@@ -13,10 +13,10 @@ use registry_casework_client::{
     CaseloadApplyRequest, CaseloadMoveRequest, CaseloadPreviewQuery, CaseworkAction, CaseworkAuth,
     CaseworkClient as CoreClient, CaseworkClientConfig as CoreConfig, CaseworkClientError,
     ClockRecomputeApplyRequest, ClockRecomputeRequest, DecideRequest, DelegateRequest,
-    DirectoryTargetsQuery, HoldingsQuery, HolidaySetRevisionInput, HostedCancelRequest,
-    HostedCreateRequest, HostedDecisionRequest, HostedNoteRequest, HostedPageQuery,
-    HostedTerminalQuery, ListWorkItemsQuery, NextWorkItemQuery, RecoverAttemptRequest,
-    SaveDraftRequest,
+    DirectoryTargetsQuery, HoldingsQuery, HolidaySetRevisionInput, HostedPageQuery,
+    NextWorkItemQuery, RecoverAttemptRequest, ReviewCancelRequest, ReviewCreateRequest,
+    ReviewNoteRequest, ReviewPageQuery, ReviewResultResponse, ReviewTaskDecisionRequest,
+    ReviewTaskDraftInput, ReviewTaskQuery, SaveDraftRequest, SubmissionDigest,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -85,6 +85,415 @@ impl CaseworkClient {
         )
     }
 
+    #[napi]
+    pub async fn create_or_recover_review_request(
+        &self,
+        token: String,
+        profile: String,
+        idempotency_key: String,
+        request: Value,
+        expected_submission_digest: String,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let request: ReviewCreateRequest = input(request)?;
+        let digest = SubmissionDigest::parse(&expected_submission_digest)
+            .map_err(|_| binding_error("invalid_request", "the submission digest is invalid"))?;
+        outcome(
+            self.inner
+                .create_or_recover_review_request(
+                    CaseworkAuth::new(&token, &profile),
+                    &idempotency_key,
+                    &request,
+                    &digest,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn review_request(
+        &self,
+        token: String,
+        profile: String,
+        request_id: String,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .review_request(CaseworkAuth::new(&token, &profile), uuid(&request_id)?)
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn review_result(
+        &self,
+        token: String,
+        profile: String,
+        accepted: Value,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let accepted = input(accepted)?;
+        review_result_outcome(
+            self.inner
+                .review_result(CaseworkAuth::new(&token, &profile), &accepted)
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn review_results(
+        &self,
+        token: String,
+        profile: String,
+        query: Option<Value>,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let query: ReviewPageQuery = query.map(input).transpose()?.unwrap_or_default();
+        outcome(
+            self.inner
+                .review_results(CaseworkAuth::new(&token, &profile), &query)
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn cancel_review_request(
+        &self,
+        token: String,
+        profile: String,
+        request_id: String,
+        idempotency_key: String,
+        request: Value,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let request: ReviewCancelRequest = input(request)?;
+        outcome(
+            self.inner
+                .cancel_review_request(
+                    CaseworkAuth::new(&token, &profile),
+                    uuid(&request_id)?,
+                    &idempotency_key,
+                    &request,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn review_kinds(&self, token: String, profile: String) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .review_kinds(CaseworkAuth::new(&token, &profile))
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn review_kind(
+        &self,
+        token: String,
+        profile: String,
+        kind_id: String,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .review_kind(CaseworkAuth::new(&token, &profile), &kind_id)
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn review_tasks(
+        &self,
+        token: String,
+        profile: String,
+        query: Option<Value>,
+        source_profile: Option<String>,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let query: ReviewTaskQuery = query.map(input).transpose()?.unwrap_or_default();
+        outcome(
+            self.inner
+                .review_tasks(
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    &query,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn review_task(
+        &self,
+        token: String,
+        profile: String,
+        task_id: String,
+        source_profile: Option<String>,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .review_task(
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    uuid(&task_id)?,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn claim_review_task(
+        &self,
+        token: String,
+        profile: String,
+        task_id: String,
+        expected_revision: i64,
+        idempotency_key: String,
+        source_profile: Option<String>,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(expected_revision)?;
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .claim_review_task(
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    uuid(&task_id)?,
+                    expected_revision,
+                    &idempotency_key,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn release_review_task(
+        &self,
+        token: String,
+        profile: String,
+        task_id: String,
+        expected_revision: i64,
+        idempotency_key: String,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(expected_revision)?;
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .release_review_task(
+                    CaseworkAuth::new(&token, &profile),
+                    uuid(&task_id)?,
+                    expected_revision,
+                    &idempotency_key,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn assign_review_task(
+        &self,
+        token: String,
+        profile: String,
+        task_id: String,
+        expected_revision: i64,
+        idempotency_key: String,
+        request: Value,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(expected_revision)?;
+        let token = bearer(token)?;
+        let request: AssignmentRequest = input(request)?;
+        outcome(
+            self.inner
+                .assign_review_task(
+                    CaseworkAuth::new(&token, &profile),
+                    uuid(&task_id)?,
+                    expected_revision,
+                    &idempotency_key,
+                    &request,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn delegate_review_task(
+        &self,
+        token: String,
+        profile: String,
+        task_id: String,
+        expected_revision: i64,
+        idempotency_key: String,
+        request: Value,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(expected_revision)?;
+        let token = bearer(token)?;
+        let request: DelegateRequest = input(request)?;
+        outcome(
+            self.inner
+                .delegate_review_task(
+                    CaseworkAuth::new(&token, &profile),
+                    uuid(&task_id)?,
+                    expected_revision,
+                    &idempotency_key,
+                    &request,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn review_task_draft(
+        &self,
+        token: String,
+        profile: String,
+        task_id: String,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .review_task_draft(CaseworkAuth::new(&token, &profile), uuid(&task_id)?)
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn save_review_task_draft(
+        &self,
+        token: String,
+        profile: String,
+        task_id: String,
+        expected_revision: i64,
+        idempotency_key: String,
+        draft: Value,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(expected_revision)?;
+        let token = bearer(token)?;
+        let draft: ReviewTaskDraftInput = input(draft)?;
+        outcome(
+            self.inner
+                .save_review_task_draft(
+                    CaseworkAuth::new(&token, &profile),
+                    uuid(&task_id)?,
+                    expected_revision,
+                    &idempotency_key,
+                    &draft,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn delete_review_task_draft(
+        &self,
+        token: String,
+        profile: String,
+        task_id: String,
+        expected_revision: i64,
+        idempotency_key: String,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(expected_revision)?;
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .delete_review_task_draft(
+                    CaseworkAuth::new(&token, &profile),
+                    uuid(&task_id)?,
+                    expected_revision,
+                    &idempotency_key,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn decide_review_task(
+        &self,
+        token: String,
+        profile: String,
+        task_id: String,
+        expected_revision: i64,
+        idempotency_key: String,
+        decision: Value,
+        source_profile: Option<String>,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(expected_revision)?;
+        let token = bearer(token)?;
+        let decision: ReviewTaskDecisionRequest = input(decision)?;
+        outcome(
+            self.inner
+                .decide_review_task(
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    uuid(&task_id)?,
+                    expected_revision,
+                    &idempotency_key,
+                    &decision,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn review_history(
+        &self,
+        token: String,
+        profile: String,
+        request_id: String,
+        query: Option<Value>,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let query: ReviewPageQuery = query.map(input).transpose()?.unwrap_or_default();
+        outcome(
+            self.inner
+                .review_history(
+                    CaseworkAuth::new(&token, &profile),
+                    uuid(&request_id)?,
+                    &query,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn add_review_note(
+        &self,
+        token: String,
+        profile: String,
+        request_id: String,
+        idempotency_key: String,
+        note: Value,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let note: ReviewNoteRequest = input(note)?;
+        outcome(
+            self.inner
+                .add_review_note(
+                    CaseworkAuth::new(&token, &profile),
+                    uuid(&request_id)?,
+                    &idempotency_key,
+                    &note,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn review_accountability(
+        &self,
+        token: String,
+        profile: String,
+        event_id: String,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .review_accountability(CaseworkAuth::new(&token, &profile), uuid(&event_id)?)
+                .await,
+        )
+    }
+
+    /* Obsolete hosted request and decision bindings removed from the public API.
     #[napi]
     pub async fn create_hosted_item(
         &self,
@@ -345,6 +754,7 @@ impl CaseworkClient {
         )
     }
 
+    */
     #[napi]
     pub async fn list_work_items(
         &self,
@@ -1156,6 +1566,31 @@ fn outcome<T: Serialize>(
         kind: "complete".into(),
         value: serialized,
         trace_id: value.trace_id,
+    })
+}
+
+fn review_result_outcome(
+    value: std::result::Result<ReviewResultResponse, CaseworkClientError>,
+) -> Result<CaseworkOutcome> {
+    let value = value.map_err(client_error)?;
+    let (kind, value, trace_id) = match value {
+        ReviewResultResponse::Available(complete) => (
+            "available",
+            serde_json::to_value(complete.value)
+                .map_err(|_| binding_error("protocol", "Casework result is not representable"))?,
+            complete.trace_id,
+        ),
+        ReviewResultResponse::Pending { trace_id } => ("pending", Value::Null, trace_id),
+        ReviewResultResponse::ConcealedOrUnknown { trace_id } => {
+            ("concealed_or_unknown", Value::Null, trace_id)
+        }
+        ReviewResultResponse::Expired { trace_id } => ("expired", Value::Null, trace_id),
+    };
+    ensure_safe_integers(&value)?;
+    Ok(CaseworkOutcome {
+        kind: kind.to_owned(),
+        value,
+        trace_id,
     })
 }
 

@@ -7,6 +7,7 @@ mod config;
 mod hosted;
 mod http;
 pub mod problem;
+mod review;
 mod runtime;
 #[cfg(feature = "schema")]
 pub mod schema;
@@ -21,6 +22,7 @@ pub use auth::*;
 pub use config::*;
 pub use hosted::*;
 pub use http::*;
+pub use review::*;
 pub use runtime::*;
 pub use service::*;
 pub use store::*;

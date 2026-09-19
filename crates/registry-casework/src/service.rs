@@ -33,7 +33,7 @@ struct SourceCursorContext<'a> {
 #[derive(Clone)]
 pub struct CaseworkService {
     pub(crate) store: PostgresStore,
-    adapters: Arc<BTreeMap<String, Arc<dyn SourceAdapter>>>,
+    pub(crate) adapters: Arc<BTreeMap<String, Arc<dyn SourceAdapter>>>,
     pub(crate) project: Arc<CaseworkProject>,
     pub(crate) task_authority: Option<Arc<crate::task_grants::TaskAuthority>>,
     audit_publisher_health: AuditPublisherHealth,

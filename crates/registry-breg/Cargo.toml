@@ -236,6 +236,7 @@ runtime = [
     "dep:registry-platform-httpsec",
     "dep:registry-platform-httputil",
     "dep:registry-platform-oidc",
+    "dep:registry-review-client",
     "dep:rustls",
     "dep:rustix",
     "dep:tokio",
@@ -279,6 +280,7 @@ registry-platform-hooks.workspace = true
 registry-platform-httpsec = { workspace = true, features = ["server"], optional = true }
 registry-platform-httputil = { workspace = true, optional = true }
 registry-platform-oidc = { workspace = true, optional = true }
+registry-review-client = { workspace = true, optional = true }
 registry-platform-script.workspace = true
 jsonschema.workspace = true
 pg_query.workspace = true

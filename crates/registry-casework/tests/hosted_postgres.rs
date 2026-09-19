@@ -69,6 +69,8 @@ fn project(version: &str, outcomes: Vec<HostedOutcomePolicy>) -> CaseworkProject
             label: "Batch review".to_owned(),
         }],
         sources: Vec::new(),
+        review_kinds: Vec::new(),
+        review_producers: Vec::new(),
         hosted_kinds: vec![HostedKindPolicy {
             id: "batch-validation".to_owned(),
             version: version.to_owned(),

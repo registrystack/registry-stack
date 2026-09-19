@@ -317,6 +317,32 @@ pub struct RuntimeConfig {
     pub task_authority: Option<TaskAuthorityConfig>,
     #[serde(default)]
     pub sources: BTreeMap<String, registry_casework_breg::BregBinding>,
+    #[serde(default)]
+    pub review_completion_destinations: BTreeMap<String, ReviewCompletionRuntimeConfig>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewCompletionRuntimeConfig {
+    pub url: String,
+    pub bearer_token_ref: String,
+    #[serde(default = "default_review_completion_timeout_ms")]
+    pub timeout_milliseconds: u64,
+    #[serde(default = "default_review_completion_attempts")]
+    pub maximum_attempts: u32,
+    #[serde(default = "default_review_completion_retry_seconds")]
+    pub retry_seconds: u64,
+}
+
+fn default_review_completion_timeout_ms() -> u64 {
+    5_000
+}
+fn default_review_completion_attempts() -> u32 {
+    12
+}
+fn default_review_completion_retry_seconds() -> u64 {
+    30
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -648,6 +674,33 @@ impl RuntimeConfig {
         if self.sources.keys().any(String::is_empty) || configured_sources != declared_sources {
             return Err(RuntimeConfigError::InvalidSourceBindings);
         }
+        let declared_destinations = project
+            .review_producers
+            .iter()
+            .filter_map(|producer| producer.completion.as_ref())
+            .map(|completion| completion.destination_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let configured_destinations = self
+            .review_completion_destinations
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if declared_destinations != configured_destinations
+            || self
+                .review_completion_destinations
+                .iter()
+                .any(|(id, destination)| {
+                    id.is_empty()
+                        || !(destination.url.starts_with("https://")
+                            || destination.url.starts_with("http://127.0.0.1:")
+                            || destination.url.starts_with("http://[::1]:"))
+                        || !(100..=30_000).contains(&destination.timeout_milliseconds)
+                        || !(1..=100).contains(&destination.maximum_attempts)
+                        || !(1..=86_400).contains(&destination.retry_seconds)
+                })
+        {
+            return Err(RuntimeConfigError::InvalidSourceBindings);
+        }
         self.validate_source_bindings()?;
         #[cfg(not(feature = "postgres-test"))]
         if self.database.test_only_plaintext {
@@ -699,6 +752,12 @@ impl RuntimeConfig {
                     reference,
                 ));
             }
+        }
+        for (destination_id, destination) in &self.review_completion_destinations {
+            references.push((
+                format!("reviewCompletionDestinations.{destination_id}.bearerTokenRef"),
+                &destination.bearer_token_ref,
+            ));
         }
         for (path, raw) in references {
             let reference = SecretReference::parse(raw.clone())
@@ -929,11 +988,11 @@ sources:
   "request":{
     "requestEntity":"correction",
     "requestRoute":"corrections",
-    "reviewMode":"staged",
-    "stages":[{"id":"review","approvals":1,"excludeSubmitter":true,"excludePreviousReviewers":false}],
+    "review":{"authority":"casework-main","policyId":"registry-correction"},
+    "onApproved":{"mode":"manual"},
     "fields":[],
     "contractFingerprint":"sha256:contract",
-    "application":{"mode":"manual"}
+    "application":{}
   }
 }
 "#;

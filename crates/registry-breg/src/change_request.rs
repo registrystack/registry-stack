@@ -8,30 +8,30 @@ use sha2::{Digest, Sha256};
 
 use crate::compiler::operation_id;
 use crate::contract::{
-    AccessProfileSource, ChangeRequestApplicationModeSource,
-    ChangeRequestCurrentDatePredicateSource, ChangeRequestDispositionSource,
-    ChangeRequestEffectSource, ChangeRequestPlannerSource, ChangeRequestPredicateSource,
-    ChangeRequestSelectorSource, ChangeRequestValueSource, Classification, EntitySource,
-    FieldTypeSource, ModuleAssetSource, MutationMode, Operation, RegistryProject,
-    RowBoundarySource, CHANGE_REQUEST_PLAN_ABI_V1,
+    AccessProfileSource, ChangeRequestCurrentDatePredicateSource, ChangeRequestEffectSource,
+    ChangeRequestOnApprovedModeSource, ChangeRequestPlannerSource, ChangeRequestPredicateSource,
+    ChangeRequestReviewSource, ChangeRequestSelectorSource, ChangeRequestValueSource,
+    Classification, EntitySource, FieldTypeSource, ModuleAssetSource, MutationMode, Operation,
+    RegistryProject, RowBoundarySource, CHANGE_REQUEST_PLAN_ABI_V1,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{
     ChangeRequestOperation, CompiledChangeRequest, CompiledChangeRequestActionRoute,
-    CompiledChangeRequestApplication, CompiledChangeRequestApplicationMode,
-    CompiledChangeRequestApplyPermission, CompiledChangeRequestDisposition,
+    CompiledChangeRequestApplication, CompiledChangeRequestApplyPermission,
     CompiledChangeRequestEffect, CompiledChangeRequestEvidence,
     CompiledChangeRequestEvidenceExpected, CompiledChangeRequestEvidenceRequirement,
     CompiledChangeRequestEvidenceSubject, CompiledChangeRequestGuardTarget,
-    CompiledChangeRequestMutation, CompiledChangeRequestPlanner, CompiledChangeRequestPlannerKind,
-    CompiledChangeRequestPlannerLimits, CompiledChangeRequestPlannerWrite,
-    CompiledChangeRequestPreconditions, CompiledChangeRequestPredicate,
-    CompiledChangeRequestPredicateExpected, CompiledChangeRequestPresencePermission,
-    CompiledChangeRequestReferenceSources, CompiledChangeRequestRetentionMode,
-    CompiledChangeRequestReviewMode, CompiledChangeRequestReviewPermission,
-    CompiledChangeRequestSelector, CompiledChangeRequestStage, CompiledChangeRequestTarget,
-    CompiledChangeRequestTargetBinding, CompiledChangeRequestValue, CompiledCurrentDateRelation,
-    CompiledEntity, CompiledField,
+    CompiledChangeRequestMutation, CompiledChangeRequestNoReview,
+    CompiledChangeRequestNoReviewMode, CompiledChangeRequestOnApproved,
+    CompiledChangeRequestOnApprovedMode, CompiledChangeRequestPlanner,
+    CompiledChangeRequestPlannerKind, CompiledChangeRequestPlannerLimits,
+    CompiledChangeRequestPlannerWrite, CompiledChangeRequestPreconditions,
+    CompiledChangeRequestPredicate, CompiledChangeRequestPredicateExpected,
+    CompiledChangeRequestPresencePermission, CompiledChangeRequestReferenceSources,
+    CompiledChangeRequestRetentionMode, CompiledChangeRequestReview,
+    CompiledChangeRequestReviewRequirement, CompiledChangeRequestSelector,
+    CompiledChangeRequestTarget, CompiledChangeRequestTargetBinding, CompiledChangeRequestValue,
+    CompiledCurrentDateRelation, CompiledEntity, CompiledField,
 };
 
 /// Path to an entity, identified so a diagnostic can name which entity it concerns.
@@ -42,14 +42,6 @@ fn entity_path(entity_id: &str) -> String {
 /// Path to an access profile declared on an entity.
 fn profile_path(entity_id: &str, profile_id: &str) -> String {
     format!("{}.accessProfiles[id={profile_id}]", entity_path(entity_id))
-}
-
-/// Path to a declared review stage on a change-request entity.
-fn stage_path(entity_id: &str, stage_id: &str) -> String {
-    format!(
-        "{}.changeRequest.review.stages[id={stage_id}]",
-        entity_path(entity_id)
-    )
 }
 
 /// Path to a declared change-request effect. Effects with an explicit id are
@@ -67,7 +59,6 @@ fn effect_path(entity_id: &str, effect_id: Option<&str>, index: usize) -> String
 pub const MAX_CHANGE_REQUEST_TARGETS: u16 = 16;
 pub const MAX_CHANGE_REQUEST_FIELD_MUTATIONS: u16 = 128;
 pub const MAX_CHANGE_REQUEST_SNAPSHOT_BYTES: u32 = 2_097_152;
-pub const MAX_CHANGE_REQUEST_REVIEW_STAGES: u16 = 32;
 pub const MAX_CHANGE_REQUEST_PLANNER_SOURCE_BYTES: usize = 65_536;
 pub const CHANGE_REQUEST_PLANNER_RHAI_VERSION: &str = "1.25.1";
 
@@ -77,86 +68,75 @@ type CompiledEffectSet = (
     BTreeSet<String>,
 );
 
-fn compile_application(
+fn compile_review(
     request_entity_id: &str,
     request: &crate::contract::ChangeRequestSource,
-    has_planner: bool,
     errors: &mut Vec<Diagnostic>,
-) -> CompiledChangeRequestApplication {
-    let source = &request.application;
-    let application_path = format!(
-        "{}.changeRequest.application",
+) -> CompiledChangeRequestReview {
+    match &request.review {
+        ChangeRequestReviewSource::Required(required) => {
+            validate_id(
+                &required.authority,
+                &format!(
+                    "{}.changeRequest.review.authority",
+                    entity_path(request_entity_id)
+                ),
+                errors,
+            );
+            validate_id(
+                &required.policy_id,
+                &format!(
+                    "{}.changeRequest.review.policyId",
+                    entity_path(request_entity_id)
+                ),
+                errors,
+            );
+            CompiledChangeRequestReview::Required(CompiledChangeRequestReviewRequirement {
+                authority: required.authority.clone(),
+                policy_id: required.policy_id.clone(),
+            })
+        }
+        ChangeRequestReviewSource::None(_) => {
+            CompiledChangeRequestReview::None(CompiledChangeRequestNoReview {
+                mode: CompiledChangeRequestNoReviewMode::None,
+            })
+        }
+    }
+}
+
+fn compile_on_approved(
+    request_entity_id: &str,
+    request: &crate::contract::ChangeRequestSource,
+    errors: &mut Vec<Diagnostic>,
+) -> CompiledChangeRequestOnApproved {
+    let path = format!(
+        "{}.changeRequest.onApproved",
         entity_path(request_entity_id)
     );
-    let queue_reasons_path = format!("{application_path}.queueReasons");
-    if !source.preconditions.is_empty()
-        && (source.mode != ChangeRequestApplicationModeSource::Manual || has_planner)
-    {
-        errors.push(Diagnostic::error(
-            "change_request.application.preconditions_manual_only",
-            format!("{application_path}.preconditions"),
-            "application preconditions require manual application and cannot run inside submit, approval, or planner transitions",
-        ));
+    match (&request.on_approved.mode, &request.on_approved.executor) {
+        (ChangeRequestOnApprovedModeSource::Manual, Some(_)) => errors.push(Diagnostic::error(
+            "change_request.on_approved.executor_forbidden",
+            format!("{path}.executor"),
+            "manual application cannot declare an executor",
+        )),
+        (ChangeRequestOnApprovedModeSource::Automatic, None) => errors.push(Diagnostic::error(
+            "change_request.on_approved.executor_required",
+            format!("{path}.executor"),
+            "automatic application requires a logical executor",
+        )),
+        (_, Some(executor)) => validate_id(executor, &format!("{path}.executor"), errors),
+        (_, None) => {}
     }
-    if source.mode == ChangeRequestApplicationModeSource::Planner {
-        if !has_planner || source.allowed_dispositions.is_empty() {
-            errors.push(Diagnostic::error(
-                "change_request.application.planner_invalid",
-                application_path.as_str(),
-                "planner application requires a Rhai planner and at least one allowed disposition",
-            ));
-        }
-    } else if !source.allowed_dispositions.is_empty() || !source.queue_reasons.is_empty() {
-        errors.push(Diagnostic::error(
-            "change_request.application.policy_forbidden",
-            application_path.as_str(),
-            "only planner application can declare dispositions or queue reasons",
-        ));
-    }
-    let queue_allowed = source
-        .allowed_dispositions
-        .contains(&ChangeRequestDispositionSource::Queue);
-    // A queue disposition and a non-empty queue-reason catalogue go together.
-    if queue_allowed == source.queue_reasons.is_empty() {
-        errors.push(Diagnostic::error(
-            "change_request.application.queue_reasons_invalid",
-            queue_reasons_path.as_str(),
-            "queue disposition and a non-empty closed queue-reason catalogue must be declared together",
-        ));
-    }
-    for (code, label) in &source.queue_reasons {
-        let queue_reason_path = format!("{queue_reasons_path}[code={code}]");
-        validate_id(code, &queue_reason_path, errors);
-        if label.trim().is_empty() || label.len() > 160 {
-            errors.push(Diagnostic::error(
-                "change_request.application.queue_reason_invalid",
-                queue_reason_path,
-                "queue reason labels must be non-empty and bounded",
-            ));
-        }
-    }
-    CompiledChangeRequestApplication {
-        mode: match source.mode {
-            ChangeRequestApplicationModeSource::Manual => {
-                CompiledChangeRequestApplicationMode::Manual
+    CompiledChangeRequestOnApproved {
+        mode: match request.on_approved.mode {
+            ChangeRequestOnApprovedModeSource::Manual => {
+                CompiledChangeRequestOnApprovedMode::Manual
             }
-            ChangeRequestApplicationModeSource::Automatic => {
-                CompiledChangeRequestApplicationMode::Automatic
-            }
-            ChangeRequestApplicationModeSource::Planner => {
-                CompiledChangeRequestApplicationMode::Planner
+            ChangeRequestOnApprovedModeSource::Automatic => {
+                CompiledChangeRequestOnApprovedMode::Automatic
             }
         },
-        allowed_dispositions: source
-            .allowed_dispositions
-            .iter()
-            .map(|value| match value {
-                ChangeRequestDispositionSource::Apply => CompiledChangeRequestDisposition::Apply,
-                ChangeRequestDispositionSource::Queue => CompiledChangeRequestDisposition::Queue,
-            })
-            .collect(),
-        queue_reasons: source.queue_reasons.clone(),
-        preconditions: CompiledChangeRequestPreconditions::default(),
+        executor: request.on_approved.executor.clone(),
     }
 }
 
@@ -632,8 +612,8 @@ pub(crate) fn compile_change_requests(
                     .map(|(entity_id, _)| (*entity_id).clone())
                     .collect::<BTreeSet<_>>();
                 plan.planner.is_none()
-                    && plan.application.mode
-                        == crate::model::CompiledChangeRequestApplicationMode::Manual
+                    && plan.on_approved.mode
+                        == crate::model::CompiledChangeRequestOnApprovedMode::Manual
                     && referenced_entities == profile.submitter_targets
                     && references.iter().all(|(_, from_field)| {
                         // Admission reads each exact target identifier from the
@@ -1344,28 +1324,10 @@ fn compile_request_entity(
             "a change-request capability must declare exactly one of effects or planner",
         ));
     }
-    let review_mode = if request.review.mode.is_some() && request.review.stages.is_empty() {
-        CompiledChangeRequestReviewMode::None
-    } else if request.review.mode.is_none() && !request.review.stages.is_empty() {
-        CompiledChangeRequestReviewMode::Stages
-    } else {
-        errors.push(Diagnostic::error(
-            "change_request.review.mode_exclusive",
-            format!("{}.changeRequest.review", entity_path(&request_entity.id)),
-            "review must declare exactly one of mode none or a non-empty stage list",
-        ));
-        CompiledChangeRequestReviewMode::Stages
-    };
+    let review = compile_review(&request_entity.id, request, errors);
+    let on_approved = compile_on_approved(&request_entity.id, request, errors);
 
-    let mut application = compile_application(
-        &request_entity.id,
-        request,
-        request.planner.is_some(),
-        errors,
-    );
-
-    let stages = compile_stages(&request_entity.id, request, errors);
-    let (effects, changed_fields, target_entities, planner) =
+    let (effects, _changed_fields, target_entities, planner) =
         if let Some(planner) = &request.planner {
             let compiled = compile_planner(
                 PlannerCompileInput {
@@ -1397,8 +1359,16 @@ fn compile_request_entity(
             validate_plan_bounds(request_entity, entities, &effects, errors);
             (effects, changed_fields, target_entities, None)
         };
-    application.preconditions =
-        compile_preconditions(project, request_entity, entities, assets, request, errors);
+    let application = CompiledChangeRequestApplication {
+        preconditions: compile_preconditions(
+            project,
+            request_entity,
+            entities,
+            assets,
+            request,
+            errors,
+        ),
+    };
     if !application.preconditions.is_empty() {
         let base_bytes = match &planner {
             Some(planner) => maximum_planner_snapshot_bytes(request_entity, &planner.writes),
@@ -1415,14 +1385,15 @@ fn compile_request_entity(
         if combined.is_none_or(|bytes| bytes > u64::from(MAX_CHANGE_REQUEST_SNAPSHOT_BYTES)) {
             errors.push(Diagnostic::error(
                 "change_request.preconditions.bounds",
-                format!("{}.changeRequest.application.preconditions", entity_path(&request_entity.id)),
+                format!(
+                    "{}.changeRequest.application.preconditions",
+                    entity_path(&request_entity.id)
+                ),
                 "the compiled Evidence contracts and maximum frozen guard values exceed the remaining proposal snapshot ceiling",
             ));
         }
     }
-    let actions = compile_action_routes(&stages);
-    let review_permissions =
-        compile_review_permissions(request_entity, &stages, &changed_fields, entities, errors);
+    let actions = compile_action_routes();
     let authority_targets = target_entities
         .iter()
         .cloned()
@@ -1450,25 +1421,14 @@ fn compile_request_entity(
             "a change-request type requires at least one submit_request grant",
         ));
     }
-    validate_automatic_apply_profile(
-        request_entity,
-        review_mode,
-        &application,
-        &stages,
-        &review_permissions,
-        &apply_permissions,
-        &authority_targets,
-        errors,
-    );
     let contract_fingerprint = contract_fingerprint(ContractFingerprintInput {
         request_entity,
         entities,
         effects: &effects,
-        stages: &stages,
-        review_permissions: &review_permissions,
         apply_permissions: &apply_permissions,
         target_entities: &authority_targets,
-        review_mode,
+        review: &review,
+        on_approved: &on_approved,
         application: &application,
         planner: planner.as_ref(),
     });
@@ -1477,13 +1437,12 @@ fn compile_request_entity(
         request_entity_id: source.id.clone(),
         contract_fingerprint,
         retention_mode: compile_retention_mode(request.retention.mode),
-        review_mode,
+        review,
+        on_approved,
         application,
         planner,
         effects,
-        stages,
         actions,
-        review_permissions,
         apply_permissions,
         presence_permissions: Vec::new(),
         // This public set names records mutated by the request. Read-only
@@ -1494,60 +1453,6 @@ fn compile_request_entity(
         maximum_field_mutations: MAX_CHANGE_REQUEST_FIELD_MUTATIONS,
         maximum_snapshot_bytes: MAX_CHANGE_REQUEST_SNAPSHOT_BYTES,
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn validate_automatic_apply_profile(
-    request_entity: &CompiledEntity,
-    review_mode: CompiledChangeRequestReviewMode,
-    application: &CompiledChangeRequestApplication,
-    stages: &[CompiledChangeRequestStage],
-    review_permissions: &[CompiledChangeRequestReviewPermission],
-    apply_permissions: &[CompiledChangeRequestApplyPermission],
-    target_entities: &BTreeSet<String>,
-    errors: &mut Vec<Diagnostic>,
-) {
-    let may_apply_when_ready = application.mode == CompiledChangeRequestApplicationMode::Automatic
-        || (application.mode == CompiledChangeRequestApplicationMode::Planner
-            && application
-                .allowed_dispositions
-                .contains(&CompiledChangeRequestDisposition::Apply));
-    if !may_apply_when_ready {
-        return;
-    }
-    let final_stage = stages.last().map(|stage| stage.id.as_str());
-    let covered = request_entity.access_profiles.values().any(|profile| {
-        let can_trigger_ready = match review_mode {
-            CompiledChangeRequestReviewMode::None => {
-                profile.operations.contains(&Operation::SubmitRequest)
-            }
-            CompiledChangeRequestReviewMode::Stages => {
-                profile.operations.contains(&Operation::ApproveRequest)
-                    && final_stage.is_some_and(|stage| {
-                        target_entities.iter().all(|target_entity_id| {
-                            review_permissions.iter().any(|grant| {
-                                grant.profile_id == profile.id
-                                    && grant.stage == stage
-                                    && grant.target_entity_id == *target_entity_id
-                            })
-                        })
-                    })
-            }
-        };
-        can_trigger_ready
-            && target_entities.iter().all(|target_entity_id| {
-                apply_permissions.iter().any(|grant| {
-                    grant.profile_id == profile.id && grant.target_entity_id == *target_entity_id
-                })
-            })
-    });
-    if !target_entities.is_empty() && !covered {
-        errors.push(Diagnostic::error(
-            "change_request.application.automatic_apply_profile_missing",
-            format!("{}.accessProfiles", entity_path(&request_entity.id)),
-            "an application policy that may apply when ready requires one profile with both readiness-trigger and complete target authority",
-        ));
-    }
 }
 
 fn compile_retention_mode(
@@ -1561,47 +1466,6 @@ fn compile_retention_mode(
             CompiledChangeRequestRetentionMode::OperatorErase
         }
     }
-}
-
-fn compile_stages(
-    entity_id: &str,
-    request: &crate::contract::ChangeRequestSource,
-    errors: &mut Vec<Diagnostic>,
-) -> Vec<CompiledChangeRequestStage> {
-    if request.review.stages.len() > usize::from(MAX_CHANGE_REQUEST_REVIEW_STAGES) {
-        errors.push(Diagnostic::error(
-            "change_request.review.stage_count",
-            format!("{}.changeRequest.review.stages", entity_path(entity_id)),
-            "change-request review stages must stay within the supported finite bound",
-        ));
-    }
-    let mut ids = BTreeSet::new();
-    let mut stages = Vec::new();
-    for stage in &request.review.stages {
-        let path = stage_path(entity_id, &stage.id);
-        validate_id(&stage.id, &format!("{path}.id"), errors);
-        if !ids.insert(stage.id.as_str()) {
-            errors.push(Diagnostic::error(
-                "change_request.review.stage.duplicate",
-                format!("{path}.id"),
-                "review stage identifiers must be duplicate-free",
-            ));
-        }
-        if stage.approvals == 0 || stage.approvals > 32 {
-            errors.push(Diagnostic::error(
-                "change_request.review.stage.approvals_invalid",
-                format!("{path}.approvals"),
-                "review stage approval counts must be within the supported bounds",
-            ));
-        }
-        stages.push(CompiledChangeRequestStage {
-            id: stage.id.clone(),
-            approvals: stage.approvals,
-            exclude_submitter: stage.exclude_submitter,
-            exclude_previous_reviewers: stage.exclude_previous_reviewers,
-        });
-    }
-    stages
 }
 
 fn compile_effects(
@@ -2129,173 +1993,21 @@ fn validate_plan_bounds(
     }
 }
 
-fn compile_action_routes(
-    stages: &[CompiledChangeRequestStage],
-) -> Vec<CompiledChangeRequestActionRoute> {
-    let mut actions = vec![
+fn compile_action_routes() -> Vec<CompiledChangeRequestActionRoute> {
+    vec![
         CompiledChangeRequestActionRoute {
             operation: ChangeRequestOperation::SubmitRequest,
-            review_stage: None,
         },
         CompiledChangeRequestActionRoute {
             operation: ChangeRequestOperation::ReviseRequest,
-            review_stage: None,
         },
         CompiledChangeRequestActionRoute {
             operation: ChangeRequestOperation::CancelRequest,
-            review_stage: None,
         },
         CompiledChangeRequestActionRoute {
             operation: ChangeRequestOperation::ApplyRequest,
-            review_stage: None,
         },
-    ];
-    for stage in stages {
-        for operation in [
-            ChangeRequestOperation::ApproveRequest,
-            ChangeRequestOperation::RejectRequest,
-            ChangeRequestOperation::RequestRevision,
-        ] {
-            actions.push(CompiledChangeRequestActionRoute {
-                operation,
-                review_stage: Some(stage.id.clone()),
-            });
-        }
-    }
-    actions
-}
-
-fn compile_review_permissions(
-    request_entity: &CompiledEntity,
-    stages: &[CompiledChangeRequestStage],
-    changed_fields: &BTreeMap<String, BTreeSet<String>>,
-    entities: &BTreeMap<String, CompiledEntity>,
-    errors: &mut Vec<Diagnostic>,
-) -> Vec<CompiledChangeRequestReviewPermission> {
-    let stage_ids = stages
-        .iter()
-        .map(|stage| stage.id.as_str())
-        .collect::<BTreeSet<_>>();
-    let mut permissions = Vec::new();
-    for profile in request_entity.access_profiles.values() {
-        let profile_base = profile_path(&request_entity.id, &profile.id);
-        for grant in &profile.review_stages {
-            if !profile.operations.iter().any(|operation| {
-                matches!(
-                    operation,
-                    Operation::ApproveRequest
-                        | Operation::RejectRequest
-                        | Operation::RequestRevision
-                )
-            }) {
-                errors.push(Diagnostic::error(
-                    "change_request.review_stage.operation_required",
-                    format!("{profile_base}.operations"),
-                    "review stage permissions require approve_request, reject_request, or request_revision authority",
-                ));
-            }
-            let stage_permission_path =
-                format!("{profile_base}.reviewStages[stage={}]", grant.stage);
-            if !stage_ids.contains(grant.stage.as_str()) {
-                errors.push(Diagnostic::error(
-                    "change_request.review_stage.unknown",
-                    format!("{stage_permission_path}.stage"),
-                    "a review permission refers to an unknown review stage",
-                ));
-                continue;
-            }
-            for target in &grant.targets {
-                let target_permission_path =
-                    format!("{stage_permission_path}.targets[entity={}]", target.entity);
-                let Some(target_entity) = entities.get(&target.entity) else {
-                    errors.push(Diagnostic::error(
-                        "change_request.review_stage.target_unknown",
-                        format!("{target_permission_path}.entity"),
-                        "a review permission targets an unknown entity",
-                    ));
-                    continue;
-                };
-                validate_target_fields(
-                    target_entity,
-                    &target.readable_fields,
-                    &format!("{target_permission_path}.readableFields"),
-                    errors,
-                );
-                validate_row_boundaries(
-                    target_entity,
-                    &target.row_boundaries,
-                    &format!("{target_permission_path}.rowBoundaries"),
-                    errors,
-                );
-                validate_permission_access_requirements(
-                    target_entity,
-                    profile,
-                    &target.row_boundaries,
-                    &target_permission_path,
-                    errors,
-                );
-                if let Some(required) = changed_fields.get(&target.entity) {
-                    if !required.is_subset(&target.readable_fields) {
-                        errors.push(Diagnostic::error(
-                            "change_request.review_projection.incomplete",
-                            format!("{target_permission_path}.readableFields"),
-                            "review target projections must cover every changed target field",
-                        ));
-                    }
-                }
-                permissions.push(CompiledChangeRequestReviewPermission {
-                    profile_id: profile.id.clone(),
-                    stage: grant.stage.clone(),
-                    target_entity_id: target.entity.clone(),
-                    readable_fields: target.readable_fields.clone(),
-                    row_boundaries: target.row_boundaries.clone(),
-                });
-            }
-        }
-    }
-    for stage in stages {
-        let covered = request_entity.access_profiles.values().any(|profile| {
-            let can_decide = profile.operations.iter().any(|operation| {
-                matches!(
-                    operation,
-                    Operation::ApproveRequest
-                        | Operation::RejectRequest
-                        | Operation::RequestRevision
-                )
-            });
-            can_decide
-                && changed_fields.keys().all(|entity_id| {
-                    profile.review_stages.iter().any(|grant| {
-                        grant.stage == stage.id
-                            && grant.targets.iter().any(|target| {
-                                target.entity == *entity_id
-                                    && changed_fields.get(entity_id).is_some_and(|fields| {
-                                        fields.is_subset(&target.readable_fields)
-                                    })
-                            })
-                    })
-                })
-        });
-        if !covered {
-            errors.push(Diagnostic::error(
-                "change_request.review_projection.incomplete",
-                format!(
-                    "{}.accessProfiles[].reviewStages[stage={}]",
-                    entity_path(&request_entity.id),
-                    stage.id
-                ),
-                "each review stage requires at least one profile that can review every target change",
-            ));
-        }
-    }
-    permissions.sort_by(|left, right| {
-        (&left.stage, &left.profile_id, &left.target_entity_id).cmp(&(
-            &right.stage,
-            &right.profile_id,
-            &right.target_entity_id,
-        ))
-    });
-    permissions
+    ]
 }
 
 fn compile_apply_permissions(
@@ -2753,11 +2465,10 @@ struct ContractFingerprintInput<'a> {
     request_entity: &'a CompiledEntity,
     entities: &'a BTreeMap<String, CompiledEntity>,
     effects: &'a [CompiledChangeRequestEffect],
-    stages: &'a [CompiledChangeRequestStage],
-    review_permissions: &'a [CompiledChangeRequestReviewPermission],
     apply_permissions: &'a [CompiledChangeRequestApplyPermission],
     target_entities: &'a BTreeSet<String>,
-    review_mode: CompiledChangeRequestReviewMode,
+    review: &'a CompiledChangeRequestReview,
+    on_approved: &'a CompiledChangeRequestOnApproved,
     application: &'a CompiledChangeRequestApplication,
     planner: Option<&'a CompiledChangeRequestPlanner>,
 }
@@ -2767,11 +2478,10 @@ fn contract_fingerprint(input: ContractFingerprintInput<'_>) -> String {
         request_entity,
         entities,
         effects,
-        stages,
-        review_permissions,
         apply_permissions,
         target_entities,
-        review_mode,
+        review,
+        on_approved,
         application,
         planner,
     } = input;
@@ -2783,18 +2493,15 @@ fn contract_fingerprint(input: ContractFingerprintInput<'_>) -> String {
                 .map(|entity| (entity_id.clone(), entity_contract_payload(entity)))
         })
         .collect::<BTreeMap<_, _>>();
-    let mut payload = json!({
-        "version": 2,
+    let payload = json!({
+        "version": 4,
         "requestEntity": entity_contract_payload(request_entity),
         "targetEntities": target_contracts,
         "effects": effects,
-        "stages": stages,
-        "reviewAuthority": authority_payload(
-            request_entity,
-            review_permissions.iter().map(|grant| grant.profile_id.as_str()).collect(),
-            [Operation::ApproveRequest, Operation::RejectRequest, Operation::RequestRevision]
-        ),
-        "reviewPermissions": review_permission_payload(review_permissions),
+        "review": review,
+        "onApproved": on_approved,
+        "application": application,
+        "planner": planner,
         "applyAuthority": authority_payload(
             request_entity,
             apply_permissions.iter().map(|grant| grant.profile_id.as_str()).collect(),
@@ -2804,22 +2511,9 @@ fn contract_fingerprint(input: ContractFingerprintInput<'_>) -> String {
         "limits": {
             "maximumTargets": MAX_CHANGE_REQUEST_TARGETS,
             "maximumFieldMutations": MAX_CHANGE_REQUEST_FIELD_MUTATIONS,
-            "maximumSnapshotBytes": MAX_CHANGE_REQUEST_SNAPSHOT_BYTES,
-            "maximumReviewStages": MAX_CHANGE_REQUEST_REVIEW_STAGES
+            "maximumSnapshotBytes": MAX_CHANGE_REQUEST_SNAPSHOT_BYTES
         }
     });
-    if planner.is_some()
-        || review_mode != CompiledChangeRequestReviewMode::Stages
-        || application.mode != CompiledChangeRequestApplicationMode::Manual
-        || !application.allowed_dispositions.is_empty()
-        || !application.queue_reasons.is_empty()
-        || !application.preconditions.is_empty()
-    {
-        payload["version"] = json!(3);
-        payload["reviewMode"] = json!(review_mode);
-        payload["application"] = json!(application);
-        payload["planner"] = json!(planner);
-    }
     let bytes =
         canonicalize_json(&payload).expect("compiled change-request contract canonicalizes");
     let digest = Sha256::digest(bytes);
@@ -2888,31 +2582,6 @@ fn authority_payload<const N: usize>(
         })
         .collect::<BTreeMap<_, _>>();
     json!(profiles)
-}
-
-fn review_permission_payload(
-    grants: &[CompiledChangeRequestReviewPermission],
-) -> Vec<serde_json::Value> {
-    let mut grants = grants.iter().collect::<Vec<_>>();
-    grants.sort_by(|left, right| {
-        (&left.profile_id, &left.stage, &left.target_entity_id).cmp(&(
-            &right.profile_id,
-            &right.stage,
-            &right.target_entity_id,
-        ))
-    });
-    grants
-        .into_iter()
-        .map(|grant| {
-            json!({
-                "profileId": grant.profile_id,
-                "stage": grant.stage,
-                "targetEntityId": grant.target_entity_id,
-                "readableFields": grant.readable_fields,
-                "rowBoundaries": grant.row_boundaries,
-            })
-        })
-        .collect()
 }
 
 fn apply_permission_payload(
@@ -3018,5 +2687,141 @@ fn validate_id(value: &str, path: &str, errors: &mut Vec<Diagnostic>) {
             path,
             "an identifier must use the closed lowercase identifier grammar",
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(review: Value, on_approved: Option<Value>) -> crate::contract::ChangeRequestSource {
+        let mut source = json!({"review": review});
+        if let Some(on_approved) = on_approved {
+            source["onApproved"] = on_approved;
+        }
+        serde_json::from_value(source).expect("change-request source parses")
+    }
+
+    #[test]
+    fn review_requirement_and_automatic_executor_compile_exactly() {
+        let request = request(
+            json!({"authority": "casework", "policyId": "registry-correction"}),
+            Some(json!({"mode": "automatic", "executor": "registry-applier"})),
+        );
+        let mut errors = Vec::new();
+
+        let review = compile_review("correction", &request, &mut errors);
+        let on_approved = compile_on_approved("correction", &request, &mut errors);
+        assert_eq!(
+            review,
+            CompiledChangeRequestReview::Required(CompiledChangeRequestReviewRequirement {
+                authority: "casework".into(),
+                policy_id: "registry-correction".into(),
+            })
+        );
+        assert_eq!(
+            on_approved,
+            CompiledChangeRequestOnApproved {
+                mode: CompiledChangeRequestOnApprovedMode::Automatic,
+                executor: Some("registry-applier".into()),
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(review).expect("compiled review serializes"),
+            json!({"authority": "casework", "policyId": "registry-correction"})
+        );
+        assert_eq!(
+            serde_json::to_value(on_approved).expect("compiled application policy serializes"),
+            json!({"mode": "automatic", "executor": "registry-applier"})
+        );
+        assert!(errors.is_empty(), "unexpected diagnostics: {errors:?}");
+    }
+
+    #[test]
+    fn explicit_no_review_defaults_to_manual_application() {
+        let request = request(json!({"mode": "none"}), None);
+        let mut errors = Vec::new();
+
+        let review = compile_review("correction", &request, &mut errors);
+        assert_eq!(
+            review,
+            CompiledChangeRequestReview::None(CompiledChangeRequestNoReview {
+                mode: CompiledChangeRequestNoReviewMode::None,
+            })
+        );
+        assert_eq!(
+            compile_on_approved("correction", &request, &mut errors),
+            CompiledChangeRequestOnApproved::default()
+        );
+        assert_eq!(
+            serde_json::to_value(review).expect("compiled no-review serializes"),
+            json!({"mode": "none"})
+        );
+        assert!(errors.is_empty(), "unexpected diagnostics: {errors:?}");
+    }
+
+    #[test]
+    fn on_approved_executor_presence_is_exact() {
+        for (on_approved, expected_code) in [
+            (
+                json!({"mode": "manual", "executor": "registry-applier"}),
+                "change_request.on_approved.executor_forbidden",
+            ),
+            (
+                json!({"mode": "automatic"}),
+                "change_request.on_approved.executor_required",
+            ),
+        ] {
+            let request = request(json!({"mode": "none"}), Some(on_approved));
+            let mut errors = Vec::new();
+
+            compile_on_approved("correction", &request, &mut errors);
+
+            assert_eq!(errors.len(), 1, "unexpected diagnostics: {errors:?}");
+            assert_eq!(errors[0].code, expected_code);
+        }
+    }
+
+    #[test]
+    fn review_and_executor_bindings_use_bounded_identifiers() {
+        let request = request(
+            json!({"authority": "Casework", "policyId": "registry-correction"}),
+            Some(json!({"mode": "automatic", "executor": "registry/applier"})),
+        );
+        let mut errors = Vec::new();
+
+        compile_review("correction", &request, &mut errors);
+        compile_on_approved("correction", &request, &mut errors);
+
+        assert_eq!(
+            errors
+                .iter()
+                .map(|diagnostic| diagnostic.path.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "entities[id=correction].changeRequest.onApproved.executor",
+                "entities[id=correction].changeRequest.review.authority",
+            ])
+        );
+        assert!(errors
+            .iter()
+            .all(|diagnostic| diagnostic.code == "identifier.invalid"));
+    }
+
+    #[test]
+    fn obsolete_stages_and_application_modes_are_not_authoring_inputs() {
+        assert!(
+            serde_json::from_value::<crate::contract::ChangeRequestSource>(json!({
+                "review": {"stages": [{"id": "review", "approvals": 1}]}
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<crate::contract::ChangeRequestSource>(json!({
+                "review": {"mode": "none"},
+                "application": {"mode": "automatic"}
+            }))
+            .is_err()
+        );
     }
 }

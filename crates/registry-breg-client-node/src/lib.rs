@@ -26,7 +26,7 @@ use registry_breg_client::{
     BRegProblemCode, BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
     BRegRelationshipContinuation, BRegRelationshipContinuationProjection,
     BRegRelationshipListRequest, BRegRequestMetadata,
-    BRegRequestResultReference as CoreRequestResultReference, BRegRequestReview, BRegRequestState,
+    BRegRequestResultReference as CoreRequestResultReference, BRegRequestState,
     BRegRetainedRequestHistoryPage as CoreRetainedRequestHistoryPage,
     BRegRetainedRequestProposal as CoreRetainedRequestProposal, BRegSnapshotContinuation,
     BRegSnapshotContinuationProjection, BRegSnapshotListRequest, BRegTombstoneBinding,
@@ -356,11 +356,9 @@ fn request_state_name(value: BRegRequestState) -> &'static str {
     match value {
         BRegRequestState::Draft => "draft",
         BRegRequestState::Submitted => "submitted",
-        BRegRequestState::Approved => "approved",
-        BRegRequestState::NeedsChanges => "needs_changes",
-        BRegRequestState::Rejected => "rejected",
-        BRegRequestState::Canceled => "canceled",
+        BRegRequestState::Cancelled => "cancelled",
         BRegRequestState::Applied => "applied",
+        BRegRequestState::Superseded => "superseded",
     }
 }
 
@@ -1749,22 +1747,6 @@ fn receipt_value(value: &BRegLifecycleActionReceipt) -> Value {
     value.to_value()
 }
 
-fn review_value(value: &BRegRequestReview) -> Value {
-    json!({
-        "targets": value.targets().iter().map(|target| json!({
-            "entityIdentifier": target.entity_identifier(),
-            "recordIdentifier": target.record_identifier(),
-            "operation": match target.operation() {
-                registry_breg_client::BRegReviewOperation::Create => "create",
-                registry_breg_client::BRegReviewOperation::Patch => "patch",
-            },
-            "baseRevision": target.base_revision(),
-            "before": target.before(),
-            "after": target.after(),
-        })).collect::<Vec<_>>(),
-    })
-}
-
 fn attachment_state_value(value: &BRegAttachmentState) -> Value {
     json!({
         "slotIdentifier": value.slot_identifier(),
@@ -1825,31 +1807,23 @@ fn change_request_capability_value(
             "possibleWriteOperations": planner.possible_write_operations().iter()
                 .map(registry_breg_client::BRegOperationKind::as_str).collect::<Vec<_>>(),
         },
-        "reviewMode": match value.review_mode() {
-            registry_breg_client::BRegChangeRequestReviewMode::None => "none",
-            registry_breg_client::BRegChangeRequestReviewMode::Staged => "staged",
+        "review": match value.review() {
+            registry_breg_client::BRegChangeRequestReviewRequirement::None => {
+                json!({"mode":"none"})
+            }
+            registry_breg_client::BRegChangeRequestReviewRequirement::External(requirement) => {
+                json!({"authority":requirement.authority(),"policyId":requirement.policy_id()})
+            }
         },
-        "stages": value.stages().map(|stages| {
-            stages.iter().map(|stage| json!({
-                "id": stage.identifier(),
-                "approvals": stage.approvals(),
-                "excludeSubmitter": stage.exclude_submitter(),
-                "excludePreviousReviewers": stage.exclude_previous_reviewers(),
-            })).collect::<Vec<_>>()
-        }),
-        "application": {
-            "mode": match value.application().mode() {
-                registry_breg_client::BRegChangeRequestApplicationMode::Manual => "manual",
-                registry_breg_client::BRegChangeRequestApplicationMode::Automatic => "automatic",
-                registry_breg_client::BRegChangeRequestApplicationMode::Planner => "planner",
+        "onApproved": {
+            "mode": match value.on_approved().mode() {
+                registry_breg_client::BRegChangeRequestOnApprovedMode::Manual => "manual",
+                registry_breg_client::BRegChangeRequestOnApprovedMode::Automatic => "automatic",
             },
-            "allowedDispositions": value.application().allowed_dispositions().iter().map(|value| match value {
-                registry_breg_client::BRegChangeRequestDisposition::Apply => "apply",
-                registry_breg_client::BRegChangeRequestDisposition::Queue => "queue",
-            }).collect::<Vec<_>>(),
-            "queueReasons": value.application().queue_reasons().iter().map(|reason| json!({
-                "code": reason.code(), "label": reason.label(),
-            })).collect::<Vec<_>>(),
+            "executor": value.on_approved().executor(),
+        },
+        "application": {
+            "preconditions": value.application().preconditions(),
         },
     })
 }
@@ -2084,22 +2058,8 @@ impl LifecycleAction {
             .map_err(|_| binding_error("protocol", "action body is not representable"))
     }
     #[napi(getter)]
-    pub fn review_json(&self) -> Result<Option<String>> {
-        self.inner
-            .review()
-            .map(|value| serde_json::to_string(&review_value(value)))
-            .transpose()
-            .map_err(|_| binding_error("protocol", "action review is not representable"))
-    }
-
-    #[napi(getter)]
     pub fn operation(&self) -> String {
         self.inner.operation().identifier().to_owned()
-    }
-
-    #[napi(getter)]
-    pub fn stage(&self) -> Option<String> {
-        self.inner.stage().map(str::to_owned)
     }
 
     #[napi(getter)]
@@ -2110,11 +2070,6 @@ impl LifecycleAction {
     #[napi(getter)]
     pub fn body(&self) -> Value {
         self.inner.body().to_value()
-    }
-
-    #[napi(getter)]
-    pub fn review(&self) -> Option<Value> {
-        self.inner.review().map(review_value)
     }
 }
 

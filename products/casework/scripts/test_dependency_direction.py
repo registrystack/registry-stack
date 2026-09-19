@@ -15,6 +15,8 @@ def metadata(edges: dict[str, list[str]]) -> dict:
     names = {
         "core": "registry-casework-core",
         "client": "registry-casework-client",
+        "review-protocol": "registry-review-protocol",
+        "review-client": "registry-review-client",
         "adapter": "registry-casework-breg",
         "breg": "registry-breg",
         "breg-client": "registry-breg-client",
@@ -40,6 +42,8 @@ class DependencyDirectionTests(unittest.TestCase):
             {
                 "core": ["serde"],
                 "client": ["core"],
+                "review-protocol": ["serde"],
+                "review-client": ["review-protocol"],
                 "adapter": ["core", "breg-client"],
                 "breg": ["serde"],
                 "breg-client": ["serde"],
@@ -53,6 +57,8 @@ class DependencyDirectionTests(unittest.TestCase):
             {
                 "core": ["serde"],
                 "client": ["serde"],
+                "review-protocol": ["serde"],
+                "review-client": ["review-protocol"],
                 "adapter": ["core", "breg-client"],
                 "breg": [],
                 "breg-client": [],
@@ -66,6 +72,8 @@ class DependencyDirectionTests(unittest.TestCase):
             {
                 "core": ["serde"],
                 "client": ["core"],
+                "review-protocol": ["serde"],
+                "review-client": ["review-protocol"],
                 "adapter": ["core", "breg-client"],
                 "breg": [],
                 "breg-client": [],
@@ -79,6 +87,8 @@ class DependencyDirectionTests(unittest.TestCase):
             {
                 "core": [],
                 "client": ["core"],
+                "review-protocol": [],
+                "review-client": ["review-protocol"],
                 "adapter": ["core", "breg-client"],
                 "breg": ["serde"],
                 "breg-client": [],
@@ -87,6 +97,38 @@ class DependencyDirectionTests(unittest.TestCase):
         )
         failures = "\n".join(MODULE.violations(graph))
         self.assertIn("registry-breg transitively depends on Casework", failures)
+
+    def test_product_neutral_review_protocol_may_be_used_by_breg(self):
+        graph = metadata(
+            {
+                "core": ["review-protocol"],
+                "client": ["core", "review-client"],
+                "review-protocol": ["serde"],
+                "review-client": ["review-protocol"],
+                "adapter": ["core", "breg-client"],
+                "breg": ["review-client"],
+                "breg-client": ["serde"],
+                "serde": [],
+            }
+        )
+        self.assertEqual(MODULE.violations(graph), [])
+
+    def test_review_protocol_dependency_on_casework_is_rejected(self):
+        graph = metadata(
+            {
+                "core": ["serde"],
+                "client": ["core"],
+                "review-protocol": ["serde"],
+                "review-client": ["review-protocol"],
+                "adapter": ["core", "breg-client"],
+                "breg": [],
+                "breg-client": [],
+                "serde": ["core"],
+            }
+        )
+        failures = "\n".join(MODULE.violations(graph))
+        self.assertIn("registry-review-protocol transitively depends on Casework", failures)
+        self.assertIn("registry-review-client transitively depends on Casework", failures)
 
 
 if __name__ == "__main__":

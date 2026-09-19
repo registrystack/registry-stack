@@ -41,9 +41,10 @@ const ABSENCE_CURSORS_MIGRATION: &str = include_str!("../migrations/0012_absence
 const SYNC_CLAIM_INDEXES_MIGRATION: &str =
     include_str!("../migrations/0013_sync_claim_indexes.sql");
 const HOSTED_RESULT_MIGRATION: &str = include_str!("../migrations/0015_hosted_result.sql");
+const UNIFIED_REVIEWS_MIGRATION: &str = include_str!("../migrations/0016_unified_reviews.sql");
 
 /// Every schema version in ledger order.
-const MIGRATIONS: [(i64, &str); 15] = [
+const MIGRATIONS: [(i64, &str); 16] = [
     (1, MIGRATION),
     (2, HOSTED_MIGRATION),
     (3, ASSIGNMENT_MIGRATION),
@@ -59,6 +60,7 @@ const MIGRATIONS: [(i64, &str); 15] = [
     (13, SYNC_CLAIM_INDEXES_MIGRATION),
     (14, include_str!("../migrations/0014_task_grants.sql")),
     (15, HOSTED_RESULT_MIGRATION),
+    (16, UNIFIED_REVIEWS_MIGRATION),
 ];
 
 /// Serializes operator-run migrations on one session lock. A second migrator

@@ -1857,7 +1857,6 @@ fn validate_permission_access_requirements(
             request_visibility: None,
             lookups: Vec::new(),
             read_paths: Vec::new(),
-            review_stages: Vec::new(),
             apply_targets: Vec::new(),
             submitter_targets: BTreeSet::new(),
             request_presence: Vec::new(),
@@ -1956,7 +1955,6 @@ fn entity_permission_fields_empty(grant: &crate::contract::AccessPermissionSourc
         && grant.membership_boundaries.is_empty()
         && grant.lookups.is_empty()
         && grant.read_paths.is_empty()
-        && grant.review_stages.is_empty()
         && grant.apply_targets.is_empty()
         && grant.submitter_targets.is_empty()
         && grant.request_presence.is_empty()

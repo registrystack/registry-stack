@@ -1,0 +1,1486 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! Durable source-owned review submission, completion, and application state.
+//!
+//! Network calls are deliberately separated from every database transaction.
+//! A claimed job is committed before I/O and every response is written through
+//! an exact proposal and submission-digest comparison.
+
+use registry_review_client::{
+    submission_digest, BearerToken, ReviewClient, ReviewClientError, ReviewCompletion,
+    ReviewCompletionType, ReviewCreateRequest, ReviewRequestAccepted, ReviewResult,
+    ReviewResultResponse, ReviewResultsQuery, SourceContextBinding, SubjectBinding,
+};
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use subtle::ConstantTimeEq;
+use tokio_postgres::{GenericClient, Transaction};
+use uuid::Uuid;
+use zeroize::Zeroizing;
+
+use crate::model::{
+    CompiledChangeRequestOnApprovedMode, CompiledChangeRequestReview, CompiledRegistry,
+};
+use crate::mutation::MutationError;
+use crate::postgres::SqlIdentifier;
+use crate::request_workflow::ProposalSnapshot;
+
+const SUBJECT_TYPE: &str = "change-request";
+const SUBMISSION_LEASE_SECONDS: i64 = 30;
+
+#[async_trait::async_trait]
+pub trait ReviewResultSource: Send + Sync {
+    async fn approved_evidence(
+        &self,
+        authority: &str,
+        accepted: &ReviewRequestAccepted,
+    ) -> Result<crate::review_integration::AcceptedReviewEvidence, MutationError>;
+}
+
+pub struct ReviewAuthorityClient {
+    authority: String,
+    client: ReviewClient,
+    token: BearerToken,
+    producer_id: String,
+    recovery_days: u32,
+    completion_token: Option<Zeroizing<String>>,
+    completion_recipient: Option<String>,
+}
+
+impl ReviewAuthorityClient {
+    pub fn new(
+        authority: String,
+        client: ReviewClient,
+        token: BearerToken,
+        producer_id: String,
+        recovery_days: u32,
+        completion_token: Option<Zeroizing<String>>,
+        completion_recipient: Option<String>,
+    ) -> Result<Self, ()> {
+        if authority.trim().is_empty()
+            || authority.len() > 128
+            || producer_id.trim().is_empty()
+            || producer_id.len() > 128
+            || producer_id.chars().any(char::is_control)
+            || !(1..=90).contains(&recovery_days)
+            || completion_token.is_some() != completion_recipient.is_some()
+            || completion_token.as_ref().is_some_and(|token| {
+                token.is_empty() || token.len() > 4096 || token.chars().any(char::is_control)
+            })
+            || completion_recipient.as_ref().is_some_and(|recipient| {
+                recipient.trim().is_empty()
+                    || recipient.len() > 128
+                    || recipient.chars().any(char::is_control)
+            })
+        {
+            return Err(());
+        }
+        Ok(Self {
+            authority,
+            client,
+            token,
+            producer_id,
+            recovery_days,
+            completion_token,
+            completion_recipient,
+        })
+    }
+}
+
+pub struct ReviewAuthorityRegistry {
+    authorities: BTreeMap<String, Arc<ReviewAuthorityClient>>,
+}
+
+impl ReviewAuthorityRegistry {
+    pub fn new(authorities: BTreeMap<String, Arc<ReviewAuthorityClient>>) -> Result<Self, ()> {
+        if authorities.is_empty()
+            || authorities
+                .iter()
+                .any(|(id, authority)| id != &authority.authority)
+        {
+            return Err(());
+        }
+        Ok(Self { authorities })
+    }
+
+    pub fn contains(&self, authority: &str) -> bool {
+        self.authorities.contains_key(authority)
+    }
+
+    fn submission_binding(&self, authority: &str) -> Option<(&str, u32)> {
+        self.authorities
+            .get(authority)
+            .map(|configured| (configured.producer_id.as_str(), configured.recovery_days))
+    }
+
+    fn recovery_days(&self, authority: &str) -> Option<u32> {
+        self.authorities
+            .get(authority)
+            .map(|configured| configured.recovery_days)
+    }
+
+    /// Resolve a completion sender only when both its independently configured
+    /// bearer credential and logical recipient match one authority exactly.
+    pub fn completion_authority(&self, token: &str, recipient: &str) -> Option<&str> {
+        let mut matched = None;
+        for (authority, configured) in &self.authorities {
+            let Some(expected_token) = configured.completion_token.as_ref() else {
+                continue;
+            };
+            let Some(expected_recipient) = configured.completion_recipient.as_ref() else {
+                continue;
+            };
+            let token_matches = expected_token.len() == token.len()
+                && expected_token
+                    .as_bytes()
+                    .ct_eq(token.as_bytes())
+                    .unwrap_u8()
+                    == 1;
+            let recipient_matches = expected_recipient.len() == recipient.len()
+                && expected_recipient
+                    .as_bytes()
+                    .ct_eq(recipient.as_bytes())
+                    .unwrap_u8()
+                    == 1;
+            if token_matches && recipient_matches {
+                if matched.is_some() {
+                    return None;
+                }
+                matched = Some(authority.as_str());
+            }
+        }
+        matched
+    }
+
+    async fn authority_for_pending(
+        &self,
+        client: &tokio_postgres::Client,
+        states: &[&str],
+    ) -> Result<Option<Arc<ReviewAuthorityClient>>, MutationError> {
+        let row = client
+            .query_opt(
+                "SELECT authority
+                   FROM registry_internal.registry_request_review_submissions
+                  WHERE state=ANY($1) AND next_attempt_at <= transaction_timestamp()
+                  ORDER BY next_attempt_at,created_at LIMIT 1",
+                &[&states],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        row.map(|row| {
+            self.authorities
+                .get(row.get::<_, String>(0).as_str())
+                .cloned()
+                .ok_or(MutationError::Unavailable)
+        })
+        .transpose()
+    }
+
+    async fn run_one(&self, client: &mut tokio_postgres::Client) -> Result<bool, MutationError> {
+        if client
+            .execute(
+                "UPDATE registry_internal.registry_request_review_submissions
+                    SET state='failed',lease_until=NULL,last_error_code='submission-recovery-expired',
+                        updated_at=transaction_timestamp()
+                  WHERE accepted_binding IS NULL AND recovery_deadline <= transaction_timestamp()
+                    AND state IN ('pending','submitting','uncertain')",
+                &[],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+            > 0
+        {
+            return Ok(true);
+        }
+        if let Some(authority) = self
+            .authority_for_pending(client, &["pending", "uncertain", "submitting"])
+            .await?
+        {
+            return run_one_submission(
+                client,
+                &authority.authority,
+                &authority.client,
+                &authority.token,
+            )
+            .await;
+        }
+        if let Some(authority) = self.authority_for_pending(client, &["cancelling"]).await? {
+            return run_one_cancellation(
+                client,
+                &authority.authority,
+                &authority.client,
+                &authority.token,
+            )
+            .await;
+        }
+        for authority in self.authorities.values() {
+            if consume_result_feed(client, authority).await? {
+                return Ok(true);
+            }
+        }
+        let row = client
+            .query_opt(
+                "SELECT authority
+                   FROM registry_internal.registry_request_review_submissions s
+                  WHERE state='accepted' AND NOT EXISTS (
+                    SELECT 1 FROM registry_internal.registry_request_review_results r
+                     WHERE r.request_entity_id=s.request_entity_id AND r.request_id=s.request_id
+                       AND r.proposal_version=s.proposal_version)
+                    AND next_result_poll_at <= transaction_timestamp()
+                  ORDER BY next_result_poll_at,updated_at LIMIT 1",
+                &[],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        if let Some(row) = row {
+            let authority = self
+                .authorities
+                .get(row.get::<_, String>(0).as_str())
+                .ok_or(MutationError::Unavailable)?;
+            return poll_one_result(
+                client,
+                &authority.authority,
+                &authority.client,
+                &authority.token,
+            )
+            .await;
+        }
+        Ok(false)
+    }
+}
+
+async fn consume_result_feed(
+    client: &mut tokio_postgres::Client,
+    authority: &ReviewAuthorityClient,
+) -> Result<bool, MutationError> {
+    let cursor = client
+        .query_opt(
+            "SELECT cursor FROM registry_internal.registry_request_review_feed_checkpoints
+              WHERE authority=$1",
+            &[&authority.authority],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?
+        .and_then(|row| row.get::<_, Option<String>>(0));
+    let page = match authority
+        .client
+        .requester_results(
+            &authority.token,
+            &ReviewResultsQuery {
+                cursor: cursor.as_deref(),
+                limit: Some(100),
+            },
+        )
+        .await
+    {
+        Ok(page) => page.value,
+        Err(ReviewClientError::Problem { status: 410, .. }) if cursor.is_some() => {
+            client
+                .execute(
+                    "INSERT INTO registry_internal.registry_request_review_feed_checkpoints
+                     (authority,cursor,updated_at) VALUES ($1,NULL,transaction_timestamp())
+                     ON CONFLICT (authority) DO UPDATE
+                         SET cursor=NULL,updated_at=transaction_timestamp()",
+                    &[&authority.authority],
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            return Ok(true);
+        }
+        Err(_) => return Err(MutationError::Unavailable),
+    };
+    let had_items = !page.items.is_empty();
+    let checkpoint = page
+        .next_cursor
+        .clone()
+        .or_else(|| page.items.last().map(|item| item.event_id.to_string()))
+        .or(cursor);
+    let transaction = client
+        .transaction()
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    let expires_at =
+        chrono::Utc::now() + chrono::Duration::days(i64::from(authority.recovery_days));
+    for item in page.items {
+        receive_completion(
+            &transaction,
+            &authority.authority,
+            &ReviewCompletion {
+                event_type: ReviewCompletionType::ReviewCompleted,
+                event_id: item.event_id,
+                request_id: item.request_id,
+                result_id: item.result_id,
+                completed_at: item.completed_at,
+            },
+            expires_at,
+        )
+        .await?;
+    }
+    transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_request_review_feed_checkpoints
+             (authority,cursor,updated_at) VALUES ($1,$2,transaction_timestamp())
+             ON CONFLICT (authority) DO UPDATE
+                 SET cursor=EXCLUDED.cursor,updated_at=transaction_timestamp()",
+            &[&authority.authority, &checkpoint],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    Ok(had_items)
+}
+
+pub struct ReviewCompletionReceiver {
+    pool: crate::postgres::RuntimePool,
+    authorities: Arc<ReviewAuthorityRegistry>,
+}
+
+impl ReviewCompletionReceiver {
+    pub fn new(
+        pool: crate::postgres::RuntimePool,
+        authorities: Arc<ReviewAuthorityRegistry>,
+    ) -> Self {
+        Self { pool, authorities }
+    }
+
+    pub fn authority(&self, token: &str, recipient: &str) -> Option<String> {
+        self.authorities
+            .completion_authority(token, recipient)
+            .map(str::to_owned)
+    }
+
+    pub async fn receive(
+        &self,
+        authority: &str,
+        completion: &ReviewCompletion,
+    ) -> Result<(), MutationError> {
+        if !self.authorities.contains(authority) {
+            return Err(MutationError::InvalidRequest);
+        }
+        let recovery_days = self
+            .authorities
+            .recovery_days(authority)
+            .ok_or(MutationError::InvalidRequest)?;
+        let mut client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        receive_completion(
+            &transaction,
+            authority,
+            completion,
+            chrono::Utc::now() + chrono::Duration::days(i64::from(recovery_days)),
+        )
+        .await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| MutationError::Unavailable)
+    }
+}
+
+pub struct ReviewWorker {
+    pool: crate::postgres::RuntimePool,
+    authorities: Arc<ReviewAuthorityRegistry>,
+}
+
+impl ReviewWorker {
+    pub fn new(
+        pool: crate::postgres::RuntimePool,
+        authorities: Arc<ReviewAuthorityRegistry>,
+    ) -> Self {
+        Self { pool, authorities }
+    }
+
+    pub async fn run(self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
+        loop {
+            if *shutdown.borrow() {
+                return;
+            }
+            let worked = match self.pool.get().await {
+                Ok(mut client) => self
+                    .authorities
+                    .run_one(&mut **client)
+                    .await
+                    .unwrap_or(false),
+                Err(_) => false,
+            };
+            if worked {
+                continue;
+            }
+            tokio::select! {
+                _ = shutdown.changed() => {},
+                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {},
+            }
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ReviewResultSource for ReviewAuthorityRegistry {
+    async fn approved_evidence(
+        &self,
+        authority: &str,
+        accepted: &ReviewRequestAccepted,
+    ) -> Result<crate::review_integration::AcceptedReviewEvidence, MutationError> {
+        self.authorities
+            .get(authority)
+            .ok_or(MutationError::PreconditionFailed)?
+            .approved_evidence(authority, accepted)
+            .await
+    }
+}
+
+#[async_trait::async_trait]
+impl ReviewResultSource for ReviewAuthorityClient {
+    async fn approved_evidence(
+        &self,
+        authority: &str,
+        accepted: &ReviewRequestAccepted,
+    ) -> Result<crate::review_integration::AcceptedReviewEvidence, MutationError> {
+        if authority != self.authority {
+            return Err(MutationError::PreconditionFailed);
+        }
+        let result = match self
+            .client
+            .result(&self.token, accepted)
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+        {
+            ReviewResultResponse::Available(complete) => complete.value,
+            ReviewResultResponse::Pending { .. }
+            | ReviewResultResponse::ConcealedOrUnknown { .. }
+            | ReviewResultResponse::Expired { .. } => {
+                return Err(MutationError::PreconditionFailed)
+            }
+            _ => return Err(MutationError::Unavailable),
+        };
+        crate::review_integration::AcceptedReviewEvidence::from_protocol(
+            authority, accepted, &result,
+        )
+        .map_err(|_| MutationError::PreconditionFailed)
+    }
+}
+
+pub(crate) async fn load_accepted_binding(
+    client: &impl GenericClient,
+    request_entity_id: &str,
+    request_id: Uuid,
+    proposal_version: i64,
+    proposal_digest: &str,
+) -> Result<(String, ReviewRequestAccepted), MutationError> {
+    let row = client
+        .query_opt(
+            "SELECT authority,accepted_binding
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                AND proposal_digest=$4 AND state='accepted'",
+            &[
+                &request_entity_id,
+                &request_id,
+                &proposal_version,
+                &proposal_digest,
+            ],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?
+        .ok_or(MutationError::PreconditionFailed)?;
+    let accepted = serde_json::from_value(row.get(1)).map_err(|_| MutationError::Unavailable)?;
+    Ok((row.get(0), accepted))
+}
+
+pub(crate) const REVIEW_TABLES: &[(&str, &[&str])] = &[
+    (
+        "registry_request_review_submissions",
+        &["INSERT", "SELECT", "UPDATE"],
+    ),
+    (
+        "registry_request_review_completions",
+        &["INSERT", "SELECT", "UPDATE", "DELETE"],
+    ),
+    (
+        "registry_request_review_results",
+        &["INSERT", "SELECT", "UPDATE"],
+    ),
+    (
+        "registry_request_review_feed_checkpoints",
+        &["INSERT", "SELECT", "UPDATE"],
+    ),
+    (
+        "registry_request_application_jobs",
+        &["INSERT", "SELECT", "UPDATE"],
+    ),
+];
+
+pub(crate) async fn install(
+    client: &impl GenericClient,
+    runtime_role: &SqlIdentifier,
+) -> Result<(), MutationError> {
+    client
+        .batch_execute(
+            "CREATE TABLE IF NOT EXISTS registry_internal.registry_request_review_submissions (
+                 request_entity_id text NOT NULL CHECK (request_entity_id <> ''),
+                 request_id uuid NOT NULL,
+                 proposal_version bigint NOT NULL CHECK (proposal_version BETWEEN 1 AND 4294967295),
+                 proposal_digest text NOT NULL CHECK (proposal_digest ~ '^sha256:[0-9a-f]{64}$'),
+                 job_id uuid NOT NULL UNIQUE,
+                 authority text NOT NULL CHECK (authority <> '' AND octet_length(authority) <= 128),
+                 producer_id text NOT NULL CHECK (producer_id <> '' AND octet_length(producer_id) <= 128),
+                 policy_id text NOT NULL CHECK (policy_id <> '' AND octet_length(policy_id) <= 128),
+                 idempotency_key text NOT NULL UNIQUE CHECK (
+                     idempotency_key <> '' AND octet_length(idempotency_key) <= 128
+                 ),
+                 create_request jsonb NOT NULL CHECK (
+                     jsonb_typeof(create_request) = 'object'
+                     AND octet_length(create_request::text) <= 98304
+                 ),
+                 expected_submission_digest text NOT NULL
+                     CHECK (expected_submission_digest ~ '^sha256:[0-9a-f]{64}$'),
+                 on_approved_mode text NOT NULL CHECK (on_approved_mode IN ('manual','automatic')),
+                 executor text CHECK (executor IS NULL OR (executor <> '' AND octet_length(executor) <= 128)),
+                 state text NOT NULL CHECK (state IN
+                     ('pending','submitting','accepted','uncertain','cancelling','cancelled','failed')),
+                 accepted_binding jsonb CHECK (
+                     accepted_binding IS NULL OR (
+                         jsonb_typeof(accepted_binding) = 'object'
+                         AND octet_length(accepted_binding::text) <= 8192
+                     )
+                 ),
+                 attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 1000),
+                 withdrawn boolean NOT NULL DEFAULT false,
+                 recovery_deadline timestamptz NOT NULL
+                     DEFAULT (transaction_timestamp()+interval '30 days'),
+                 result_poll_attempts integer NOT NULL DEFAULT 0
+                     CHECK (result_poll_attempts BETWEEN 0 AND 1000),
+                 next_result_poll_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 next_attempt_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 lease_until timestamptz,
+                 last_error_code text CHECK (
+                     last_error_code IS NULL OR
+                     (last_error_code <> '' AND octet_length(last_error_code) <= 128)
+                 ),
+                 created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 PRIMARY KEY (request_entity_id, request_id, proposal_version),
+                 FOREIGN KEY (request_entity_id, request_id, proposal_version)
+                     REFERENCES registry_internal.registry_request_proposals,
+                 CHECK ((on_approved_mode = 'manual' AND executor IS NULL)
+                     OR (on_approved_mode = 'automatic' AND executor IS NOT NULL)),
+                 CHECK ((state IN ('accepted','cancelling','cancelled') AND accepted_binding IS NOT NULL)
+                     OR (state NOT IN ('accepted','cancelling','cancelled')))
+             );
+             ALTER TABLE registry_internal.registry_request_review_submissions
+                 ADD COLUMN IF NOT EXISTS withdrawn boolean NOT NULL DEFAULT false;
+             ALTER TABLE registry_internal.registry_request_review_submissions
+                 ADD COLUMN IF NOT EXISTS producer_id text;
+             DO $$ BEGIN
+                 IF EXISTS (
+                     SELECT 1 FROM registry_internal.registry_request_review_submissions
+                      WHERE producer_id IS NULL
+                 ) THEN
+                     RAISE EXCEPTION 'legacy review submissions require explicit producer cutover';
+                 END IF;
+             END $$;
+             ALTER TABLE registry_internal.registry_request_review_submissions
+                 ALTER COLUMN producer_id SET NOT NULL;
+             ALTER TABLE registry_internal.registry_request_review_submissions
+                 ADD COLUMN IF NOT EXISTS recovery_deadline timestamptz NOT NULL
+                     DEFAULT (transaction_timestamp()+interval '30 days');
+             ALTER TABLE registry_internal.registry_request_review_submissions
+                 ADD COLUMN IF NOT EXISTS result_poll_attempts integer NOT NULL DEFAULT 0;
+             ALTER TABLE registry_internal.registry_request_review_submissions
+                 ADD COLUMN IF NOT EXISTS next_result_poll_at timestamptz NOT NULL
+                     DEFAULT transaction_timestamp();
+             CREATE INDEX IF NOT EXISTS registry_request_review_submission_jobs
+                 ON registry_internal.registry_request_review_submissions
+                 (next_attempt_at, created_at)
+                 WHERE state IN ('pending','submitting','uncertain');
+             CREATE TABLE IF NOT EXISTS registry_internal.registry_request_review_completions (
+                 authority text NOT NULL CHECK (authority <> '' AND octet_length(authority) <= 128),
+                 event_id uuid NOT NULL,
+                 review_request_id uuid NOT NULL,
+                 result_id uuid NOT NULL,
+                 completed_at timestamptz NOT NULL,
+                 state text NOT NULL CHECK (state IN
+                     ('pending','correlated','unmatched','applied','exhausted')),
+                 received_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 expires_at timestamptz NOT NULL,
+                 PRIMARY KEY (authority, event_id),
+                 CHECK (expires_at > received_at)
+             );
+             CREATE INDEX IF NOT EXISTS registry_request_review_completion_reconcile
+                 ON registry_internal.registry_request_review_completions
+                 (state, received_at) WHERE state IN ('pending','unmatched');
+             CREATE TABLE IF NOT EXISTS registry_internal.registry_request_review_results (
+                 request_entity_id text NOT NULL,
+                 request_id uuid NOT NULL,
+                 proposal_version bigint NOT NULL CHECK (proposal_version BETWEEN 1 AND 4294967295),
+                 authority text NOT NULL CHECK (authority <> '' AND octet_length(authority) <= 128),
+                 result_id uuid NOT NULL,
+                 result jsonb NOT NULL CHECK (
+                     jsonb_typeof(result) = 'object' AND octet_length(result::text) <= 16384
+                 ),
+                 status text NOT NULL CHECK (status IN
+                     ('approved','rejected','changes_requested','answered','cancelled','superseded')),
+                 completed_at timestamptz NOT NULL,
+                 available_until timestamptz NOT NULL,
+                 verified_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 PRIMARY KEY (request_entity_id, request_id, proposal_version),
+                 UNIQUE (authority, result_id),
+                 FOREIGN KEY (request_entity_id, request_id, proposal_version)
+                     REFERENCES registry_internal.registry_request_review_submissions,
+                 CHECK (available_until > completed_at)
+             );
+             CREATE TABLE IF NOT EXISTS registry_internal.registry_request_review_feed_checkpoints (
+                 authority text PRIMARY KEY CHECK (authority <> '' AND octet_length(authority) <= 128),
+                 cursor text CHECK (cursor IS NULL OR (cursor <> '' AND octet_length(cursor) <= 1024)),
+                 updated_at timestamptz NOT NULL DEFAULT transaction_timestamp()
+             );
+             CREATE TABLE IF NOT EXISTS registry_internal.registry_request_application_jobs (
+                 request_entity_id text NOT NULL,
+                 request_id uuid NOT NULL,
+                 proposal_version bigint NOT NULL CHECK (proposal_version BETWEEN 1 AND 4294967295),
+                 job_id uuid NOT NULL UNIQUE,
+                 proposal_digest text NOT NULL CHECK (proposal_digest ~ '^sha256:[0-9a-f]{64}$'),
+                 result_id uuid NOT NULL,
+                 executor text NOT NULL CHECK (executor <> '' AND octet_length(executor) <= 128),
+                 state text NOT NULL CHECK (state IN ('queued','applying','applied','blocked')),
+                 attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 1000),
+                 next_attempt_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 last_error_code text CHECK (
+                     last_error_code IS NULL OR
+                     (last_error_code <> '' AND octet_length(last_error_code) <= 128)
+                 ),
+                 application_id uuid,
+                 created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 PRIMARY KEY (request_entity_id, request_id, proposal_version),
+                 FOREIGN KEY (request_entity_id, request_id, proposal_version)
+                     REFERENCES registry_internal.registry_request_review_results,
+                 CHECK ((state = 'applied' AND application_id IS NOT NULL)
+                     OR (state <> 'applied' AND application_id IS NULL))
+             );",
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    for (table, privileges) in REVIEW_TABLES {
+        let role = runtime_role.as_str();
+        client
+            .batch_execute(&format!(
+                "REVOKE ALL ON registry_internal.{table} FROM PUBLIC, \"{role}\";
+                 GRANT {} ON registry_internal.{table} TO \"{role}\";",
+                privileges.join(", ")
+            ))
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn enqueue_submission(
+    transaction: &Transaction<'_>,
+    registry: &CompiledRegistry,
+    request_entity_id: &str,
+    request_id: Uuid,
+    proposal: &ProposalSnapshot,
+    requester_reference: &str,
+    initiator: Option<&registry_review_client::HumanIdentity>,
+    authorities: &ReviewAuthorityRegistry,
+) -> Result<(), MutationError> {
+    let CompiledChangeRequestReview::Required(requirement) = proposal.review_requirement() else {
+        return Ok(());
+    };
+    let source_namespace = registry.registry_id();
+    let (producer_id, recovery_days) = authorities
+        .submission_binding(&requirement.authority)
+        .ok_or(MutationError::Unavailable)?;
+    let source_reference = format!(
+        "breg:{source_namespace}:{request_entity_id}:{request_id}:{}",
+        proposal.version().get()
+    );
+    let create = ReviewCreateRequest {
+        kind: requirement.policy_id.clone(),
+        subject: SubjectBinding {
+            source: source_namespace.to_owned(),
+            subject_type: SUBJECT_TYPE.to_owned(),
+            id: request_id.to_string(),
+            version: proposal.version().get().to_string(),
+            digest: registry_review_client::ContentDigest::parse(proposal.effect_digest().as_str())
+                .map_err(|_| MutationError::Unavailable)?,
+        },
+        requester_reference: requester_reference.to_owned(),
+        initiator: initiator.cloned(),
+        context: registry_review_client::ReviewContext::Source {
+            binding: SourceContextBinding {
+                reference: source_reference,
+            },
+        },
+        result_constraints: None,
+    };
+    let expected_digest = submission_digest(producer_id, source_namespace, &create)
+        .map_err(|_| MutationError::InvalidRequest)?;
+    let job_id = Uuid::new_v4();
+    let idempotency_key = format!("breg-review-{job_id}");
+    let create_value = serde_json::to_value(&create).map_err(|_| MutationError::Unavailable)?;
+    let (mode, executor) = match proposal.on_approved().mode {
+        CompiledChangeRequestOnApprovedMode::Manual => ("manual", None),
+        CompiledChangeRequestOnApprovedMode::Automatic => (
+            "automatic",
+            Some(
+                proposal
+                    .on_approved()
+                    .executor
+                    .as_deref()
+                    .ok_or(MutationError::InvalidRequest)?,
+            ),
+        ),
+    };
+    let inserted = transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_request_review_submissions
+             (request_entity_id, request_id, proposal_version, proposal_digest,
+              job_id, authority, producer_id, policy_id, idempotency_key, create_request,
+              expected_submission_digest, on_approved_mode, executor, state,recovery_deadline)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',
+                     transaction_timestamp()+($14 * interval '1 day'))
+             ON CONFLICT DO NOTHING",
+            &[
+                &request_entity_id,
+                &request_id,
+                &i64::from(proposal.version().get()),
+                &proposal.effect_digest().as_str(),
+                &job_id,
+                &requirement.authority,
+                &producer_id,
+                &requirement.policy_id,
+                &idempotency_key,
+                &create_value,
+                &expected_digest.as_str(),
+                &mode,
+                &executor,
+                &i64::from(recovery_days),
+            ],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    if inserted != 1 {
+        let row = transaction
+            .query_one(
+                "SELECT proposal_digest, authority, producer_id, policy_id, create_request,
+                        expected_submission_digest, on_approved_mode, executor
+                   FROM registry_internal.registry_request_review_submissions
+                  WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3",
+                &[
+                    &request_entity_id,
+                    &request_id,
+                    &i64::from(proposal.version().get()),
+                ],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        let exact = row.get::<_, String>(0) == proposal.effect_digest().as_str()
+            && row.get::<_, String>(1) == requirement.authority
+            && row.get::<_, String>(2) == producer_id
+            && row.get::<_, String>(3) == requirement.policy_id
+            && row.get::<_, Value>(4) == create_value
+            && row.get::<_, String>(5) == expected_digest.as_str()
+            && row.get::<_, String>(6) == mode
+            && row.get::<_, Option<String>>(7).as_deref() == executor;
+        if !exact {
+            return Err(MutationError::IdempotencyConflict);
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn schedule_cancellation(
+    transaction: &Transaction<'_>,
+    request_entity_id: &str,
+    request_id: Uuid,
+    proposal_version: i64,
+) -> Result<(), MutationError> {
+    transaction
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET withdrawn=true,
+                    state=CASE WHEN accepted_binding IS NULL THEN state ELSE 'cancelling' END,
+                    lease_until=NULL,next_attempt_at=transaction_timestamp(),
+                    updated_at=transaction_timestamp()
+              WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                AND state NOT IN ('cancelled','failed')",
+            &[&request_entity_id, &request_id, &proposal_version],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+pub struct ClaimedReviewSubmission {
+    pub request_entity_id: String,
+    pub request_id: Uuid,
+    pub proposal_version: i64,
+    pub authority: String,
+    pub idempotency_key: String,
+    pub request: ReviewCreateRequest,
+    pub expected_submission_digest: registry_review_client::SubmissionDigest,
+}
+
+pub async fn claim_submission(
+    client: &impl GenericClient,
+    authority: &str,
+) -> Result<Option<ClaimedReviewSubmission>, MutationError> {
+    let row = client
+        .query_opt(
+            "WITH candidate AS (
+                 SELECT request_entity_id, request_id, proposal_version
+                   FROM registry_internal.registry_request_review_submissions
+                  WHERE next_attempt_at <= transaction_timestamp()
+                    AND authority=$2
+                    AND recovery_deadline > transaction_timestamp()
+                    AND (state IN ('pending','uncertain')
+                         OR (state='submitting' AND lease_until < transaction_timestamp()))
+                  ORDER BY next_attempt_at, created_at
+                  FOR UPDATE SKIP LOCKED LIMIT 1
+             )
+             UPDATE registry_internal.registry_request_review_submissions s
+                SET state='submitting', attempt_count=attempt_count+1,
+                    lease_until=transaction_timestamp()+($1 * interval '1 second'),
+                    updated_at=transaction_timestamp()
+               FROM candidate c
+              WHERE s.request_entity_id=c.request_entity_id
+                AND s.request_id=c.request_id AND s.proposal_version=c.proposal_version
+             RETURNING s.request_entity_id,s.request_id,s.proposal_version,s.authority,
+                       s.idempotency_key,s.create_request,s.expected_submission_digest",
+            &[&SUBMISSION_LEASE_SECONDS, &authority],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    row.map(|row| {
+        Ok(ClaimedReviewSubmission {
+            request_entity_id: row.get(0),
+            request_id: row.get(1),
+            proposal_version: row.get(2),
+            authority: row.get(3),
+            idempotency_key: row.get(4),
+            request: serde_json::from_value(row.get(5)).map_err(|_| MutationError::Unavailable)?,
+            expected_submission_digest: registry_review_client::SubmissionDigest::parse(
+                &row.get::<_, String>(6),
+            )
+            .map_err(|_| MutationError::Unavailable)?,
+        })
+    })
+    .transpose()
+}
+
+pub async fn run_one_submission(
+    client: &impl GenericClient,
+    authority: &str,
+    review_client: &ReviewClient,
+    token: &BearerToken,
+) -> Result<bool, MutationError> {
+    let Some(job) = claim_submission(client, authority).await? else {
+        return Ok(false);
+    };
+    let response = review_client
+        .create_or_recover_request(
+            token,
+            &job.idempotency_key,
+            &job.request,
+            &job.expected_submission_digest,
+        )
+        .await;
+    match response {
+        Ok(complete) => {
+            let accepted =
+                serde_json::to_value(&complete.value).map_err(|_| MutationError::Unavailable)?;
+            let updated = client
+                .execute(
+                    "UPDATE registry_internal.registry_request_review_submissions
+                        SET state=CASE WHEN withdrawn THEN 'cancelling' ELSE 'accepted' END,
+                            accepted_binding=$4,lease_until=NULL,
+                            last_error_code=NULL,updated_at=transaction_timestamp()
+                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                        AND state='submitting' AND expected_submission_digest=$5",
+                    &[
+                        &job.request_entity_id,
+                        &job.request_id,
+                        &job.proposal_version,
+                        &accepted,
+                        &job.expected_submission_digest.as_str(),
+                    ],
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            if updated != 1 {
+                return Err(MutationError::PreconditionFailed);
+            }
+        }
+        Err(_) => {
+            client
+                .execute(
+                    "UPDATE registry_internal.registry_request_review_submissions
+                        SET state='uncertain',lease_until=NULL,last_error_code='remote-uncertain',
+                            next_attempt_at=transaction_timestamp()+interval '5 seconds',
+                            updated_at=transaction_timestamp()
+                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                        AND state='submitting'",
+                    &[
+                        &job.request_entity_id,
+                        &job.request_id,
+                        &job.proposal_version,
+                    ],
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+        }
+    }
+    Ok(true)
+}
+
+pub async fn run_one_cancellation(
+    client: &mut tokio_postgres::Client,
+    authority_id: &str,
+    review_client: &ReviewClient,
+    token: &BearerToken,
+) -> Result<bool, MutationError> {
+    let Some(row) = client
+        .query_opt(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET lease_until=transaction_timestamp()+($1 * interval '1 second'),
+                    attempt_count=attempt_count+1,updated_at=transaction_timestamp()
+              WHERE (request_entity_id,request_id,proposal_version)=(
+                    SELECT request_entity_id,request_id,proposal_version
+                      FROM registry_internal.registry_request_review_submissions
+                     WHERE state='cancelling' AND authority=$2
+                       AND next_attempt_at <= transaction_timestamp()
+                       AND (lease_until IS NULL OR lease_until < transaction_timestamp())
+                     ORDER BY next_attempt_at,created_at FOR UPDATE SKIP LOCKED LIMIT 1)
+              RETURNING request_entity_id,request_id,proposal_version,authority,
+                        idempotency_key,accepted_binding",
+            &[&SUBMISSION_LEASE_SECONDS, &authority_id],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?
+    else {
+        return Ok(false);
+    };
+    let entity_id: String = row.get(0);
+    let request_id: Uuid = row.get(1);
+    let version: i64 = row.get(2);
+    let authority: String = row.get(3);
+    let key = format!("{}-cancel", row.get::<_, String>(4));
+    let accepted: ReviewRequestAccepted =
+        serde_json::from_value(row.get(5)).map_err(|_| MutationError::Unavailable)?;
+    let cancellation = registry_review_client::ReviewCancelRequest {
+        subject: accepted.subject.clone(),
+        reason: "source proposal withdrawn or superseded".to_owned(),
+    };
+    match review_client
+        .cancel_request(token, accepted.request_id, &key, &cancellation)
+        .await
+    {
+        Ok(complete) => {
+            let result = match complete.value {
+                registry_review_client::ReviewCancelResponse::Cancelled { result }
+                | registry_review_client::ReviewCancelResponse::AlreadyTerminal { result } => {
+                    result
+                }
+            };
+            let transaction = client
+                .transaction()
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            reconcile_result(&transaction, &authority, &accepted, &result).await?;
+            transaction
+                .execute(
+                    "UPDATE registry_internal.registry_request_review_submissions
+                        SET state='cancelled',lease_until=NULL,last_error_code=NULL,
+                            updated_at=transaction_timestamp()
+                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                        AND state='cancelling'",
+                    &[&entity_id, &request_id, &version],
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            transaction
+                .commit()
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+        }
+        Err(_) => {
+            client
+                .execute(
+                    "UPDATE registry_internal.registry_request_review_submissions
+                        SET lease_until=NULL,last_error_code='cancellation-uncertain',
+                            next_attempt_at=transaction_timestamp()+interval '5 seconds',
+                            updated_at=transaction_timestamp()
+                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                        AND state='cancelling'",
+                    &[&entity_id, &request_id, &version],
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+        }
+    }
+    Ok(true)
+}
+
+pub async fn receive_completion(
+    transaction: &Transaction<'_>,
+    authority: &str,
+    completion: &ReviewCompletion,
+    expires_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), MutationError> {
+    let state = if transaction
+        .query_opt(
+            "SELECT 1 FROM registry_internal.registry_request_review_submissions
+              WHERE authority=$1 AND accepted_binding->>'requestId'=$2",
+            &[&authority, &completion.request_id.to_string()],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?
+        .is_some()
+    {
+        "pending"
+    } else {
+        "unmatched"
+    };
+    let persisted = transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_request_review_completions
+             (authority,event_id,review_request_id,result_id,completed_at,state,expires_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)
+             ON CONFLICT (authority,event_id) DO UPDATE
+                 SET state=registry_request_review_completions.state
+               WHERE registry_request_review_completions.review_request_id=EXCLUDED.review_request_id
+                 AND registry_request_review_completions.result_id=EXCLUDED.result_id
+                 AND registry_request_review_completions.completed_at=EXCLUDED.completed_at",
+            &[
+                &authority,
+                &completion.event_id,
+                &completion.request_id,
+                &completion.result_id,
+                &completion.completed_at,
+                &state,
+                &expires_at,
+            ],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    if persisted != 1 {
+        return Err(MutationError::PreconditionFailed);
+    }
+    Ok(())
+}
+
+pub async fn reconcile_result(
+    transaction: &Transaction<'_>,
+    authority: &str,
+    accepted: &ReviewRequestAccepted,
+    result: &ReviewResult,
+) -> Result<(), MutationError> {
+    result
+        .check()
+        .map_err(|_| MutationError::PreconditionFailed)?;
+    if result.request_id != accepted.request_id
+        || result.subject != accepted.subject
+        || result.policy != accepted.policy
+        || result.submission_digest != accepted.submission_digest
+    {
+        return Err(MutationError::PreconditionFailed);
+    }
+    let row = transaction
+        .query_opt(
+            "SELECT request_entity_id,request_id,proposal_version,proposal_digest,
+                    on_approved_mode,executor,withdrawn
+               FROM registry_internal.registry_request_review_submissions
+              WHERE authority=$1 AND accepted_binding=$2 AND state IN ('accepted','cancelling')
+              FOR UPDATE",
+            &[
+                &authority,
+                &serde_json::to_value(accepted).map_err(|_| MutationError::Unavailable)?,
+            ],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?
+        .ok_or(MutationError::PreconditionFailed)?;
+    let entity_id: String = row.get(0);
+    let request_id: Uuid = row.get(1);
+    let version: i64 = row.get(2);
+    let proposal_digest: String = row.get(3);
+    if result.subject.id != request_id.to_string()
+        || result.subject.version != version.to_string()
+        || result.subject.digest.as_str() != proposal_digest
+    {
+        return Err(MutationError::PreconditionFailed);
+    }
+    let status = result_status(result.status);
+    let value = serde_json::to_value(result).map_err(|_| MutationError::Unavailable)?;
+    transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_request_review_results
+             (request_entity_id,request_id,proposal_version,authority,result_id,result,
+              status,completed_at,available_until)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+             ON CONFLICT (request_entity_id,request_id,proposal_version) DO UPDATE
+                 SET result=EXCLUDED.result
+               WHERE registry_request_review_results.result_id=EXCLUDED.result_id
+                 AND registry_request_review_results.result=EXCLUDED.result",
+            &[
+                &entity_id,
+                &request_id,
+                &version,
+                &authority,
+                &result.result_id,
+                &value,
+                &status,
+                &result.completed_at,
+                &result.available_until,
+            ],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    transaction
+        .execute(
+            "UPDATE registry_internal.registry_request_review_completions
+                SET state='correlated'
+              WHERE authority=$1 AND review_request_id=$2 AND result_id=$3
+                AND state IN ('pending','unmatched')",
+            &[&authority, &result.request_id, &result.result_id],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    let mode: String = row.get(4);
+    let executor: Option<String> = row.get(5);
+    let withdrawn: bool = row.get(6);
+    if status == "approved" && mode == "automatic" && !withdrawn {
+        let executor = executor.ok_or(MutationError::Unavailable)?;
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_request_application_jobs
+                 (request_entity_id,request_id,proposal_version,job_id,proposal_digest,
+                  result_id,executor,state)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,'queued') ON CONFLICT DO NOTHING",
+                &[
+                    &entity_id,
+                    &request_id,
+                    &version,
+                    &Uuid::new_v4(),
+                    &proposal_digest,
+                    &result.result_id,
+                    &executor,
+                ],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+    }
+    Ok(())
+}
+
+pub async fn poll_one_result(
+    client: &mut tokio_postgres::Client,
+    authority_id: &str,
+    review_client: &ReviewClient,
+    token: &BearerToken,
+) -> Result<bool, MutationError> {
+    let Some(row) = client
+        .query_opt(
+            "SELECT authority,accepted_binding
+               FROM registry_internal.registry_request_review_submissions s
+              WHERE state='accepted' AND authority=$1
+                AND next_result_poll_at <= transaction_timestamp()
+                AND NOT EXISTS (
+                    SELECT 1 FROM registry_internal.registry_request_review_results r
+                     WHERE r.request_entity_id=s.request_entity_id AND r.request_id=s.request_id
+                       AND r.proposal_version=s.proposal_version)
+              ORDER BY updated_at LIMIT 1",
+            &[&authority_id],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?
+    else {
+        return Ok(false);
+    };
+    let authority: String = row.get(0);
+    let accepted: ReviewRequestAccepted =
+        serde_json::from_value(row.get(1)).map_err(|_| MutationError::Unavailable)?;
+    let response = review_client
+        .result(token, &accepted)
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    match response {
+        ReviewResultResponse::Available(complete) => {
+            let transaction = client
+                .transaction()
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            reconcile_result(&transaction, &authority, &accepted, &complete.value).await?;
+            transaction
+                .commit()
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+        }
+        ReviewResultResponse::Pending { .. } | ReviewResultResponse::ConcealedOrUnknown { .. } => {
+            client
+                .execute(
+                    "UPDATE registry_internal.registry_request_review_submissions
+                        SET result_poll_attempts=result_poll_attempts+1,
+                            next_result_poll_at=transaction_timestamp()+
+                              (LEAST(60,5*(result_poll_attempts+1)) * interval '1 second'),
+                            updated_at=transaction_timestamp()
+                      WHERE authority=$1 AND accepted_binding=$2 AND state='accepted'",
+                    &[
+                        &authority,
+                        &serde_json::to_value(&accepted).map_err(|_| MutationError::Unavailable)?,
+                    ],
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+        }
+        ReviewResultResponse::Expired { .. } => {
+            client
+                .execute(
+                    "UPDATE registry_internal.registry_request_review_submissions
+                        SET state='failed',last_error_code='result-expired',
+                            updated_at=transaction_timestamp()
+                      WHERE authority=$1 AND accepted_binding=$2 AND state='accepted'",
+                    &[
+                        &authority,
+                        &serde_json::to_value(&accepted).map_err(|_| MutationError::Unavailable)?,
+                    ],
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+        }
+        _ => return Err(MutationError::Unavailable),
+    }
+    Ok(true)
+}
+
+fn result_status(status: registry_review_client::ReviewResultStatus) -> &'static str {
+    match status {
+        registry_review_client::ReviewResultStatus::Approved => "approved",
+        registry_review_client::ReviewResultStatus::Rejected => "rejected",
+        registry_review_client::ReviewResultStatus::ChangesRequested => "changes_requested",
+        registry_review_client::ReviewResultStatus::Answered => "answered",
+        registry_review_client::ReviewResultStatus::Cancelled => "cancelled",
+        registry_review_client::ReviewResultStatus::Superseded => "superseded",
+    }
+}
+
+pub(crate) async fn read_projection(
+    transaction: &Transaction<'_>,
+    request_entity_id: &str,
+    request_id: Uuid,
+    proposal: &ProposalSnapshot,
+) -> Result<Option<Value>, MutationError> {
+    let CompiledChangeRequestReview::Required(requirement) = proposal.review_requirement() else {
+        return Ok(None);
+    };
+    let row = transaction
+        .query_opt(
+            "SELECT s.state,s.authority,s.accepted_binding,s.on_approved_mode,s.executor,
+                    r.status,r.result_id,
+                    to_char(r.completed_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                    to_char(r.available_until AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                    j.state,j.application_id,s.last_error_code,
+                    c.state,c.event_id,
+                    to_char(c.received_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                    s.withdrawn
+               FROM registry_internal.registry_request_review_submissions s
+               LEFT JOIN registry_internal.registry_request_review_results r
+                 USING (request_entity_id,request_id,proposal_version)
+               LEFT JOIN registry_internal.registry_request_application_jobs j
+                 USING (request_entity_id,request_id,proposal_version)
+               LEFT JOIN LATERAL (
+                    SELECT state,event_id,received_at
+                      FROM registry_internal.registry_request_review_completions c
+                     WHERE c.authority=s.authority
+                       AND c.review_request_id=(s.accepted_binding->>'requestId')::uuid
+                     ORDER BY received_at DESC LIMIT 1
+               ) c ON s.accepted_binding IS NOT NULL
+              WHERE s.request_entity_id=$1 AND s.request_id=$2 AND s.proposal_version=$3",
+            &[
+                &request_entity_id,
+                &request_id,
+                &i64::from(proposal.version().get()),
+            ],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    let Some(row) = row else {
+        return Ok(Some(json!({
+            "submission":{"state":"pending","authority":requirement.authority},
+            "result":{"state":"pending"},
+            "delivery":{"state":"polling"},
+            "application":{"mode":application_mode(proposal),"state":"awaitingReview"},
+            "recovery":{"state":"none"}
+        })));
+    };
+    let withdrawn: bool = row.get(15);
+    let submission_state = match row.get::<_, String>(0).as_str() {
+        "pending" | "submitting" | "uncertain" if withdrawn => "cancelling",
+        "pending" | "submitting" => "pending",
+        "accepted" => "accepted",
+        "uncertain" => "uncertain",
+        "cancelling" => "cancelling",
+        "cancelled" => "cancelled",
+        "failed" => "failed",
+        _ => return Err(MutationError::Unavailable),
+    };
+    let accepted: Option<Value> = row.get(2);
+    let mut submission = json!({
+        "state": submission_state,
+        "authority": row.get::<_, String>(1),
+    });
+    if let Some(accepted) = accepted {
+        submission["requestId"] = accepted["requestId"].clone();
+        submission["submissionDigest"] = accepted["submissionDigest"].clone();
+        submission["policy"] = accepted["policy"].clone();
+    }
+    let result_state = match row.get::<_, Option<String>>(5).as_deref() {
+        None => "pending",
+        Some("approved") => "approved",
+        Some("rejected") => "rejected",
+        Some("changes_requested") => "changesRequested",
+        Some("answered") => "answered",
+        Some("cancelled") => "cancelled",
+        Some("superseded") => "superseded",
+        Some(_) => return Err(MutationError::Unavailable),
+    };
+    let mut result = json!({"state": result_state});
+    if let Some(result_id) = row.get::<_, Option<Uuid>>(6) {
+        result["resultId"] = json!(result_id);
+        result["completedAt"] = json!(row.get::<_, Option<String>>(7));
+        result["availableUntil"] = json!(row.get::<_, Option<String>>(8));
+    }
+    let delivery_state = match row.get::<_, Option<String>>(12).as_deref() {
+        None => "polling",
+        Some("pending") => "received",
+        Some("correlated" | "applied") => "reconciled",
+        Some("unmatched") => "unmatched",
+        Some("exhausted") => "exhausted",
+        Some(_) => return Err(MutationError::Unavailable),
+    };
+    let mut delivery = json!({"state":delivery_state});
+    if let Some(event_id) = row.get::<_, Option<Uuid>>(13) {
+        delivery["eventId"] = json!(event_id);
+        delivery["receivedAt"] = json!(row.get::<_, Option<String>>(14));
+    }
+    let application_state = match row.get::<_, Option<String>>(9).as_deref() {
+        Some("queued") => "queued",
+        Some("applying") => "applying",
+        Some("applied") => "applied",
+        Some("blocked") => "blocked",
+        Some(_) => return Err(MutationError::Unavailable),
+        None if row.get::<_, Option<String>>(5).as_deref() == Some("approved") => "ready",
+        None => "awaitingReview",
+    };
+    let mode: String = row.get(3);
+    let mut application = json!({"mode":mode,"state":application_state});
+    if let Some(executor) = row.get::<_, Option<String>>(4) {
+        application["executor"] = json!(executor);
+    }
+    if let Some(application_id) = row.get::<_, Option<Uuid>>(10) {
+        application["applicationId"] = json!(application_id);
+    }
+    let recovery = match row.get::<_, Option<String>>(11) {
+        None => json!({"state":"none"}),
+        Some(code) => json!({"state":"operatorAttention","code":code}),
+    };
+    Ok(Some(json!({
+        "submission":submission,"result":result,"delivery":delivery,
+        "application":application,"recovery":recovery
+    })))
+}
+
+fn application_mode(proposal: &ProposalSnapshot) -> &'static str {
+    match proposal.on_approved().mode {
+        CompiledChangeRequestOnApprovedMode::Manual => "manual",
+        CompiledChangeRequestOnApprovedMode::Automatic => "automatic",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn authority(id: &str, completion: Option<(&str, &str)>) -> Arc<ReviewAuthorityClient> {
+        let client = ReviewClient::new(registry_review_client::ReviewClientConfig::new(
+            "https://casework.example.test/".parse().expect("URL"),
+        ))
+        .expect("client");
+        Arc::new(
+            ReviewAuthorityClient::new(
+                id.to_owned(),
+                client,
+                BearerToken::new("outgoing-token".to_owned()).expect("outgoing token"),
+                format!("{id}-producer"),
+                30,
+                completion.map(|(token, _)| Zeroizing::new(token.to_owned())),
+                completion.map(|(_, recipient)| recipient.to_owned()),
+            )
+            .expect("authority"),
+        )
+    }
+
+    #[test]
+    fn completion_sender_requires_exact_independent_token_and_recipient() {
+        let registry = ReviewAuthorityRegistry::new(BTreeMap::from([
+            (
+                "casework-a".to_owned(),
+                authority("casework-a", Some(("sender-a", "registry-a"))),
+            ),
+            (
+                "casework-b".to_owned(),
+                authority("casework-b", Some(("sender-b", "registry-b"))),
+            ),
+        ]))
+        .expect("registry");
+
+        assert_eq!(
+            registry.completion_authority("sender-a", "registry-a"),
+            Some("casework-a")
+        );
+        assert_eq!(
+            registry.completion_authority("sender-a", "registry-b"),
+            None
+        );
+        assert_eq!(
+            registry.completion_authority("sender-b", "registry-a"),
+            None
+        );
+        assert_eq!(
+            registry.completion_authority("outgoing-token", "registry-a"),
+            None
+        );
+    }
+
+    #[test]
+    fn polling_only_authority_has_no_completion_sender() {
+        let registry = ReviewAuthorityRegistry::new(BTreeMap::from([(
+            "casework-a".to_owned(),
+            authority("casework-a", None),
+        )]))
+        .expect("registry");
+
+        assert_eq!(
+            registry.completion_authority("any-token", "any-recipient"),
+            None
+        );
+        assert_eq!(
+            registry.submission_binding("casework-a"),
+            Some(("casework-a-producer", 30))
+        );
+    }
+}

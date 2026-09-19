@@ -150,16 +150,17 @@ pub struct CompiledChangeRequest {
     pub request_entity_id: String,
     pub contract_fingerprint: String,
     pub retention_mode: CompiledChangeRequestRetentionMode,
-    #[serde(default, skip_serializing_if = "is_staged_review")]
-    pub review_mode: CompiledChangeRequestReviewMode,
-    #[serde(default, skip_serializing_if = "is_manual_application")]
+    pub review: CompiledChangeRequestReview,
+    pub on_approved: CompiledChangeRequestOnApproved,
+    #[serde(
+        default,
+        skip_serializing_if = "CompiledChangeRequestApplication::is_empty"
+    )]
     pub application: CompiledChangeRequestApplication,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub planner: Option<CompiledChangeRequestPlanner>,
     pub effects: Vec<CompiledChangeRequestEffect>,
-    pub stages: Vec<CompiledChangeRequestStage>,
     pub actions: Vec<CompiledChangeRequestActionRoute>,
-    pub review_permissions: Vec<CompiledChangeRequestReviewPermission>,
     pub apply_permissions: Vec<CompiledChangeRequestApplyPermission>,
     pub presence_permissions: Vec<CompiledChangeRequestPresencePermission>,
     pub target_entities: BTreeSet<String>,
@@ -186,24 +187,51 @@ impl CompiledChangeRequest {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CompiledChangeRequestReviewMode {
-    None,
-    #[default]
-    Stages,
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CompiledChangeRequestReview {
+    Required(CompiledChangeRequestReviewRequirement),
+    None(CompiledChangeRequestNoReview),
 }
 
-fn is_staged_review(mode: &CompiledChangeRequestReviewMode) -> bool {
-    *mode == CompiledChangeRequestReviewMode::Stages
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestReviewRequirement {
+    pub authority: String,
+    pub policy_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestNoReview {
+    pub mode: CompiledChangeRequestNoReviewMode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompiledChangeRequestNoReviewMode {
+    None,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledChangeRequestOnApproved {
+    pub mode: CompiledChangeRequestOnApprovedMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executor: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompiledChangeRequestOnApprovedMode {
+    #[default]
+    Manual,
+    Automatic,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledChangeRequestApplication {
-    pub mode: CompiledChangeRequestApplicationMode,
-    pub allowed_dispositions: BTreeSet<CompiledChangeRequestDisposition>,
-    pub queue_reasons: BTreeMap<String, String>,
     #[serde(
         default,
         skip_serializing_if = "CompiledChangeRequestPreconditions::is_empty"
@@ -211,11 +239,10 @@ pub struct CompiledChangeRequestApplication {
     pub preconditions: CompiledChangeRequestPreconditions,
 }
 
-fn is_manual_application(application: &CompiledChangeRequestApplication) -> bool {
-    application.mode == CompiledChangeRequestApplicationMode::Manual
-        && application.allowed_dispositions.is_empty()
-        && application.queue_reasons.is_empty()
-        && application.preconditions.is_empty()
+impl CompiledChangeRequestApplication {
+    pub fn is_empty(&self) -> bool {
+        self.preconditions.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -314,22 +341,6 @@ pub enum CompiledChangeRequestEvidenceExpected {
     RequestField { field: String },
     AtLeast { value: i64 },
     AtMost { value: i64 },
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CompiledChangeRequestApplicationMode {
-    #[default]
-    Manual,
-    Automatic,
-    Planner,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CompiledChangeRequestDisposition {
-    Apply,
-    Queue,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -443,24 +454,10 @@ pub enum CompiledChangeRequestValue {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestStage {
-    pub id: String,
-    pub approvals: u16,
-    pub exclude_submitter: bool,
-    // Preserve the canonical bytes of frozen stages that predate this rule.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub exclude_previous_reviewers: bool,
-}
-
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChangeRequestOperation {
     SubmitRequest,
-    ApproveRequest,
-    RejectRequest,
-    RequestRevision,
     ReviseRequest,
     CancelRequest,
     ApplyRequest,
@@ -470,9 +467,6 @@ impl ChangeRequestOperation {
     pub fn access_operation(self) -> Operation {
         match self {
             Self::SubmitRequest => Operation::SubmitRequest,
-            Self::ApproveRequest => Operation::ApproveRequest,
-            Self::RejectRequest => Operation::RejectRequest,
-            Self::RequestRevision => Operation::RequestRevision,
             Self::ReviseRequest => Operation::ReviseRequest,
             Self::CancelRequest => Operation::CancelRequest,
             Self::ApplyRequest => Operation::ApplyRequest,
@@ -484,18 +478,6 @@ impl ChangeRequestOperation {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledChangeRequestActionRoute {
     pub operation: ChangeRequestOperation,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub review_stage: Option<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestReviewPermission {
-    pub profile_id: String,
-    pub stage: String,
-    pub target_entity_id: String,
-    pub readable_fields: BTreeSet<String>,
-    pub row_boundaries: Vec<RowBoundarySource>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

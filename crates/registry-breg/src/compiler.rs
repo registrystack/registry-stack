@@ -1799,7 +1799,6 @@ fn expand_project_access(
                 request_visibility: grant.request_visibility,
                 lookups: grant.lookups.clone(),
                 read_paths: grant.read_paths.clone(),
-                review_stages: grant.review_stages.clone(),
                 apply_targets: grant.apply_targets.clone(),
                 submitter_targets: grant.submitter_targets.clone(),
                 request_presence: grant.request_presence.clone(),
@@ -3189,9 +3188,6 @@ fn validate_profiles(
                         | Operation::Tombstone
                         | Operation::Batch
                         | Operation::SubmitRequest
-                        | Operation::ApproveRequest
-                        | Operation::RejectRequest
-                        | Operation::RequestRevision
                         | Operation::ReviseRequest
                         | Operation::CancelRequest
                         | Operation::ApplyRequest
@@ -4270,29 +4266,14 @@ pub const PACKAGE_IDENTITY_KEYS: [&str; 4] = [
 /// Every change request transition a request lifecycle event may select, in
 /// workflow order. Authoring documentation reads this list rather than
 /// restating it.
-pub const REQUEST_LIFECYCLE_TRANSITIONS: [&str; 8] = [
-    "submit",
-    "approve",
-    "reject",
-    "request_revision",
-    "revise",
-    "rebase",
-    "cancel",
-    "apply",
-];
+pub const REQUEST_LIFECYCLE_TRANSITIONS: [&str; 5] =
+    ["submit", "revise", "rebase", "cancel", "apply"];
 
 /// Every change request state a request lifecycle event may select, in
 /// workflow order. Authoring documentation reads this list rather than
 /// restating it.
-pub const REQUEST_LIFECYCLE_STATES: [&str; 7] = [
-    "draft",
-    "submitted",
-    "approved",
-    "needs_changes",
-    "rejected",
-    "canceled",
-    "applied",
-];
+pub const REQUEST_LIFECYCLE_STATES: [&str; 5] =
+    ["draft", "submitted", "cancelled", "applied", "superseded"];
 
 fn valid_request_lifecycle_transition(value: &str) -> bool {
     REQUEST_LIFECYCLE_TRANSITIONS.contains(&value)
@@ -4409,7 +4390,7 @@ fn maximum_event_payload_bytes<'a>(
         total = total.checked_add(key.len() as u64 + 3)?;
     }
     if trigger == EventTrigger::RequestLifecycle {
-        // The request lifecycle envelope contains bounded ASCII state/stage/
+        // The request lifecycle envelope contains bounded ASCII state and
         // digest fields plus integer proposal/workflow revisions and a stable
         // deduplication key. The exact runtime payload is still checked against
         // the compiled delivery maximum before insert.
@@ -4419,7 +4400,6 @@ fn maximum_event_payload_bytes<'a>(
             "transition",
             "fromState",
             "toState",
-            "stage",
             "effectDigest",
             "deduplicationKey",
             "reasonPresent",
@@ -4436,17 +4416,17 @@ fn maximum_event_payload_bytes<'a>(
             .checked_add(34)?
             .checked_add(16)?
             .checked_add(16)?
-            .checked_add(258)?
             .checked_add(73)?
             .checked_add(512)?
             .checked_add(5)?;
-        if request_event_may_include_review_reason(event) {
+        if request_event_may_include_reason(event) {
             // Include the comma, key, and worst-case escaped Unicode text only
-            // when the event can carry a rejection or revision reason.
+            // when the event can carry an application reason.
             total = total
                 .checked_add(1 + "reason".len() as u64 + 3)?
                 .checked_add(
-                    (crate::request_workflow::MAX_REVIEW_REASON_CHARS as u64).checked_mul(6)?,
+                    (crate::request_workflow::MAX_APPLICATION_REASON_CHARS as u64)
+                        .checked_mul(6)?,
                 )?
                 .checked_add(2)?;
         }
@@ -4660,7 +4640,7 @@ fn maximum_field_json_bytes(field_type: &FieldTypeSource) -> Option<u64> {
 
 /// A lifecycle event can disclose reviewer text only on these two transitions.
 /// Empty condition sets are unrestricted, as in runtime condition evaluation.
-fn request_event_may_include_review_reason(event: &crate::contract::HookSource) -> bool {
+fn request_event_may_include_reason(event: &crate::contract::HookSource) -> bool {
     if event.trigger != EventTrigger::RequestLifecycle {
         return false;
     }
@@ -4670,15 +4650,10 @@ fn request_event_may_include_review_reason(event: &crate::contract::HookSource) 
             transitions,
             to_states,
             ..
-        }) => [
-            ("reject", "rejected"),
-            ("request_revision", "needs_changes"),
-        ]
-        .iter()
-        .any(|(transition, state)| {
-            (transitions.is_empty() || transitions.contains(*transition))
-                && (to_states.is_empty() || to_states.contains(*state))
-        }),
+        }) => {
+            (transitions.is_empty() || transitions.contains("apply"))
+                && (to_states.is_empty() || to_states.contains("applied"))
+        }
         Some(EventConditionSource::Fields { .. }) => false,
     }
 }
@@ -4712,7 +4687,7 @@ fn compile_event_delivery_inventory(
                 .collect::<Vec<_>>();
             if event.trigger == EventTrigger::RequestLifecycle {
                 classifications.push(entity.classification);
-                if request_event_may_include_review_reason(event) {
+                if request_event_may_include_reason(event) {
                     classifications.push(Classification::Internal);
                 }
             }
@@ -5437,14 +5412,8 @@ fn compile_change_request_routes_and_access(
 ) {
     for action in &plan.actions {
         let operation = action.operation.access_operation();
-        let route_id =
-            change_request_route_id(entity, action.operation, action.review_stage.as_deref());
-        let profiles = change_request_route_profiles(
-            entity,
-            plan,
-            action.operation,
-            action.review_stage.as_deref(),
-        );
+        let route_id = change_request_route_id(entity, action.operation);
+        let profiles = change_request_route_profiles(entity, plan, action.operation);
         if profiles.is_empty() {
             continue;
         }
@@ -5456,15 +5425,11 @@ fn compile_change_request_routes_and_access(
             id: route_id.clone(),
             entity_id: entity.id.clone(),
             method: HttpMethod::Post,
-            path: change_request_route_path(
-                entity,
-                action.operation,
-                action.review_stage.as_deref(),
-            ),
+            path: change_request_route_path(entity, action.operation),
             operation,
             query_kind: None,
             revision_kind: None,
-            request_stage: action.review_stage.clone(),
+            request_stage: None,
             maximum_records: Some(1),
             access_profiles: profile_ids.iter().cloned().collect(),
             default_access_profile: default.map(|profile| profile.id.clone()),
@@ -5483,7 +5448,6 @@ fn change_request_route_profiles<'a>(
     entity: &'a CompiledEntity,
     plan: &crate::model::CompiledChangeRequest,
     operation: ChangeRequestOperation,
-    review_stage: Option<&str>,
 ) -> Vec<&'a AccessProfileSource> {
     entity
         .access_profiles
@@ -5494,33 +5458,12 @@ fn change_request_route_profiles<'a>(
                     ChangeRequestOperation::SubmitRequest
                     | ChangeRequestOperation::ReviseRequest
                     | ChangeRequestOperation::CancelRequest => true,
-                    ChangeRequestOperation::ApproveRequest
-                    | ChangeRequestOperation::RejectRequest
-                    | ChangeRequestOperation::RequestRevision => {
-                        review_stage.is_some_and(|stage| {
-                            review_route_profile_covers_stage(plan, &profile.id, stage)
-                        })
-                    }
                     ChangeRequestOperation::ApplyRequest => {
                         apply_route_profile_covers_targets(plan, &profile.id)
                     }
                 }
         })
         .collect()
-}
-
-fn review_route_profile_covers_stage(
-    plan: &crate::model::CompiledChangeRequest,
-    profile_id: &str,
-    stage: &str,
-) -> bool {
-    plan.target_entities.iter().all(|target| {
-        plan.review_permissions.iter().any(|grant| {
-            grant.profile_id == profile_id
-                && grant.stage == stage
-                && grant.target_entity_id == *target
-        })
-    })
 }
 
 fn apply_route_profile_covers_targets(
@@ -5544,43 +5487,18 @@ fn route_default_profile<'a>(
     }
 }
 
-fn change_request_route_id(
-    entity: &CompiledEntity,
-    operation: ChangeRequestOperation,
-    review_stage: Option<&str>,
-) -> String {
-    match operation {
-        ChangeRequestOperation::ApproveRequest
-        | ChangeRequestOperation::RejectRequest
-        | ChangeRequestOperation::RequestRevision => format!(
-            "records.{}.request.stages.{}.{}",
-            entity.id,
-            review_stage.expect("review route stage is compiled"),
-            request_action_id(operation)
-        ),
-        _ => format!(
-            "records.{}.request.{}",
-            entity.id,
-            request_action_id(operation)
-        ),
-    }
+fn change_request_route_id(entity: &CompiledEntity, operation: ChangeRequestOperation) -> String {
+    format!(
+        "records.{}.request.{}",
+        entity.id,
+        request_action_id(operation)
+    )
 }
 
-fn change_request_route_path(
-    entity: &CompiledEntity,
-    operation: ChangeRequestOperation,
-    review_stage: Option<&str>,
-) -> String {
+fn change_request_route_path(entity: &CompiledEntity, operation: ChangeRequestOperation) -> String {
     let base = format!("/v1/records/{}/{{record_id}}/actions", entity.route);
     match operation {
         ChangeRequestOperation::SubmitRequest => format!("{base}/submit"),
-        ChangeRequestOperation::ApproveRequest
-        | ChangeRequestOperation::RejectRequest
-        | ChangeRequestOperation::RequestRevision => format!(
-            "{base}/stages/{}/{}",
-            review_stage.expect("review route stage is compiled"),
-            request_action_path_segment(operation)
-        ),
         ChangeRequestOperation::ReviseRequest => format!("{base}/revise"),
         ChangeRequestOperation::CancelRequest => format!("{base}/cancel"),
         ChangeRequestOperation::ApplyRequest => format!("{base}/apply"),
@@ -5590,21 +5508,6 @@ fn change_request_route_path(
 fn request_action_id(operation: ChangeRequestOperation) -> &'static str {
     match operation {
         ChangeRequestOperation::SubmitRequest => "submit",
-        ChangeRequestOperation::ApproveRequest => "approve",
-        ChangeRequestOperation::RejectRequest => "reject",
-        ChangeRequestOperation::RequestRevision => "request_revision",
-        ChangeRequestOperation::ReviseRequest => "revise",
-        ChangeRequestOperation::CancelRequest => "cancel",
-        ChangeRequestOperation::ApplyRequest => "apply",
-    }
-}
-
-fn request_action_path_segment(operation: ChangeRequestOperation) -> &'static str {
-    match operation {
-        ChangeRequestOperation::SubmitRequest => "submit",
-        ChangeRequestOperation::ApproveRequest => "approve",
-        ChangeRequestOperation::RejectRequest => "reject",
-        ChangeRequestOperation::RequestRevision => "request-revision",
         ChangeRequestOperation::ReviseRequest => "revise",
         ChangeRequestOperation::CancelRequest => "cancel",
         ChangeRequestOperation::ApplyRequest => "apply",
@@ -6297,9 +6200,6 @@ fn route_shape(entity: &CompiledEntity, operation: Operation) -> (HttpMethod, St
         Operation::Revisions => (HttpMethod::Get, format!("{base}/{{record_id}}/revisions")),
         Operation::Snapshot => (HttpMethod::Get, format!("{base}:snapshot")),
         Operation::SubmitRequest
-        | Operation::ApproveRequest
-        | Operation::RejectRequest
-        | Operation::RequestRevision
         | Operation::ReviseRequest
         | Operation::CancelRequest
         | Operation::ApplyRequest
@@ -6323,7 +6223,7 @@ fn routed_operations() -> [Operation; 9] {
     ]
 }
 
-fn all_operations() -> [Operation; 17] {
+fn all_operations() -> [Operation; 14] {
     [
         Operation::Create,
         Operation::Get,
@@ -6335,9 +6235,6 @@ fn all_operations() -> [Operation; 17] {
         Operation::Revisions,
         Operation::Snapshot,
         Operation::SubmitRequest,
-        Operation::ApproveRequest,
-        Operation::RejectRequest,
-        Operation::RequestRevision,
         Operation::ReviseRequest,
         Operation::CancelRequest,
         Operation::ApplyRequest,
@@ -6349,9 +6246,6 @@ fn is_request_operation(operation: Operation) -> bool {
     matches!(
         operation,
         Operation::SubmitRequest
-            | Operation::ApproveRequest
-            | Operation::RejectRequest
-            | Operation::RequestRevision
             | Operation::ReviseRequest
             | Operation::CancelRequest
             | Operation::ApplyRequest
@@ -6370,9 +6264,6 @@ pub(crate) fn operation_id(operation: Operation) -> &'static str {
         Operation::Revisions => "revisions",
         Operation::Snapshot => "snapshot",
         Operation::SubmitRequest => "submit_request",
-        Operation::ApproveRequest => "approve_request",
-        Operation::RejectRequest => "reject_request",
-        Operation::RequestRevision => "request_revision",
         Operation::ReviseRequest => "revise_request",
         Operation::CancelRequest => "cancel_request",
         Operation::ApplyRequest => "apply_request",

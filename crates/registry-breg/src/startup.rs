@@ -346,6 +346,7 @@ pub struct PreparedServer {
     shutdown_grace: Duration,
     webhook_worker: Option<WebhookWorker>,
     attachment_verification_worker: Option<AttachmentVerificationWorker>,
+    review_worker: Option<crate::review_store::ReviewWorker>,
     metrics: Option<PreparedMetricsListener>,
     #[cfg(feature = "wasm")]
     wasm_runtime: Option<crate::wasm_runtime::ConfiguredWasmRuntime>,
@@ -391,6 +392,7 @@ impl PreparedServer {
             shutdown_grace,
             webhook_worker: None,
             attachment_verification_worker: None,
+            review_worker: None,
             metrics: None,
             #[cfg(feature = "wasm")]
             wasm_runtime: None,
@@ -414,6 +416,7 @@ impl PreparedServer {
             shutdown_grace,
             webhook_worker: Some(webhook_worker),
             attachment_verification_worker: None,
+            review_worker: None,
             metrics: None,
             #[cfg(feature = "wasm")]
             wasm_runtime: None,
@@ -880,6 +883,18 @@ async fn finish_prepared_server(
     let evidence = config
         .activate_evidence(&registry)
         .map_err(StartupError::RuntimeConfig)?;
+    let review_authorities = config
+        .activate_review_authorities(&registry)
+        .map_err(StartupError::RuntimeConfig)?;
+    let review_worker = review_authorities.as_ref().map(|authorities| {
+        crate::review_store::ReviewWorker::new(pool.clone(), Arc::clone(authorities))
+    });
+    let review_completion_receiver = review_authorities.as_ref().map(|authorities| {
+        Arc::new(crate::review_store::ReviewCompletionReceiver::new(
+            pool.clone(),
+            Arc::clone(authorities),
+        ))
+    });
     let task_status = config
         .activate_task_status(&registry)
         .map_err(StartupError::RuntimeConfig)?;
@@ -922,6 +937,10 @@ async fn finish_prepared_server(
         Some(field_encryption) => mutations.with_field_encryption(field_encryption),
         None => mutations,
     };
+    let mutations = match review_authorities {
+        Some(authorities) => mutations.with_review_result_source(authorities),
+        None => mutations,
+    };
     let mutations = Arc::new(match evidence {
         Some(evaluator) => mutations
             .with_evidence_evaluator(evaluator)
@@ -932,6 +951,9 @@ async fn finish_prepared_server(
         .with_postgres_revisions(revisions)
         .with_snapshots(snapshots)
         .with_postgres_mutations(mutations);
+    if let Some(receiver) = review_completion_receiver {
+        service = service.with_review_completions(receiver);
+    }
     if let Some(origin) = config.listener().public_origin() {
         service = service.with_public_origin(origin.clone());
     }
@@ -963,6 +985,7 @@ async fn finish_prepared_server(
         shutdown_grace: config.operational_timeouts().shutdown_grace,
         webhook_worker,
         attachment_verification_worker,
+        review_worker,
         metrics,
         #[cfg(feature = "wasm")]
         wasm_runtime: Some(wasm_runtime),
@@ -1149,6 +1172,7 @@ pub async fn serve_until_shutdown(
         shutdown_grace,
         webhook_worker,
         attachment_verification_worker,
+        review_worker,
         metrics,
         #[cfg(feature = "wasm")]
             wasm_runtime: _wasm_runtime,
@@ -1172,6 +1196,8 @@ pub async fn serve_until_shutdown(
     let (worker_shutdown_tx, worker_shutdown_rx) = watch::channel(false);
     let mut verification_worker = attachment_verification_worker
         .map(|worker| tokio::spawn(worker.run(worker_shutdown_rx.clone())));
+    let mut review_worker =
+        review_worker.map(|worker| tokio::spawn(worker.run(worker_shutdown_rx.clone())));
     let mut worker = webhook_worker.map(|worker| tokio::spawn(worker.run(worker_shutdown_rx)));
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let (metrics_shutdown_tx, metrics_shutdown_rx) = oneshot::channel::<()>();
@@ -1214,6 +1240,9 @@ pub async fn serve_until_shutdown(
         if let Some(worker) = verification_worker.as_mut() {
             let _ = worker.await;
         }
+        if let Some(worker) = review_worker.as_mut() {
+            let _ = worker.await;
+        }
         if let Some(metrics_server) = metrics_server.as_mut() {
             let _ = metrics_server.await;
         }
@@ -1235,6 +1264,10 @@ pub async fn serve_until_shutdown(
                 let _ = worker.await;
             }
             if let Some(worker) = verification_worker.as_mut() {
+                worker.abort();
+                let _ = worker.await;
+            }
+            if let Some(worker) = review_worker.as_mut() {
                 worker.abort();
                 let _ = worker.await;
             }

@@ -38,11 +38,10 @@ fn fixture_with(effects: Value, customize: impl FnOnce(&mut Value)) -> CompiledR
                 {"id":"two","type":"reference","target":"target","classification":"internal"},
                 {"id":"value","type":"string","maxLength":64,"required":true,"classification":"internal"}
             ],
-            "changeRequest":{"effects":effects,"review":{"stages":[{"id":"review","approvals":1}]}}
+            "changeRequest":{"effects":effects,"review":{"authority":"casework-main","policyId":"request-review"}}
         }],
         "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","permissions":[{
-            "entity":"request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["one","two","value"],
-            "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["first","second","parent"], "rowBoundaries": []}]}],
+            "entity":"request","operations":["get","submit_request","apply_request"],"readableFields":["one","two","value"],
             "applyTargets":[{"entity":"target", "rowBoundaries": []}],
           "rowBoundaries": []
         }]}]
@@ -61,7 +60,8 @@ fn omitted_optional_request_field_freezes_as_materialized_null() {
                 .as_array_mut()
                 .unwrap()
                 .push(json!({"id":"optional-note","type":"string","maxLength":32,"classification":"internal"}));
-            source["entities"][1]["changeRequest"]["application"] = json!({"mode":"manual","preconditions":{"request":[{"field":"optional-note","equals":null}]}});
+            source["entities"][1]["changeRequest"]["application"] =
+                json!({"preconditions":{"request":[{"field":"optional-note","equals":null}]}});
         },
     );
     let before = map(json!({"first":"old"}));
@@ -192,16 +192,12 @@ fn preparation_refuses_a_guard_on_its_own_request_record() {
                 .unwrap()
                 .push(json!({"id":"guard-reference","type":"reference","target":"request","required":true,"classification":"internal"}));
             source["entities"][1]["changeRequest"]["application"] = json!({
-                "mode":"manual","preconditions":{"targets":[{
+                "preconditions":{"targets":[{
                     "id":"guard","entity":"request","fromField":"guard-reference",
                     "requires":[{"field":"value","equals":"changed"}]
                 }]}
             });
             let permission = &mut source["accessProfiles"][0]["permissions"][0];
-            permission["reviewStages"][0]["targets"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!({"entity":"request","readableFields":["value"],"rowBoundaries":[]}));
             permission["applyTargets"]
                 .as_array_mut()
                 .unwrap()
@@ -347,15 +343,14 @@ fn declarative_and_rhai_paths_produce_byte_equivalent_canonical_effects() {
                 "changeRequest":change_request
             }],
             "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","permissions":[{
-                "entity":"request","operations":["get","submit_request","approve_request","apply_request"],
+                "entity":"request","operations":["get","submit_request","apply_request"],
                 "readableFields":["one","value"],
-                "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["first"], "rowBoundaries": []}]}],
                 "applyTargets":[{"entity":"target", "rowBoundaries": []}],
               "rowBoundaries": []
             }]}]
         })
     };
-    let review = json!({"stages":[{"id":"review","approvals":1}]});
+    let review = json!({"authority":"casework-main","policyId":"request-review"});
     let declarative_source = project(json!({
         "effects":[{"target":{"fromField":"one"},"operation":"patch","set":{"first":{"fromField":"value"}}}],
         "review":review.clone()
@@ -662,13 +657,12 @@ fn rhai_planner_refuses_authority_ceiling_escape_before_target_locks() {
                     "requestFields":["target-ref","value"],
                     "writes":[{"target":{"fromField":"target-ref"},"operation":"patch","fields":["allowed"]}]
                 },
-                "review":{"stages":[{"id":"review","approvals":1}]}
+                "review":{"authority":"casework-main","policyId":"request-review"}
             }
         }],
         "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","permissions":[{
-            "entity":"request","operations":["get","submit_request","approve_request","apply_request"],
+            "entity":"request","operations":["get","submit_request","apply_request"],
             "readableFields":["target-ref","value"],
-            "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["allowed"], "rowBoundaries": []}]}],
             "applyTargets":[{"entity":"target", "rowBoundaries": []}],
           "rowBoundaries": []
         }]}]

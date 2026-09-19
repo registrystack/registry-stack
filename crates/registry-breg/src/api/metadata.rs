@@ -182,9 +182,6 @@ fn required_capabilities(operation: Operation) -> Vec<&'static str> {
     if matches!(
         operation,
         Operation::SubmitRequest
-            | Operation::ApproveRequest
-            | Operation::RejectRequest
-            | Operation::RequestRevision
             | Operation::ReviseRequest
             | Operation::CancelRequest
             | Operation::ApplyRequest
@@ -491,9 +488,6 @@ fn request(surface: &AuthorizedSurface<'_>, query: Option<&CompiledQueryOperatio
             value["contentType"] = json!("application/json");
         }
         Operation::SubmitRequest
-        | Operation::ApproveRequest
-        | Operation::RejectRequest
-        | Operation::RequestRevision
         | Operation::ReviseRequest
         | Operation::CancelRequest
         | Operation::ApplyRequest => {
@@ -697,9 +691,6 @@ mod tests {
     fn request_lifecycle_operations_require_an_explicit_workspace_capability() {
         for operation in [
             Operation::SubmitRequest,
-            Operation::ApproveRequest,
-            Operation::RejectRequest,
-            Operation::RequestRevision,
             Operation::ReviseRequest,
             Operation::CancelRequest,
             Operation::ApplyRequest,
@@ -720,7 +711,7 @@ mod tests {
         assert_eq!(empty["properties"], json!({}));
 
         let decision =
-            crate::artifacts::openapi_request_action_input_schema(Operation::ApproveRequest);
+            crate::artifacts::openapi_request_action_input_schema(Operation::ApplyRequest);
         assert_eq!(
             decision["required"],
             json!(["proposalVersion", "effectDigest"])

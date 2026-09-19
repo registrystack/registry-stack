@@ -374,6 +374,8 @@ fn project() -> CaseworkProject {
             label: "Decisions".to_owned(),
         }],
         sources: Vec::new(),
+        review_kinds: Vec::new(),
+        review_producers: Vec::new(),
         hosted_kinds: vec![standalone_decision_starter_kind()],
         calendars: Vec::new(),
         clocks: Vec::new(),

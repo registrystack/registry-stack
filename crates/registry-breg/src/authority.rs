@@ -116,19 +116,6 @@ pub fn authority_inventory(
                     &grant.row_boundaries,
                 )?;
             }
-            for stage in &profile.review_stages {
-                for target in &stage.targets {
-                    inventory.boundaries(
-                        target_entity(registry, &target.entity)?,
-                        &profile.id,
-                        &format!(
-                            "{surface}/reviewStages/{}/targets/{}",
-                            stage.stage, target.entity
-                        ),
-                        &target.row_boundaries,
-                    )?;
-                }
-            }
             for target in &profile.apply_targets {
                 inventory.boundaries(
                     target_entity(registry, &target.entity)?,

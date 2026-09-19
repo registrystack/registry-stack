@@ -138,6 +138,7 @@ pub enum AuthenticationError {
 pub struct RegistryAuthenticator {
     verifier: TokenVerifier,
     last_key_refusal_warning: Mutex<Option<Instant>>,
+    issuer: String,
     audience: String,
     scope_claim: String,
     principal_claim: String,
@@ -160,9 +161,11 @@ impl RegistryAuthenticator {
         let direct_claims = validate_claim_mapping(registry, &verifier_config, &claims)?;
         let audience = verifier_config.audiences[0].clone();
         let scope_claim = verifier_config.scope_claim.clone();
+        let issuer = verifier_config.issuer.clone();
         Ok(Self {
             verifier: TokenVerifier::new(verifier_config, key_source),
             last_key_refusal_warning: Mutex::new(None),
+            issuer,
             audience,
             scope_claim,
             principal_claim: claims.principal_claim,
@@ -244,6 +247,18 @@ impl RegistryAuthenticator {
             actor_kind(&verified.claims, &self.contextual_claims)
                 .map_err(|_| AuthenticationError::InvalidClaims)?,
         );
+        let human_identity = if actor_kind == Some(registry_platform_oidc::ActorKind::Human) {
+            Some(registry_review_client::HumanIdentity {
+                issuer: self.issuer.clone(),
+                subject: verified
+                    .claims
+                    .sub
+                    .clone()
+                    .ok_or(AuthenticationError::InvalidClaims)?,
+            })
+        } else {
+            None
+        };
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| AuthenticationError::InvalidClaims)?
@@ -307,6 +322,7 @@ impl RegistryAuthenticator {
                 grant_subjects,
             )
         })
+        .and_then(|claims| claims.with_human_identity(human_identity))
         .map_err(|_| AuthenticationError::InvalidClaims)
     }
 }

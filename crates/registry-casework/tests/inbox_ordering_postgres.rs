@@ -195,6 +195,8 @@ fn project_with_inbox(inbox: InboxPolicy) -> CaseworkProject {
                 })
                 .collect(),
         }],
+        review_kinds: Vec::new(),
+        review_producers: Vec::new(),
         hosted_kinds: Vec::new(),
         calendars: Vec::new(),
         clocks: Vec::new(),

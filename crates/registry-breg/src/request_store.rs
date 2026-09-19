@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Product-owned, relational change-request bookkeeping. Business intake stays
-//! in the compiled entity table; immutable proposals and decisions live here.
+//! in the compiled entity table; immutable proposals live here.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -18,8 +18,8 @@ use crate::request_prepare::RequestTargetSnapshot;
 use crate::request_workflow::{
     ApplicationId, ApplicationReceipt, ApplicationResultLink, EntityId, ProposalDigest,
     ProposalSnapshot, ProposalVersion, RecordId, RecordRevision, RequestKey, RequestState,
-    RequestWorkflow, ReviewDecision, ReviewDecisionKind, StateRevision, TrustedActorRef,
-    TrustedTimestamp, MAX_REQUEST_SNAPSHOT_BYTES, MAX_REQUEST_TARGETS,
+    RequestWorkflow, StateRevision, TrustedActorRef, TrustedTimestamp, MAX_REQUEST_SNAPSHOT_BYTES,
+    MAX_REQUEST_TARGETS,
 };
 
 pub(crate) const REQUEST_TABLES: &[(&str, &[&str])] = &[
@@ -48,8 +48,8 @@ pub(crate) async fn install(
              request_entity_id text NOT NULL CHECK (request_entity_id <> ''),
              request_id uuid NOT NULL,
              owner_reference text NOT NULL CHECK (owner_reference <> ''),
-             state text NOT NULL CHECK (state IN
-                 ('draft','submitted','approved','needs_changes','rejected','canceled','applied')),
+            state text NOT NULL CHECK (state IN
+                 ('draft','submitted','cancelled','applied','superseded')),
              proposal_version bigint NOT NULL CHECK (proposal_version BETWEEN 1 AND 4294967295),
              workflow_revision bigint NOT NULL CHECK (workflow_revision > 0),
              review_completed_at timestamptz,
@@ -65,7 +65,7 @@ pub(crate) async fn install(
              DROP CONSTRAINT IF EXISTS registry_request_state_detail_erasure_terminal;
          ALTER TABLE registry_internal.registry_request_state
              ADD CONSTRAINT registry_request_state_detail_erasure_terminal CHECK (
-                 detail_erased_at IS NULL OR state IN ('rejected','canceled','applied')
+                 detail_erased_at IS NULL OR state IN ('cancelled','superseded','applied')
              );
          CREATE TABLE IF NOT EXISTS registry_internal.registry_request_intake_presence (
              request_entity_id text NOT NULL CHECK (request_entity_id <> ''),
@@ -276,6 +276,7 @@ pub(crate) async fn install(
             AND s.state IN ('approved', 'rejected', 'canceled', 'applied');"
     ).await.map_err(|_| MutationError::Unavailable)?;
     crate::attachment_store::install(client, runtime_role).await?;
+    crate::review_store::install(client, runtime_role).await?;
     for (table, privileges) in REQUEST_TABLES {
         let role = runtime_role.as_str();
         client
@@ -374,6 +375,7 @@ impl std::fmt::Debug for RequestWorkflowHeader {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RequestReviewTiming {
     pub first_submitted_at: String,
@@ -386,13 +388,14 @@ impl RequestWorkflowHeader {
     #[must_use]
     #[allow(dead_code)]
     pub(crate) fn is_terminal(&self) -> bool {
-        matches!(self.state.as_str(), "rejected" | "canceled" | "applied")
+        matches!(self.state.as_str(), "cancelled" | "applied" | "superseded")
     }
 }
 
 /// Loads the bounded, request-wide clock facts retained independently from
 /// proposal payload detail. Correction intervals are derived from durable
 /// decision and proposal rows and stop changing after the first completion.
+#[cfg(test)]
 pub(crate) async fn load_review_timing(
     transaction: &Transaction<'_>,
     entity_id: &str,
@@ -619,8 +622,13 @@ pub(crate) async fn load(
         .map_err(|_| MutationError::Unavailable)?;
     let current_version = proposal_version(row.get::<_, i64>(2))?;
     let revision = u64::try_from(row.get::<_, i64>(3)).map_err(|_| MutationError::Unavailable)?;
-    let state = RequestState::from_storage(&row.get::<_, String>(1))
-        .map_err(|_| MutationError::Unavailable)?;
+    let state = RequestState::from_storage(&row.get::<_, String>(1)).map_err(|error| {
+        if error == crate::request_workflow::WorkflowError::OccupiedLegacyApprovalState {
+            MutationError::Conflict
+        } else {
+            MutationError::Unavailable
+        }
+    })?;
     let proposals = transaction
         .query(
             "SELECT proposal_version, snapshot FROM registry_internal.registry_request_proposals
@@ -639,42 +647,6 @@ pub(crate) async fn load(
             serde_json::from_value(snapshot).map_err(|_| MutationError::Unavailable)?;
         proposal_map.insert(version, snapshot);
     }
-    let decisions = transaction
-        .query(
-            "SELECT proposal_version, stage_id, actor_reference, decision, effect_digest,
-                to_char(decided_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
-                reason, reason_present
-         FROM registry_internal.registry_request_decisions
-         WHERE request_entity_id = $1 AND request_id = $2 AND proposal_version = $3
-         ORDER BY decision_index LIMIT 1025",
-            &[&entity_id, &record_id, &i64::from(current_version.get())],
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
-    if decisions.len() > 1024 {
-        return Err(MutationError::Unavailable);
-    }
-    let decisions = decisions
-        .into_iter()
-        .map(|decision| {
-            let kind = ReviewDecisionKind::from_storage(&decision.get::<_, String>(3))
-                .map_err(|_| MutationError::Unavailable)?;
-            ReviewDecision::restore(
-                proposal_version(decision.get::<_, i64>(0))?,
-                decision.get(1),
-                kind,
-                TrustedActorRef::from_verified_context(decision.get::<_, String>(2))
-                    .map_err(|_| MutationError::Unavailable)?,
-                TrustedTimestamp::from_server_clock(decision.get::<_, String>(5))
-                    .map_err(|_| MutationError::Unavailable)?,
-                ProposalDigest::new(decision.get::<_, String>(4))
-                    .map_err(|_| MutationError::Unavailable)?,
-                decision.get(6),
-                decision.get(7),
-            )
-            .map_err(|_| MutationError::Unavailable)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
     let application = if let Some(application) = transaction
         .query_opt(
             "SELECT proposal_version, application_id, effect_digest, applied_by,
@@ -738,7 +710,6 @@ pub(crate) async fn load(
         current_version,
         StateRevision::new(revision).map_err(|_| MutationError::Unavailable)?,
         proposal_map,
-        decisions,
         application,
     )
     .map_err(|_| MutationError::Unavailable)
@@ -774,11 +745,12 @@ pub(crate) async fn load_header(
         .map_err(|_| MutationError::Unavailable)?
         .ok_or(MutationError::PreconditionFailed)?;
     let state: String = row.get(1);
-    if !matches!(
-        state.as_str(),
-        "draft" | "submitted" | "approved" | "needs_changes" | "rejected" | "canceled" | "applied"
-    ) {
-        return Err(MutationError::Unavailable);
+    match RequestState::from_storage(&state) {
+        Ok(_) => {}
+        Err(crate::request_workflow::WorkflowError::OccupiedLegacyApprovalState) => {
+            return Err(MutationError::Conflict);
+        }
+        Err(_) => return Err(MutationError::Unavailable),
     }
     let proposal_version: i64 = row.get(2);
     let workflow_revision: i64 = row.get(3);
@@ -999,19 +971,7 @@ pub(crate) async fn save(
     let version = i64::from(workflow.current_version().get());
     let revision = i64::try_from(workflow.workflow_revision().get())
         .map_err(|_| MutationError::Unavailable)?;
-    let review_completed_at = match workflow.state() {
-        RequestState::Approved | RequestState::Rejected | RequestState::Applied => workflow
-            .decisions()
-            .last()
-            .map(|decision| decision.decided_at().as_str())
-            .or_else(|| {
-                workflow
-                    .current_proposal()
-                    .map(|proposal| proposal.submitted_at().as_str())
-            }),
-        RequestState::Draft | RequestState::Submitted | RequestState::NeedsChanges => None,
-        RequestState::Canceled => None,
-    };
+    let review_completed_at: Option<&str> = None;
     if revision
         != previous_revision
             .checked_add(1)
@@ -1051,25 +1011,6 @@ pub(crate) async fn save(
                 &snapshot,
             )
             .await?;
-        }
-    }
-    for (index, decision) in workflow.decisions().iter().enumerate() {
-        let index = i32::try_from(index).map_err(|_| MutationError::Unavailable)?;
-        let decision_version = i64::from(decision.version().get());
-        let inserted = transaction.execute(
-            "INSERT INTO registry_internal.registry_request_decisions
-                 (request_entity_id, request_id, proposal_version, decision_index,
-                  stage_id, actor_reference, decision, effect_digest, decided_at,
-                  reason, reason_present)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text::timestamptz, $10, $11)
-             ON CONFLICT (request_entity_id, request_id, proposal_version, decision_index) DO NOTHING",
-            &[&entity_id, &record_id, &decision_version, &index,
-              &decision.stage_id(), &decision.actor().as_str(),
-              &decision.kind().as_storage(), &decision.effect_digest().as_str(),
-              &decision.decided_at().as_str(), &decision.reason(), &decision.reason_present()],
-        ).await.map_err(map_store_error)?;
-        if inserted == 0 {
-            verify_existing_decision(transaction, entity_id, record_id, decision, index).await?;
         }
     }
     if let Some(application) = workflow.application() {
@@ -1191,45 +1132,6 @@ async fn verify_existing_proposal(
         && row.get::<_, String>(1) == contract_fingerprint
         && row.get::<_, String>(2) == effect_digest
         && existing_snapshot == *snapshot
-    {
-        Ok(())
-    } else {
-        Err(MutationError::Conflict)
-    }
-}
-
-async fn verify_existing_decision(
-    transaction: &Transaction<'_>,
-    entity_id: &str,
-    record_id: Uuid,
-    decision: &ReviewDecision,
-    index: i32,
-) -> Result<(), MutationError> {
-    let version = i64::from(decision.version().get());
-    let stage_id = decision.stage_id();
-    let actor = decision.actor().as_str();
-    let kind = decision.kind().as_storage();
-    let effect_digest = decision.effect_digest().as_str();
-    let decided_at = decision.decided_at().as_str();
-    let row = transaction
-        .query_opt(
-            "SELECT stage_id, actor_reference, decision, effect_digest,
-                    decided_at = $5::text::timestamptz AS same_time, reason, reason_present
-             FROM registry_internal.registry_request_decisions
-             WHERE request_entity_id = $1 AND request_id = $2
-               AND proposal_version = $3 AND decision_index = $4",
-            &[&entity_id, &record_id, &version, &index, &decided_at],
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?
-        .ok_or(MutationError::Conflict)?;
-    if row.get::<_, String>(0) == stage_id
-        && row.get::<_, String>(1) == actor
-        && row.get::<_, String>(2) == kind
-        && row.get::<_, String>(3) == effect_digest
-        && row.get::<_, bool>(4)
-        && row.get::<_, Option<String>>(5).as_deref() == decision.reason()
-        && row.get::<_, bool>(6) == decision.reason_present()
     {
         Ok(())
     } else {

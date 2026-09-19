@@ -7,7 +7,7 @@ mod action;
 pub(crate) use action::erase_expired_action_evidence;
 pub(crate) use action::{HookProposalApplication, HookProposalOutcome};
 mod request;
-pub(crate) use request::{request_action_etag, RequestEvidencePreflight};
+pub(crate) use request::{request_action_etag, RequestEvidencePreflight, RequestReceiptPreflight};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -804,6 +804,7 @@ pub struct MutationCoordinator {
     event_destinations: Option<Arc<ActivatedEventDestinationRegistry>>,
     task_status: Option<Arc<dyn crate::task_grant::TaskGrantStatusChecker>>,
     field_encryption: Option<Arc<FieldEncryptionService>>,
+    review_authorities: Option<Arc<crate::review_store::ReviewAuthorityRegistry>>,
 }
 
 impl MutationCoordinator {
@@ -840,7 +841,17 @@ impl MutationCoordinator {
             event_destinations,
             task_status: None,
             field_encryption: None,
+            review_authorities: None,
         }
+    }
+
+    #[must_use]
+    pub(crate) fn with_review_authorities(
+        mut self,
+        authorities: Arc<crate::review_store::ReviewAuthorityRegistry>,
+    ) -> Self {
+        self.review_authorities = Some(authorities);
+        self
     }
 
     pub fn with_task_status(

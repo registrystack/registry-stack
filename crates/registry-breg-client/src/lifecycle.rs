@@ -6,7 +6,7 @@
 //! crate-owned, validated Registry Metadata handle and the exact record
 //! envelope from which it was read.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::{Serialize, Serializer};
@@ -14,24 +14,17 @@ use serde_json::{json, Map, Value};
 use url::Url;
 use uuid::Uuid;
 
-/// Maximum Unicode characters in a rejection or revision reason.
-pub const MAX_BREG_REVIEW_REASON_CHARACTERS: usize = 4_096;
+/// Maximum Unicode characters in an application reason.
+pub const MAX_BREG_APPLICATION_REASON_CHARACTERS: usize = 4_096;
 
 /// Maximum actor-action links accepted on one record.
 pub const MAX_BREG_REQUEST_ACTIONS: usize = 64;
-/// Maximum lifecycle operation bindings in metadata. Thirty-two review stages
-/// can each expose three decisions, plus the four non-stage transitions.
-pub const MAX_BREG_LIFECYCLE_OPERATION_BINDINGS: usize = 100;
-/// Maximum targets accepted in one review preview.
-pub const MAX_BREG_REVIEW_TARGETS: usize = 16;
-/// Maximum fields accepted in a review target's `before` or `after` object.
-pub const MAX_BREG_REVIEW_OBJECT_MEMBERS: usize = 128;
+/// Maximum lifecycle operation bindings in metadata.
+pub const MAX_BREG_LIFECYCLE_OPERATION_BINDINGS: usize = 4;
 /// Maximum bytes accepted for one actor-action href.
 pub const MAX_BREG_ACTION_HREF_BYTES: usize = 2_048;
 /// Maximum bytes accepted for an opaque snapshot reference.
 pub const MAX_BREG_SNAPSHOT_REFERENCE_BYTES: usize = 4_096;
-/// Maximum authored review stages accepted in one request projection.
-pub const MAX_BREG_REVIEW_STAGES: usize = 32;
 /// Maximum retained proposals accepted in one caller-controlled history page.
 pub const MAX_BREG_RETAINED_PROPOSALS: usize = 50;
 /// Maximum caller-visible result references accepted for one retained proposal.
@@ -43,11 +36,9 @@ const MAX_TIMESTAMP_BYTES: usize = 128;
 
 /// One of Base Registry Engine's closed change-request lifecycle operations.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[allow(clippy::enum_variant_names)]
 pub enum BRegLifecycleOperation {
     SubmitRequest,
-    ApproveRequest,
-    RejectRequest,
-    RequestRevision,
     ReviseRequest,
     CancelRequest,
     ApplyRequest,
@@ -55,11 +46,8 @@ pub enum BRegLifecycleOperation {
 
 impl BRegLifecycleOperation {
     /// All supported lifecycle operations, in workflow order.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 4] = [
         Self::SubmitRequest,
-        Self::ApproveRequest,
-        Self::RejectRequest,
-        Self::RequestRevision,
         Self::ReviseRequest,
         Self::CancelRequest,
         Self::ApplyRequest,
@@ -70,32 +58,19 @@ impl BRegLifecycleOperation {
     pub const fn identifier(self) -> &'static str {
         match self {
             Self::SubmitRequest => "submit_request",
-            Self::ApproveRequest => "approve_request",
-            Self::RejectRequest => "reject_request",
-            Self::RequestRevision => "request_revision",
             Self::ReviseRequest => "revise_request",
             Self::CancelRequest => "cancel_request",
             Self::ApplyRequest => "apply_request",
         }
     }
 
-    const fn is_review(self) -> bool {
-        matches!(
-            self,
-            Self::ApproveRequest | Self::RejectRequest | Self::RequestRevision
-        )
-    }
-
     const fn requires_proposal_binding(self) -> bool {
-        self.is_review() || matches!(self, Self::ApplyRequest)
+        matches!(self, Self::ApplyRequest)
     }
 
     const fn path_suffix(self) -> &'static str {
         match self {
             Self::SubmitRequest => "/actions/submit",
-            Self::ApproveRequest => "/approve",
-            Self::RejectRequest => "/reject",
-            Self::RequestRevision => "/request-revision",
             Self::ReviseRequest => "/actions/revise",
             Self::CancelRequest => "/actions/cancel",
             Self::ApplyRequest => "/actions/apply",
@@ -108,11 +83,9 @@ impl BRegLifecycleOperation {
 pub enum BRegRequestState {
     Draft,
     Submitted,
-    Approved,
-    NeedsChanges,
-    Rejected,
-    Canceled,
+    Cancelled,
     Applied,
+    Superseded,
 }
 
 /// One caller-visible record affected by an exact applied request proposal.
@@ -169,7 +142,6 @@ pub struct BRegRetainedRequestProposal {
     result_link_count: u16,
     result_references: Vec<BRegRequestResultReference>,
     effect_digest: Option<BRegEffectDigest>,
-    decisions: Vec<BRegRequestDecision>,
 }
 
 impl BRegRetainedRequestProposal {
@@ -230,10 +202,6 @@ impl BRegRetainedRequestProposal {
         self.effect_digest.as_ref()
     }
 
-    #[must_use]
-    pub fn decisions(&self) -> &[BRegRequestDecision] {
-        &self.decisions
-    }
 }
 
 impl fmt::Debug for BRegRetainedRequestProposal {
@@ -250,7 +218,6 @@ impl fmt::Debug for BRegRetainedRequestProposal {
             .field("has_application", &self.application_identifier.is_some())
             .field("visible_result_count", &self.result_references.len())
             .field("has_effect_digest", &self.effect_digest.is_some())
-            .field("decision_count", &self.decisions.len())
             .finish()
     }
 }
@@ -320,94 +287,64 @@ impl fmt::Debug for BRegRetainedRequestHistoryPage {
     }
 }
 
-/// Closed review policy frozen into a visible change-request proposal.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BRegRequestReviewMode {
-    None,
-    Staged,
-}
-
-impl BRegRequestReviewMode {
-    fn parse(value: &str) -> Option<Self> {
-        match value {
-            "none" => Some(Self::None),
-            "staged" => Some(Self::Staged),
-            _ => None,
-        }
-    }
-}
-
-/// Closed application disposition frozen into a visible proposal.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BRegRequestApplicationDisposition {
-    Apply,
-    Queue,
-}
-
-impl BRegRequestApplicationDisposition {
-    fn parse(value: &str) -> Option<Self> {
-        match value {
-            "apply" => Some(Self::Apply),
-            "queue" => Some(Self::Queue),
-            _ => None,
-        }
-    }
-}
-
-/// A finite, compiled queue reason carried by a visible proposal.
+/// The review requirement frozen into a visible change-request proposal.
 #[derive(Clone, Eq, PartialEq)]
-pub struct BRegRequestQueueReason {
-    code: String,
-    label: String,
+pub enum BRegRequestReviewRequirement {
+    /// Review is explicitly not required.
+    None,
+    /// Review is delegated to the named external authority and policy.
+    External(BRegExternalReviewRequirement),
 }
 
-impl BRegRequestQueueReason {
-    #[must_use]
-    pub fn code(&self) -> &str {
-        &self.code
-    }
-
-    #[must_use]
-    pub fn label(&self) -> &str {
-        &self.label
-    }
-}
-
-impl fmt::Debug for BRegRequestQueueReason {
+impl fmt::Debug for BRegRequestReviewRequirement {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BRegRequestQueueReason")
-            .field("code", &self.code)
-            .field("label", &"<redacted>")
-            .finish()
+        match self {
+            Self::None => formatter.write_str("BRegRequestReviewRequirement::None"),
+            Self::External(_) => {
+                formatter.write_str("BRegRequestReviewRequirement::External(<redacted>)")
+            }
+        }
     }
 }
 
-/// Frozen, caller-visible planning policy for the current proposal.
+/// A bounded external review authority and policy identifier.
+#[derive(Clone, Eq, PartialEq)]
+pub struct BRegExternalReviewRequirement {
+    authority: String,
+    policy_id: String,
+}
+
+impl BRegExternalReviewRequirement {
+    #[must_use]
+    pub fn authority(&self) -> &str {
+        &self.authority
+    }
+
+    #[must_use]
+    pub fn policy_id(&self) -> &str {
+        &self.policy_id
+    }
+}
+
+impl fmt::Debug for BRegExternalReviewRequirement {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegExternalReviewRequirement(<redacted>)")
+    }
+}
+
+/// Frozen, caller-visible review requirement for the current proposal.
 ///
 /// This is descriptive only. It cannot grant a lifecycle action or cause the
 /// client to infer that an automatic application is authorized.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BRegRequestProposal {
-    review_mode: BRegRequestReviewMode,
-    application_disposition: BRegRequestApplicationDisposition,
-    queue_reason: Option<BRegRequestQueueReason>,
+    review: BRegRequestReviewRequirement,
 }
 
 impl BRegRequestProposal {
     #[must_use]
-    pub const fn review_mode(&self) -> BRegRequestReviewMode {
-        self.review_mode
-    }
-
-    #[must_use]
-    pub const fn application_disposition(&self) -> BRegRequestApplicationDisposition {
-        self.application_disposition
-    }
-
-    #[must_use]
-    pub fn queue_reason(&self) -> Option<&BRegRequestQueueReason> {
-        self.queue_reason.as_ref()
+    pub const fn review(&self) -> &BRegRequestReviewRequirement {
+        &self.review
     }
 }
 
@@ -416,11 +353,9 @@ impl BRegRequestState {
         match value {
             "draft" => Some(Self::Draft),
             "submitted" => Some(Self::Submitted),
-            "approved" => Some(Self::Approved),
-            "needs_changes" => Some(Self::NeedsChanges),
-            "rejected" => Some(Self::Rejected),
-            "canceled" => Some(Self::Canceled),
+            "cancelled" => Some(Self::Cancelled),
             "applied" => Some(Self::Applied),
+            "superseded" => Some(Self::Superseded),
             _ => None,
         }
     }
@@ -429,11 +364,9 @@ impl BRegRequestState {
         match self {
             Self::Draft => "draft",
             Self::Submitted => "submitted",
-            Self::Approved => "approved",
-            Self::NeedsChanges => "needs_changes",
-            Self::Rejected => "rejected",
-            Self::Canceled => "canceled",
+            Self::Cancelled => "cancelled",
             Self::Applied => "applied",
+            Self::Superseded => "superseded",
         }
     }
 }
@@ -649,326 +582,313 @@ pub enum BRegRecordApplication {
     Erased(BRegErasedApplication),
 }
 
-/// A review preview for a caller-authorized lifecycle decision.
-#[derive(Clone, PartialEq)]
-pub struct BRegRequestReview {
-    targets: Vec<BRegRequestReviewTarget>,
+/// Current status of an externally owned review. This projection is descriptive
+/// and never grants BReg application authority.
+#[derive(Clone, Eq, PartialEq)]
+pub struct BRegExternalReviewStatus {
+    submission: BRegExternalReviewSubmission,
+    result: BRegExternalReviewResult,
+    delivery: BRegExternalReviewDelivery,
+    application: BRegExternalReviewApplication,
+    recovery: BRegExternalReviewRecovery,
 }
 
-impl BRegRequestReview {
+impl BRegExternalReviewStatus {
     #[must_use]
-    pub fn targets(&self) -> &[BRegRequestReviewTarget] {
-        &self.targets
+    pub const fn submission(&self) -> &BRegExternalReviewSubmission {
+        &self.submission
+    }
+    #[must_use]
+    pub const fn result(&self) -> &BRegExternalReviewResult {
+        &self.result
+    }
+    #[must_use]
+    pub const fn delivery(&self) -> &BRegExternalReviewDelivery {
+        &self.delivery
+    }
+    #[must_use]
+    pub const fn application(&self) -> &BRegExternalReviewApplication {
+        &self.application
+    }
+    #[must_use]
+    pub const fn recovery(&self) -> &BRegExternalReviewRecovery {
+        &self.recovery
     }
 }
 
-impl fmt::Debug for BRegRequestReview {
+impl fmt::Debug for BRegExternalReviewStatus {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("BRegRequestReview")
-            .field("target_count", &self.targets.len())
-            .finish()
-    }
-}
-
-/// A create or patch target preview. Field values are inert and never used as
-/// mutation authority by this client.
-#[derive(Clone, PartialEq)]
-pub struct BRegRequestReviewTarget {
-    entity_identifier: String,
-    record_identifier: String,
-    operation: BRegReviewOperation,
-    base_revision: Option<u64>,
-    before: Option<BTreeMap<String, Value>>,
-    after: BTreeMap<String, Value>,
-}
-
-impl BRegRequestReviewTarget {
-    #[must_use]
-    pub fn entity_identifier(&self) -> &str {
-        &self.entity_identifier
-    }
-
-    #[must_use]
-    pub fn record_identifier(&self) -> &str {
-        &self.record_identifier
-    }
-
-    #[must_use]
-    pub const fn operation(&self) -> BRegReviewOperation {
-        self.operation
-    }
-
-    #[must_use]
-    pub const fn base_revision(&self) -> Option<u64> {
-        self.base_revision
-    }
-
-    #[must_use]
-    pub fn before(&self) -> Option<&BTreeMap<String, Value>> {
-        self.before.as_ref()
-    }
-
-    #[must_use]
-    pub fn after(&self) -> &BTreeMap<String, Value> {
-        &self.after
-    }
-}
-
-impl fmt::Debug for BRegRequestReviewTarget {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BRegRequestReviewTarget")
-            .field("entity_identifier", &"<redacted>")
-            .field("record_identifier", &"<redacted>")
-            .field("operation", &self.operation)
-            .field("base_revision", &self.base_revision)
-            .field(
-                "before_member_count",
-                &self.before.as_ref().map(BTreeMap::len),
-            )
-            .field("after_member_count", &self.after.len())
+            .debug_struct("BRegExternalReviewStatus")
+            .field("submission_state", &self.submission.state)
+            .field("result_state", &self.result.state)
+            .field("delivery_state", &self.delivery.state)
+            .field("application_state", &self.application.state)
+            .field("recovery_state", &self.recovery.state)
             .finish()
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BRegReviewOperation {
-    Create,
-    Patch,
+pub enum BRegExternalReviewSubmissionState {
+    Pending,
+    Accepted,
+    Uncertain,
+    Cancelling,
+    Cancelled,
+    Failed,
 }
 
-/// An inert retained reviewer decision; it grants no action authority.
 #[derive(Clone, Eq, PartialEq)]
-pub struct BRegRequestDecision {
-    stage_id: String,
-    kind: BRegRequestDecisionKind,
-    decided_at: String,
-    reason_present: bool,
-    reason: Option<String>,
-    actor_reference: Option<String>,
+pub struct BRegExternalReviewSubmission {
+    state: BRegExternalReviewSubmissionState,
+    authority: String,
+    request_id: Option<String>,
+    submission_digest: Option<BRegEffectDigest>,
+    policy: Option<BRegExternalReviewPolicy>,
 }
 
-impl BRegRequestDecision {
+impl BRegExternalReviewSubmission {
     #[must_use]
-    pub fn stage_id(&self) -> &str {
-        &self.stage_id
+    pub const fn state(&self) -> BRegExternalReviewSubmissionState {
+        self.state
     }
     #[must_use]
-    pub const fn kind(&self) -> BRegRequestDecisionKind {
-        self.kind
+    pub fn authority(&self) -> &str {
+        &self.authority
     }
     #[must_use]
-    pub fn decided_at(&self) -> &str {
-        &self.decided_at
-    }
-    /// Whether a reason was supplied, including when its text is withheld or erased.
-    #[must_use]
-    pub const fn reason_present(&self) -> bool {
-        self.reason_present
+    pub fn request_id(&self) -> Option<&str> {
+        self.request_id.as_deref()
     }
     #[must_use]
-    pub fn reason(&self) -> Option<&str> {
-        self.reason.as_deref()
+    pub fn submission_digest(&self) -> Option<&BRegEffectDigest> {
+        self.submission_digest.as_ref()
     }
-
-    /// Opaque actor correlation disclosed only by an explicitly authorized profile.
     #[must_use]
-    pub fn actor_reference(&self) -> Option<&str> {
-        self.actor_reference.as_deref()
+    pub const fn policy(&self) -> Option<&BRegExternalReviewPolicy> {
+        self.policy.as_ref()
     }
 }
 
-impl fmt::Debug for BRegRequestDecision {
+impl fmt::Debug for BRegExternalReviewSubmission {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("BRegRequestDecision(<redacted>)")
+        formatter
+            .debug_struct("BRegExternalReviewSubmission")
+            .field("state", &self.state)
+            .field("has_request_id", &self.request_id.is_some())
+            .field("has_submission_digest", &self.submission_digest.is_some())
+            .field("has_policy", &self.policy.is_some())
+            .finish()
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BRegRequestDecisionKind {
-    Approve,
-    Reject,
-    RequestRevision,
-}
-
-fn decode_decisions(value: Value) -> Result<Vec<BRegRequestDecision>, BRegLifecycleDecodeError> {
-    let Value::Array(values) = value else {
-        return Err(BRegLifecycleDecodeError::Profile);
-    };
-    if values.len() > 1024 {
-        return Err(BRegLifecycleDecodeError::Profile);
-    }
-    values
-        .into_iter()
-        .map(|value| {
-            let mut object = exact_object(
-                value,
-                &["stageId", "kind", "decidedAt", "reasonPresent"],
-                &["reason", "actorReference"],
-            )?;
-            let stage_id = take_string(&mut object, "stageId")?;
-            validate_identifier(&stage_id)?;
-            let kind = match take_string(&mut object, "kind")?.as_str() {
-                "approve" => BRegRequestDecisionKind::Approve,
-                "reject" => BRegRequestDecisionKind::Reject,
-                "request_revision" => BRegRequestDecisionKind::RequestRevision,
-                _ => return Err(BRegLifecycleDecodeError::Profile),
-            };
-            let decided_at = take_string(&mut object, "decidedAt")?;
-            validate_timestamp(&decided_at)?;
-            let reason_present = object
-                .remove("reasonPresent")
-                .and_then(|v| v.as_bool())
-                .ok_or(BRegLifecycleDecodeError::Profile)?;
-            let reason = match object.remove("reason") {
-                None => None,
-                Some(Value::String(reason))
-                    if reason_present
-                        && !reason.contains('\0')
-                        && reason.chars().count() <= MAX_BREG_REVIEW_REASON_CHARACTERS =>
-                {
-                    Some(reason)
-                }
-                _ => return Err(BRegLifecycleDecodeError::Profile),
-            };
-            let actor_reference = take_optional_identifier(&mut object, "actorReference")?;
-            Ok(BRegRequestDecision {
-                stage_id,
-                kind,
-                decided_at,
-                reason_present,
-                reason,
-                actor_reference,
-            })
-        })
-        .collect()
-}
-
-/// One frozen stage in the current proposal's review policy.
 #[derive(Clone, Eq, PartialEq)]
-pub struct BRegRequestReviewStage {
+pub struct BRegExternalReviewPolicy {
     id: String,
-    approvals: u64,
-    exclude_submitter: bool,
-    exclude_previous_reviewers: bool,
+    version: String,
+    digest: BRegEffectDigest,
 }
 
-impl fmt::Debug for BRegRequestReviewStage {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BRegRequestReviewStage")
-            .field("identifier", &"<redacted>")
-            .field("approvals", &self.approvals)
-            .field("exclude_submitter", &self.exclude_submitter)
-            .field(
-                "exclude_previous_reviewers",
-                &self.exclude_previous_reviewers,
-            )
-            .finish()
-    }
-}
-
-impl BRegRequestReviewStage {
+impl BRegExternalReviewPolicy {
     #[must_use]
-    pub fn identifier(&self) -> &str {
+    pub fn id(&self) -> &str {
         &self.id
     }
-
     #[must_use]
-    pub const fn approvals(&self) -> u64 {
-        self.approvals
+    pub fn version(&self) -> &str {
+        &self.version
     }
-
     #[must_use]
-    pub const fn exclude_submitter(&self) -> bool {
-        self.exclude_submitter
-    }
-
-    #[must_use]
-    pub const fn exclude_previous_reviewers(&self) -> bool {
-        self.exclude_previous_reviewers
+    pub fn digest(&self) -> &BRegEffectDigest {
+        &self.digest
     }
 }
 
-/// Caller-visible timing and stage state for the current retained proposal.
-#[derive(Clone, Eq, PartialEq)]
-pub struct BRegRequestReviewState {
-    stages: Vec<BRegRequestReviewStage>,
-    submitted_at: String,
-    pending_stage: Option<String>,
-    stage_entered_at: Option<String>,
-}
-
-impl fmt::Debug for BRegRequestReviewState {
+impl fmt::Debug for BRegExternalReviewPolicy {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BRegRequestReviewState")
-            .field("stage_count", &self.stages.len())
-            .field("has_pending_stage", &self.pending_stage.is_some())
-            .field("has_stage_entered_at", &self.stage_entered_at.is_some())
-            .finish()
+        formatter.write_str("BRegExternalReviewPolicy(<redacted>)")
     }
 }
 
-impl BRegRequestReviewState {
-    #[must_use]
-    pub fn stages(&self) -> &[BRegRequestReviewStage] {
-        &self.stages
-    }
-    #[must_use]
-    pub fn submitted_at(&self) -> &str {
-        &self.submitted_at
-    }
-    #[must_use]
-    pub fn pending_stage(&self) -> Option<&str> {
-        self.pending_stage.as_deref()
-    }
-    #[must_use]
-    pub fn stage_entered_at(&self) -> Option<&str> {
-        self.stage_entered_at.as_deref()
-    }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BRegExternalReviewResultState {
+    Pending,
+    Approved,
+    Rejected,
+    ChangesRequested,
+    Answered,
+    Cancelled,
+    Superseded,
+    Unavailable,
 }
 
-/// Bounded lifecycle timing retained independently from proposal detail.
 #[derive(Clone, Eq, PartialEq)]
-pub struct BRegRequestReviewTiming {
-    first_submitted_at: String,
-    paused_milliseconds: u64,
-    pause_started_at: Option<String>,
+pub struct BRegExternalReviewResult {
+    state: BRegExternalReviewResultState,
+    result_id: Option<String>,
     completed_at: Option<String>,
+    available_until: Option<String>,
 }
 
-impl fmt::Debug for BRegRequestReviewTiming {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BRegRequestReviewTiming")
-            .field("paused_milliseconds", &self.paused_milliseconds)
-            .field("has_pause_started_at", &self.pause_started_at.is_some())
-            .field("has_completed_at", &self.completed_at.is_some())
-            .finish()
-    }
-}
-
-impl BRegRequestReviewTiming {
+impl BRegExternalReviewResult {
     #[must_use]
-    pub fn first_submitted_at(&self) -> &str {
-        &self.first_submitted_at
+    pub const fn state(&self) -> BRegExternalReviewResultState {
+        self.state
     }
     #[must_use]
-    pub const fn paused_milliseconds(&self) -> u64 {
-        self.paused_milliseconds
-    }
-    #[must_use]
-    pub fn pause_started_at(&self) -> Option<&str> {
-        self.pause_started_at.as_deref()
+    pub fn result_id(&self) -> Option<&str> {
+        self.result_id.as_deref()
     }
     #[must_use]
     pub fn completed_at(&self) -> Option<&str> {
         self.completed_at.as_deref()
     }
+    #[must_use]
+    pub fn available_until(&self) -> Option<&str> {
+        self.available_until.as_deref()
+    }
 }
 
+impl fmt::Debug for BRegExternalReviewResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegExternalReviewResult")
+            .field("state", &self.state)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BRegExternalReviewDeliveryState {
+    Polling,
+    Received,
+    Reconciled,
+    Unmatched,
+    Exhausted,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct BRegExternalReviewDelivery {
+    state: BRegExternalReviewDeliveryState,
+    event_id: Option<String>,
+    received_at: Option<String>,
+}
+
+impl BRegExternalReviewDelivery {
+    #[must_use]
+    pub const fn state(&self) -> BRegExternalReviewDeliveryState {
+        self.state
+    }
+    #[must_use]
+    pub fn event_id(&self) -> Option<&str> {
+        self.event_id.as_deref()
+    }
+    #[must_use]
+    pub fn received_at(&self) -> Option<&str> {
+        self.received_at.as_deref()
+    }
+}
+
+impl fmt::Debug for BRegExternalReviewDelivery {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegExternalReviewDelivery")
+            .field("state", &self.state)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BRegExternalReviewApplicationMode {
+    Manual,
+    Automatic,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BRegExternalReviewApplicationState {
+    AwaitingReview,
+    Ready,
+    Queued,
+    Applying,
+    Applied,
+    Blocked,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct BRegExternalReviewApplication {
+    mode: BRegExternalReviewApplicationMode,
+    state: BRegExternalReviewApplicationState,
+    executor: Option<String>,
+    application_id: Option<String>,
+}
+
+impl BRegExternalReviewApplication {
+    #[must_use]
+    pub const fn mode(&self) -> BRegExternalReviewApplicationMode {
+        self.mode
+    }
+    #[must_use]
+    pub const fn state(&self) -> BRegExternalReviewApplicationState {
+        self.state
+    }
+    #[must_use]
+    pub fn executor(&self) -> Option<&str> {
+        self.executor.as_deref()
+    }
+    #[must_use]
+    pub fn application_id(&self) -> Option<&str> {
+        self.application_id.as_deref()
+    }
+}
+
+impl fmt::Debug for BRegExternalReviewApplication {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegExternalReviewApplication")
+            .field("mode", &self.mode)
+            .field("state", &self.state)
+            .field("has_executor", &self.executor.is_some())
+            .field("has_application_id", &self.application_id.is_some())
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BRegExternalReviewRecoveryState {
+    None,
+    SubmissionUnknown,
+    ReceiptPending,
+    ReceiptRecovered,
+    OperatorAttention,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct BRegExternalReviewRecovery {
+    state: BRegExternalReviewRecoveryState,
+    code: Option<String>,
+}
+
+impl BRegExternalReviewRecovery {
+    #[must_use]
+    pub const fn state(&self) -> BRegExternalReviewRecoveryState {
+        self.state
+    }
+    #[must_use]
+    pub fn code(&self) -> Option<&str> {
+        self.code.as_deref()
+    }
+}
+
+impl fmt::Debug for BRegExternalReviewRecovery {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegExternalReviewRecovery")
+            .field("state", &self.state)
+            .field("has_code", &self.code.is_some())
+            .finish()
+    }
+}
 /// Validated but inert change-request metadata extracted from a Registry
 /// Record. Its action links cannot be executed until promoted.
 #[derive(Clone, PartialEq)]
@@ -982,10 +902,7 @@ pub struct BRegRequestMetadata {
     actions: Vec<InertBRegLifecycleAction>,
     application: Option<BRegRecordApplication>,
     retained_history: Option<BRegRetainedRequestHistoryPage>,
-    decisions: Vec<BRegRequestDecision>,
-    retained_decisions: Vec<BRegRequestDecision>,
-    review: Option<BRegRequestReviewState>,
-    review_timing: Option<BRegRequestReviewTiming>,
+    review: Option<BRegExternalReviewStatus>,
     submitter_reference: Option<String>,
     applier_reference: Option<String>,
 }
@@ -1040,9 +957,7 @@ impl BRegRequestMetadata {
                 "actions",
                 "application",
                 "history",
-                "decisions",
                 "review",
-                "reviewTiming",
                 "submitterReference",
                 "applierReference",
             ],
@@ -1096,21 +1011,13 @@ impl BRegRequestMetadata {
                 decode_retained_application(value)?,
             )),
         };
-        let decisions = match object.remove("decisions") {
-            None => Vec::new(),
-            Some(value) => decode_decisions(value)?,
-        };
         let review = object
             .remove("review")
-            .map(decode_request_review_state)
+            .map(decode_external_review_status)
             .transpose()?;
         if detail_erased && review.is_some() {
             return Err(BRegLifecycleDecodeError::Profile);
         }
-        let review_timing = object
-            .remove("reviewTiming")
-            .map(decode_request_review_timing)
-            .transpose()?;
         let submitter_reference = take_optional_identifier(&mut object, "submitterReference")?;
         let applier_reference = take_optional_identifier(&mut object, "applierReference")?;
         if applier_reference.is_some() && application.is_none() {
@@ -1144,13 +1051,6 @@ impl BRegRequestMetadata {
                 return Err(BRegLifecycleDecodeError::Profile);
             }
         }
-        let retained_decisions = retained_history
-            .as_ref()
-            .into_iter()
-            .flat_map(|history| &history.proposals)
-            .flat_map(|proposal| proposal.decisions.iter().cloned())
-            .collect();
-
         Ok(Self {
             breg_state,
             proposal_version,
@@ -1161,10 +1061,7 @@ impl BRegRequestMetadata {
             actions,
             application,
             retained_history,
-            decisions,
-            retained_decisions,
             review,
-            review_timing,
             submitter_reference,
             applier_reference,
         })
@@ -1206,27 +1103,9 @@ impl BRegRequestMetadata {
         self.application.as_ref()
     }
 
-    /// Caller-visible decisions for the current proposal, including reason text
-    /// only when the runtime discloses and retains it.
     #[must_use]
-    pub fn decisions(&self) -> &[BRegRequestDecision] {
-        &self.decisions
-    }
-
-    /// Caller-visible decisions from retained proposals, in proposal and decision order.
-    #[must_use]
-    pub fn retained_decisions(&self) -> &[BRegRequestDecision] {
-        &self.retained_decisions
-    }
-
-    #[must_use]
-    pub fn review(&self) -> Option<&BRegRequestReviewState> {
+    pub fn review(&self) -> Option<&BRegExternalReviewStatus> {
         self.review.as_ref()
-    }
-
-    #[must_use]
-    pub fn review_timing(&self) -> Option<&BRegRequestReviewTiming> {
-        self.review_timing.as_ref()
     }
 
     #[must_use]
@@ -1253,7 +1132,7 @@ impl BRegRequestMetadata {
     }
 
     /// Promotes every advisory action only after exact Registry Metadata,
-    /// selected-profile, record, route, stage, href and precondition binding.
+    /// selected-profile, record, route, href and precondition binding.
     pub fn promote_actions(
         &self,
         authority: &BRegLifecycleAuthority,
@@ -1299,10 +1178,7 @@ impl fmt::Debug for BRegRequestMetadata {
             .field("detail_erased", &self.detail_erased)
             .field("action_count", &self.actions.len())
             .field("application", &self.application)
-            .field("decision_count", &self.decisions.len())
-            .field("retained_decision_count", &self.retained_decisions.len())
             .field("review", &self.review)
-            .field("review_timing", &self.review_timing)
             .field(
                 "has_submitter_reference",
                 &self.submitter_reference.is_some(),
@@ -1321,11 +1197,9 @@ struct InertBRegLifecycleAction {
     operation: BRegLifecycleOperation,
     href: String,
     if_match: String,
-    stage: Option<String>,
     rebase: Option<bool>,
     proposal_version: Option<BRegProposalVersion>,
     effect_digest: Option<BRegEffectDigest>,
-    review: Option<BRegRequestReview>,
 }
 
 impl InertBRegLifecycleAction {
@@ -1333,13 +1207,7 @@ impl InertBRegLifecycleAction {
         let mut object = exact_object(
             value,
             &["operation", "method", "href", "ifMatch"],
-            &[
-                "stage",
-                "rebase",
-                "proposalVersion",
-                "effectDigest",
-                "review",
-            ],
+            &["rebase", "proposalVersion", "effectDigest"],
         )?;
         let operation = parse_operation(&take_string(&mut object, "operation")?)?;
         if take_string(&mut object, "method")? != "POST" {
@@ -1351,7 +1219,6 @@ impl InertBRegLifecycleAction {
         if !valid_action_if_match(&if_match) {
             return Err(BRegLifecycleDecodeError::Profile);
         }
-        let stage = take_optional_identifier(&mut object, "stage")?;
         let rebase = match object.remove("rebase") {
             None => None,
             Some(Value::Bool(value)) => Some(value),
@@ -1360,23 +1227,6 @@ impl InertBRegLifecycleAction {
         let proposal_version = take_optional_proposal_version(&mut object, "proposalVersion")?;
         let effect_digest = take_optional_digest(&mut object, "effectDigest")?;
         if proposal_version.is_some() != effect_digest.is_some() {
-            return Err(BRegLifecycleDecodeError::Profile);
-        }
-        let review = match object.remove("review") {
-            None => None,
-            Some(value) => Some(decode_review(value)?),
-        };
-
-        if operation.is_review() {
-            if stage.is_none()
-                || review.is_none()
-                || proposal_version.is_none()
-                || effect_digest.is_none()
-                || rebase.is_some()
-            {
-                return Err(BRegLifecycleDecodeError::Profile);
-            }
-        } else if stage.is_some() || review.is_some() {
             return Err(BRegLifecycleDecodeError::Profile);
         }
         if operation.requires_proposal_binding()
@@ -1396,11 +1246,9 @@ impl InertBRegLifecycleAction {
             operation,
             href,
             if_match,
-            stage,
             rebase,
             proposal_version,
             effect_digest,
-            review,
         })
     }
 }
@@ -1412,7 +1260,6 @@ impl fmt::Debug for InertBRegLifecycleAction {
             .field("operation", &self.operation)
             .field("href", &"<redacted>")
             .field("if_match", &"<redacted>")
-            .field("stage", &self.stage.as_ref().map(|_| "<redacted>"))
             .field("rebase", &self.rebase)
             .field(
                 "proposal_version",
@@ -1422,7 +1269,6 @@ impl fmt::Debug for InertBRegLifecycleAction {
                 "effect_digest",
                 &self.effect_digest.as_ref().map(|_| "<redacted>"),
             )
-            .field("review", &self.review)
             .finish()
     }
 }
@@ -1466,7 +1312,7 @@ impl BRegLifecycleAuthority {
         let mut keys = BTreeSet::new();
         for binding in &operations {
             binding.validate()?;
-            if !keys.insert((binding.operation, binding.stage.clone())) {
+            if !keys.insert(binding.operation) {
                 return Err(BRegLifecyclePromotionError::Authority);
             }
         }
@@ -1527,7 +1373,7 @@ impl BRegLifecycleAuthority {
                 "recordRevision",
                 "proposalVersion",
             ],
-            &["stage", "effectDigest", "rebase"],
+            &["effectDigest", "rebase"],
         )
         .map_err(|_| BRegLifecyclePromotionError::Binding)?;
         let operation = parse_operation(
@@ -1543,8 +1389,6 @@ impl BRegLifecycleAuthority {
         if !valid_action_if_match(&if_match) {
             return Err(BRegLifecyclePromotionError::Binding);
         }
-        let stage = take_optional_identifier(&mut identity, "stage")
-            .map_err(|_| BRegLifecyclePromotionError::Binding)?;
         let record_identifier = take_string(&mut identity, "recordIdentifier")
             .map_err(|_| BRegLifecyclePromotionError::Binding)?;
         validate_canonical_uuid(&record_identifier)
@@ -1571,7 +1415,7 @@ impl BRegLifecycleAuthority {
         let mut bindings = self
             .operations
             .iter()
-            .filter(|binding| binding.operation == operation && binding.stage == stage);
+            .filter(|binding| binding.operation == operation);
         let binding = bindings
             .next()
             .filter(|_| bindings.next().is_none())
@@ -1599,9 +1443,7 @@ impl BRegLifecycleAuthority {
             operation,
             href,
             if_match: BRegActionIfMatch(if_match),
-            stage,
             body: action_body,
-            review: None,
             registry_revision: self.registry_revision.clone(),
             source_binding: self.source_binding.clone(),
             record_identifier,
@@ -1626,9 +1468,10 @@ impl BRegLifecycleAuthority {
         proposal_version: BRegProposalVersion,
         effect_digest: Option<BRegEffectDigest>,
     ) -> Result<BRegLifecycleAction, BRegLifecyclePromotionError> {
-        let mut matches = self.operations.iter().filter(|binding| {
-            binding.operation == action.operation && binding.stage == action.stage
-        });
+        let mut matches = self
+            .operations
+            .iter()
+            .filter(|binding| binding.operation == action.operation);
         let binding = matches
             .next()
             .filter(|_| matches.next().is_none())
@@ -1645,7 +1488,7 @@ impl BRegLifecycleAuthority {
             BRegLifecycleOperation::ReviseRequest => BRegLifecycleActionBody::ReviseRequest {
                 rebase: action.rebase.ok_or(BRegLifecyclePromotionError::Binding)?,
             },
-            operation => {
+            BRegLifecycleOperation::ApplyRequest => {
                 let proposal_version = action
                     .proposal_version
                     .ok_or(BRegLifecyclePromotionError::Binding)?;
@@ -1653,34 +1496,10 @@ impl BRegLifecycleAuthority {
                     .effect_digest
                     .clone()
                     .ok_or(BRegLifecyclePromotionError::Binding)?;
-                match operation {
-                    BRegLifecycleOperation::ApproveRequest => {
-                        BRegLifecycleActionBody::ApproveRequest {
-                            proposal_version,
-                            effect_digest,
-                            reason: None,
-                        }
-                    }
-                    BRegLifecycleOperation::RejectRequest => {
-                        BRegLifecycleActionBody::RejectRequest {
-                            proposal_version,
-                            effect_digest,
-                            reason: None,
-                        }
-                    }
-                    BRegLifecycleOperation::RequestRevision => {
-                        BRegLifecycleActionBody::RequestRevision {
-                            proposal_version,
-                            effect_digest,
-                            reason: None,
-                        }
-                    }
-                    BRegLifecycleOperation::ApplyRequest => BRegLifecycleActionBody::ApplyRequest {
-                        proposal_version,
-                        effect_digest,
-                        reason: None,
-                    },
-                    _ => return Err(BRegLifecyclePromotionError::Binding),
+                BRegLifecycleActionBody::ApplyRequest {
+                    proposal_version,
+                    effect_digest,
+                    reason: None,
                 }
             }
         };
@@ -1693,9 +1512,7 @@ impl BRegLifecycleAuthority {
             operation: action.operation,
             href: action.href.clone(),
             if_match: BRegActionIfMatch(action.if_match.clone()),
-            stage: action.stage.clone(),
             body,
-            review: action.review.clone(),
             registry_revision: self.registry_revision.clone(),
             source_binding: self.source_binding.clone(),
             record_identifier: record.record_identifier.clone(),
@@ -1726,44 +1543,20 @@ impl fmt::Debug for BRegLifecycleAuthority {
 pub struct BRegLifecycleOperationBinding {
     operation: BRegLifecycleOperation,
     path_template: String,
-    stage: Option<String>,
 }
 
 impl BRegLifecycleOperationBinding {
-    pub(crate) fn new(
-        operation: BRegLifecycleOperation,
-        path_template: String,
-        stage: Option<String>,
-    ) -> Self {
+    pub(crate) fn new(operation: BRegLifecycleOperation, path_template: String) -> Self {
         Self {
             operation,
             path_template,
-            stage,
         }
     }
 
     fn validate(&self) -> Result<(), BRegLifecyclePromotionError> {
         validate_route_template(&self.path_template)
             .map_err(|_| BRegLifecyclePromotionError::Authority)?;
-        match (self.operation.is_review(), self.stage.as_deref()) {
-            (true, Some(stage)) => {
-                validate_identifier(stage).map_err(|_| BRegLifecyclePromotionError::Authority)?
-            }
-            (false, None) => {}
-            _ => return Err(BRegLifecyclePromotionError::Authority),
-        }
-        let suffix = if self.operation.is_review() {
-            format!(
-                "/actions/stages/{}/{}",
-                self.stage
-                    .as_deref()
-                    .ok_or(BRegLifecyclePromotionError::Authority)?,
-                self.operation.path_suffix().trim_start_matches('/')
-            )
-        } else {
-            self.operation.path_suffix().to_owned()
-        };
-        if !self.path_template.ends_with(&suffix) {
+        if !self.path_template.ends_with(self.operation.path_suffix()) {
             return Err(BRegLifecyclePromotionError::Authority);
         }
         Ok(())
@@ -1792,7 +1585,6 @@ impl fmt::Debug for BRegLifecycleOperationBinding {
             .debug_struct("BRegLifecycleOperationBinding")
             .field("operation", &self.operation)
             .field("path_template", &"<redacted>")
-            .field("stage", &self.stage.as_ref().map(|_| "<redacted>"))
             .finish()
     }
 }
@@ -1894,9 +1686,7 @@ pub struct BRegLifecycleAction {
     operation: BRegLifecycleOperation,
     href: String,
     if_match: BRegActionIfMatch,
-    stage: Option<String>,
     body: BRegLifecycleActionBody,
-    review: Option<BRegRequestReview>,
     registry_revision: String,
     source_binding: String,
     record_identifier: String,
@@ -1924,37 +1714,25 @@ impl BRegLifecycleAction {
     }
 
     #[must_use]
-    pub fn stage(&self) -> Option<&str> {
-        self.stage.as_deref()
-    }
-
-    #[must_use]
     pub fn body(&self) -> &BRegLifecycleActionBody {
         &self.body
     }
 
-    /// Return a copy carrying a reason on a decision or apply body. Empty text
+    /// Return a copy carrying a reason on an apply body. Empty text
     /// is permitted; all text is preserved exactly for explicit retry.
     /// Validation performs no token acquisition or I/O.
     pub fn with_reason(&self, reason: impl Into<String>) -> Result<Self, BRegLifecycleActionError> {
         let reason = reason.into();
-        if reason.contains('\0') || reason.chars().count() > MAX_BREG_REVIEW_REASON_CHARACTERS {
+        if reason.contains('\0') || reason.chars().count() > MAX_BREG_APPLICATION_REASON_CHARACTERS
+        {
             return Err(BRegLifecycleActionError::Reason);
         }
         let mut action = self.clone();
         match &mut action.body {
-            BRegLifecycleActionBody::ApproveRequest { reason: value, .. }
-            | BRegLifecycleActionBody::RejectRequest { reason: value, .. }
-            | BRegLifecycleActionBody::RequestRevision { reason: value, .. }
-            | BRegLifecycleActionBody::ApplyRequest { reason: value, .. } => *value = Some(reason),
+            BRegLifecycleActionBody::ApplyRequest { reason: value, .. } => *value = Some(reason),
             _ => return Err(BRegLifecycleActionError::Reason),
         }
         Ok(action)
-    }
-
-    #[must_use]
-    pub fn review(&self) -> Option<&BRegRequestReview> {
-        self.review.as_ref()
     }
 
     #[must_use]
@@ -1976,9 +1754,6 @@ impl BRegLifecycleAction {
             "recordRevision": self.expected_receipt_revision - 1,
             "proposalVersion": self.proposal_version,
         });
-        if let Some(stage) = &self.stage {
-            identity["stage"] = Value::String(stage.clone());
-        }
         if let Some(effect_digest) = &self.effect_digest {
             identity["effectDigest"] = Value::String(effect_digest.as_str().to_owned());
         }
@@ -1999,21 +1774,11 @@ impl BRegLifecycleAction {
             BRegLifecycleOperation::SubmitRequest => {
                 request.breg_state() == BRegRequestState::Submitted
             }
-            BRegLifecycleOperation::ApproveRequest => matches!(
-                request.breg_state(),
-                BRegRequestState::Submitted | BRegRequestState::Approved
-            ),
-            BRegLifecycleOperation::RejectRequest => {
-                request.breg_state() == BRegRequestState::Rejected
-            }
-            BRegLifecycleOperation::RequestRevision => {
-                request.breg_state() == BRegRequestState::NeedsChanges
-            }
             BRegLifecycleOperation::ReviseRequest => {
                 request.breg_state() == BRegRequestState::Draft
             }
             BRegLifecycleOperation::CancelRequest => {
-                request.breg_state() == BRegRequestState::Canceled
+                request.breg_state() == BRegRequestState::Cancelled
             }
             BRegLifecycleOperation::ApplyRequest => {
                 request.breg_state() == BRegRequestState::Applied
@@ -2067,9 +1832,7 @@ impl fmt::Debug for BRegLifecycleAction {
             .field("operation", &self.operation)
             .field("href", &"<redacted>")
             .field("if_match", &self.if_match)
-            .field("stage", &self.stage.as_ref().map(|_| "<redacted>"))
             .field("body", &self.body)
-            .field("review", &self.review)
             .field("registry_revision", &"<redacted>")
             .field("source_binding", &"<redacted>")
             .field("record_identifier", &"<redacted>")
@@ -2085,23 +1848,9 @@ impl fmt::Debug for BRegLifecycleAction {
 
 /// Exact request body synthesized from one promoted actor action.
 #[derive(Clone, Eq, PartialEq)]
+#[allow(clippy::enum_variant_names)]
 pub enum BRegLifecycleActionBody {
     SubmitRequest,
-    ApproveRequest {
-        proposal_version: BRegProposalVersion,
-        effect_digest: BRegEffectDigest,
-        reason: Option<String>,
-    },
-    RejectRequest {
-        proposal_version: BRegProposalVersion,
-        effect_digest: BRegEffectDigest,
-        reason: Option<String>,
-    },
-    RequestRevision {
-        proposal_version: BRegProposalVersion,
-        effect_digest: BRegEffectDigest,
-        reason: Option<String>,
-    },
     ReviseRequest {
         rebase: bool,
     },
@@ -2128,21 +1877,6 @@ fn recovery_action_body(
     let reason = supplied.get("reason").cloned();
     let body = match operation {
         BRegLifecycleOperation::SubmitRequest => BRegLifecycleActionBody::SubmitRequest,
-        BRegLifecycleOperation::ApproveRequest => BRegLifecycleActionBody::ApproveRequest {
-            proposal_version,
-            effect_digest: effect_digest.ok_or(BRegLifecyclePromotionError::Binding)?,
-            reason: recovery_reason(reason)?,
-        },
-        BRegLifecycleOperation::RejectRequest => BRegLifecycleActionBody::RejectRequest {
-            proposal_version,
-            effect_digest: effect_digest.ok_or(BRegLifecyclePromotionError::Binding)?,
-            reason: recovery_reason(reason)?,
-        },
-        BRegLifecycleOperation::RequestRevision => BRegLifecycleActionBody::RequestRevision {
-            proposal_version,
-            effect_digest: effect_digest.ok_or(BRegLifecyclePromotionError::Binding)?,
-            reason: recovery_reason(reason)?,
-        },
         BRegLifecycleOperation::ReviseRequest => BRegLifecycleActionBody::ReviseRequest {
             rebase: rebase.ok_or(BRegLifecyclePromotionError::Binding)?,
         },
@@ -2164,7 +1898,7 @@ fn recovery_reason(reason: Option<Value>) -> Result<Option<String>, BRegLifecycl
         None => Ok(None),
         Some(Value::String(reason))
             if !reason.contains('\0')
-                && reason.chars().count() <= MAX_BREG_REVIEW_REASON_CHARACTERS =>
+                && reason.chars().count() <= MAX_BREG_APPLICATION_REASON_CHARACTERS =>
         {
             Ok(Some(reason))
         }
@@ -2179,22 +1913,7 @@ impl BRegLifecycleActionBody {
         match self {
             Self::SubmitRequest | Self::CancelRequest => json!({}),
             Self::ReviseRequest { rebase } => json!({"rebase": rebase}),
-            Self::ApproveRequest {
-                proposal_version,
-                effect_digest,
-                reason,
-            }
-            | Self::RejectRequest {
-                proposal_version,
-                effect_digest,
-                reason,
-            }
-            | Self::RequestRevision {
-                proposal_version,
-                effect_digest,
-                reason,
-            }
-            | Self::ApplyRequest {
+            Self::ApplyRequest {
                 proposal_version,
                 effect_digest,
                 reason,
@@ -2214,9 +1933,6 @@ impl fmt::Debug for BRegLifecycleActionBody {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::SubmitRequest => "BRegLifecycleActionBody::SubmitRequest",
-            Self::ApproveRequest { .. } => "BRegLifecycleActionBody::ApproveRequest(<redacted>)",
-            Self::RejectRequest { .. } => "BRegLifecycleActionBody::RejectRequest(<redacted>)",
-            Self::RequestRevision { .. } => "BRegLifecycleActionBody::RequestRevision(<redacted>)",
             Self::ReviseRequest { .. } => "BRegLifecycleActionBody::ReviseRequest(<redacted>)",
             Self::CancelRequest => "BRegLifecycleActionBody::CancelRequest",
             Self::ApplyRequest { .. } => "BRegLifecycleActionBody::ApplyRequest(<redacted>)",
@@ -2389,23 +2105,15 @@ impl BRegLifecycleReceiptRequest {
             })),
         });
         if let Some(proposal) = &self.proposal {
-            let mut proposal_value = json!({
-                "reviewMode": match proposal.review_mode {
-                    BRegRequestReviewMode::None => "none",
-                    BRegRequestReviewMode::Staged => "staged",
-                },
-                "applicationDisposition": match proposal.application_disposition {
-                    BRegRequestApplicationDisposition::Apply => "apply",
-                    BRegRequestApplicationDisposition::Queue => "queue",
+            value["proposal"] = json!({
+                "review": match &proposal.review {
+                    BRegRequestReviewRequirement::None => json!({"mode": "none"}),
+                    BRegRequestReviewRequirement::External(requirement) => json!({
+                        "authority": requirement.authority,
+                        "policyId": requirement.policy_id,
+                    }),
                 },
             });
-            if let Some(reason) = &proposal.queue_reason {
-                proposal_value["queueReason"] = json!({
-                    "code": reason.code,
-                    "label": reason.label,
-                });
-            }
-            value["proposal"] = proposal_value;
         }
         value
     }
@@ -2439,7 +2147,7 @@ pub enum BRegLifecycleDecodeError {
 /// Coarse, value-free lifecycle action input failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum BRegLifecycleActionError {
-    #[error("Base Registry Engine reason requires rejection or revision, no NUL, and at most 4096 Unicode characters")]
+    #[error("Base Registry Engine application reason requires no NUL and at most 4096 Unicode characters")]
     Reason,
 }
 
@@ -2452,122 +2160,256 @@ pub enum BRegLifecyclePromotionError {
     Binding,
 }
 
-fn decode_review(value: Value) -> Result<BRegRequestReview, BRegLifecycleDecodeError> {
-    let mut object = exact_object(value, &["targets"], &[])?;
-    let targets = match object.remove("targets") {
-        Some(Value::Array(targets)) if targets.len() <= MAX_BREG_REVIEW_TARGETS => targets
-            .into_iter()
-            .map(decode_review_target)
-            .collect::<Result<Vec<_>, _>>()?,
-        _ => return Err(BRegLifecycleDecodeError::Profile),
-    };
-    Ok(BRegRequestReview { targets })
-}
-
 fn decode_proposal(value: Value) -> Result<BRegRequestProposal, BRegLifecycleDecodeError> {
-    let mut object = exact_object(
-        value,
-        &["reviewMode", "applicationDisposition"],
-        &["queueReason"],
+    let mut object = exact_object(value, &["review"], &[])?;
+    let review = decode_review_requirement(
+        object
+            .remove("review")
+            .ok_or(BRegLifecycleDecodeError::Profile)?,
     )?;
-    let review_mode = BRegRequestReviewMode::parse(&take_string(&mut object, "reviewMode")?)
-        .ok_or(BRegLifecycleDecodeError::Profile)?;
-    let application_disposition = BRegRequestApplicationDisposition::parse(&take_string(
-        &mut object,
-        "applicationDisposition",
-    )?)
-    .ok_or(BRegLifecycleDecodeError::Profile)?;
-    let queue_reason = match object.remove("queueReason") {
-        None => None,
-        Some(value) => Some(decode_queue_reason(value)?),
+    Ok(BRegRequestProposal { review })
+}
+
+pub(crate) fn decode_review_requirement(
+    value: Value,
+) -> Result<BRegRequestReviewRequirement, BRegLifecycleDecodeError> {
+    let Value::Object(mut object) = value else {
+        return Err(BRegLifecycleDecodeError::Profile);
     };
-    if matches!(
-        application_disposition,
-        BRegRequestApplicationDisposition::Apply
-    ) && queue_reason.is_some()
-    {
+    if object.len() == 1 && object.remove("mode") == Some(Value::String("none".to_owned())) {
+        return Ok(BRegRequestReviewRequirement::None);
+    }
+    if object.len() != 2 {
         return Err(BRegLifecycleDecodeError::Profile);
     }
-    Ok(BRegRequestProposal {
-        review_mode,
-        application_disposition,
-        queue_reason,
-    })
+    let authority = take_string(&mut object, "authority")?;
+    let policy_id = take_string(&mut object, "policyId")?;
+    validate_identifier(&authority)?;
+    validate_identifier(&policy_id)?;
+    Ok(BRegRequestReviewRequirement::External(
+        BRegExternalReviewRequirement {
+            authority,
+            policy_id,
+        },
+    ))
 }
 
-fn decode_queue_reason(value: Value) -> Result<BRegRequestQueueReason, BRegLifecycleDecodeError> {
-    let mut object = exact_object(value, &["code", "label"], &[])?;
-    let code = take_string(&mut object, "code")?;
-    validate_identifier(&code)?;
-    let label = take_string(&mut object, "label")?;
-    if label.is_empty() || label.len() > MAX_IDENTIFIER_BYTES {
-        return Err(BRegLifecycleDecodeError::Profile);
-    }
-    Ok(BRegRequestQueueReason { code, label })
-}
-
-fn decode_review_target(value: Value) -> Result<BRegRequestReviewTarget, BRegLifecycleDecodeError> {
+fn decode_external_review_status(
+    value: Value,
+) -> Result<BRegExternalReviewStatus, BRegLifecycleDecodeError> {
     let mut object = exact_object(
         value,
         &[
-            "entityId",
-            "recordId",
-            "operation",
-            "baseRevision",
-            "before",
-            "after",
+            "submission",
+            "result",
+            "delivery",
+            "application",
+            "recovery",
         ],
         &[],
     )?;
-    let entity_identifier = take_string(&mut object, "entityId")?;
-    validate_identifier(&entity_identifier)?;
-    let record_identifier = take_string(&mut object, "recordId")?;
-    validate_canonical_uuid(&record_identifier)?;
-    let operation = match take_string(&mut object, "operation")?.as_str() {
-        "create" => BRegReviewOperation::Create,
-        "patch" => BRegReviewOperation::Patch,
-        _ => return Err(BRegLifecycleDecodeError::Profile),
-    };
-    let base_revision = match object.remove("baseRevision") {
-        Some(Value::Null) => None,
-        Some(value) => Some(
-            value
-                .as_u64()
-                .filter(|revision| *revision > 0)
-                .ok_or(BRegLifecycleDecodeError::Profile)?,
-        ),
-        None => return Err(BRegLifecycleDecodeError::Profile),
-    };
-    let before = match object.remove("before") {
-        Some(Value::Null) => None,
-        Some(Value::Object(value)) if value.len() <= MAX_BREG_REVIEW_OBJECT_MEMBERS => {
-            Some(value.into_iter().collect())
-        }
-        _ => return Err(BRegLifecycleDecodeError::Profile),
-    };
-    let after = match object.remove("after") {
-        Some(Value::Object(value)) if value.len() <= MAX_BREG_REVIEW_OBJECT_MEMBERS => {
-            value.into_iter().collect()
-        }
-        _ => return Err(BRegLifecycleDecodeError::Profile),
-    };
-    if matches!(operation, BRegReviewOperation::Create)
-        && (base_revision.is_some() || before.is_some())
-        || matches!(operation, BRegReviewOperation::Patch)
-            && (base_revision.is_none() || before.is_none())
+    let submission = decode_external_review_submission(take_required(&mut object, "submission")?)?;
+    let result = decode_external_review_result(take_required(&mut object, "result")?)?;
+    let delivery = decode_external_review_delivery(take_required(&mut object, "delivery")?)?;
+    let application =
+        decode_external_review_application(take_required(&mut object, "application")?)?;
+    let recovery = decode_external_review_recovery(take_required(&mut object, "recovery")?)?;
+    if application.application_id.is_some()
+        && application.state != BRegExternalReviewApplicationState::Applied
+        && !matches!(
+            recovery.state,
+            BRegExternalReviewRecoveryState::ReceiptPending
+                | BRegExternalReviewRecoveryState::ReceiptRecovered
+        )
     {
         return Err(BRegLifecycleDecodeError::Profile);
     }
-    Ok(BRegRequestReviewTarget {
-        entity_identifier,
-        record_identifier,
-        operation,
-        base_revision,
-        before,
-        after,
+    Ok(BRegExternalReviewStatus {
+        submission,
+        result,
+        delivery,
+        application,
+        recovery,
     })
 }
 
+fn decode_external_review_submission(
+    value: Value,
+) -> Result<BRegExternalReviewSubmission, BRegLifecycleDecodeError> {
+    let mut object = exact_object(
+        value,
+        &["state", "authority"],
+        &["requestId", "submissionDigest", "policy"],
+    )?;
+    let state = match take_string(&mut object, "state")?.as_str() {
+        "pending" => BRegExternalReviewSubmissionState::Pending,
+        "accepted" => BRegExternalReviewSubmissionState::Accepted,
+        "uncertain" => BRegExternalReviewSubmissionState::Uncertain,
+        "cancelling" => BRegExternalReviewSubmissionState::Cancelling,
+        "cancelled" => BRegExternalReviewSubmissionState::Cancelled,
+        "failed" => BRegExternalReviewSubmissionState::Failed,
+        _ => return Err(BRegLifecycleDecodeError::Profile),
+    };
+    let authority = take_string(&mut object, "authority")?;
+    validate_identifier(&authority)?;
+    let request_id = take_optional_uuid(&mut object, "requestId")?;
+    let submission_digest = take_optional_digest(&mut object, "submissionDigest")?;
+    let policy = object
+        .remove("policy")
+        .map(decode_external_review_policy)
+        .transpose()?;
+    let accepted = matches!(
+        state,
+        BRegExternalReviewSubmissionState::Accepted
+            | BRegExternalReviewSubmissionState::Cancelling
+            | BRegExternalReviewSubmissionState::Cancelled
+    );
+    if accepted != (request_id.is_some() && submission_digest.is_some() && policy.is_some())
+        || (!accepted && (request_id.is_some() || submission_digest.is_some() || policy.is_some()))
+    {
+        return Err(BRegLifecycleDecodeError::Profile);
+    }
+    Ok(BRegExternalReviewSubmission {
+        state,
+        authority,
+        request_id,
+        submission_digest,
+        policy,
+    })
+}
+
+fn decode_external_review_policy(
+    value: Value,
+) -> Result<BRegExternalReviewPolicy, BRegLifecycleDecodeError> {
+    let mut object = exact_object(value, &["id", "version", "digest"], &[])?;
+    let id = take_string(&mut object, "id")?;
+    let version = take_string(&mut object, "version")?;
+    validate_identifier(&id)?;
+    validate_identifier(&version)?;
+    let digest = BRegEffectDigest::parse(&take_string(&mut object, "digest")?)?;
+    Ok(BRegExternalReviewPolicy {
+        id,
+        version,
+        digest,
+    })
+}
+
+fn decode_external_review_result(
+    value: Value,
+) -> Result<BRegExternalReviewResult, BRegLifecycleDecodeError> {
+    let mut object = exact_object(
+        value,
+        &["state"],
+        &["resultId", "completedAt", "availableUntil"],
+    )?;
+    let state = match take_string(&mut object, "state")?.as_str() {
+        "pending" => BRegExternalReviewResultState::Pending,
+        "approved" => BRegExternalReviewResultState::Approved,
+        "rejected" => BRegExternalReviewResultState::Rejected,
+        "changesRequested" => BRegExternalReviewResultState::ChangesRequested,
+        "answered" => BRegExternalReviewResultState::Answered,
+        "cancelled" => BRegExternalReviewResultState::Cancelled,
+        "superseded" => BRegExternalReviewResultState::Superseded,
+        "unavailable" => BRegExternalReviewResultState::Unavailable,
+        _ => return Err(BRegLifecycleDecodeError::Profile),
+    };
+    let result_id = take_optional_uuid(&mut object, "resultId")?;
+    let completed_at = take_optional_utc_timestamp(&mut object, "completedAt")?;
+    let available_until = take_optional_utc_timestamp(&mut object, "availableUntil")?;
+    let terminal = !matches!(
+        state,
+        BRegExternalReviewResultState::Pending | BRegExternalReviewResultState::Unavailable
+    );
+    if terminal != (result_id.is_some() && completed_at.is_some() && available_until.is_some())
+        || (!terminal
+            && (result_id.is_some() || completed_at.is_some() || available_until.is_some()))
+    {
+        return Err(BRegLifecycleDecodeError::Profile);
+    }
+    Ok(BRegExternalReviewResult {
+        state,
+        result_id,
+        completed_at,
+        available_until,
+    })
+}
+
+fn decode_external_review_delivery(
+    value: Value,
+) -> Result<BRegExternalReviewDelivery, BRegLifecycleDecodeError> {
+    let mut object = exact_object(value, &["state"], &["eventId", "receivedAt"])?;
+    let state = match take_string(&mut object, "state")?.as_str() {
+        "polling" => BRegExternalReviewDeliveryState::Polling,
+        "received" => BRegExternalReviewDeliveryState::Received,
+        "reconciled" => BRegExternalReviewDeliveryState::Reconciled,
+        "unmatched" => BRegExternalReviewDeliveryState::Unmatched,
+        "exhausted" => BRegExternalReviewDeliveryState::Exhausted,
+        _ => return Err(BRegLifecycleDecodeError::Profile),
+    };
+    let event_id = take_optional_uuid(&mut object, "eventId")?;
+    let received_at = take_optional_utc_timestamp(&mut object, "receivedAt")?;
+    let delivered = state != BRegExternalReviewDeliveryState::Polling;
+    if delivered != (event_id.is_some() && received_at.is_some())
+        || (!delivered && (event_id.is_some() || received_at.is_some()))
+    {
+        return Err(BRegLifecycleDecodeError::Profile);
+    }
+    Ok(BRegExternalReviewDelivery {
+        state,
+        event_id,
+        received_at,
+    })
+}
+
+fn decode_external_review_application(
+    value: Value,
+) -> Result<BRegExternalReviewApplication, BRegLifecycleDecodeError> {
+    let mut object = exact_object(value, &["mode", "state"], &["executor", "applicationId"])?;
+    let mode = match take_string(&mut object, "mode")?.as_str() {
+        "manual" => BRegExternalReviewApplicationMode::Manual,
+        "automatic" => BRegExternalReviewApplicationMode::Automatic,
+        _ => return Err(BRegLifecycleDecodeError::Profile),
+    };
+    let state = match take_string(&mut object, "state")?.as_str() {
+        "awaitingReview" => BRegExternalReviewApplicationState::AwaitingReview,
+        "ready" => BRegExternalReviewApplicationState::Ready,
+        "queued" => BRegExternalReviewApplicationState::Queued,
+        "applying" => BRegExternalReviewApplicationState::Applying,
+        "applied" => BRegExternalReviewApplicationState::Applied,
+        "blocked" => BRegExternalReviewApplicationState::Blocked,
+        _ => return Err(BRegLifecycleDecodeError::Profile),
+    };
+    let executor = take_optional_identifier(&mut object, "executor")?;
+    if (mode == BRegExternalReviewApplicationMode::Automatic) != executor.is_some() {
+        return Err(BRegLifecycleDecodeError::Profile);
+    }
+    let application_id = take_optional_uuid(&mut object, "applicationId")?;
+    Ok(BRegExternalReviewApplication {
+        mode,
+        state,
+        executor,
+        application_id,
+    })
+}
+
+fn decode_external_review_recovery(
+    value: Value,
+) -> Result<BRegExternalReviewRecovery, BRegLifecycleDecodeError> {
+    let mut object = exact_object(value, &["state"], &["code"])?;
+    let state = match take_string(&mut object, "state")?.as_str() {
+        "none" => BRegExternalReviewRecoveryState::None,
+        "submissionUnknown" => BRegExternalReviewRecoveryState::SubmissionUnknown,
+        "receiptPending" => BRegExternalReviewRecoveryState::ReceiptPending,
+        "receiptRecovered" => BRegExternalReviewRecoveryState::ReceiptRecovered,
+        "operatorAttention" => BRegExternalReviewRecoveryState::OperatorAttention,
+        _ => return Err(BRegLifecycleDecodeError::Profile),
+    };
+    let code = take_optional_identifier(&mut object, "code")?;
+    if state == BRegExternalReviewRecoveryState::None && code.is_some() {
+        return Err(BRegLifecycleDecodeError::Profile);
+    }
+    Ok(BRegExternalReviewRecovery { state, code })
+}
 fn decode_retained_application(
     value: Value,
 ) -> Result<BRegRetainedApplication, BRegLifecycleDecodeError> {
@@ -2596,7 +2438,7 @@ fn decode_retained_application(
         Some(Value::String(reason))
             if reason_present
                 && !reason.contains('\0')
-                && reason.chars().count() <= MAX_BREG_REVIEW_REASON_CHARACTERS =>
+                && reason.chars().count() <= MAX_BREG_APPLICATION_REASON_CHARACTERS =>
         {
             Some(reason)
         }
@@ -2682,7 +2524,7 @@ fn decode_retained_proposal(
             "resultLinkCount",
             "resultLinks",
         ],
-        &["effectDigest", "decisions"],
+        &["effectDigest"],
     )?;
     let request_entity_identifier = take_string(&mut object, "requestEntityId")?;
     validate_identifier(&request_entity_identifier)?;
@@ -2735,10 +2577,6 @@ fn decode_retained_proposal(
         return Err(BRegLifecycleDecodeError::Profile);
     }
     let effect_digest = take_optional_digest(&mut object, "effectDigest")?;
-    let decisions = match object.remove("decisions") {
-        None => Vec::new(),
-        Some(value) => decode_decisions(value)?,
-    };
     Ok(BRegRetainedRequestProposal {
         request_entity_identifier,
         request_identifier,
@@ -2751,7 +2589,6 @@ fn decode_retained_proposal(
         result_link_count,
         result_references,
         effect_digest,
-        decisions,
     })
 }
 
@@ -2839,108 +2676,6 @@ fn decode_erased_application(
     })
 }
 
-fn decode_request_review_stage(
-    value: Value,
-) -> Result<BRegRequestReviewStage, BRegLifecycleDecodeError> {
-    let mut object = exact_object(
-        value,
-        &["id", "approvals", "excludeSubmitter"],
-        &["excludePreviousReviewers"],
-    )?;
-    let id = take_string(&mut object, "id")?;
-    validate_review_stage_identifier(&id)?;
-    let approvals = object
-        .remove("approvals")
-        .and_then(|value| value.as_u64())
-        .filter(|value| (1..=32).contains(value))
-        .ok_or(BRegLifecycleDecodeError::Profile)?;
-    let exclude_submitter = object
-        .remove("excludeSubmitter")
-        .and_then(|value| value.as_bool())
-        .ok_or(BRegLifecycleDecodeError::Profile)?;
-    let exclude_previous_reviewers = match object.remove("excludePreviousReviewers") {
-        None => false,
-        Some(Value::Bool(value)) => value,
-        Some(_) => return Err(BRegLifecycleDecodeError::Profile),
-    };
-    Ok(BRegRequestReviewStage {
-        id,
-        approvals,
-        exclude_submitter,
-        exclude_previous_reviewers,
-    })
-}
-
-fn decode_request_review_state(
-    value: Value,
-) -> Result<BRegRequestReviewState, BRegLifecycleDecodeError> {
-    let mut object = exact_object(
-        value,
-        &["stages", "submittedAt", "pendingStage", "stageEnteredAt"],
-        &[],
-    )?;
-    let stages = match object.remove("stages") {
-        Some(Value::Array(values)) if values.len() <= MAX_BREG_REVIEW_STAGES => values
-            .into_iter()
-            .map(decode_request_review_stage)
-            .collect::<Result<Vec<_>, _>>()?,
-        _ => return Err(BRegLifecycleDecodeError::Profile),
-    };
-    let mut identifiers = BTreeSet::new();
-    if stages
-        .iter()
-        .any(|stage| !identifiers.insert(stage.id.as_str()))
-    {
-        return Err(BRegLifecycleDecodeError::Profile);
-    }
-    let submitted_at = take_string(&mut object, "submittedAt")?;
-    validate_timestamp(&submitted_at)?;
-    let pending_stage = take_required_nullable_identifier(&mut object, "pendingStage")?;
-    let stage_entered_at = take_required_nullable_timestamp(&mut object, "stageEnteredAt")?;
-    if pending_stage
-        .as_deref()
-        .is_some_and(|pending| !identifiers.contains(pending))
-    {
-        return Err(BRegLifecycleDecodeError::Profile);
-    }
-    Ok(BRegRequestReviewState {
-        stages,
-        submitted_at,
-        pending_stage,
-        stage_entered_at,
-    })
-}
-
-fn decode_request_review_timing(
-    value: Value,
-) -> Result<BRegRequestReviewTiming, BRegLifecycleDecodeError> {
-    let mut object = exact_object(
-        value,
-        &[
-            "firstSubmittedAt",
-            "pausedMilliseconds",
-            "pauseStartedAt",
-            "completedAt",
-        ],
-        &[],
-    )?;
-    let first_submitted_at = take_string(&mut object, "firstSubmittedAt")?;
-    validate_timestamp(&first_submitted_at)?;
-    let paused_milliseconds = object
-        .remove("pausedMilliseconds")
-        .and_then(|value| value.as_u64())
-        .filter(|value| *value <= 9_007_199_254_740_991)
-        .ok_or(BRegLifecycleDecodeError::Profile)?;
-    let pause_started_at = take_required_nullable_timestamp(&mut object, "pauseStartedAt")?;
-    let completed_at = take_required_nullable_timestamp(&mut object, "completedAt")?;
-    Ok(BRegRequestReviewTiming {
-        first_submitted_at,
-        paused_milliseconds,
-        pause_started_at,
-        completed_at,
-    })
-}
-
 fn decode_receipt_request(
     value: Value,
 ) -> Result<BRegLifecycleReceiptRequest, BRegLifecycleDecodeError> {
@@ -3005,6 +2740,15 @@ fn take_string(
         .ok_or(BRegLifecycleDecodeError::Profile)
 }
 
+fn take_required(
+    object: &mut Map<String, Value>,
+    member: &str,
+) -> Result<Value, BRegLifecycleDecodeError> {
+    object
+        .remove(member)
+        .ok_or(BRegLifecycleDecodeError::Profile)
+}
+
 fn take_optional_identifier(
     object: &mut Map<String, Value>,
     member: &str,
@@ -3019,31 +2763,31 @@ fn take_optional_identifier(
     }
 }
 
-fn take_required_nullable_identifier(
+fn take_optional_uuid(
     object: &mut Map<String, Value>,
     member: &str,
 ) -> Result<Option<String>, BRegLifecycleDecodeError> {
     match object.remove(member) {
-        Some(Value::Null) => Ok(None),
+        None => Ok(None),
         Some(Value::String(value)) => {
-            validate_identifier(&value)?;
+            validate_canonical_uuid(&value)?;
             Ok(Some(value))
         }
-        _ => Err(BRegLifecycleDecodeError::Profile),
+        Some(_) => Err(BRegLifecycleDecodeError::Profile),
     }
 }
 
-fn take_required_nullable_timestamp(
+fn take_optional_utc_timestamp(
     object: &mut Map<String, Value>,
     member: &str,
 ) -> Result<Option<String>, BRegLifecycleDecodeError> {
     match object.remove(member) {
-        Some(Value::Null) => Ok(None),
+        None => Ok(None),
         Some(Value::String(value)) => {
-            validate_timestamp(&value)?;
+            validate_utc_timestamp(&value)?;
             Ok(Some(value))
         }
-        _ => Err(BRegLifecycleDecodeError::Profile),
+        Some(_) => Err(BRegLifecycleDecodeError::Profile),
     }
 }
 
@@ -3080,7 +2824,7 @@ fn reject_duplicate_action_bindings(
 ) -> Result<(), BRegLifecycleDecodeError> {
     let mut keys = BTreeSet::new();
     for action in actions {
-        if !keys.insert((action.operation, action.stage.clone())) {
+        if !keys.insert(action.operation) {
             return Err(BRegLifecycleDecodeError::Profile);
         }
     }
@@ -3118,19 +2862,6 @@ fn validate_identifier(value: &str) -> Result<(), BRegLifecycleDecodeError> {
     Ok(())
 }
 
-fn validate_review_stage_identifier(value: &str) -> Result<(), BRegLifecycleDecodeError> {
-    let mut bytes = value.bytes();
-    if value.len() > 64
-        || !bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
-        || !bytes.all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
-        })
-    {
-        return Err(BRegLifecycleDecodeError::Profile);
-    }
-    Ok(())
-}
-
 fn validate_canonical_uuid(value: &str) -> Result<(), BRegLifecycleDecodeError> {
     let parsed = Uuid::parse_str(value).map_err(|_| BRegLifecycleDecodeError::Profile)?;
     if parsed.hyphenated().to_string() != value {
@@ -3150,6 +2881,16 @@ fn validate_timestamp(value: &str) -> Result<(), BRegLifecycleDecodeError> {
     time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
         .map(|_| ())
         .map_err(|_| BRegLifecycleDecodeError::Profile)
+}
+
+fn validate_utc_timestamp(value: &str) -> Result<(), BRegLifecycleDecodeError> {
+    validate_timestamp(value)?;
+    let parsed = time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+        .map_err(|_| BRegLifecycleDecodeError::Profile)?;
+    if parsed.offset() != time::UtcOffset::UTC {
+        return Err(BRegLifecycleDecodeError::Profile);
+    }
+    Ok(())
 }
 
 fn validate_relative_action_href(href: &str) -> Result<(), BRegLifecycleDecodeError> {

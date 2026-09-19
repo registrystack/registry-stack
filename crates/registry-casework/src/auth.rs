@@ -198,6 +198,8 @@ mod tests {
             access_profiles: Vec::new(),
             queues: Vec::new(),
             sources: Vec::new(),
+            review_kinds: Vec::new(),
+            review_producers: Vec::new(),
             hosted_kinds: Vec::new(),
             calendars: Vec::new(),
             clocks: Vec::new(),

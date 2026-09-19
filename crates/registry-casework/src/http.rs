@@ -23,6 +23,9 @@ use registry_casework_core::{
     HostedNoteRequest, HostedPageQuery, HostedTerminalPage, HostedTerminalQuery,
     HostedTerminalResult, HostedValidationError, HostedValidationReason, ListWorkItemsQuery,
     MutationResponse, NextWorkItemQuery, QueueRecord, RecoverAttemptRequest, RequesterHostedItem,
+    ReviewAccountabilityRecord, ReviewCancelRequest, ReviewCreateRequest, ReviewHistoryEntry,
+    ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewRequestView,
+    ReviewResultFeedPage, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage, ReviewerTask,
     SaveDraftRequest, ATTEMPT_REFERENCE_HEADER, CASEWORK_PROFILE_HEADER, IDEMPOTENCY_KEY_HEADER,
     IF_MATCH_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES,
     SOURCE_PROFILE_HEADER, VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
@@ -35,7 +38,8 @@ use uuid::Uuid;
 
 use crate::problem::ProblemCode;
 use crate::{
-    AuthenticationError, CaseworkAuthenticator, CaseworkService, ServiceError, StoreError,
+    AuthenticationError, CaseworkAuthenticator, CaseworkService, ReviewResultRead,
+    ReviewRuntimeError, ReviewTaskDecisionRequest, ServiceError, StoreError,
 };
 
 tokio::task_local! {
@@ -73,6 +77,56 @@ pub fn router(state: HttpState) -> Router {
             .route("/v1/task-grants/{grant_id}/assertion", post(task_assertion))
             .route("/v1/task-grants/{grant_id}/status", get(task_status))
             .route("/v1/hosted-items", post(create_hosted_item))
+            .route("/v1/review-requests", post(create_review_request))
+            .route("/v1/review-kinds", get(review_kind_descriptions))
+            .route("/v1/review-kinds/{kind_id}", get(review_kind_description))
+            .route("/v1/review-results", get(review_result_feed))
+            .route("/v1/review-tasks", get(review_tasks))
+            .route("/v1/review-tasks/{task_id}", get(get_review_task))
+            .route("/v1/review-requests/{request_id}", get(get_review_request))
+            .route(
+                "/v1/review-requests/{request_id}/result",
+                get(get_review_result),
+            )
+            .route(
+                "/v1/review-requests/{request_id}/cancel",
+                post(cancel_review_request),
+            )
+            .route("/v1/review-tasks/{task_id}/claim", post(claim_review_task))
+            .route(
+                "/v1/review-tasks/{task_id}/assign",
+                post(assign_review_task),
+            )
+            .route(
+                "/v1/review-tasks/{task_id}/delegate",
+                post(delegate_review_task),
+            )
+            .route(
+                "/v1/review-tasks/{task_id}/release",
+                post(release_review_task),
+            )
+            .route(
+                "/v1/review-tasks/{task_id}/draft",
+                get(get_review_task_draft)
+                    .put(save_review_task_draft)
+                    .delete(delete_review_task_draft),
+            )
+            .route(
+                "/v1/review-tasks/{task_id}/decisions",
+                post(decide_review_task),
+            )
+            .route(
+                "/v1/review-requests/{request_id}/history",
+                get(review_history),
+            )
+            .route(
+                "/v1/review-requests/{request_id}/notes",
+                post(add_review_note),
+            )
+            .route(
+                "/v1/review-accountability/{event_id}",
+                get(review_accountability),
+            )
             .route("/v1/hosted-items/terminal", get(hosted_terminal_items))
             .route("/v1/hosted-items/{item_id}", get(get_hosted_item))
             .route(
@@ -274,6 +328,390 @@ async fn description(
             .cloned()
             .collect(),
     }))
+}
+
+async fn create_review_request(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(request): Json<ReviewCreateRequest>,
+) -> Result<Response, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    let outcome = state
+        .service
+        .create_review_request(&actor, request, idempotency_key(&headers)?)
+        .await
+        .map_err(HttpError::from)?;
+    Ok((StatusCode::CREATED, Json(outcome.accepted)).into_response())
+}
+
+async fn review_kind_descriptions(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<ReviewKindPolicySnapshot>>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(state.service.review_kind_descriptions(&actor)?))
+}
+
+async fn review_kind_description(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(kind_id): Path<String>,
+) -> Result<Json<ReviewKindPolicySnapshot>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state.service.review_kind_description(&actor, &kind_id)?,
+    ))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReviewTaskQuery {
+    queue: Option<String>,
+    cursor: Option<Uuid>,
+    limit: Option<usize>,
+}
+
+async fn review_tasks(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<ReviewTaskQuery>,
+) -> Result<Json<ReviewTaskPage>, HttpError> {
+    let source_profile_id = source_profile_optional(&headers)?;
+    let (actor, token) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .review_tasks(
+                &actor,
+                source_profile_id,
+                token,
+                query.queue.as_deref(),
+                query.cursor,
+                query.limit.unwrap_or(25),
+            )
+            .await?,
+    ))
+}
+
+async fn get_review_task(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+) -> Result<Json<ReviewerTask>, HttpError> {
+    let source_profile_id = source_profile_optional(&headers)?;
+    let (actor, token) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .review_task(&actor, task_id, source_profile_id, token)
+            .await?,
+    ))
+}
+
+async fn get_review_request(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(request_id): Path<Uuid>,
+) -> Result<Json<ReviewRequestView>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .review_request(&actor, request_id)
+            .await
+            .map_err(HttpError::from)?,
+    ))
+}
+
+async fn get_review_result(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(request_id): Path<Uuid>,
+) -> Result<Response, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    match state.service.review_result(&actor, request_id).await {
+        Ok(ReviewResultRead::Available(result)) => Ok(Json(result).into_response()),
+        Ok(ReviewResultRead::Pending) => Ok(StatusCode::ACCEPTED.into_response()),
+        Ok(ReviewResultRead::Expired) => Ok(StatusCode::GONE.into_response()),
+        Err(ReviewRuntimeError::NotFound) => Ok(StatusCode::NOT_FOUND.into_response()),
+        Err(error) => Err(HttpError::from(error)),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReviewFeedQuery {
+    cursor: Option<Uuid>,
+    limit: Option<usize>,
+}
+
+async fn review_result_feed(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<ReviewFeedQuery>,
+) -> Result<Json<ReviewResultFeedPage>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .review_result_feed(&actor, query.cursor, query.limit.unwrap_or(25))
+            .await
+            .map_err(HttpError::from)?,
+    ))
+}
+
+async fn cancel_review_request(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(request_id): Path<Uuid>,
+    Json(request): Json<ReviewCancelRequest>,
+) -> Result<Response, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .cancel_review_request(&actor, request_id, request, idempotency_key(&headers)?)
+            .await
+            .map_err(HttpError::from)?,
+    )
+    .into_response())
+}
+
+async fn claim_review_task(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+    body: Bytes,
+) -> Result<Response, HttpError> {
+    if !body.is_empty() {
+        return Err(HttpError::Invalid);
+    }
+    let source_profile_id = source_profile_optional(&headers)?;
+    let (actor, token) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .claim_review_task(
+                &actor,
+                task_id,
+                source_profile_id,
+                token,
+                if_match(&headers)?,
+                idempotency_key(&headers)?,
+            )
+            .await
+            .map_err(HttpError::from)?,
+    )
+    .into_response())
+}
+
+async fn assign_review_task(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+    Json(request): Json<AssignmentRequest>,
+) -> Result<Json<ReviewerTask>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .assign_review_task(
+                &actor,
+                task_id,
+                if_match(&headers)?,
+                request,
+                idempotency_key(&headers)?,
+            )
+            .await?,
+    ))
+}
+
+async fn delegate_review_task(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+    Json(request): Json<DelegateRequest>,
+) -> Result<Json<ReviewerTask>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .delegate_review_task(
+                &actor,
+                task_id,
+                if_match(&headers)?,
+                request,
+                idempotency_key(&headers)?,
+            )
+            .await?,
+    ))
+}
+
+async fn get_review_task_draft(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+) -> Result<Response, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    match state.service.review_task_draft(&actor, task_id).await? {
+        Some(draft) => Ok(Json(draft).into_response()),
+        None => Ok(StatusCode::NOT_FOUND.into_response()),
+    }
+}
+
+async fn save_review_task_draft(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+    Json(input): Json<ReviewTaskDraftInput>,
+) -> Result<Json<ReviewTaskDraft>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .save_review_task_draft(
+                &actor,
+                task_id,
+                if_match(&headers)?,
+                input,
+                idempotency_key(&headers)?,
+            )
+            .await?,
+    ))
+}
+
+async fn delete_review_task_draft(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+) -> Result<StatusCode, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    state
+        .service
+        .delete_review_task_draft(
+            &actor,
+            task_id,
+            if_match(&headers)?,
+            idempotency_key(&headers)?,
+        )
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReviewHistoryQuery {
+    cursor: Option<Uuid>,
+    limit: Option<usize>,
+}
+
+async fn review_history(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(request_id): Path<Uuid>,
+    Query(query): Query<ReviewHistoryQuery>,
+) -> Result<Json<ReviewHistoryPage>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .review_history(&actor, request_id, query.cursor, query.limit.unwrap_or(25))
+            .await?,
+    ))
+}
+
+async fn add_review_note(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(request_id): Path<Uuid>,
+    Json(request): Json<ReviewNoteRequest>,
+) -> Result<Json<ReviewHistoryEntry>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .add_review_note(&actor, request_id, request, idempotency_key(&headers)?)
+            .await?,
+    ))
+}
+
+async fn review_accountability(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(event_id): Path<Uuid>,
+) -> Result<Json<ReviewAccountabilityRecord>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .review_accountability(&actor, event_id)
+            .await?,
+    ))
+}
+
+async fn release_review_task(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+    body: Bytes,
+) -> Result<Response, HttpError> {
+    reject_source_profile(&headers)?;
+    if !body.is_empty() {
+        return Err(HttpError::Invalid);
+    }
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .release_review_task(
+                &actor,
+                task_id,
+                if_match(&headers)?,
+                idempotency_key(&headers)?,
+            )
+            .await
+            .map_err(HttpError::from)?,
+    )
+    .into_response())
+}
+
+async fn decide_review_task(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+    Json(request): Json<ReviewTaskDecisionRequest>,
+) -> Result<StatusCode, HttpError> {
+    let source_profile_id = source_profile_optional(&headers)?;
+    let (actor, token) = authenticate(&state, &headers).await?;
+    state
+        .service
+        .decide_review_task(
+            &actor,
+            task_id,
+            request,
+            source_profile_id,
+            token,
+            if_match(&headers)?,
+            idempotency_key(&headers)?,
+        )
+        .await
+        .map_err(HttpError::from)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn create_hosted_item(
@@ -1400,6 +1838,9 @@ pub enum HttpError {
     SourceProfileRequired,
     SourceBadGateway,
     ReasonUnsupported,
+    ReviewResultExpired,
+    ReviewSubmissionConflict,
+    ReviewTaskNotHeld,
     SourceRecordMissing,
     SourceRequestRejected,
     SourceReviewerNotAuthorized,
@@ -1485,6 +1926,28 @@ impl From<ServiceError> for HttpError {
     }
 }
 
+impl From<ReviewRuntimeError> for HttpError {
+    fn from(error: ReviewRuntimeError) -> Self {
+        match error {
+            ReviewRuntimeError::NotFound => Self::NotFound,
+            ReviewRuntimeError::Forbidden => Self::Forbidden,
+            ReviewRuntimeError::SubmissionConflict => Self::ReviewSubmissionConflict,
+            ReviewRuntimeError::ResultExpired => Self::ReviewResultExpired,
+            ReviewRuntimeError::TaskNotHeld => Self::ReviewTaskNotHeld,
+            ReviewRuntimeError::SourceProfileRequired => Self::SourceProfileRequired,
+            ReviewRuntimeError::SourceProfileNotApplicable => Self::SourceProfileNotApplicable,
+            ReviewRuntimeError::SourceUnavailable => Self::ServiceUnavailable,
+            ReviewRuntimeError::SourceInvalid => Self::SourceBadGateway,
+            ReviewRuntimeError::RevisionConflict => Self::PreconditionFailed,
+            ReviewRuntimeError::IdempotencyConflict => Self::IdempotencyKeyReused,
+            ReviewRuntimeError::IdempotencyExpired => Self::IdempotencyExpired,
+            ReviewRuntimeError::Invalid => Self::Invalid,
+            ReviewRuntimeError::Corrupt => Self::Internal,
+            ReviewRuntimeError::Store(error) => error.into(),
+        }
+    }
+}
+
 impl HttpError {
     fn from_source_event(error: ServiceError) -> Self {
         match error {
@@ -1522,6 +1985,9 @@ impl HttpError {
             Self::SourceProfileRequired => ProblemCode::SourceProfileRequired,
             Self::SourceBadGateway => ProblemCode::SourceBadGateway,
             Self::ReasonUnsupported => ProblemCode::RequestReasonUnsupported,
+            Self::ReviewResultExpired => ProblemCode::ReviewResultExpired,
+            Self::ReviewSubmissionConflict => ProblemCode::ReviewSubmissionConflict,
+            Self::ReviewTaskNotHeld => ProblemCode::ReviewTaskNotHeld,
             Self::SourceRecordMissing => ProblemCode::SourceRecordMissing,
             Self::SourceRequestRejected => ProblemCode::RequestSourceRejected,
             Self::SourceReviewerNotAuthorized => ProblemCode::SourceReviewerNotAuthorized,

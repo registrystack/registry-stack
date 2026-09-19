@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "crates/registry-review-client",
+    "crates/registry-review-protocol",
     "crates/registry-casework-client-node",
     "crates/registry-casework-client-py",
     "crates/registry-casework",
@@ -76,6 +78,8 @@ repository = "https://github.com/registrystack/registry-stack"
 unsafe_code = "forbid"
 
 [workspace.dependencies]
+registry-review-client = { path = "crates/registry-review-client", version = "0.32.0" }
+registry-review-protocol = { path = "crates/registry-review-protocol", version = "0.32.0" }
 registry-thunderid-tooling = { path = "crates/registry-thunderid-tooling", version = "0.32.0" }
 registry-casework = { path = "crates/registry-casework", version = "0.32.0" }
 registry-casework-client-node = { path = "crates/registry-casework-client-node", version = "0.32.0" }

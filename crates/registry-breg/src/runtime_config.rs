@@ -2,7 +2,7 @@
 //! Strict deployment-only runtime configuration for Base Registry Engine.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fmt, fs,
     io::Read,
     net::{IpAddr, SocketAddr},
@@ -383,7 +383,10 @@ fn contains_governed_member(value: &serde_norway::Value) -> bool {
                 // reinterpret an id such as `hooks` as a governed field; the
                 // strict binding value types still reject undeployed members.
                 || (key.as_str().is_none_or(|key| {
-                    !matches!(key, "eventDestinations" | "evidenceProviders")
+                    !matches!(
+                        key,
+                        "eventDestinations" | "evidenceProviders" | "reviewAuthorities"
+                    )
                 }) && contains_governed_member(value))
         }),
         serde_norway::Value::Sequence(values) => values.iter().any(contains_governed_member),
@@ -408,6 +411,7 @@ pub struct RuntimeConfig {
     event_destinations: EventDestinationConfigs,
     evidence_providers:
         std::collections::BTreeMap<String, crate::action_evidence_config::EvidenceProviderConfig>,
+    review_authorities: BTreeMap<String, ReviewAuthorityConfig>,
     event_delivery: EventDeliveryConfig,
     operational_timeouts: OperationalTimeouts,
     wasm_execution: WasmExecutionConfig,
@@ -444,6 +448,13 @@ impl RuntimeConfig {
         let event_destinations = EventDestinationConfigs::from_raw(raw.event_destinations)
             .map_err(|_| RuntimeConfigError::InvalidEventDestination)?;
         let event_delivery = EventDeliveryConfig::from_raw(raw.event_delivery)?;
+        let review_authorities = raw
+            .review_authorities
+            .into_iter()
+            .map(|(id, authority)| {
+                ReviewAuthorityConfig::from_raw(&id, authority).map(|authority| (id, authority))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
         let operational_timeouts = OperationalTimeouts::from_raw(raw.operational_timeouts)?;
         let wasm_execution = WasmExecutionConfig::from_raw(raw.wasm_execution)?;
         let metrics_listener = raw
@@ -468,6 +479,7 @@ impl RuntimeConfig {
             cursor,
             event_destinations,
             evidence_providers: raw.evidence_providers,
+            review_authorities,
             event_delivery,
             operational_timeouts,
             wasm_execution,
@@ -508,6 +520,75 @@ impl RuntimeConfig {
             &self.evidence_providers,
             &self.secret_resolver()?,
         )
+    }
+
+    pub fn activate_review_authorities(
+        &self,
+        compiled: &CompiledRegistry,
+    ) -> Result<Option<Arc<crate::review_store::ReviewAuthorityRegistry>>> {
+        let required = compiled
+            .entities()
+            .values()
+            .filter_map(|entity| entity.change_request.as_ref())
+            .filter_map(|request| match &request.review {
+                crate::model::CompiledChangeRequestReview::Required(requirement) => {
+                    Some(requirement.authority.as_str())
+                }
+                crate::model::CompiledChangeRequestReview::None(_) => None,
+            })
+            .collect::<BTreeSet<_>>();
+        if required.is_empty() {
+            return Ok(None);
+        }
+        if required
+            .iter()
+            .any(|authority| !self.review_authorities.contains_key(*authority))
+        {
+            return Err(RuntimeConfigError::InvalidBinding);
+        }
+        let resolver = self.secret_resolver()?;
+        let mut activated = BTreeMap::new();
+        for authority in required {
+            let config = &self.review_authorities[authority];
+            let token = resolver.resolve_reference(&config.token_ref)?;
+            let token = std::str::from_utf8(token.expose_secret())
+                .map_err(|_| RuntimeConfigError::Secret)?;
+            let completion = config
+                .completion
+                .as_ref()
+                .map(
+                    |(token_ref, recipient)| -> Result<(Zeroizing<String>, String)> {
+                        let token = resolver.resolve_reference(token_ref)?;
+                        let token = std::str::from_utf8(token.expose_secret())
+                            .map_err(|_| RuntimeConfigError::Secret)?;
+                        Ok((Zeroizing::new(token.to_owned()), recipient.clone()))
+                    },
+                )
+                .transpose()?;
+            let client = registry_review_client::ReviewClient::new(
+                registry_review_client::ReviewClientConfig::new(config.endpoint.clone())
+                    .with_request_timeout(self.operational_timeouts.http_request)
+                    .with_connect_timeout(self.operational_timeouts.http_request),
+            )
+            .map_err(|_| RuntimeConfigError::InvalidBinding)?;
+            let token = registry_review_client::BearerToken::new(token.to_owned())
+                .map_err(|_| RuntimeConfigError::Secret)?;
+            let authority_client = crate::review_store::ReviewAuthorityClient::new(
+                authority.to_owned(),
+                client,
+                token,
+                config.producer_id.clone(),
+                config.recovery_days,
+                completion.as_ref().map(|(token, _)| token.clone()),
+                completion.map(|(_, recipient)| recipient),
+            )
+            .map_err(|_| RuntimeConfigError::InvalidBinding)?;
+            activated.insert(authority.to_owned(), Arc::new(authority_client));
+        }
+        crate::review_store::ReviewAuthorityRegistry::new(activated)
+            .map(Arc::new)
+            .map(Some)
+            .map_err(|_| RuntimeConfigError::InvalidBinding)
     }
 
     /// Resolve the selected content backend before accepting attachment requests.
@@ -1943,6 +2024,77 @@ pub(crate) fn parse_secret_reference(
     SecretReference::parse(value).map_err(|_| error)
 }
 
+#[derive(Clone)]
+struct ReviewAuthorityConfig {
+    endpoint: reqwest::Url,
+    token_ref: SecretReference,
+    producer_id: String,
+    recovery_days: u32,
+    completion: Option<(SecretReference, String)>,
+}
+
+impl ReviewAuthorityConfig {
+    fn from_raw(id: &str, raw: RawReviewAuthorityConfig) -> Result<Self> {
+        if id.trim().is_empty() || id.len() > 128 || id.chars().any(char::is_control) {
+            return Err(RuntimeConfigError::InvalidBinding);
+        }
+        let endpoint =
+            reqwest::Url::parse(&raw.endpoint).map_err(|_| RuntimeConfigError::InvalidBinding)?;
+        // The review client performs the complete credential-destination
+        // validation during activation. Refuse URL suffixes here as well so a
+        // typo never survives configuration parsing.
+        if !endpoint.username().is_empty()
+            || endpoint.password().is_some()
+            || endpoint.query().is_some()
+            || endpoint.fragment().is_some()
+        {
+            return Err(RuntimeConfigError::InvalidBinding);
+        }
+        let completion = match (raw.completion_token_ref, raw.completion_recipient) {
+            (None, None) => None,
+            (Some(token_ref), Some(recipient))
+                if !recipient.trim().is_empty()
+                    && recipient.len() <= 128
+                    && !recipient.chars().any(char::is_control) =>
+            {
+                Some((
+                    parse_secret_reference(token_ref, RuntimeConfigError::InvalidBinding)?,
+                    recipient,
+                ))
+            }
+            _ => return Err(RuntimeConfigError::InvalidBinding),
+        };
+        if raw.producer_id.trim().is_empty()
+            || raw.producer_id.len() > 128
+            || raw.producer_id.chars().any(char::is_control)
+            || !(1..=90).contains(&raw.recovery_days)
+        {
+            return Err(RuntimeConfigError::InvalidBinding);
+        }
+        Ok(Self {
+            endpoint,
+            token_ref: parse_secret_reference(raw.token_ref, RuntimeConfigError::InvalidBinding)?,
+            producer_id: raw.producer_id,
+            recovery_days: raw.recovery_days,
+            completion,
+        })
+    }
+}
+
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawReviewAuthorityConfig {
+    endpoint: String,
+    token_ref: String,
+    producer_id: String,
+    recovery_days: u32,
+    #[serde(default)]
+    completion_token_ref: Option<String>,
+    #[serde(default)]
+    completion_recipient: Option<String>,
+}
+
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1974,6 +2126,8 @@ struct RawRuntimeConfig {
     #[serde(default)]
     evidence_providers:
         std::collections::BTreeMap<String, crate::action_evidence_config::EvidenceProviderConfig>,
+    #[serde(default)]
+    review_authorities: BTreeMap<String, RawReviewAuthorityConfig>,
     /// Optional event-delivery tuning. Defaults to the server's bounded retention policy.
     #[serde(default)]
     event_delivery: RawEventDeliveryConfig,

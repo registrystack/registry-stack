@@ -197,6 +197,7 @@ pub struct ClaimContext {
     submitter_targets: BTreeMap<String, ClaimContext>,
     task_grant: Option<crate::task_grant::TaskGrantBinding>,
     grant_audit: Option<crate::audit::GrantAuditContext>,
+    human_identity: Option<registry_review_client::HumanIdentity>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -231,6 +232,21 @@ impl ClaimContext {
     }
     pub(crate) fn grant_audit(&self) -> Option<&crate::audit::GrantAuditContext> {
         self.grant_audit.as_ref()
+    }
+
+    pub(crate) fn with_human_identity(
+        mut self,
+        identity: Option<registry_review_client::HumanIdentity>,
+    ) -> Result<Self> {
+        if let Some(identity) = &identity {
+            identity.check().map_err(|_| invalid_context())?;
+        }
+        self.human_identity = identity;
+        Ok(self)
+    }
+
+    pub(crate) fn human_identity(&self) -> Option<&registry_review_client::HumanIdentity> {
+        self.human_identity.as_ref()
     }
 
     pub(crate) fn with_task_grant(
@@ -324,6 +340,7 @@ impl ClaimContext {
             submitter_targets: BTreeMap::new(),
             task_grant: None,
             grant_audit: None,
+            human_identity: None,
         })
     }
 
@@ -357,6 +374,7 @@ impl ClaimContext {
             submitter_targets: BTreeMap::new(),
             task_grant: None,
             grant_audit: None,
+            human_identity: None,
         })
     }
 
@@ -571,26 +589,18 @@ impl ChangeRequestActionContext {
             .change_request
             .as_ref()
             .ok_or_else(invalid_context)?;
-        let expected_route_id = change_request_action_route_id(
-            &request_entity.id,
-            route.operation,
-            route.request_stage.as_deref(),
-        );
+        let expected_route_id = change_request_action_route_id(&request_entity.id, route.operation);
         if expected_route_id != route.id {
             return Err(invalid_context());
         }
-        let action_exists = plan.actions.iter().any(|action| {
-            action.operation.access_operation() == route.operation
-                && action.review_stage.as_deref() == route.request_stage.as_deref()
-        });
+        let action_exists = plan
+            .actions
+            .iter()
+            .any(|action| action.operation.access_operation() == route.operation);
         if !action_exists {
             return Err(invalid_context());
         }
-        if matches!(
-            route.operation,
-            Operation::ApproveRequest | Operation::RejectRequest | Operation::RequestRevision
-        ) != route.request_stage.is_some()
-        {
+        if route.request_stage.is_some() {
             return Err(invalid_context());
         }
         let mut context = Self {
@@ -604,7 +614,7 @@ impl ChangeRequestActionContext {
             principal: request_claims.principal().map(str::to_owned),
             purpose: request_claims.purpose().map(str::to_owned),
             operation: route.operation,
-            stage: route.request_stage.clone(),
+            stage: None,
             route_id: route.id.clone(),
             canonical_context: String::new(),
         };
@@ -640,11 +650,7 @@ impl ChangeRequestActionContext {
         if self.proposal_version <= 0 || !is_change_request_action_operation(self.operation) {
             return Err(invalid_context());
         }
-        if matches!(
-            self.operation,
-            Operation::ApproveRequest | Operation::RejectRequest | Operation::RequestRevision
-        ) != self.stage.is_some()
-        {
+        if self.stage.is_some() {
             return Err(invalid_context());
         }
         if Self::canonicalize(self)? != self.canonical_context {
@@ -879,7 +885,6 @@ impl fmt::Debug for ChangeRequestPresenceContext {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ChangeRequestTargetPhase {
     Preparation,
-    Review { stage: String },
     Application,
 }
 
@@ -961,25 +966,6 @@ impl ChangeRequestTargetContext {
             request_claims,
             ChangeRequestTargetPhase::Preparation,
             Vec::new(),
-            binding,
-        )
-    }
-
-    pub(crate) fn for_review(
-        registry: &CompiledRegistry,
-        request_claims: &ClaimContext,
-        stage: &str,
-        target_boundaries: Vec<RowBoundaryContext>,
-        binding: ChangeRequestTargetBinding,
-    ) -> Result<Self> {
-        validate_required_context_value(stage)?;
-        Self::for_compiled(
-            registry,
-            request_claims,
-            ChangeRequestTargetPhase::Review {
-                stage: stage.to_owned(),
-            },
-            target_boundaries,
             binding,
         )
     }
@@ -1078,7 +1064,6 @@ impl ChangeRequestTargetContext {
     pub(crate) fn authorize_retained_attachment_request(
         registry: &CompiledRegistry,
         claims: &ClaimContext,
-        review_stage: Option<&str>,
         slot: &str,
         boundaries: &[RowBoundaryContext],
         intake: &serde_json::Map<String, Value>,
@@ -1093,34 +1078,14 @@ impl ChangeRequestTargetContext {
         if !entity.attachments.contains_key(slot) {
             return Err(invalid_context());
         }
-        let expected = match review_stage {
-            Some(stage) => {
-                let grant = plan
-                    .review_permissions
-                    .iter()
-                    .find(|grant| {
-                        grant.profile_id == claims.access_profile()
-                            && grant.stage == stage
-                            && grant.target_entity_id == entity.id
-                    })
-                    .ok_or_else(invalid_context)?;
-                if !grant.readable_fields.contains(slot) {
-                    return Err(invalid_context());
-                }
-                &grant.row_boundaries
-            }
-            None => {
-                &plan
-                    .apply_permissions
-                    .iter()
-                    .find(|grant| {
-                        grant.profile_id == claims.access_profile()
-                            && grant.target_entity_id == entity.id
-                    })
-                    .ok_or_else(invalid_context)?
-                    .row_boundaries
-            }
-        };
+        let expected = &plan
+            .apply_permissions
+            .iter()
+            .find(|grant| {
+                grant.profile_id == claims.access_profile() && grant.target_entity_id == entity.id
+            })
+            .ok_or_else(invalid_context)?
+            .row_boundaries;
         validate_target_boundaries(registry, &entity.id, boundaries, expected)?;
         validate_snapshot_boundaries(entity, intake, record_id, boundaries)
     }
@@ -1133,7 +1098,6 @@ impl ChangeRequestTargetContext {
     pub(crate) fn authorize_retained_attachment_rows(
         registry: &CompiledRegistry,
         request_claims: &ClaimContext,
-        review_stage: Option<&str>,
         target_boundaries: Vec<RowBoundaryContext>,
         binding: ChangeRequestTargetBinding,
         target_entity: &crate::model::CompiledEntity,
@@ -1141,15 +1105,7 @@ impl ChangeRequestTargetContext {
         after: &serde_json::Map<String, Value>,
         record_id: Uuid,
     ) -> Result<()> {
-        let phase = match review_stage {
-            Some(stage) => {
-                validate_required_context_value(stage)?;
-                ChangeRequestTargetPhase::Review {
-                    stage: stage.to_owned(),
-                }
-            }
-            None => ChangeRequestTargetPhase::Application,
-        };
+        let phase = ChangeRequestTargetPhase::Application;
         let context = Self::for_compiled_with_contract_binding(
             registry,
             request_claims,
@@ -1239,36 +1195,6 @@ impl ChangeRequestTargetContext {
                     return Err(invalid_context());
                 }
             }
-            ChangeRequestTargetPhase::Review { stage } => {
-                if !request_profile.operations.iter().any(|operation| {
-                    matches!(
-                        operation,
-                        Operation::ApproveRequest
-                            | Operation::RejectRequest
-                            | Operation::RequestRevision
-                    )
-                }) {
-                    return Err(invalid_context());
-                }
-                let grant = plan
-                    .review_permissions
-                    .iter()
-                    .find(|grant| {
-                        grant.profile_id == request_claims.access_profile()
-                            && grant.stage == *stage
-                            && grant.target_entity_id == binding.target_entity_id
-                    })
-                    .ok_or_else(invalid_context)?;
-                validate_target_boundaries(
-                    registry,
-                    &binding.target_entity_id,
-                    &target_boundaries,
-                    &grant.row_boundaries,
-                )?;
-                if !binding.fields.is_subset(&grant.readable_fields) {
-                    return Err(invalid_context());
-                }
-            }
             ChangeRequestTargetPhase::Application => {
                 if !request_profile
                     .operations
@@ -1322,9 +1248,6 @@ impl ChangeRequestTargetContext {
     fn canonicalize(context: &Self) -> Result<String> {
         let phase = match &context.phase {
             ChangeRequestTargetPhase::Preparation => json!({"kind": "preparation"}),
-            ChangeRequestTargetPhase::Review { stage } => {
-                json!({"kind": "review", "stage": stage})
-            }
             ChangeRequestTargetPhase::Application => json!({"kind": "application"}),
         };
         let target_boundaries = Value::Array(
@@ -2135,9 +2058,6 @@ fn is_change_request_action_operation(operation: Operation) -> bool {
     matches!(
         operation,
         Operation::SubmitRequest
-            | Operation::ApproveRequest
-            | Operation::RejectRequest
-            | Operation::RequestRevision
             | Operation::ReviseRequest
             | Operation::CancelRequest
             | Operation::ApplyRequest
@@ -2147,9 +2067,6 @@ fn is_change_request_action_operation(operation: Operation) -> bool {
 fn change_request_action_operation_name(operation: Operation) -> &'static str {
     match operation {
         Operation::SubmitRequest => "submit_request",
-        Operation::ApproveRequest => "approve_request",
-        Operation::RejectRequest => "reject_request",
-        Operation::RequestRevision => "request_revision",
         Operation::ReviseRequest => "revise_request",
         Operation::CancelRequest => "cancel_request",
         Operation::ApplyRequest => "apply_request",
@@ -2157,25 +2074,15 @@ fn change_request_action_operation_name(operation: Operation) -> &'static str {
     }
 }
 
-fn change_request_action_route_id(
-    entity_id: &str,
-    operation: Operation,
-    stage: Option<&str>,
-) -> String {
+fn change_request_action_route_id(entity_id: &str, operation: Operation) -> String {
     let action_id = match operation {
         Operation::SubmitRequest => "submit",
-        Operation::ApproveRequest => "approve",
-        Operation::RejectRequest => "reject",
-        Operation::RequestRevision => "request_revision",
         Operation::ReviseRequest => "revise",
         Operation::CancelRequest => "cancel",
         Operation::ApplyRequest => "apply",
         _ => "unsupported",
     };
-    match stage {
-        Some(stage) => format!("records.{entity_id}.request.stages.{stage}.{action_id}"),
-        None => format!("records.{entity_id}.request.{action_id}"),
-    }
+    format!("records.{entity_id}.request.{action_id}")
 }
 
 fn operation_context_name(operation: Operation) -> &'static str {
@@ -2968,19 +2875,19 @@ mod tests {
             .change_request
             .as_ref()
             .expect("request plan compiles");
-        let reviewer = ClaimContext::for_compiled(
+        let applier = ClaimContext::for_compiled(
             &registry,
             "placement-correction-request",
-            Some("reviewer-canary".to_owned()),
-            "reviewer",
-            Some("review".to_owned()),
+            Some("applier-canary".to_owned()),
+            "applier",
+            Some("apply".to_owned()),
             Vec::new(),
         )
-        .expect("reviewer request context compiles");
+        .expect("applier request context compiles");
         let context = ChangeRequestActionContext::for_route(
             &registry,
-            &reviewer,
-            "records.placement-correction-request.request.stages.review.approve",
+            &applier,
+            "records.placement-correction-request.request.apply",
             request_id,
             1,
             "actor-reference-canary",
@@ -2991,17 +2898,17 @@ mod tests {
             "\"contractFingerprint\":\"{}\"",
             plan.contract_fingerprint
         )));
-        assert!(context.canonical_context().contains(
-            "\"routeId\":\"records.placement-correction-request.request.stages.review.approve\""
-        ));
+        assert!(context
+            .canonical_context()
+            .contains("\"routeId\":\"records.placement-correction-request.request.apply\""));
         let debug = format!("{context:?}");
-        assert!(!debug.contains("reviewer-canary"));
+        assert!(!debug.contains("applier-canary"));
         assert!(!debug.contains("actor-reference-canary"));
 
         assert!(ChangeRequestActionContext::for_route(
             &registry,
-            &reviewer,
-            "records.placement-correction-request.request.stages.other.approve",
+            &applier,
+            "records.placement-correction-request.request.submit",
             request_id,
             1,
             "actor-reference-canary",
@@ -3021,7 +2928,7 @@ mod tests {
         assert!(ChangeRequestActionContext::for_route(
             &registry,
             &submitter,
-            "records.placement-correction-request.request.stages.review.approve",
+            "records.placement-correction-request.request.apply",
             request_id,
             1,
             "actor-reference-canary",
@@ -3031,7 +2938,7 @@ mod tests {
     }
 
     #[test]
-    fn change_request_target_context_binds_compiled_effect_and_review_authority() {
+    fn change_request_target_context_binds_compiled_effect_and_application_authority() {
         let registry = compiled_change_request_registry();
         let request_id =
             Uuid::parse_str("00000000-0000-0000-0000-000000000901").expect("request UUID parses");
@@ -3077,26 +2984,6 @@ mod tests {
         let debug = format!("{preparation:?}");
         assert!(!debug.contains("principal-canary"));
 
-        let reviewer = ClaimContext::for_compiled(
-            &registry,
-            "placement-correction-request",
-            Some("reviewer-canary".to_owned()),
-            "reviewer",
-            Some("review".to_owned()),
-            Vec::new(),
-        )
-        .expect("reviewer request context compiles");
-        let review = ChangeRequestTargetContext::for_review(
-            &registry,
-            &reviewer,
-            "review",
-            vec![equals("tenant", "tenant-a")],
-            binding.clone(),
-        )
-        .expect("review context derives from review grant and target boundary");
-        assert!(review
-            .canonical_context()
-            .contains("\"phase\":{\"kind\":\"review\",\"stage\":\"review\"}"));
         let before = serde_json::Map::from_iter([
             ("tenant".to_owned(), json!("tenant-a")),
             (
@@ -3111,14 +2998,6 @@ mod tests {
                 json!("00000000-0000-0000-0000-000000000112"),
             ),
         ]);
-        review
-            .authorize_rows(
-                &registry.entities()["asset-placement"],
-                Some(&before),
-                &after,
-                target_id,
-            )
-            .expect("review snapshots satisfy the target boundary exactly");
         let wrong_after = serde_json::Map::from_iter([
             ("tenant".to_owned(), json!("tenant-b")),
             (
@@ -3126,7 +3005,31 @@ mod tests {
                 json!("00000000-0000-0000-0000-000000000112"),
             ),
         ]);
-        assert!(review
+        let applier = ClaimContext::for_compiled(
+            &registry,
+            "placement-correction-request",
+            Some("applier-canary".to_owned()),
+            "applier",
+            Some("apply".to_owned()),
+            Vec::new(),
+        )
+        .expect("applier request context compiles");
+        let application = ChangeRequestTargetContext::for_application(
+            &registry,
+            &applier,
+            vec![equals("tenant", "tenant-a")],
+            binding.clone(),
+        )
+        .expect("application context derives from apply grant and target boundary");
+        application
+            .authorize_rows(
+                &registry.entities()["asset-placement"],
+                Some(&before),
+                &after,
+                target_id,
+            )
+            .expect("application snapshots satisfy the target boundary exactly");
+        assert!(application
             .authorize_rows(
                 &registry.entities()["asset-placement"],
                 Some(&before),
@@ -3137,41 +3040,23 @@ mod tests {
 
         let mut wrong_fields = binding.clone();
         wrong_fields.fields.insert("tenant".to_owned());
-        assert!(ChangeRequestTargetContext::for_review(
+        assert!(ChangeRequestTargetContext::for_application(
             &registry,
-            &reviewer,
-            "review",
+            &applier,
             vec![equals("tenant", "tenant-a")],
             wrong_fields,
         )
         .is_err());
 
-        let mut missing_revision = binding.clone();
+        let mut missing_revision = binding;
         missing_revision.expected_revision = None;
         assert!(ChangeRequestTargetContext::for_application(
             &registry,
-            &reviewer,
+            &applier,
             vec![equals("tenant", "tenant-a")],
             missing_revision,
         )
         .is_err());
-
-        let applier = ClaimContext::for_compiled(
-            &registry,
-            "placement-correction-request",
-            Some("applier-canary".to_owned()),
-            "applier",
-            Some("apply".to_owned()),
-            Vec::new(),
-        )
-        .expect("applier request context compiles");
-        ChangeRequestTargetContext::for_application(
-            &registry,
-            &applier,
-            vec![equals("tenant", "tenant-a")],
-            binding,
-        )
-        .expect("application context derives from apply grant and target boundary");
     }
 
     fn equals(field: &str, value: &str) -> RowBoundaryContext {
@@ -3376,7 +3261,6 @@ mod tests {
                         allow_data_export: false,
                         lookups: Vec::new(),
                         read_paths: Vec::new(),
-                        review_stages: Vec::new(),
                         apply_targets: Vec::new(),
                         submitter_targets: Default::default(),
                         request_presence: Vec::new(),
@@ -3421,7 +3305,6 @@ mod tests {
                         allow_data_export: false,
                         lookups: Vec::new(),
                         read_paths: Vec::new(),
-                        review_stages: Vec::new(),
                         apply_targets: Vec::new(),
                         submitter_targets: Default::default(),
                         request_presence: Vec::new(),
@@ -3519,7 +3402,8 @@ mod tests {
                       "operation":"patch",
                       "set":{"site":{"fromField":"proposed-site"}}
                     }],
-                    "review":{"stages":[{"id":"review","approvals":1,"excludeSubmitter":true}]}
+                    "review":{"authority":"casework-main","policyId":"request-review"},
+                    "onApproved":{"mode":"manual"}
                   }
                 }
               ],
@@ -3548,16 +3432,8 @@ mod tests {
                   "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],
                   "permissions":[{
                     "entity":"placement-correction-request",
-                    "operations":["get","list","approve_request","reject_request","request_revision"],
+                    "operations":["get","list"],
                     "readableFields":["placement","proposed-site","reason"],
-                    "reviewStages":[{
-                      "stage":"review",
-                      "targets":[{
-                        "entity":"asset-placement",
-                        "readableFields":["site"],
-                        "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-                      }]
-                    }],
                     "rowBoundaries": []
                   }]
                 },

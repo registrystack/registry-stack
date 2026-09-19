@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::CaseworkRole;
-use crate::HostedKindPolicy;
 use crate::{check_clock_policies, check_routing_policy, CalendarPolicy, ClockPolicy, RoutingRule};
+use crate::{HostedKindPolicy, ReviewKindPolicy};
 
 pub const CASEWORK_API_VERSION: &str = "registry.registrystack.org/casework/v1alpha1";
 pub const CASEWORK_KIND: &str = "CaseworkProject";
@@ -69,6 +69,10 @@ pub struct CaseworkProject {
     pub sources: Vec<SourcePolicy>,
     #[serde(default)]
     pub hosted_kinds: Vec<HostedKindPolicy>,
+    #[serde(default)]
+    pub review_kinds: Vec<ReviewKindPolicy>,
+    #[serde(default)]
+    pub review_producers: Vec<ReviewProducerPolicy>,
     #[serde(default)]
     pub calendars: Vec<CalendarPolicy>,
     #[serde(default)]
@@ -217,8 +221,7 @@ impl CaseworkProject {
                 .iter()
                 .any(|profile| match profile.role {
                     CaseworkRole::Requester => {
-                        profile.kinds.is_empty()
-                            || profile.kinds.len() > crate::MAXIMUM_HOSTED_KINDS
+                        profile.kinds.len() > crate::MAXIMUM_HOSTED_KINDS
                             || profile.kinds.iter().collect::<BTreeSet<_>>().len()
                                 != profile.kinds.len()
                     }
@@ -229,7 +232,111 @@ impl CaseworkProject {
         {
             return Err(ConfigError::HostedKinds);
         }
-        if self.sources.is_empty() && self.hosted_kinds.is_empty() {
+        let review_kinds = self
+            .review_kinds
+            .iter()
+            .map(|kind| kind.id.as_str())
+            .collect::<BTreeSet<_>>();
+        if self.review_kinds.len() > crate::MAXIMUM_HOSTED_KINDS
+            || review_kinds.len() != self.review_kinds.len()
+            || self.review_kinds.iter().any(|kind| kind.check().is_err())
+        {
+            return Err(ConfigError::ReviewKinds);
+        }
+        for (kind_index, kind) in self.review_kinds.iter().enumerate() {
+            for (clock_index, clock_id) in kind.clocks.iter().enumerate() {
+                if !self.clocks.iter().any(|clock| clock.id() == clock_id) {
+                    return Err(ConfigError::Reference {
+                        path: format!("reviewKinds[{kind_index}].clocks[{clock_index}]"),
+                        target: "clock",
+                    });
+                }
+            }
+            for (stage_index, stage) in kind.stages.iter().enumerate() {
+                if !queues.contains(&stage.queue) {
+                    return Err(ConfigError::Reference {
+                        path: format!("reviewKinds[{kind_index}].stages[{stage_index}].queue"),
+                        target: "queue",
+                    });
+                }
+                for (profile_index, profile_id) in stage.deciding_profiles.iter().enumerate() {
+                    if self
+                        .access_profiles
+                        .iter()
+                        .find(|profile| profile.id == *profile_id)
+                        .is_none_or(|profile| {
+                            !matches!(profile.role, CaseworkRole::Staff | CaseworkRole::Supervisor)
+                        })
+                    {
+                        return Err(ConfigError::Reference {
+                            path: format!(
+                                "reviewKinds[{kind_index}].stages[{stage_index}].decidingProfiles[{profile_index}]"
+                            ),
+                            target: "staff or supervisor access profile",
+                        });
+                    }
+                }
+            }
+        }
+        let producer_ids = self
+            .review_producers
+            .iter()
+            .map(|producer| producer.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let producer_principals = self
+            .review_producers
+            .iter()
+            .map(|producer| {
+                (
+                    producer.profile.as_str(),
+                    producer.issuer.as_str(),
+                    producer.subject.as_str(),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        if self.review_producers.len() > 64
+            || producer_ids.len() != self.review_producers.len()
+            || producer_principals.len() != self.review_producers.len()
+            || self.review_kinds.is_empty() != self.review_producers.is_empty()
+        {
+            return Err(ConfigError::ReviewProducers);
+        }
+        for (producer_index, producer) in self.review_producers.iter().enumerate() {
+            if !producer.check()
+                || self
+                    .access_profiles
+                    .iter()
+                    .find(|profile| profile.id == producer.profile)
+                    .is_none_or(|profile| profile.role != CaseworkRole::Requester)
+            {
+                return Err(ConfigError::ReviewProducers);
+            }
+            for (kind_index, kind_id) in producer.kinds.iter().enumerate() {
+                let kind = self.review_kinds.iter().find(|kind| kind.id == *kind_id);
+                if kind.is_none() {
+                    return Err(ConfigError::Reference {
+                        path: format!("reviewProducers[{producer_index}].kinds[{kind_index}]"),
+                        target: "review kind",
+                    });
+                }
+                if kind.is_some_and(|kind| kind.retention.terminal_days < producer.recovery_days) {
+                    return Err(ConfigError::Semantic {
+                        path: format!("reviewProducers[{producer_index}].recoveryDays"),
+                        member: "recovery window no longer than result retention",
+                    });
+                }
+                if kind.is_some_and(|kind| {
+                    kind.stages.iter().any(|stage| stage.exclude_initiator)
+                        && producer.trusted_initiator_issuer.is_none()
+                }) {
+                    return Err(ConfigError::Semantic {
+                        path: format!("reviewProducers[{producer_index}].trustedInitiatorIssuer"),
+                        member: "trusted initiator issuer required by an exclusion stage",
+                    });
+                }
+            }
+        }
+        if self.sources.is_empty() && self.hosted_kinds.is_empty() && self.review_kinds.is_empty() {
             return Err(ConfigError::NoConfiguredWork);
         }
         let calendar_ids = self
@@ -381,6 +488,79 @@ pub struct AccessProfile {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewProducerPolicy {
+    pub id: String,
+    pub profile: String,
+    pub issuer: String,
+    pub subject: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_initiator_issuer: Option<String>,
+    pub source_namespaces: Vec<String>,
+    pub kinds: Vec<String>,
+    pub recovery_days: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<ReviewCompletionDestinationPolicy>,
+}
+
+impl ReviewProducerPolicy {
+    fn check(&self) -> bool {
+        valid_review_name(&self.id)
+            && valid_profile_identifier(&self.profile)
+            && bounded_config_text(&self.issuer, 512)
+            && bounded_config_text(&self.subject, 256)
+            && self
+                .trusted_initiator_issuer
+                .as_ref()
+                .is_none_or(|issuer| bounded_config_text(issuer, 512))
+            && (1..=crate::MAXIMUM_HOSTED_RETENTION_DAYS).contains(&self.recovery_days)
+            && !self.source_namespaces.is_empty()
+            && self.source_namespaces.len() <= 64
+            && self
+                .source_namespaces
+                .iter()
+                .all(|value| valid_review_name(value))
+            && self.source_namespaces.iter().collect::<BTreeSet<_>>().len()
+                == self.source_namespaces.len()
+            && !self.kinds.is_empty()
+            && self.kinds.len() <= crate::MAXIMUM_HOSTED_KINDS
+            && self.kinds.iter().all(|value| valid_review_name(value))
+            && self.kinds.iter().collect::<BTreeSet<_>>().len() == self.kinds.len()
+            && self
+                .completion
+                .as_ref()
+                .is_none_or(ReviewCompletionDestinationPolicy::check)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewCompletionDestinationPolicy {
+    pub destination_id: String,
+    pub recipient_binding: String,
+}
+
+impl ReviewCompletionDestinationPolicy {
+    fn check(&self) -> bool {
+        valid_review_name(&self.destination_id) && bounded_config_text(&self.recipient_binding, 256)
+    }
+}
+
+fn valid_review_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+}
+
+fn bounded_config_text(value: &str, maximum: usize) -> bool {
+    !value.trim().is_empty()
+        && value.len() <= maximum
+        && value.chars().all(|character| !character.is_control())
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QueuePolicy {
     pub id: String,
     pub label: String,
@@ -514,6 +694,10 @@ pub enum ConfigError {
     AccessProfileScopes,
     #[error("the hosted kind policy or its profile grants are invalid")]
     HostedKinds,
+    #[error("the unified review kind policy or its stage grants are invalid")]
+    ReviewKinds,
+    #[error("the unified review producer admission policy is invalid")]
+    ReviewProducers,
     #[error("the Casework project configures no source or hosted work")]
     NoConfiguredWork,
     #[error("a source routing policy is invalid")]
@@ -566,7 +750,11 @@ impl ConfigLoadError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::standalone_decision_starter_kind;
+    use crate::{
+        standalone_decision_starter_kind, ReviewContextStrategy, ReviewKindPurpose,
+        ReviewRetentionPolicy, ReviewStagePolicy,
+    };
+    use serde_json::json;
 
     fn profile(id: &str, role: CaseworkRole, kinds: &[&str]) -> AccessProfile {
         AccessProfile {
@@ -599,6 +787,8 @@ mod tests {
             }],
             sources: Vec::new(),
             hosted_kinds: vec![standalone_decision_starter_kind()],
+            review_kinds: Vec::new(),
+            review_producers: Vec::new(),
             calendars: Vec::new(),
             clocks: Vec::new(),
             inbox: InboxPolicy::default(),
@@ -613,6 +803,53 @@ mod tests {
             .map(|profile| (*profile).to_owned())
             .collect();
         kind
+    }
+
+    fn review_kind() -> ReviewKindPolicy {
+        ReviewKindPolicy {
+            id: "registry-correction".to_owned(),
+            version: "1".to_owned(),
+            purpose: ReviewKindPurpose::Approval,
+            context_strategy: ReviewContextStrategy::Source,
+            stages: vec![ReviewStagePolicy {
+                id: "review".to_owned(),
+                queue: "decisions".to_owned(),
+                deciding_profiles: vec!["staff".to_owned()],
+                required_approvals: 1,
+                exclude_initiator: true,
+                exclude_previous_stage_reviewers: true,
+            }],
+            clocks: Vec::new(),
+            retention: ReviewRetentionPolicy {
+                terminal_days: 90,
+                accountability_days: 365,
+            },
+            display_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["summary"],
+                "properties": {"summary": {"type": "string", "maxLength": 160}}
+            }),
+            result_schema: None,
+            outcomes: Vec::new(),
+        }
+    }
+
+    fn review_producer() -> ReviewProducerPolicy {
+        ReviewProducerPolicy {
+            id: "registry".to_owned(),
+            profile: "requester".to_owned(),
+            issuer: "https://registry.example".to_owned(),
+            subject: "registry-service".to_owned(),
+            trusted_initiator_issuer: Some("https://people.example".to_owned()),
+            source_namespaces: vec!["registry".to_owned()],
+            kinds: vec!["registry-correction".to_owned()],
+            recovery_days: 30,
+            completion: Some(ReviewCompletionDestinationPolicy {
+                destination_id: "registry-review-completion".to_owned(),
+                recipient_binding: "sha256:recipient-binding".to_owned(),
+            }),
+        }
     }
 
     fn project_with_source_queue(queue: &str) -> CaseworkProject {
@@ -659,6 +896,49 @@ mod tests {
         let mut candidate = project();
         candidate.access_profiles[2].kinds = vec!["decision".to_owned()];
         assert_eq!(candidate.check(), Err(ConfigError::HostedKinds));
+    }
+
+    #[test]
+    fn review_producers_are_exact_and_recovery_fits_result_retention() {
+        let mut candidate = project();
+        candidate.review_kinds = vec![review_kind()];
+        candidate.review_producers = vec![review_producer()];
+        assert_eq!(candidate.check(), Ok(()));
+
+        let mut review_only = candidate.clone();
+        review_only.hosted_kinds.clear();
+        review_only.access_profiles[3].kinds.clear();
+        assert_eq!(review_only.check(), Ok(()));
+
+        let mut changed_identity = candidate.clone();
+        let mut duplicate = changed_identity.review_producers[0].clone();
+        duplicate.id = "registry-alias".to_owned();
+        changed_identity.review_producers.push(duplicate);
+        assert_eq!(changed_identity.check(), Err(ConfigError::ReviewProducers));
+
+        let mut excessive_recovery = candidate.clone();
+        excessive_recovery.review_producers[0].recovery_days = 91;
+        assert!(matches!(
+            excessive_recovery.check(),
+            Err(ConfigError::Semantic {
+                member: "recovery window no longer than result retention",
+                ..
+            })
+        ));
+
+        let mut unknown_clock = candidate.clone();
+        unknown_clock.review_kinds[0].clocks = vec!["missing-clock".to_owned()];
+        assert_eq!(
+            unknown_clock.check().unwrap_err().path(),
+            "reviewKinds[0].clocks[0]"
+        );
+
+        let mut undeclared_namespace = candidate;
+        undeclared_namespace.review_producers[0].source_namespaces = vec!["registry/path".into()];
+        assert_eq!(
+            undeclared_namespace.check(),
+            Err(ConfigError::ReviewProducers)
+        );
     }
 
     #[test]

@@ -35,7 +35,6 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
     let digest = effect_digest();
     let request_id = "00000000-0000-4000-8000-000000000001";
     let placement_id = "00000000-0000-4000-8000-000000000010";
-    let site_id = "00000000-0000-4000-8000-000000000020";
     let replacement_site_id = "00000000-0000-4000-8000-000000000021";
 
     assert_valid(
@@ -53,28 +52,16 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
                 "proposalVersion": 2,
                 "effectDigest": digest,
                 "editable": false,
-                "decisions": [{
-                    "stageId": "review", "kind": "approve",
-                    "decidedAt": "2026-09-09T00:00:00Z", "reasonPresent": false
-                }],
+                "proposal": {
+                    "review": {"authority": "casework-main", "policyId": "request-review"}
+                },
                 "actions": [{
-                    "operation": "approve_request",
+                    "operation": "apply_request",
                     "method": "POST",
-                    "href": "/v1/records/placement-correction-requests/00000000-0000-4000-8000-000000000001/actions/stages/review/approve?accessProfile=request-reviewer",
+                    "href": "/v1/records/placement-correction-requests/00000000-0000-4000-8000-000000000001/actions/apply?accessProfile=request-applier",
                     "ifMatch": "\"breg-action\"",
-                    "stage": "review",
                     "proposalVersion": 2,
-                    "effectDigest": digest,
-                    "review": {
-                        "targets": [{
-                            "entityId": "placement",
-                            "recordId": placement_id,
-                            "operation": "patch",
-                            "baseRevision": 7,
-                            "before": {"site": site_id},
-                            "after": {"site": replacement_site_id}
-                        }]
-                    }
+                    "effectDigest": digest
                 }],
                 "application": {
                     "applicationId": "00000000-0000-4000-8000-0000000000aa",
@@ -96,12 +83,7 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
                         "applicationId": null,
                         "resultLinkCount": 0,
                         "resultLinks": [],
-                        "effectDigest": digest,
-                        "decisions": [{
-                            "stageId": "review", "kind": "request_revision",
-                            "decidedAt": "2026-09-09T00:00:00Z", "reasonPresent": true,
-                            "reason": "  Please confirm. ตรวจสอบ 🙂  "
-                        }]
+                        "effectDigest": digest
                     }],
                     "nextAfterProposalVersion": null
                 }
@@ -127,10 +109,6 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
                 "proposalVersion": 2,
                 "detailErased": true,
                 "editable": false,
-                "decisions": [{
-                    "stageId": "review", "kind": "reject",
-                    "decidedAt": "2026-09-09T00:00:00Z", "reasonPresent": true
-                }],
                 "effectDigest": digest,
                 "application": {
                     "applicationId": "00000000-0000-4000-8000-0000000000aa",
@@ -289,74 +267,25 @@ fn served_field_projection_keeps_response_data_strict_but_subsettable() {
 }
 
 #[test]
-fn current_and_retained_decision_schemas_match_client_reason_and_count_bounds() {
+fn current_proposal_schema_keeps_review_binding_closed() {
     let registry = compiled_registry();
     let openapi = generated_openapi(&registry);
     let path = route_path(&registry, "placement-correction-request", Operation::Get);
     let request_schema = &openapi["paths"][path]["get"]["responses"]["200"]["content"]
         ["application/json"]["schema"]["properties"]["data"]["properties"]["request"];
-    let current = &request_schema["properties"]["decisions"];
-    let retained = &request_schema["properties"]["history"]["properties"]["proposals"]["items"]
-        ["properties"]["decisions"];
-    for schema in [current, retained] {
-        let validator = inline_validator(schema);
-        assert_valid(&validator, &json!([]));
-        for kind in ["approve", "reject", "request_revision"] {
-            let mut decision = json!({
-                "stageId": "review", "kind": kind,
-                "decidedAt": "2026-09-09T00:00:00Z", "reasonPresent": false
-            });
-            assert_valid(&validator, &json!([decision.clone()]));
-            decision["reason"] = json!("explanation");
-            assert!(!validator.is_valid(&json!([decision.clone()])));
-            decision.as_object_mut().unwrap().remove("reason");
-            decision["reasonPresent"] = json!(true);
-            assert_valid(&validator, &json!([decision.clone()]));
-            for reason in [json!(""), json!("  ตรวจสอบ 🙂  "), json!("🙂".repeat(4096))]
-            {
-                decision["reason"] = reason;
-                assert_valid(&validator, &json!([decision.clone()]));
-            }
-            for reason in [
-                Value::Null,
-                json!(false),
-                json!(1),
-                json!([]),
-                json!({}),
-                json!("a\0b"),
-                json!("🙂".repeat(4097)),
-            ] {
-                decision["reason"] = reason;
-                assert!(!validator.is_valid(&json!([decision.clone()])));
-            }
-        }
-        let decision = json!({
-            "stageId": "review", "kind": "approve",
-            "decidedAt": "2026-09-09T00:00:00Z", "reasonPresent": false
-        });
-        let mut with_stage = decision.clone();
-        with_stage["stageId"] = json!(format!("a{}", "_".repeat(63)));
-        assert_valid(&validator, &json!([with_stage.clone()]));
-        for stage in [
-            "".to_owned(),
-            "Review".to_owned(),
-            "1review".to_owned(),
-            "review stage".to_owned(),
-            "review\n".to_owned(),
-            "review\r\n".to_owned(),
-            "review\0".to_owned(),
-            "ตรวจสอบ".to_owned(),
-            "a".repeat(65),
-        ] {
-            with_stage["stageId"] = json!(stage);
-            assert!(!validator.is_valid(&json!([with_stage.clone()])));
-        }
-        let mut with_time = decision.clone();
-        with_time["decidedAt"] = json!(format!("2026-09-09T00:00:00.{}Z", "0".repeat(110)));
-        assert!(!validator.is_valid(&json!([with_time])));
-        assert_valid(&validator, &json!(vec![decision.clone(); 1024]));
-        assert!(!validator.is_valid(&json!(vec![decision; 1025])));
-    }
+    let validator = inline_validator(&request_schema["properties"]["proposal"]);
+    assert_valid(
+        &validator,
+        &json!({"review": {"authority": "casework-main", "policyId": "request-review"}}),
+    );
+    assert_valid(&validator, &json!({"review": {"mode": "none"}}));
+    assert_invalid(
+        &validator,
+        &json!({
+            "review": {"authority": "casework-main", "policyId": "request-review"},
+            "applicationDisposition": "apply"
+        }),
+    );
 }
 
 #[test]
@@ -910,22 +839,15 @@ fn compiled_registry() -> CompiledRegistry {
                 "operation":"patch",
                 "set":{"site":{"fromField":"proposed-site"}}
               }],
-              "review":{"stages":[{"id":"review","approvals":1,"excludeSubmitter":true}]}
+              "review":{"authority":"casework-main","policyId":"request-review"},
+              "onApproved":{"mode":"manual"}
             }
           }],
           "accessProfiles":[{
             "id":"request-reviewer","default":true,"principalClaim":"principal","permissions":[{
               "entity":"placement-correction-request",
-              "operations":["get","approve_request","reject_request","request_revision"],
+              "operations":["get"],
               "readableFields":["placement","proposed-site"],
-              "reviewStages":[{
-                "stage":"review",
-                "targets":[{
-                  "entity":"placement",
-                  "readableFields":["site"],
-                  "rowBoundaries":[{"field":"site","claim":"site_claim","operator":"equals"}]
-                }]
-              }],
               "rowBoundaries": []
             }]
           },{

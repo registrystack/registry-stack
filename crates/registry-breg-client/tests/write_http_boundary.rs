@@ -1956,7 +1956,7 @@ fn apply_metadata_fixture() -> Value {
         "properties": {
             "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
             "effectDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "Digest of the immutable proposal effects displayed to the actor."},
-            "reason": {"type": "string", "maxLength": 4096, "pattern": "^[^\\u0000]*$", "description": "Optional reviewer explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."}
+            "reason": {"type": "string", "maxLength": 4096, "pattern": "^[^\\u0000]*$", "description": "Optional application explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."}
         }
     });
     metadata["entities"][0]["operations"][2]["operation"] = json!("apply_request");
@@ -1968,7 +1968,7 @@ async fn prepared_lifecycle_recovers_original_apply_after_action_disappears() {
     use registry_breg_client::BRegPreparedLifecycle;
     let metadata = apply_metadata_fixture();
     let mut record = lifecycle_record_body();
-    record["data"]["request"]["bregState"] = json!("approved");
+    record["data"]["request"]["bregState"] = json!("submitted");
     record["data"]["request"]["editable"] = json!(false);
     let action = &mut record["data"]["request"]["actions"][0];
     action["operation"] = json!("apply_request");
@@ -2067,7 +2067,6 @@ async fn prepared_lifecycle_recovers_original_apply_after_action_disappears() {
     assert_eq!(action.href(), recovered.href());
     assert_eq!(action.if_match(), recovered.if_match());
     assert_eq!(action.body(), recovered.body());
-    assert!(recovered.review().is_none());
     let legacy = BRegPreparedLifecycle::from_slice(&legacy_saved).unwrap();
     let (legacy_recovered, legacy_key) = fixture
         .client
@@ -2187,145 +2186,6 @@ async fn record_revisions_uses_bounded_native_route_and_refuses_invalid_selector
     assert_eq!(fixture.requests.lock().unwrap().len(), 1);
 }
 
-#[tokio::test]
-async fn prepared_review_reason_survives_restart_and_exact_wire_retry() {
-    use registry_breg_client::BRegPreparedLifecycle;
-    let cases: Value = serde_json::from_str(include_str!("fixtures/review-reasons.json")).unwrap();
-    for operation in ["reject_request", "request_revision"] {
-        let fixture = test_client(vec![
-            MockResponse::json(StatusCode::OK, cases["metadata"].clone()),
-            lifecycle_response(cases["receipts"][operation].clone()),
-            MockResponse::json(StatusCode::OK, cases["metadata"].clone()),
-            lifecycle_response(cases["receipts"][operation].clone()),
-        ])
-        .await;
-        let first_caller = fixture
-            .client
-            .with_bearer_token(BearerToken::new("original-human-token").unwrap());
-        let refreshed_caller = fixture
-            .client
-            .with_bearer_token(BearerToken::new("refreshed-human-token").unwrap());
-        let contract = first_caller
-            .registry_contract(Some("writer"))
-            .await
-            .unwrap()
-            .value;
-        let authority = contract.select_lifecycle("item", "writer").unwrap();
-        let mut record_value = cases["records"][operation].clone();
-        record_value["data"]["domainData"] = json!({"privateField": "domain-data-canary"});
-        record_value["data"]["request"]["proposal"] = json!({
-            "reviewMode": "staged",
-            "applicationDisposition": "queue",
-            "queueReason": {"code": "manual-check", "label": "proposal-canary"}
-        });
-        record_value["data"]["request"]["actions"][0]["review"]["targets"] = json!([{
-            "entityId": "item",
-            "recordId": OTHER_RECORD_ID,
-            "operation": "patch",
-            "baseRevision": 3,
-            "before": {"privateField": "preview-before-canary"},
-            "after": {"privateField": "preview-after-canary"}
-        }]);
-        let RegistryRecordResponse::Single(record) =
-            RegistryRecordResponse::from_value(record_value, RegistryRecordRepresentation::Json)
-                .unwrap()
-        else {
-            panic!("single")
-        };
-        let action = fixture
-            .client
-            .lifecycle_actions(&authority, &record)
-            .unwrap()
-            .remove(0);
-        let before = fixture.token.0.load(Ordering::SeqCst);
-        assert!(action.with_reason("x".repeat(4097)).is_err());
-        assert!(action.with_reason("\0").is_err());
-        assert_eq!(fixture.token.0.load(Ordering::SeqCst), before);
-        let action = action
-            .with_reason("  Please correct the values.\nเหตุผล 📝  ")
-            .unwrap();
-        let prepared = fixture
-            .client
-            .prepare_lifecycle_action(&authority, &record, &action, &key("review-attempt"))
-            .unwrap();
-        let saved = prepared.as_bytes().to_vec();
-        let saved_text = std::str::from_utf8(&saved).unwrap();
-        for excluded in [
-            "domain-data-canary",
-            "proposal-canary",
-            "preview-before-canary",
-            "preview-after-canary",
-            "history",
-            "decisions",
-        ] {
-            assert!(!saved_text.contains(excluded), "persisted {excluded}");
-        }
-        assert_eq!(
-            serde_json::from_slice::<Value>(&saved).unwrap()["version"],
-            json!(2)
-        );
-        first_caller
-            .execute_lifecycle_action(&action, &key("review-attempt"))
-            .await
-            .unwrap();
-        drop(prepared);
-        let prepared = BRegPreparedLifecycle::from_slice(&saved).unwrap();
-        let contract = refreshed_caller
-            .registry_contract(Some("writer"))
-            .await
-            .unwrap()
-            .value;
-        let authority = contract.select_lifecycle("item", "writer").unwrap();
-        let (recovered, original_key) = refreshed_caller
-            .recover_lifecycle_action(&authority, &prepared)
-            .unwrap();
-        assert_eq!(recovered.operation(), action.operation());
-        assert_eq!(recovered.href(), action.href());
-        assert_eq!(recovered.if_match(), action.if_match());
-        assert_eq!(recovered.body(), action.body());
-        assert!(recovered.review().is_none());
-        refreshed_caller
-            .execute_lifecycle_action(&recovered, &original_key)
-            .await
-            .unwrap();
-        let requests = fixture.requests.lock().unwrap().clone();
-        assert_eq!(requests[1].body, requests[3].body);
-        assert_eq!(requests[1].if_match, requests[3].if_match);
-        assert_eq!(requests[1].idempotency_key, requests[3].idempotency_key);
-        assert_eq!(
-            requests[1].authorization.as_deref(),
-            Some("Bearer original-human-token")
-        );
-        assert_eq!(
-            requests[3].authorization.as_deref(),
-            Some("Bearer refreshed-human-token")
-        );
-        assert_eq!(
-            serde_json::from_slice::<Value>(&requests[1].body).unwrap()["reason"],
-            "  Please correct the values.\nเหตุผล 📝  "
-        );
-        let before = fixture.token.0.load(Ordering::SeqCst);
-        for reason in [json!(null), json!(1), json!("x".repeat(4097)), json!("\0")] {
-            let mut tampered: Value = serde_json::from_slice(&saved).unwrap();
-            let mut body: Value = serde_json::from_str(tampered["body"].as_str().unwrap()).unwrap();
-            body["reason"] = reason;
-            tampered["body"] = json!(serde_json::to_string(&body).unwrap());
-            let tampered =
-                BRegPreparedLifecycle::from_slice(&serde_json::to_vec(&tampered).unwrap()).unwrap();
-            assert!(fixture
-                .client
-                .recover_lifecycle_action(&authority, &tampered)
-                .is_err());
-        }
-        assert_eq!(fixture.token.0.load(Ordering::SeqCst), before);
-    }
-}
-
-/// The engine answers an immediate-action business refusal with the
-/// package-declared label in `detail`, the declared reason in `refusalCode`,
-/// and, when the rule names one, the action input in `fieldPath`. The reason is
-/// the whole machine-readable outcome, so the client keeps it and refuses every
-/// document outside the published schema.
 #[tokio::test]
 async fn immediate_action_refusals_carry_their_declared_reason_and_stay_bounded() {
     let base = problem_response(BRegProblemCode::ActionRefused);

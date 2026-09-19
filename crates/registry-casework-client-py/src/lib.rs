@@ -14,10 +14,8 @@ use casework_client_sdk::{
     CaseworkClient as RustClient, CaseworkClientConfig, CaseworkClientError as RustClientError,
     CaseworkComplete, CaseworkProblemCode, CaseworkProtocolFailure, ClockRecomputeApplyRequest,
     ClockRecomputeRequest, DecideRequest, DelegateRequest, DirectoryTargetsQuery,
-    DirectoryTeamUpdateRequest, HoldingsQuery, HolidaySetRevisionInput, HostedCancelRequest,
-    HostedCreateRequest, HostedDecisionRequest, HostedNoteRequest, HostedPageQuery,
-    HostedTerminalQuery, ListWorkItemsQuery, NextWorkItemQuery, RecoverAttemptRequest,
-    SaveDraftRequest,
+    DirectoryTeamUpdateRequest, HoldingsQuery, HolidaySetRevisionInput, HostedPageQuery,
+    ListWorkItemsQuery, NextWorkItemQuery, RecoverAttemptRequest, SaveDraftRequest,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
@@ -367,6 +365,7 @@ impl CaseworkClient {
         )
     }
 
+    /* Obsolete hosted request and decision bindings removed from the public API.
     fn create_hosted_item<'py>(
         &self,
         py: Python<'py>,
@@ -664,6 +663,7 @@ impl CaseworkClient {
         )
     }
 
+    */
     fn list_work_items<'py>(
         &self,
         py: Python<'py>,

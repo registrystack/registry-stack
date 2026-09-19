@@ -472,16 +472,16 @@ fn refuses_change_request_lifecycle_entities() {
         "selectorProfiles":[{"id":"by-code","fields":["code"]}],
         "changeRequest":{
             "effects":[{"target":{"fromField":"subject"},"operation":"patch","set":{"status":{"fromField":"new-status"}}}],
-            "review":{"stages":[{"id":"review","approvals":1}]}}}));
+            "review":{"authority":"casework-main","policyId":"request-review"},
+            "onApproved":{"mode":"manual"}}}));
     original["accessProfiles"]
         .as_array_mut()
         .unwrap()
         .push(json!({"id":"record-request-steward","principalClaim":"principal","requiredScopes":["registry.write"],
             "permissions":[{"entity":"record-request","rowBoundaries":[],
-                "operations":["create","get","submit_request","approve_request","apply_request"],
+                "operations":["create","get","submit_request","apply_request"],
                 "readableFields":["code","subject","new-status"],
                 "writableFields":["code","subject","new-status"],
-                "reviewStages":[{"stage":"review","targets":[{"entity":"record","readableFields":["status"],"rowBoundaries":[]}]}],
                 "applyTargets":[{"entity":"record","rowBoundaries":[]}]}]}));
     original["accessProfiles"][0]["permissions"]
         .as_array_mut()

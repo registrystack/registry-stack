@@ -85,6 +85,7 @@ pub struct VerifiedRequestClaims {
     actor_subject: Option<String>,
     grant: Option<GrantClaims>,
     grant_subjects: BTreeMap<String, Value>,
+    human_identity: Option<registry_review_client::HumanIdentity>,
 }
 
 impl VerifiedRequestClaims {
@@ -112,6 +113,7 @@ impl VerifiedRequestClaims {
             actor_subject: None,
             grant: None,
             grant_subjects: BTreeMap::new(),
+            human_identity: None,
         })
     }
 
@@ -148,6 +150,19 @@ impl VerifiedRequestClaims {
         Ok(self)
     }
 
+    pub(crate) fn with_human_identity(
+        mut self,
+        identity: Option<registry_review_client::HumanIdentity>,
+    ) -> Result<Self, VerifiedContextError> {
+        if let Some(identity) = &identity {
+            identity
+                .check()
+                .map_err(|_| VerifiedContextError::InvalidDirectValue)?;
+        }
+        self.human_identity = identity;
+        Ok(self)
+    }
+
     #[must_use]
     pub fn anonymous() -> Self {
         Self {
@@ -161,6 +176,7 @@ impl VerifiedRequestClaims {
             actor_subject: None,
             grant: None,
             grant_subjects: BTreeMap::new(),
+            human_identity: None,
         }
     }
 
@@ -198,6 +214,9 @@ impl VerifiedRequestClaims {
     }
     pub(crate) fn grant_subjects(&self) -> &BTreeMap<String, Value> {
         &self.grant_subjects
+    }
+    pub(crate) fn human_identity(&self) -> Option<&registry_review_client::HumanIdentity> {
+        self.human_identity.as_ref()
     }
 }
 
@@ -288,6 +307,7 @@ pub struct AuthorizedRequestContext {
     submitter_targets: BTreeMap<String, Vec<VerifiedRowBoundary>>,
     task_grant: Option<TaskGrantBinding>,
     grant_audit: Option<crate::audit::GrantAuditContext>,
+    human_identity: Option<registry_review_client::HumanIdentity>,
 }
 
 impl AuthorizedRequestContext {
@@ -307,6 +327,7 @@ impl AuthorizedRequestContext {
             submitter_targets: BTreeMap::new(),
             task_grant: None,
             grant_audit: None,
+            human_identity: None,
         }
     }
 
@@ -320,10 +341,14 @@ impl AuthorizedRequestContext {
 
     pub(crate) fn with_grant_audit(mut self, claims: &VerifiedRequestClaims) -> Self {
         self.grant_audit = crate::audit::GrantAuditContext::from_claims(claims);
+        self.human_identity = claims.human_identity().cloned();
         self
     }
     pub(crate) fn grant_audit(&self) -> Option<&crate::audit::GrantAuditContext> {
         self.grant_audit.as_ref()
+    }
+    pub(crate) fn human_identity(&self) -> Option<&registry_review_client::HumanIdentity> {
+        self.human_identity.as_ref()
     }
 
     pub(crate) fn with_task_grant(mut self, grant: Option<TaskGrantBinding>) -> Self {
@@ -482,32 +507,21 @@ pub struct VerifiedRequestAction {
     method: HttpMethod,
     path: String,
     operation: Operation,
-    review_stage: Option<String>,
     response_fields: BTreeSet<String>,
     target_authority: Vec<VerifiedRequestTargetAuthority>,
     attachment_request_authority: Option<VerifiedRequestTargetAuthority>,
-    automatic_apply_authority: Option<Vec<VerifiedRequestTargetAuthority>>,
-    requires_automatic_apply_if_ready: bool,
 }
 
 pub(crate) struct VerifiedRequestActionAuthority {
     target: Vec<VerifiedRequestTargetAuthority>,
     attachment_request: Option<VerifiedRequestTargetAuthority>,
-    automatic_apply: Option<Vec<VerifiedRequestTargetAuthority>>,
-    requires_automatic_apply_if_ready: bool,
 }
 
 impl VerifiedRequestActionAuthority {
-    pub(crate) const fn new(
-        target: Vec<VerifiedRequestTargetAuthority>,
-        automatic_apply: Option<Vec<VerifiedRequestTargetAuthority>>,
-        requires_automatic_apply_if_ready: bool,
-    ) -> Self {
+    pub(crate) const fn new(target: Vec<VerifiedRequestTargetAuthority>) -> Self {
         Self {
             target,
             attachment_request: None,
-            automatic_apply,
-            requires_automatic_apply_if_ready,
         }
     }
     pub(crate) fn with_attachment_request_authority(
@@ -525,7 +539,6 @@ impl VerifiedRequestAction {
         method: HttpMethod,
         path: String,
         operation: Operation,
-        review_stage: Option<String>,
         response_fields: BTreeSet<String>,
         authority: VerifiedRequestActionAuthority,
     ) -> Self {
@@ -534,12 +547,9 @@ impl VerifiedRequestAction {
             method,
             path,
             operation,
-            review_stage,
             response_fields,
             target_authority: authority.target,
             attachment_request_authority: authority.attachment_request,
-            automatic_apply_authority: authority.automatic_apply,
-            requires_automatic_apply_if_ready: authority.requires_automatic_apply_if_ready,
         }
     }
 
@@ -564,11 +574,6 @@ impl VerifiedRequestAction {
     }
 
     #[must_use]
-    pub fn review_stage(&self) -> Option<&str> {
-        self.review_stage.as_deref()
-    }
-
-    #[must_use]
     pub fn response_fields(&self) -> &BTreeSet<String> {
         &self.response_fields
     }
@@ -581,16 +586,6 @@ impl VerifiedRequestAction {
     pub(crate) fn attachment_request_authority(&self) -> Option<&VerifiedRequestTargetAuthority> {
         self.attachment_request_authority.as_ref()
     }
-
-    #[must_use]
-    pub fn automatic_apply_authority(&self) -> Option<&[VerifiedRequestTargetAuthority]> {
-        self.automatic_apply_authority.as_deref()
-    }
-
-    #[must_use]
-    pub const fn requires_automatic_apply_if_ready(&self) -> bool {
-        self.requires_automatic_apply_if_ready
-    }
 }
 
 impl fmt::Debug for VerifiedRequestAction {
@@ -600,7 +595,6 @@ impl fmt::Debug for VerifiedRequestAction {
             .field("route_id", &self.route_id)
             .field("method", &self.method)
             .field("operation", &self.operation)
-            .field("review_stage", &self.review_stage)
             .field("response_fields", &self.response_fields)
             .field("target_authority_count", &self.target_authority.len())
             .finish()

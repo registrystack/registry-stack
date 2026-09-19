@@ -12,8 +12,7 @@ use crate::request_prepare::{self, RequestTargetSnapshot};
 use crate::request_workflow::{
     ApplicationId, ApplicationResultLink, ContractFingerprint, EntityId, ObservedTarget,
     PreparedApplication, ProposalDigest, ProposalVersion, RecordId, RecordRevision, RequestState,
-    RequestWorkflow, ReviewDecisionKind, TrustedActorRef, TrustedTimestamp,
-    TrustedTransitionContext,
+    RequestWorkflow, TrustedActorRef, TrustedTimestamp, TrustedTransitionContext,
 };
 use crate::rhai_planner::{CandidateChangeRequestEffect, CandidateChangeRequestMutation};
 
@@ -43,6 +42,11 @@ pub(crate) enum RequestEvidencePreflight {
     ),
 }
 
+pub(crate) enum RequestReceiptPreflight {
+    Receipt,
+    Continue,
+}
+
 /// A conditional action is bound to its exact selected operation and authority,
 /// not to the ETag of a record page or a work-queue/list response.
 #[allow(clippy::too_many_arguments)]
@@ -56,7 +60,6 @@ pub(crate) fn request_action_etag(
     workflow: &RequestWorkflow,
     response_fields: &BTreeSet<String>,
     target_authority: &[crate::api::RequestActionTargetAuthority],
-    automatic_apply_authority: Option<&[crate::api::RequestActionTargetAuthority]>,
 ) -> Result<String, MutationError> {
     request_action_etag_for_revisions(
         profile,
@@ -69,7 +72,6 @@ pub(crate) fn request_action_etag(
         workflow,
         response_fields,
         target_authority,
-        automatic_apply_authority,
     )
 }
 
@@ -85,7 +87,6 @@ fn request_action_etag_for_revisions(
     workflow: &RequestWorkflow,
     response_fields: &BTreeSet<String>,
     target_authority: &[crate::api::RequestActionTargetAuthority],
-    automatic_apply_authority: Option<&[crate::api::RequestActionTargetAuthority]>,
 ) -> Result<String, MutationError> {
     if record_revision <= 0 || workflow_revision == 0 {
         return Err(MutationError::PreconditionFailed);
@@ -99,7 +100,6 @@ fn request_action_etag_for_revisions(
         "effectDigest": workflow.current_proposal().map(|proposal| proposal.effect_digest().as_str()),
         "responseFields": response_fields,
         "targetAuthority": target_authority_binding(target_authority),
-        "automaticApplyAuthority": automatic_apply_authority.map(target_authority_binding),
     });
     let canonical = canonicalize_json(&binding).map_err(|_| MutationError::Unavailable)?;
     let digest = profile
@@ -114,6 +114,122 @@ fn request_action_etag_for_revisions(
 }
 
 impl MutationCoordinator {
+    /// Determine whether this exact action binding already has a durable
+    /// source-owned receipt. This check deliberately performs no remote I/O
+    /// and returns no receipt content. The normal action transaction still
+    /// re-authorizes the caller before returning the stored response.
+    pub(crate) async fn preflight_request_action_receipt(
+        &self,
+        client: &mut Client,
+        registry: &CompiledRegistry,
+        input: &RequestActionInput<'_>,
+        claims: &ClaimContext,
+    ) -> Result<RequestReceiptPreflight, MutationError> {
+        let route = registry
+            .routes()
+            .routes
+            .iter()
+            .find(|route| route.id == input.route_id)
+            .ok_or(MutationError::InvalidRequest)?;
+        let entity = registry
+            .entities()
+            .get(input.entity_id)
+            .ok_or(MutationError::InvalidRequest)?;
+        let profile = entity
+            .access_profiles
+            .get(claims.access_profile())
+            .ok_or(MutationError::InvalidRequest)?;
+        if !profile_is_keyed(&self.audit_profile)
+            || entity.change_request.is_none()
+            || route.entity_id != entity.id
+            || claims.entity_id() != entity.id
+            || claims.principal().is_none()
+            || route.method != HttpMethod::Post
+            || !route
+                .access_profiles
+                .iter()
+                .any(|id| id == claims.access_profile())
+            || !profile.operations.contains(&route.operation)
+            || action_operation(&input.action) != route.operation
+            || !input.response_fields.is_subset(&profile.readable_fields)
+            || !valid_uuid(input.record_id)
+        {
+            return Err(MutationError::InvalidRequest);
+        }
+        let binding = resolve_binding(
+            &self.audit_profile,
+            &IdempotencyBinding {
+                key: input.idempotency_key,
+                context: claims,
+                method: route.method,
+                route: &route.path,
+                target_record: Some(input.record_id),
+                package_revision: &self.expected.package_revision,
+                response_fields: &input.response_fields,
+                canonical_request_digest: Sha256::digest(
+                    canonicalize_json(&action_binding_json(input)?)
+                        .map_err(|_| MutationError::InvalidRequest)?,
+                )
+                .into(),
+            },
+        )?;
+        let transaction = begin_record_transaction(
+            client,
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+            claims,
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+        let request_id =
+            Uuid::parse_str(input.record_id).map_err(|_| MutationError::InvalidRequest)?;
+        let actor =
+            request_actor_reference(&self.audit_profile, &self.expected.database_id, claims)?;
+        let header = transaction
+            .transaction()
+            .query_opt(
+                "SELECT proposal_version FROM registry_internal.registry_request_state
+                 WHERE request_entity_id = $1 AND request_id = $2",
+                &[&entity.id, &request_id],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+            .ok_or(MutationError::PreconditionFailed)?;
+        let action_context = ChangeRequestActionContext::for_route(
+            registry,
+            claims,
+            &route.id,
+            request_id,
+            header.get::<_, i64>(0),
+            &actor,
+            &self.expected.package_revision,
+        )
+        .map_err(|_| MutationError::PreconditionFailed)?;
+        transaction
+            .install_change_request_action_context(&action_context)
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        let receipt = transaction
+            .transaction()
+            .query_opt(
+                "SELECT 1 FROM registry_internal.registry_idempotency WHERE key_reference = $1",
+                &[&binding.key_reference],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+            .is_some();
+        transaction
+            .commit()
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        Ok(if receipt {
+            RequestReceiptPreflight::Receipt
+        } else {
+            RequestReceiptPreflight::Continue
+        })
+    }
+
     pub(crate) async fn record_request_boundary_refusal(
         &self,
         client: &mut Client,
@@ -182,7 +298,7 @@ impl MutationCoordinator {
             return Err(MutationError::InvalidRequest);
         };
         if plan.application.preconditions.evidence.is_empty()
-            || plan.application.mode != crate::model::CompiledChangeRequestApplicationMode::Manual
+            || plan.on_approved.mode != crate::model::CompiledChangeRequestOnApprovedMode::Manual
             || !profile_is_keyed(&self.audit_profile)
             || route.entity_id != entity.id
             || claims.entity_id() != entity.id
@@ -314,9 +430,8 @@ impl MutationCoordinator {
             &workflow,
             &input.response_fields,
             &input.target_authority,
-            input.automatic_apply_authority.as_deref(),
         )?;
-        if workflow.state() != RequestState::Approved
+        if workflow.state() != RequestState::Submitted
             || etag.as_bytes().ct_eq(input.if_match.as_bytes()).unwrap_u8() != 1
         {
             return Err(MutationError::PreconditionFailed);
@@ -461,6 +576,7 @@ impl MutationCoordinator {
         input: RequestActionInput<'_>,
         claims: &ClaimContext,
         fault: FaultControl,
+        review_evidence: Option<&crate::review_integration::AcceptedReviewEvidence>,
         frozen_evidence: Option<&[crate::action_evidence_client::VerifiedAcquisition]>,
         attempt_recorded: bool,
     ) -> Result<MutationOutcome, MutationError> {
@@ -567,6 +683,7 @@ impl MutationCoordinator {
                     submission.as_ref(),
                     request_action_statement_timeout(deadline),
                     fault,
+                    review_evidence,
                     frozen_evidence,
                 )
                 .await;
@@ -701,7 +818,6 @@ impl MutationCoordinator {
             &workflow,
             &input.response_fields,
             &input.target_authority,
-            input.automatic_apply_authority.as_deref(),
         )?;
         if etag.as_bytes().ct_eq(input.if_match.as_bytes()).unwrap_u8() != 1
             || workflow.owner().as_str() != actor_reference
@@ -777,6 +893,7 @@ impl MutationCoordinator {
         submission: Option<&SubmissionCandidate>,
         statement_timeout: Duration,
         fault: FaultControl,
+        review_evidence: Option<&crate::review_integration::AcceptedReviewEvidence>,
         frozen_evidence: Option<&[crate::action_evidence_client::VerifiedAcquisition]>,
     ) -> Result<MutationOutcome, MutationError> {
         let body = action_binding_json(input)?;
@@ -868,7 +985,6 @@ impl MutationCoordinator {
                     &preview_workflow,
                     &input.response_fields,
                     &input.target_authority,
-                    input.automatic_apply_authority.as_deref(),
                 )?;
                 if preview_etag
                     .as_bytes()
@@ -906,38 +1022,7 @@ impl MutationCoordinator {
             matches!(&stored.metadata, StoredResultMetadata::Application { .. })
                 && !matches!(input.action, RequestActionBody::Apply { .. })
         }) {
-            // An automatically applied submit/approval is recovered under the
-            // same selected profile's real ApplyRequest route. This changes
-            // only the transaction-local request-row RLS phase; the stored
-            // idempotency binding and terminal audit remain bound to the
-            // caller's original action.
-            input
-                .automatic_apply_authority
-                .as_ref()
-                .ok_or(MutationError::PreconditionFailed)?;
-            let apply_route = registry
-                .routes()
-                .routes
-                .iter()
-                .find(|candidate| {
-                    candidate.entity_id == entity.id
-                        && candidate.operation == Operation::ApplyRequest
-                })
-                .ok_or(MutationError::PreconditionFailed)?;
-            let recovery_context = ChangeRequestActionContext::for_route(
-                registry,
-                claims,
-                &apply_route.id,
-                request_id,
-                header.get::<_, i64>(0),
-                &actor_reference,
-                &self.expected.package_revision,
-            )
-            .map_err(|_| MutationError::PreconditionFailed)?;
-            transaction
-                .install_change_request_action_context(&recovery_context)
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
+            return Err(MutationError::PreconditionFailed);
         }
         // Request state serializes every lifecycle operation and draft edit.
         // Read the request row after that lock without demanding UPDATE rights:
@@ -984,54 +1069,6 @@ impl MutationCoordinator {
                     &targets,
                     &actor_reference,
                 )?;
-                // A replay of an automatically applied submit or approval
-                // must re-prove the independent ApplyRequest grant. The
-                // ordinary action authority above remains the review/submit
-                // proof and is never substituted with this apply proof.
-                if workflow.state() == RequestState::Applied
-                    && !matches!(input.action, RequestActionBody::Apply { .. })
-                    && workflow
-                        .current_proposal()
-                        .and_then(|proposal| proposal.planning_binding())
-                        .is_some_and(|planning| {
-                            planning.disposition()
-                                == crate::request_workflow::FrozenPlannerDisposition::Apply
-                        })
-                {
-                    let proposal = workflow
-                        .current_proposal()
-                        .ok_or(MutationError::Unavailable)?;
-                    let apply_authority = input
-                        .automatic_apply_authority
-                        .clone()
-                        .ok_or(MutationError::PreconditionFailed)?;
-                    let automatic_input = RequestActionInput {
-                        route_id: input.route_id,
-                        idempotency_key: input.idempotency_key,
-                        if_match: input.if_match,
-                        context: input.context,
-                        entity_id: input.entity_id,
-                        record_id: input.record_id,
-                        action: RequestActionBody::Apply {
-                            proposal_version: proposal.version().get(),
-                            effect_digest: proposal.effect_digest().as_str().to_owned(),
-                            reason: None,
-                        },
-                        response_fields: input.response_fields.clone(),
-                        target_authority: apply_authority,
-                        automatic_apply_authority: None,
-                        correlation: input.correlation,
-                    };
-                    self.authorize_targets(
-                        registry,
-                        &automatic_input,
-                        claims,
-                        entity,
-                        &workflow,
-                        &targets,
-                        &actor_reference,
-                    )?;
-                }
             }
             append_terminal_audit(
                 transaction.transaction(),
@@ -1091,7 +1128,6 @@ impl MutationCoordinator {
                     &workflow,
                     &input.response_fields,
                     &input.target_authority,
-                    input.automatic_apply_authority.as_deref(),
                 )?;
                 if input
                     .if_match
@@ -1197,7 +1233,6 @@ impl MutationCoordinator {
             &workflow,
             &input.response_fields,
             &input.target_authority,
-            input.automatic_apply_authority.as_deref(),
         )?;
         if etag.as_bytes().ct_eq(input.if_match.as_bytes()).unwrap_u8() != 1 {
             return Err(MutationError::PreconditionFailed);
@@ -1210,21 +1245,9 @@ impl MutationCoordinator {
         if let Some(grant) = claims.task_grant() {
             self.check_task_authority(grant).await?;
         }
-        if matches!(input.action, RequestActionBody::Approve { .. }) {
-            if let Some(grant) = crate::request_store::load_task_authority(
-                transaction.transaction(),
-                &entity.id,
-                record_uuid,
-                i64::from(workflow.current_version().get()),
-            )
-            .await?
-            {
-                self.check_task_authority(&grant).await?;
-            }
-        }
         let previous_revision = i64::try_from(workflow.workflow_revision().get())
             .map_err(|_| MutationError::Unavailable)?;
-        let mut save_previous_revision = previous_revision;
+        let save_previous_revision = previous_revision;
         let previous_state = workflow.state();
         let previous_version = workflow.current_version().get();
         let trusted = TrustedTransitionContext::from_verified_context(
@@ -1233,11 +1256,9 @@ impl MutationCoordinator {
             request_timestamp(time::OffsetDateTime::now_utc())?,
         );
         let mut prepared_targets = None;
-        let mut prepared_targets_saved = false;
-        let mut request_revision_advanced = false;
         let mut application_count = None;
         let mut application_result_revisions = Vec::new();
-        let mut next = match &input.action {
+        let next = match &input.action {
             RequestActionBody::Submit => {
                 let (record_revision, workflow_revision, prepared) = prepared_submission
                     .take()
@@ -1262,57 +1283,6 @@ impl MutationCoordinator {
                 prepared_targets = Some(prepared.targets);
                 workflow
                     .submit(trusted.clone(), proposal)
-                    .map_err(workflow_error)?
-                    .into_workflow()
-            }
-            RequestActionBody::Approve {
-                proposal_version,
-                effect_digest,
-                ..
-            }
-            | RequestActionBody::Reject {
-                proposal_version,
-                effect_digest,
-                ..
-            }
-            | RequestActionBody::RequestRevision {
-                proposal_version,
-                effect_digest,
-                ..
-            } => {
-                let targets = crate::request_store::load_targets(
-                    transaction.transaction(),
-                    &entity.id,
-                    record_uuid,
-                    i64::from(workflow.current_version().get()),
-                )
-                .await?;
-                self.authorize_targets(
-                    registry,
-                    input,
-                    claims,
-                    entity,
-                    &workflow,
-                    &targets,
-                    &actor_reference,
-                )?;
-                let decision = match input.action {
-                    RequestActionBody::Approve { .. } => ReviewDecisionKind::Approve,
-                    RequestActionBody::Reject { .. } => ReviewDecisionKind::Reject,
-                    _ => ReviewDecisionKind::RequestRevision,
-                };
-                workflow
-                    .decide_with_reason(
-                        trusted.clone(),
-                        route
-                            .request_stage
-                            .as_deref()
-                            .ok_or(MutationError::InvalidRequest)?,
-                        ProposalVersion::new(*proposal_version).map_err(workflow_error)?,
-                        &ProposalDigest::new(effect_digest).map_err(workflow_error)?,
-                        decision,
-                        input.action.reason().map(str::to_owned),
-                    )
                     .map_err(workflow_error)?
                     .into_workflow()
             }
@@ -1347,6 +1317,7 @@ impl MutationCoordinator {
                         *proposal_version,
                         effect_digest,
                         None,
+                        review_evidence,
                         &binding,
                         fault,
                         frozen_evidence,
@@ -1367,109 +1338,6 @@ impl MutationCoordinator {
             )
             .await?;
         }
-        if !matches!(input.action, RequestActionBody::Apply { .. })
-            && next.state() == RequestState::Approved
-            && next
-                .current_proposal()
-                .and_then(|proposal| proposal.planning_binding())
-                .is_some_and(|binding| {
-                    binding.disposition()
-                        == crate::request_workflow::FrozenPlannerDisposition::Apply
-                })
-        {
-            let proposal = next.current_proposal().ok_or(MutationError::Conflict)?;
-            let proposal_version = proposal.version().get();
-            let effect_digest = proposal.effect_digest().as_str().to_owned();
-            let apply_authority = input
-                .automatic_apply_authority
-                .clone()
-                .ok_or(MutationError::PreconditionFailed)?;
-            // The submit/approve action policy authorizes the request-row
-            // revision while the durable workflow still has its source state.
-            // Advance that row before transaction-local materialization of the
-            // approved state; target application still follows afterward and
-            // the whole composition rolls back together on any failure.
-            current = advance_request_revision(transaction.transaction(), entity, &current).await?;
-            request_revision_advanced = true;
-            // Materialize the approved proposal, final decision (if any), and
-            // frozen targets inside this transaction before entering the
-            // existing application RLS path. No intermediate state is
-            // externally visible, and any application failure rolls all of it
-            // back with the target writes.
-            crate::request_store::save(
-                transaction.transaction(),
-                &entity.id,
-                record_uuid,
-                save_previous_revision,
-                &next,
-            )
-            .await?;
-            if matches!(input.action, RequestActionBody::Submit) {
-                if let Some(grant) = claims.task_grant() {
-                    crate::request_store::save_task_authority(
-                        transaction.transaction(),
-                        &entity.id,
-                        record_uuid,
-                        i64::from(next.current_version().get()),
-                        grant,
-                    )
-                    .await?;
-                }
-            }
-            save_previous_revision = i64::try_from(next.workflow_revision().get())
-                .map_err(|_| MutationError::Unavailable)?;
-            if let Some(targets) = prepared_targets.as_deref() {
-                crate::request_store::save_targets(
-                    transaction.transaction(),
-                    &entity.id,
-                    record_uuid,
-                    i64::from(next.current_version().get()),
-                    targets,
-                )
-                .await?;
-                prepared_targets_saved = true;
-            }
-            let automatic_input = RequestActionInput {
-                route_id: input.route_id,
-                idempotency_key: input.idempotency_key,
-                if_match: input.if_match,
-                context: input.context,
-                entity_id: input.entity_id,
-                record_id: input.record_id,
-                action: RequestActionBody::Apply {
-                    proposal_version,
-                    effect_digest: effect_digest.clone(),
-                    reason: None,
-                },
-                response_fields: input.response_fields.clone(),
-                target_authority: apply_authority,
-                automatic_apply_authority: None,
-                correlation: input.correlation,
-            };
-            let applied = self
-                .apply_approved_request(
-                    &transaction,
-                    registry,
-                    &automatic_input,
-                    claims,
-                    route,
-                    entity,
-                    next,
-                    &current.data,
-                    &actor_reference,
-                    trusted.clone(),
-                    proposal_version,
-                    &effect_digest,
-                    prepared_targets.as_deref(),
-                    &binding,
-                    fault,
-                    None,
-                )
-                .await?;
-            application_count = Some(applied.result_count);
-            application_result_revisions = applied.result_revisions;
-            next = applied.workflow;
-        }
         // Restore the ordinary request context before advancing its revision.
         transaction
             .transaction()
@@ -1479,9 +1347,7 @@ impl MutationCoordinator {
             )
             .await
             .map_err(|_| MutationError::Unavailable)?;
-        if !request_revision_advanced {
-            current = advance_request_revision(transaction.transaction(), entity, &current).await?;
-        }
+        current = advance_request_revision(transaction.transaction(), entity, &current).await?;
         let request_reference = record_reference(
             &self.audit_profile,
             &self.expected.package_revision,
@@ -1505,7 +1371,33 @@ impl MutationCoordinator {
             &next,
         )
         .await?;
+        if matches!(
+            input.action,
+            RequestActionBody::Revise { .. } | RequestActionBody::Cancel
+        ) {
+            crate::review_store::schedule_cancellation(
+                transaction.transaction(),
+                &entity.id,
+                record_uuid,
+                i64::from(previous_version),
+            )
+            .await?;
+        }
         if matches!(input.action, RequestActionBody::Submit) {
+            let proposal = next.current_proposal().ok_or(MutationError::Unavailable)?;
+            crate::review_store::enqueue_submission(
+                transaction.transaction(),
+                registry,
+                &entity.id,
+                record_uuid,
+                proposal,
+                &actor_reference,
+                claims.human_identity(),
+                self.review_authorities
+                    .as_deref()
+                    .ok_or(MutationError::Unavailable)?,
+            )
+            .await?;
             if let Some(grant) = claims.task_grant() {
                 crate::request_store::save_task_authority(
                     transaction.transaction(),
@@ -1538,7 +1430,7 @@ impl MutationCoordinator {
             "request_lifecycle",
         )
         .await?;
-        if let Some(targets) = prepared_targets.filter(|_| !prepared_targets_saved) {
+        if let Some(targets) = prepared_targets {
             crate::request_store::save_targets(
                 transaction.transaction(),
                 &entity.id,
@@ -1573,16 +1465,12 @@ impl MutationCoordinator {
                 to_state: request_state_name(next.state()),
                 transition: match input.action {
                     RequestActionBody::Submit => "submit",
-                    RequestActionBody::Approve { .. } => "approve",
-                    RequestActionBody::Reject { .. } => "reject",
-                    RequestActionBody::RequestRevision { .. } => "request_revision",
                     RequestActionBody::Revise { rebase: true } => "rebase",
                     RequestActionBody::Revise { rebase: false } => "revise",
                     RequestActionBody::Cancel => "cancel",
                     RequestActionBody::Apply { .. } => "apply",
                 },
                 reason: input.action.reason(),
-                stage_id: route.request_stage.as_deref(),
                 effect_digest: next
                     .current_proposal()
                     .map(|proposal| proposal.effect_digest().as_str()),
@@ -1850,11 +1738,12 @@ impl MutationCoordinator {
         proposal_version: u32,
         effect_digest: &str,
         targets_override: Option<&[RequestTargetSnapshot]>,
+        review_evidence: Option<&crate::review_integration::AcceptedReviewEvidence>,
         binding: &crate::idempotency::ResolvedIdempotencyBinding,
         fault: FaultControl,
         frozen_evidence: Option<&[crate::action_evidence_client::VerifiedAcquisition]>,
     ) -> Result<AppliedRequest, MutationError> {
-        if workflow.state() != RequestState::Approved {
+        if workflow.state() != RequestState::Submitted {
             return Err(MutationError::Conflict);
         }
         let proposal = workflow.current_proposal().ok_or(MutationError::Conflict)?;
@@ -1996,6 +1885,7 @@ impl MutationCoordinator {
                 ProposalVersion::new(proposal_version).map_err(workflow_error)?,
                 &ProposalDigest::new(effect_digest).map_err(workflow_error)?,
                 &ContractFingerprint::new(&plan.contract_fingerprint).map_err(workflow_error)?,
+                review_evidence,
                 observed,
                 PreparedApplication::new(
                     ApplicationId::new(Uuid::new_v4().to_string()).map_err(workflow_error)?,
@@ -2025,13 +1915,7 @@ impl MutationCoordinator {
         actor: &str,
     ) -> Result<BTreeMap<(String, Uuid), ChangeRequestTargetContext>, MutationError> {
         let mut contexts = BTreeMap::new();
-        if !matches!(
-            input.action,
-            RequestActionBody::Approve { .. }
-                | RequestActionBody::Reject { .. }
-                | RequestActionBody::RequestRevision { .. }
-                | RequestActionBody::Apply { .. }
-        ) {
+        if !matches!(input.action, RequestActionBody::Apply { .. }) {
             return Ok(contexts);
         }
         let plan = entity
@@ -2043,12 +1927,6 @@ impl MutationCoordinator {
         if proposal.contract_fingerprint().as_str() != plan.contract_fingerprint {
             return Err(MutationError::PreconditionFailed);
         }
-        let route = registry
-            .routes()
-            .routes
-            .iter()
-            .find(|route| route.id == input.route_id)
-            .ok_or(MutationError::InvalidRequest)?;
         for effect in proposal.effects() {
             let record = effect
                 .target()
@@ -2100,21 +1978,9 @@ impl MutationCoordinator {
                 &self.expected.package_revision,
                 actor,
             )?;
-            let context = if matches!(input.action, RequestActionBody::Apply { .. }) {
+            let context =
                 ChangeRequestTargetContext::for_application(registry, claims, boundaries, binding)
-            } else {
-                ChangeRequestTargetContext::for_review(
-                    registry,
-                    claims,
-                    route
-                        .request_stage
-                        .as_deref()
-                        .ok_or(MutationError::InvalidRequest)?,
-                    boundaries,
-                    binding,
-                )
-            }
-            .map_err(|_| MutationError::PreconditionFailed)?;
+                    .map_err(|_| MutationError::PreconditionFailed)?;
             context
                 .authorize_rows(
                     &registry.entities()[&target.entity_id],
@@ -2855,22 +2721,7 @@ fn action_binding_json(input: &RequestActionInput<'_>) -> Result<Value, Mutation
         RequestActionBody::Submit => json!({"operation": "submit"}),
         RequestActionBody::Cancel => json!({"operation": "cancel"}),
         RequestActionBody::Revise { rebase } => json!({"operation": "revise", "rebase": rebase}),
-        RequestActionBody::Approve {
-            proposal_version,
-            effect_digest,
-            ..
-        }
-        | RequestActionBody::Reject {
-            proposal_version,
-            effect_digest,
-            ..
-        }
-        | RequestActionBody::RequestRevision {
-            proposal_version,
-            effect_digest,
-            ..
-        }
-        | RequestActionBody::Apply {
+        RequestActionBody::Apply {
             proposal_version,
             effect_digest,
             ..
@@ -2881,9 +2732,11 @@ fn action_binding_json(input: &RequestActionInput<'_>) -> Result<Value, Mutation
     if let Some(reason) = input.action.reason() {
         action["reason"] = json!(reason);
     }
-    Ok(json!({"action": action, "ifMatch": input.if_match,
-            "targetAuthority": target_authority_binding(&input.target_authority),
-            "automaticApplyAuthority": input.automatic_apply_authority.as_deref().map(target_authority_binding)}))
+    Ok(json!({
+        "action": action,
+        "ifMatch": input.if_match,
+        "targetAuthority": target_authority_binding(&input.target_authority),
+    }))
 }
 
 fn target_authority_binding(authority: &[crate::api::RequestActionTargetAuthority]) -> Value {
@@ -2900,9 +2753,6 @@ fn target_authority_binding(authority: &[crate::api::RequestActionTargetAuthorit
 fn action_operation(action: &RequestActionBody) -> Operation {
     match action {
         RequestActionBody::Submit => Operation::SubmitRequest,
-        RequestActionBody::Approve { .. } => Operation::ApproveRequest,
-        RequestActionBody::Reject { .. } => Operation::RejectRequest,
-        RequestActionBody::RequestRevision { .. } => Operation::RequestRevision,
         RequestActionBody::Revise { .. } => Operation::ReviseRequest,
         RequestActionBody::Cancel => Operation::CancelRequest,
         RequestActionBody::Apply { .. } => Operation::ApplyRequest,
@@ -2927,26 +2777,10 @@ fn request_action_response(
             "appliedAt": receipt.applied_at().as_str(),
         })),
     });
-    if let Some(public) = workflow.current_proposal().and_then(|proposal| {
-        let planning = proposal.planning_binding()?;
-        let mut public = json!({
-            "reviewMode": match proposal.review_policy() {
-                crate::request_workflow::FrozenReviewPolicy::None => "none",
-                crate::request_workflow::FrozenReviewPolicy::Stages => "staged",
-            },
-            "applicationDisposition": match planning.disposition() {
-                crate::request_workflow::FrozenPlannerDisposition::Apply => "apply",
-                crate::request_workflow::FrozenPlannerDisposition::Queue => "queue",
-            },
+    if let Some(proposal) = workflow.current_proposal() {
+        request["proposal"] = json!({
+            "review": proposal.review_requirement(),
         });
-        if let Some(reason) = planning.queue_reason() {
-            public["queueReason"] = json!({
-                "code": reason.code(), "label": reason.label(),
-            });
-        }
-        Some(public)
-    }) {
-        request["proposal"] = public;
     }
     HeldResponse::from_json(
         200,
@@ -3244,10 +3078,7 @@ fn action_requires_request_owner(action: &RequestActionBody) -> bool {
         RequestActionBody::Submit
         | RequestActionBody::Revise { .. }
         | RequestActionBody::Cancel => true,
-        RequestActionBody::Approve { .. }
-        | RequestActionBody::Reject { .. }
-        | RequestActionBody::RequestRevision { .. }
-        | RequestActionBody::Apply { .. } => false,
+        RequestActionBody::Apply { .. } => false,
     }
 }
 
@@ -3255,11 +3086,9 @@ fn request_state_name(state: RequestState) -> &'static str {
     match state {
         RequestState::Draft => "draft",
         RequestState::Submitted => "submitted",
-        RequestState::Approved => "approved",
-        RequestState::NeedsChanges => "needs_changes",
-        RequestState::Rejected => "rejected",
-        RequestState::Canceled => "canceled",
+        RequestState::Cancelled => "cancelled",
         RequestState::Applied => "applied",
+        RequestState::Superseded => "superseded",
     }
 }
 
@@ -3575,33 +3404,12 @@ mod owner_gate_tests {
             );
         }
 
-        for action in [
-            RequestActionBody::Approve {
-                proposal_version: 1,
-                effect_digest: String::new(),
-                reason: None,
-            },
-            RequestActionBody::Reject {
-                proposal_version: 1,
-                effect_digest: String::new(),
-                reason: None,
-            },
-            RequestActionBody::RequestRevision {
-                proposal_version: 1,
-                effect_digest: String::new(),
-                reason: None,
-            },
-            RequestActionBody::Apply {
-                proposal_version: 1,
-                effect_digest: String::new(),
-                reason: None,
-            },
-        ] {
-            assert!(
-                !action_requires_request_owner(&action),
-                "{action:?} is a reviewer action"
-            );
-        }
+        let apply = RequestActionBody::Apply {
+            proposal_version: 1,
+            effect_digest: String::new(),
+            reason: None,
+        };
+        assert!(!action_requires_request_owner(&apply));
     }
 }
 

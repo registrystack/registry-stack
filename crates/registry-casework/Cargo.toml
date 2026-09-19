@@ -41,6 +41,7 @@ registry-platform-config.workspace = true
 registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-oidc.workspace = true
 registry-platform-httputil.workspace = true
+reqwest.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -61,7 +62,6 @@ zeroize.workspace = true
 registry-breg = { workspace = true, features = ["postgres-test"] }
 registry-evidence.workspace = true
 registry-thunderid-tooling.workspace = true
-reqwest.workspace = true
 jsonschema.workspace = true
 registry-casework-client.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-utils"] }

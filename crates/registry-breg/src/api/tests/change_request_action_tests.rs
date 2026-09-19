@@ -25,50 +25,35 @@ fn request_action_bodies_are_narrow_and_operation_bound() {
     let digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     assert_eq!(
-        parse_request_action_body(Operation::SubmitRequest, None, br#"{}"#),
+        parse_request_action_body(Operation::SubmitRequest, br#"{}"#),
         Ok(RequestActionBody::Submit)
     );
     assert_eq!(
         parse_request_action_body(
-            Operation::ApproveRequest,
-            Some("review"),
+            Operation::ApplyRequest,
             format!(r#"{{"proposalVersion":1,"effectDigest":"{digest}"}}"#).as_bytes(),
         ),
-        Ok(RequestActionBody::Approve {
+        Ok(RequestActionBody::Apply {
             proposal_version: 1,
             effect_digest: digest.to_owned(),
             reason: None,
         })
     );
     assert_eq!(
-        parse_request_action_body(Operation::ReviseRequest, None, br#"{"rebase":true}"#),
+        parse_request_action_body(Operation::ReviseRequest, br#"{"rebase":true}"#),
         Ok(RequestActionBody::Revise { rebase: true })
     );
 
     assert!(
-        parse_request_action_body(Operation::SubmitRequest, None, br#"{"state":"submitted"}"#)
-            .is_err()
+        parse_request_action_body(Operation::SubmitRequest, br#"{"state":"submitted"}"#).is_err()
     );
+    assert!(parse_request_action_body(Operation::CancelRequest, br#"{"actor":"forged"}"#).is_err());
     assert!(
-        parse_request_action_body(Operation::CancelRequest, None, br#"{"actor":"forged"}"#)
-            .is_err()
+        parse_request_action_body(Operation::ApplyRequest, br#"{"proposalVersion":1}"#).is_err()
     );
     assert!(parse_request_action_body(
-        Operation::ApproveRequest,
-        Some("review"),
-        br#"{"proposalVersion":1}"#
-    )
-    .is_err());
-    assert!(parse_request_action_body(
-        Operation::ApproveRequest,
-        Some("review"),
+        Operation::ApplyRequest,
         br#"{"proposalVersion":1,"effectDigest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789ABCDEF"}"#
-    )
-    .is_err());
-    assert!(parse_request_action_body(
-        Operation::ApproveRequest,
-        None,
-        format!(r#"{{"proposalVersion":1,"effectDigest":"{digest}"}}"#).as_bytes(),
     )
     .is_err());
 }
@@ -77,17 +62,11 @@ fn request_action_bodies_are_narrow_and_operation_bound() {
 fn reviewer_reason_parser_preserves_unicode_and_refuses_invalid_or_extra_members() {
     use serde_json::json;
     let digest = format!("sha256:{}", "a".repeat(64));
-    for (operation, stage) in [
-        (Operation::ApproveRequest, Some("review")),
-        (Operation::RejectRequest, Some("review")),
-        (Operation::RequestRevision, Some("review")),
-        (Operation::ApplyRequest, None),
-    ] {
-        let reason = "文".repeat(crate::request_workflow::MAX_REVIEW_REASON_CHARS);
+    for operation in [Operation::ApplyRequest] {
+        let reason = "文".repeat(crate::request_workflow::MAX_APPLICATION_REASON_CHARS);
         let body = json!({"proposalVersion": 1, "effectDigest": digest, "reason": reason});
         let parsed =
-            parse_request_action_body(operation, stage, &serde_json::to_vec(&body).unwrap())
-                .unwrap();
+            parse_request_action_body(operation, &serde_json::to_vec(&body).unwrap()).unwrap();
         assert_eq!(parsed.reason(), Some(reason.as_str()));
         assert!(!format!("{parsed:?}").contains(&reason));
         for invalid in [
@@ -100,22 +79,16 @@ fn reviewer_reason_parser_preserves_unicode_and_refuses_invalid_or_extra_members
             json!("文".repeat(4097)),
         ] {
             let body = json!({"proposalVersion": 1, "effectDigest": digest, "reason": invalid});
-            assert!(parse_request_action_body(
-                operation,
-                stage,
-                &serde_json::to_vec(&body).unwrap()
-            )
-            .is_err());
+            assert!(
+                parse_request_action_body(operation, &serde_json::to_vec(&body).unwrap()).is_err()
+            );
         }
         let body = json!({"proposalVersion": 1, "effectDigest": digest, "reason": "fix", "actor": "forged"});
-        assert!(
-            parse_request_action_body(operation, stage, &serde_json::to_vec(&body).unwrap())
-                .is_err()
-        );
+        assert!(parse_request_action_body(operation, &serde_json::to_vec(&body).unwrap()).is_err());
         let duplicate = format!(
             r#"{{"proposalVersion":1,"effectDigest":"{digest}","reason":"one","reason":"two"}}"#
         );
-        assert!(parse_request_action_body(operation, stage, duplicate.as_bytes()).is_err());
+        assert!(parse_request_action_body(operation, duplicate.as_bytes()).is_err());
     }
 }
 
@@ -125,13 +98,12 @@ fn request_action_access_uses_exact_finite_route_id() {
     let service = service_for(registry.clone());
     let route = route(
         &registry,
-        "records.placement-correction-request.request.stages.review.approve",
+        "records.placement-correction-request.request.apply",
     );
     assert!(access_entry_for_route(&service, route).is_some());
 
     let mut forged = route.clone();
-    forged.id = "records.placement-correction-request.request.stages.hidden.approve".to_owned();
-    forged.request_stage = Some("hidden".to_owned());
+    forged.id = "records.placement-correction-request.request.forged-apply".to_owned();
     assert!(access_entry_for_route(&service, &forged).is_none());
 }
 
@@ -184,11 +156,11 @@ fn request_action_preconditions_bind_operation_actor_profile_and_target_projecti
     );
     let approve = route(
         &registry,
-        "records.placement-correction-request.request.stages.review.approve",
+        "records.placement-correction-request.request.apply",
     );
-    let reject = route(
+    let submit = route(
         &registry,
-        "records.placement-correction-request.request.stages.review.reject",
+        "records.placement-correction-request.request.submit",
     );
     let fields = BTreeSet::from(["placement".to_owned()]);
     let tag = |claims: &ClaimContext,
@@ -205,7 +177,6 @@ fn request_action_preconditions_bind_operation_actor_profile_and_target_projecti
             &workflow,
             projection,
             authority,
-            None,
         )
         .unwrap()
     };
@@ -213,7 +184,7 @@ fn request_action_preconditions_bind_operation_actor_profile_and_target_projecti
     assert_eq!(baseline, tag(&reviewer, approve, &fields, &[]));
     assert_ne!(baseline, tag(&other_actor, approve, &fields, &[]));
     assert_ne!(baseline, tag(&applier, approve, &fields, &[]));
-    assert_ne!(baseline, tag(&reviewer, reject, &fields, &[]));
+    assert_ne!(baseline, tag(&reviewer, submit, &fields, &[]));
     assert_ne!(baseline, tag(&reviewer, approve, &BTreeSet::new(), &[]));
     let authority = [super::RequestActionTargetAuthority {
         target_entity_id: "placement".to_owned(),
@@ -232,12 +203,12 @@ fn request_action_target_authority_uses_verified_target_claims() {
         .expect("request entity compiles");
     let route = route(
         &registry,
-        "records.placement-correction-request.request.stages.review.approve",
+        "records.placement-correction-request.request.apply",
     );
     let context = AuthorizedRequestContext::new(
         Some("reviewer".to_owned()),
         None,
-        "request-reviewer".to_owned(),
+        "request-applier".to_owned(),
         Vec::new(),
     );
     let missing_claim = VerifiedRequestClaims::authenticated(
@@ -265,10 +236,7 @@ fn request_action_target_authority_uses_verified_target_claims() {
         .expect("target authority is selected");
     assert_eq!(authority.len(), 1);
     assert_eq!(authority[0].target_entity_id, "placement");
-    assert_eq!(
-        authority[0].readable_fields,
-        BTreeSet::from(["site".to_owned()])
-    );
+    assert!(authority[0].readable_fields.is_empty());
     assert_eq!(authority[0].row_boundaries.len(), 1);
     assert_eq!(authority[0].row_boundaries[0].field(), "site");
 }
@@ -301,22 +269,15 @@ fn compiled_registry() -> Arc<CompiledRegistry> {
                 "operation":"patch",
                 "set":{"site":{"fromField":"proposed-site"}}
               }],
-              "review":{"stages":[{"id":"review","approvals":1,"excludeSubmitter":true}]}
+              "review":{"authority":"casework","policyId":"placement-correction"},
+              "onApproved":{"mode":"manual"}
             }
           }],
           "accessProfiles":[{
             "id":"request-reviewer","default":true,"principalClaim":"principal","permissions":[{
               "entity":"placement-correction-request",
-              "operations":["get","submit_request","approve_request","reject_request","request_revision"],
+              "operations":["get","submit_request","revise_request","cancel_request"],
               "readableFields":["placement","proposed-site"],
-              "reviewStages":[{
-                "stage":"review",
-                "targets":[{
-                  "entity":"placement",
-                  "readableFields":["site"],
-                  "rowBoundaries":[{"field":"site","claim":"site_claim","operator":"equals"}]
-                }]
-              }],
               "rowBoundaries": []
             }]
           },{
@@ -324,7 +285,7 @@ fn compiled_registry() -> Arc<CompiledRegistry> {
               "entity":"placement-correction-request",
               "operations":["get","apply_request"],
               "readableFields":["placement"],
-              "applyTargets":[{"entity":"placement", "rowBoundaries": []}],
+              "applyTargets":[{"entity":"placement", "rowBoundaries":[{"field":"site","claim":"site_claim","operator":"equals"}]}],
               "rowBoundaries": []
             }]
           }]

@@ -8,14 +8,14 @@ use registry_casework_core::{
     ClockRecomputeApplyRequest, ClockRecomputePreview, ClockRecomputeRequest, ClockRecomputeResult,
     DecideRequest, DelegateRequest, Description, DirectoryResponse, DirectoryTargetPage,
     DirectoryTargetsQuery, DraftResponse, HistoryPage, HoldingsPage, HoldingsQuery,
-    HolidaySetDocument, HolidaySetRevisionInput, HostedAccountabilityRecord, HostedCancelRequest,
-    HostedCreateRequest, HostedDecisionRequest, HostedHistoryPage, HostedNotePage,
-    HostedNoteRequest, HostedPageQuery, HostedTerminalPage, HostedTerminalQuery,
-    HostedTerminalResult, HostedValidationError, HostedValidationReason, ListWorkItemsQuery,
-    MutationResponse, NextWorkItemQuery, RecoverAttemptRequest, ReleaseRequest,
-    RequesterHostedItem, SaveDraftRequest, WorkItem, WorkItemPage, CASEWORK_PROBLEM_TYPE_BASE,
-    CASEWORK_PROFILE_HEADER, DIRECTORY_TARGETS_PATH, HOLDINGS_PATH, HOSTED_ACCOUNTABILITY_PATH,
-    HOSTED_ITEMS_PATH, HOSTED_TERMINAL_PATH, IDEMPOTENCY_KEY_HEADER,
+    HolidaySetDocument, HolidaySetRevisionInput, HostedPageQuery, HostedValidationError,
+    HostedValidationReason, ListWorkItemsQuery, MutationResponse, NextWorkItemQuery,
+    RecoverAttemptRequest, ReleaseRequest, ReviewAccountabilityRecord, ReviewCancelRequest,
+    ReviewCancelResponse, ReviewCreateRequest, ReviewHistoryEntry, ReviewHistoryPage,
+    ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewRequestAccepted, ReviewRequestView,
+    ReviewResult, ReviewResultFeedPage, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage,
+    ReviewerTask, SaveDraftRequest, WorkItem, WorkItemPage, CASEWORK_PROBLEM_TYPE_BASE,
+    CASEWORK_PROFILE_HEADER, DIRECTORY_TARGETS_PATH, HOLDINGS_PATH, IDEMPOTENCY_KEY_HEADER,
     MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES, NEXT_WORK_ITEM_PATH,
     SOURCE_PROFILE_HEADER, VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER, WORK_ITEMS_PATH,
 };
@@ -34,7 +34,8 @@ use uuid::Uuid;
 
 use crate::{
     CaseworkAuth, CaseworkClientConfig, CaseworkClientError, CaseworkComplete, CaseworkProblemCode,
-    CaseworkProtocolFailure,
+    CaseworkProtocolFailure, ReviewPageQuery, ReviewResultResponse, ReviewTaskDecisionRequest,
+    ReviewTaskQuery,
 };
 
 const JSON_MEDIA_TYPE: &str = "application/json";
@@ -85,210 +86,454 @@ impl CaseworkClient {
         self.get_json(&auth, &["v1", "casework"], &[]).await
     }
 
-    pub async fn create_hosted_item(
+    pub async fn create_or_recover_review_request(
         &self,
         auth: CaseworkAuth<'_>,
         idempotency_key: &str,
-        request: &HostedCreateRequest,
-    ) -> Result<CaseworkComplete<RequesterHostedItem>, CaseworkClientError> {
+        request: &ReviewCreateRequest,
+        expected_submission_digest: &registry_casework_core::SubmissionDigest,
+    ) -> Result<CaseworkComplete<ReviewRequestAccepted>, CaseworkClientError> {
         reject_source_profile(&auth)?;
+        request
+            .check()
+            .map_err(|_| CaseworkClientError::invalid_request("the review request is invalid"))?;
         validate_idempotency_key(idempotency_key)?;
-        let url = self.url_from_constant(HOSTED_ITEMS_PATH)?;
-        let request = self
-            .authorized(self.http.post(url).json(request), &auth)?
+        let outgoing = self
+            .authorized(
+                self.http
+                    .post(self.url(&["v1", "review-requests"])?)
+                    .json(request),
+                &auth,
+            )?
             .header(
                 HeaderName::from_static(IDEMPOTENCY_KEY_HEADER),
-                HeaderValue::from_str(idempotency_key).map_err(|_| {
-                    CaseworkClientError::invalid_request("the idempotency key is invalid")
-                })?,
+                idempotency_key,
             );
-        self.send_json(request, StatusCode::CREATED).await
+        let complete: CaseworkComplete<ReviewRequestAccepted> =
+            self.send_json(outgoing, StatusCode::CREATED).await?;
+        if complete.value.subject != request.subject
+            || &complete.value.submission_digest != expected_submission_digest
+        {
+            return Err(protocol(
+                StatusCode::CREATED,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete)
     }
 
-    pub async fn get_hosted_item(
+    pub async fn review_request(
         &self,
         auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-    ) -> Result<CaseworkComplete<RequesterHostedItem>, CaseworkClientError> {
+        request_id: Uuid,
+    ) -> Result<CaseworkComplete<ReviewRequestView>, CaseworkClientError> {
         reject_source_profile(&auth)?;
-        self.get_json(&auth, &["v1", "hosted-items", &item_id.to_string()], &[])
+        let complete: CaseworkComplete<ReviewRequestView> = self
+            .get_json(
+                &auth,
+                &["v1", "review-requests", &request_id.to_string()],
+                &[],
+            )
+            .await?;
+        if complete.value.request_id != request_id {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete)
+    }
+
+    pub async fn review_result(
+        &self,
+        auth: CaseworkAuth<'_>,
+        expected: &ReviewRequestAccepted,
+    ) -> Result<ReviewResultResponse, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        let request = self.authorized(
+            self.http.get(self.url(&[
+                "v1",
+                "review-requests",
+                &expected.request_id.to_string(),
+                "result",
+            ])?),
+            &auth,
+        )?;
+        let response = self.send(request).await?;
+        let status = response.status();
+        let trace_id = response_trace(status, response.headers())?;
+        match status {
+            StatusCode::OK => {
+                if !exact_media_type(response.headers(), JSON_MEDIA_TYPE) {
+                    return Err(protocol(
+                        status,
+                        CaseworkProtocolFailure::MediaType,
+                        Some(trace_id),
+                    ));
+                }
+                let body = read_bounded(response, self.max_response_bytes)
+                    .await
+                    .map_err(|error| CaseworkClientError::Transport {
+                        kind: read_failure_kind(&error),
+                    })?;
+                let value: ReviewResult = serde_json::from_slice(&body).map_err(|_| {
+                    protocol(
+                        status,
+                        CaseworkProtocolFailure::Body,
+                        Some(trace_id.clone()),
+                    )
+                })?;
+                if value.check().is_err()
+                    || value.request_id != expected.request_id
+                    || value.subject != expected.subject
+                    || value.policy != expected.policy
+                    || value.submission_digest != expected.submission_digest
+                {
+                    return Err(protocol(
+                        status,
+                        CaseworkProtocolFailure::Body,
+                        Some(trace_id),
+                    ));
+                }
+                Ok(ReviewResultResponse::Available(Box::new(
+                    CaseworkComplete { value, trace_id },
+                )))
+            }
+            StatusCode::ACCEPTED | StatusCode::NOT_FOUND | StatusCode::GONE => {
+                require_empty_response(response, status, &trace_id).await?;
+                Ok(match status {
+                    StatusCode::ACCEPTED => ReviewResultResponse::Pending { trace_id },
+                    StatusCode::NOT_FOUND => ReviewResultResponse::ConcealedOrUnknown { trace_id },
+                    StatusCode::GONE => ReviewResultResponse::Expired { trace_id },
+                    _ => unreachable!(),
+                })
+            }
+            _ => Err(self.problem_or_status(response).await),
+        }
+    }
+
+    pub async fn review_results(
+        &self,
+        auth: CaseworkAuth<'_>,
+        query: &ReviewPageQuery,
+    ) -> Result<CaseworkComplete<ReviewResultFeedPage>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        validate_review_page(query.limit)?;
+        let request = self.authorized(
+            self.http
+                .get(self.url(&["v1", "review-results"])?)
+                .query(query),
+            &auth,
+        )?;
+        self.send_json(request, StatusCode::OK).await
+    }
+
+    pub async fn cancel_review_request(
+        &self,
+        auth: CaseworkAuth<'_>,
+        request_id: Uuid,
+        idempotency_key: &str,
+        cancellation: &ReviewCancelRequest,
+    ) -> Result<CaseworkComplete<ReviewCancelResponse>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        cancellation
+            .check()
+            .map_err(|_| CaseworkClientError::invalid_request("the cancellation is invalid"))?;
+        validate_idempotency_key(idempotency_key)?;
+        let request = self
+            .authorized(
+                self.http
+                    .post(self.url(&[
+                        "v1",
+                        "review-requests",
+                        &request_id.to_string(),
+                        "cancel",
+                    ])?)
+                    .json(cancellation),
+                &auth,
+            )?
+            .header(
+                HeaderName::from_static(IDEMPOTENCY_KEY_HEADER),
+                idempotency_key,
+            );
+        self.send_json(request, StatusCode::OK).await
+    }
+
+    pub async fn review_kinds(
+        &self,
+        auth: CaseworkAuth<'_>,
+    ) -> Result<CaseworkComplete<Vec<ReviewKindPolicySnapshot>>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        self.get_json(&auth, &["v1", "review-kinds"], &[]).await
+    }
+
+    pub async fn review_kind(
+        &self,
+        auth: CaseworkAuth<'_>,
+        kind_id: &str,
+    ) -> Result<CaseworkComplete<ReviewKindPolicySnapshot>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        validate_identifier(kind_id, "the review kind identifier is invalid")?;
+        self.get_json(&auth, &["v1", "review-kinds", kind_id], &[])
             .await
     }
 
-    pub async fn add_hosted_note(
+    pub async fn review_tasks(
         &self,
         auth: CaseworkAuth<'_>,
-        item_id: Uuid,
+        query: &ReviewTaskQuery,
+    ) -> Result<CaseworkComplete<ReviewTaskPage>, CaseworkClientError> {
+        if let Some(queue) = &query.queue {
+            validate_identifier(queue, "the review queue identifier is invalid")?;
+        }
+        validate_review_page(query.limit)?;
+        let request = self.authorized(
+            self.http
+                .get(self.url(&["v1", "review-tasks"])?)
+                .query(query),
+            &auth,
+        )?;
+        self.send_json(request, StatusCode::OK).await
+    }
+
+    pub async fn review_task(
+        &self,
+        auth: CaseworkAuth<'_>,
+        task_id: Uuid,
+    ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
+        self.get_json(&auth, &["v1", "review-tasks", &task_id.to_string()], &[])
+            .await
+    }
+
+    pub async fn claim_review_task(
+        &self,
+        auth: CaseworkAuth<'_>,
+        task_id: Uuid,
         expected_revision: i64,
         idempotency_key: &str,
-        note: &HostedNoteRequest,
-    ) -> Result<CaseworkComplete<RequesterHostedItem>, CaseworkClientError> {
-        reject_source_profile(&auth)?;
-        self.mutate(
-            &auth,
-            &["v1", "hosted-items", &item_id.to_string(), "notes"],
+    ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
+        self.review_task_empty_mutation(
+            auth,
+            task_id,
+            "claim",
             expected_revision,
             idempotency_key,
-            note,
+            StatusCode::OK,
         )
         .await
     }
 
-    pub async fn requester_hosted_notes(
+    pub async fn release_review_task(
         &self,
         auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-        query: &HostedPageQuery,
-    ) -> Result<CaseworkComplete<HostedNotePage>, CaseworkClientError> {
-        reject_source_profile(&auth)?;
-        validate_page(query.cursor.as_deref(), query.limit)?;
-        let url = self.url(&["v1", "hosted-items", &item_id.to_string(), "notes"])?;
-        let request = self.authorized(self.http.get(url).query(query), &auth)?;
-        self.send_json(request, StatusCode::OK).await
-    }
-
-    pub async fn cancel_hosted_item(
-        &self,
-        auth: CaseworkAuth<'_>,
-        item_id: Uuid,
+        task_id: Uuid,
         expected_revision: i64,
         idempotency_key: &str,
-        cancellation: &HostedCancelRequest,
-    ) -> Result<CaseworkComplete<HostedTerminalResult>, CaseworkClientError> {
+    ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
         reject_source_profile(&auth)?;
-        self.mutate(
-            &auth,
-            &["v1", "hosted-items", &item_id.to_string(), "cancel"],
+        self.review_task_empty_mutation(
+            auth,
+            task_id,
+            "release",
             expected_revision,
             idempotency_key,
-            cancellation,
+            StatusCode::OK,
         )
         .await
     }
 
-    pub async fn hosted_terminal_items(
+    pub async fn assign_review_task(
         &self,
         auth: CaseworkAuth<'_>,
-        query: &HostedTerminalQuery,
-    ) -> Result<CaseworkComplete<HostedTerminalPage>, CaseworkClientError> {
+        task_id: Uuid,
+        expected_revision: i64,
+        idempotency_key: &str,
+        assignment: &AssignmentRequest,
+    ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
         reject_source_profile(&auth)?;
-        validate_page(query.cursor.as_deref(), query.limit)?;
-        let url = self.url_from_constant(HOSTED_TERMINAL_PATH)?;
-        let request = self.authorized(self.http.get(url).query(query), &auth)?;
+        self.mutate(
+            &auth,
+            &["v1", "review-tasks", &task_id.to_string(), "assign"],
+            expected_revision,
+            idempotency_key,
+            assignment,
+        )
+        .await
+    }
+
+    pub async fn delegate_review_task(
+        &self,
+        auth: CaseworkAuth<'_>,
+        task_id: Uuid,
+        expected_revision: i64,
+        idempotency_key: &str,
+        delegation: &DelegateRequest,
+    ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        self.mutate(
+            &auth,
+            &["v1", "review-tasks", &task_id.to_string(), "delegate"],
+            expected_revision,
+            idempotency_key,
+            delegation,
+        )
+        .await
+    }
+
+    pub async fn review_task_draft(
+        &self,
+        auth: CaseworkAuth<'_>,
+        task_id: Uuid,
+    ) -> Result<CaseworkComplete<ReviewTaskDraft>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        self.get_json(
+            &auth,
+            &["v1", "review-tasks", &task_id.to_string(), "draft"],
+            &[],
+        )
+        .await
+    }
+
+    pub async fn save_review_task_draft(
+        &self,
+        auth: CaseworkAuth<'_>,
+        task_id: Uuid,
+        expected_revision: i64,
+        idempotency_key: &str,
+        draft: &ReviewTaskDraftInput,
+    ) -> Result<CaseworkComplete<ReviewTaskDraft>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        self.mutate_with_method(
+            &auth,
+            Method::PUT,
+            &["v1", "review-tasks", &task_id.to_string(), "draft"],
+            expected_revision,
+            idempotency_key,
+            draft,
+        )
+        .await
+    }
+
+    pub async fn delete_review_task_draft(
+        &self,
+        auth: CaseworkAuth<'_>,
+        task_id: Uuid,
+        expected_revision: i64,
+        idempotency_key: &str,
+    ) -> Result<CaseworkComplete<()>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        validate_mutation(expected_revision, idempotency_key)?;
+        let request = self.mutation_headers(
+            self.authorized(
+                self.http.delete(self.url(&[
+                    "v1",
+                    "review-tasks",
+                    &task_id.to_string(),
+                    "draft",
+                ])?),
+                &auth,
+            )?,
+            expected_revision,
+            idempotency_key,
+        )?;
+        self.send_empty(request, StatusCode::NO_CONTENT).await
+    }
+
+    pub async fn decide_review_task(
+        &self,
+        auth: CaseworkAuth<'_>,
+        task_id: Uuid,
+        expected_revision: i64,
+        idempotency_key: &str,
+        decision: &ReviewTaskDecisionRequest,
+    ) -> Result<CaseworkComplete<()>, CaseworkClientError> {
+        validate_mutation(expected_revision, idempotency_key)?;
+        let request = self.mutation_headers(
+            self.authorized(
+                self.http
+                    .post(self.url(&["v1", "review-tasks", &task_id.to_string(), "decisions"])?)
+                    .json(decision),
+                &auth,
+            )?,
+            expected_revision,
+            idempotency_key,
+        )?;
+        self.send_empty(request, StatusCode::NO_CONTENT).await
+    }
+
+    pub async fn review_history(
+        &self,
+        auth: CaseworkAuth<'_>,
+        request_id: Uuid,
+        query: &ReviewPageQuery,
+    ) -> Result<CaseworkComplete<ReviewHistoryPage>, CaseworkClientError> {
+        reject_source_profile(&auth)?;
+        validate_review_page(query.limit)?;
+        let request = self.authorized(
+            self.http
+                .get(self.url(&["v1", "review-requests", &request_id.to_string(), "history"])?)
+                .query(query),
+            &auth,
+        )?;
         self.send_json(request, StatusCode::OK).await
     }
 
-    pub async fn list_hosted_work_items(
+    pub async fn add_review_note(
         &self,
         auth: CaseworkAuth<'_>,
-        query: &ListWorkItemsQuery,
-    ) -> Result<CaseworkComplete<WorkItemPage>, CaseworkClientError> {
+        request_id: Uuid,
+        idempotency_key: &str,
+        note: &ReviewNoteRequest,
+    ) -> Result<CaseworkComplete<ReviewHistoryEntry>, CaseworkClientError> {
         reject_source_profile(&auth)?;
-        if query
-            .subject()
-            .map_err(|_| CaseworkClientError::invalid_request("the subject selector is invalid"))?
-            .is_some()
-        {
-            return Err(CaseworkClientError::invalid_request(
-                "hosted inboxes do not accept a subject selector",
-            ));
-        }
-        if query
-            .reference()
-            .map_err(|_| CaseworkClientError::invalid_request("the display reference is invalid"))?
-            .is_some()
-            || query.sort != registry_casework_core::InboxSort::Due
-        {
-            return Err(CaseworkClientError::invalid_request(
-                "hosted inboxes do not accept display-reference lookup or source sorting",
-            ));
-        }
-        validate_page(query.cursor.as_deref(), query.limit)?;
-        let url = self.url_from_constant(WORK_ITEMS_PATH)?;
-        let request = self.authorized(self.http.get(url).query(query), &auth)?;
+        validate_idempotency_key(idempotency_key)?;
+        let request = self
+            .authorized(
+                self.http
+                    .post(self.url(&["v1", "review-requests", &request_id.to_string(), "notes"])?)
+                    .json(note),
+                &auth,
+            )?
+            .header(
+                HeaderName::from_static(IDEMPOTENCY_KEY_HEADER),
+                idempotency_key,
+            );
         self.send_json(request, StatusCode::OK).await
     }
 
-    pub async fn get_hosted_work_item(
-        &self,
-        auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-    ) -> Result<CaseworkComplete<WorkItem>, CaseworkClientError> {
-        reject_source_profile(&auth)?;
-        self.get_json(&auth, &["v1", "work-items", &item_id.to_string()], &[])
-            .await
-    }
-
-    pub async fn hosted_work_item_history(
-        &self,
-        auth: CaseworkAuth<'_>,
-        item_id: Uuid,
-        query: &HostedPageQuery,
-    ) -> Result<CaseworkComplete<HostedHistoryPage>, CaseworkClientError> {
-        reject_source_profile(&auth)?;
-        validate_page(query.cursor.as_deref(), query.limit)?;
-        let url = self.url(&["v1", "work-items", &item_id.to_string(), "hosted-history"])?;
-        let request = self.authorized(self.http.get(url).query(query), &auth)?;
-        self.send_json(request, StatusCode::OK).await
-    }
-
-    pub async fn hosted_accountability_record(
+    pub async fn review_accountability(
         &self,
         auth: CaseworkAuth<'_>,
         event_id: Uuid,
-    ) -> Result<CaseworkComplete<HostedAccountabilityRecord>, CaseworkClientError> {
+    ) -> Result<CaseworkComplete<ReviewAccountabilityRecord>, CaseworkClientError> {
         reject_source_profile(&auth)?;
-        let mut url = self.url_from_constant(HOSTED_ACCOUNTABILITY_PATH)?;
-        url.path_segments_mut()
-            .map_err(|_| CaseworkClientError::invalid_request("the event identifier is invalid"))?
-            .push(&event_id.to_string());
-        let request = self.authorized(self.http.get(url), &auth)?;
-        self.send_json(request, StatusCode::OK).await
-    }
-
-    pub async fn claim_hosted_work_item(
-        &self,
-        auth: CaseworkAuth<'_>,
-        action: &CaseworkAction,
-        idempotency_key: &str,
-    ) -> Result<CaseworkComplete<MutationResponse>, CaseworkClientError> {
-        reject_source_profile(&auth)?;
-        self.mutate_action(&auth, action, "claim", idempotency_key, &ClaimRequest {})
-            .await
-    }
-
-    pub async fn release_hosted_work_item(
-        &self,
-        auth: CaseworkAuth<'_>,
-        action: &CaseworkAction,
-        idempotency_key: &str,
-    ) -> Result<CaseworkComplete<MutationResponse>, CaseworkClientError> {
-        reject_source_profile(&auth)?;
-        self.mutate_action(
+        self.get_json(
             &auth,
-            action,
-            "release",
-            idempotency_key,
-            &ReleaseRequest {},
+            &["v1", "review-accountability", &event_id.to_string()],
+            &[],
         )
         .await
     }
 
-    pub async fn decide_hosted_work_item(
+    async fn review_task_empty_mutation(
         &self,
         auth: CaseworkAuth<'_>,
-        action: &CaseworkAction,
+        task_id: Uuid,
+        operation: &str,
+        expected_revision: i64,
         idempotency_key: &str,
-        decision: &HostedDecisionRequest,
-    ) -> Result<CaseworkComplete<HostedTerminalResult>, CaseworkClientError> {
-        reject_source_profile(&auth)?;
-        if action.operation != decision.outcome {
-            return Err(CaseworkClientError::invalid_request(
-                "the offered action does not match the hosted outcome",
-            ));
-        }
-        self.mutate_action(&auth, action, "hosted-decisions", idempotency_key, decision)
-            .await
+        expected_status: StatusCode,
+    ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
+        validate_mutation(expected_revision, idempotency_key)?;
+        let request = self.authorized(
+            self.http
+                .post(self.url(&["v1", "review-tasks", &task_id.to_string(), operation])?),
+            &auth,
+        )?;
+        let request = self.mutation_headers(request, expected_revision, idempotency_key)?;
+        self.send_json(request, expected_status).await
     }
 
     pub async fn list_work_items(
@@ -1412,6 +1657,42 @@ fn action_segments<'a>(
 
 fn validate_page(cursor: Option<&str>, limit: Option<usize>) -> Result<(), CaseworkClientError> {
     validate_page_with_max(cursor, limit, MAXIMUM_PAGE_SIZE)
+}
+
+fn validate_review_page(limit: Option<usize>) -> Result<(), CaseworkClientError> {
+    if limit.is_some_and(|value| value == 0 || value > MAXIMUM_PAGE_SIZE) {
+        return Err(CaseworkClientError::invalid_request(
+            "the page size is outside the accepted range",
+        ));
+    }
+    Ok(())
+}
+
+async fn require_empty_response(
+    response: Response,
+    status: StatusCode,
+    trace_id: &str,
+) -> Result<(), CaseworkClientError> {
+    if response.headers().contains_key(CONTENT_TYPE) {
+        return Err(protocol(
+            status,
+            CaseworkProtocolFailure::MediaType,
+            Some(trace_id.to_owned()),
+        ));
+    }
+    let body = read_bounded(response, 1)
+        .await
+        .map_err(|error| CaseworkClientError::Transport {
+            kind: read_failure_kind(&error),
+        })?;
+    if !body.is_empty() {
+        return Err(protocol(
+            status,
+            CaseworkProtocolFailure::Body,
+            Some(trace_id.to_owned()),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_page_with_max(
