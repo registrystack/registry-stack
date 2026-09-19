@@ -105,8 +105,8 @@ pub trait DeliverySeams: Send + Sync + 'static {
     ) -> Result<ProposalOutcome, DeliveryError>;
 
     /// Recover a proposal that may already have committed when the current
-    /// accepted answer carries no proposal or the final attempt accepts no
-    /// answer at all.
+    /// accepted answer carries no proposal, the final attempt accepts no
+    /// answer, or its lease expires before finalization.
     ///
     /// `None` means this delivery has no committed proposal receipt and the
     /// worker may settle the current non-proposal answer or exhausted failure
