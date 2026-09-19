@@ -769,9 +769,10 @@ mod tests {
                 statement.contains("registry_webhook_delivery_state_answer_digest_required CHECK (")
                     && statement
                         .contains("handler_message IS NULL AND handler_message_digest IS NULL")
-                    && statement.contains(
-                        "state = 'delivered'\n                         AND handler_message IS NULL",
-                    )
+                    && statement.contains("state = 'delivered'")
+                    && statement
+                        .lines()
+                        .any(|line| line.trim() == "AND handler_message IS NULL")
                     && statement.contains("handler_message_digest IS NOT NULL")
                     && statement.contains("octet_length(handler_message_digest) = 32")
             })
