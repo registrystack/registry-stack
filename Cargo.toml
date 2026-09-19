@@ -179,6 +179,11 @@ rand = { version = "0.9" }
 rand_chacha = { version = "0.9" }
 rand_core = { version = "0.6", features = ["std"] }
 rcgen = { version = "0.13", default-features = false, features = ["ring", "zeroize"] }
+# Pattern evaluation for encrypted fields happens in Rust before sealing, so
+# no regex engine besides this one ever sees the plaintext. The default
+# features stay off: Unicode tables are wanted, but the code generator and
+# perf extensions are not.
+regex = { version = "1", default-features = false, features = ["std", "unicode"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots"] }
 rhai = { version = "=1.26.1", features = ["sync", "serde"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }

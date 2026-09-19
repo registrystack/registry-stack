@@ -4839,6 +4839,7 @@ dependencies = [
  "pg_query",
  "quick-xml 0.42.0",
  "rcgen",
+ "regex",
  "registry-breg-client",
  "registry-evidence-client",
  "registry-evidence-verifier",
