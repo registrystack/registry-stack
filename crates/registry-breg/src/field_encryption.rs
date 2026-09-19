@@ -12,9 +12,13 @@
 //! Transit provider activates key version 1 by generating a data key and
 //! inserting its wrapped form with `ON CONFLICT DO NOTHING`; when another
 //! concurrent activation won the insert, the existing row is loaded and
-//! unwrapped instead. The local-file provider never writes a row: it keeps
-//! key version 1 implicit and refuses to start when rows from another
-//! provider exist, because the file cannot represent more than one version.
+//! unwrapped instead. Phase 1 holds exactly one row, at key version 1:
+//! activation refuses a store that already holds more than one row or a row
+//! from any other version, because envelopes sealed under a superseded
+//! version cannot be opened and a second row would strand every earlier one.
+//! The local-file provider never writes a row: it keeps key version 1
+//! implicit and refuses to start when rows from another provider exist,
+//! because the file cannot represent more than one version.
 //!
 //! Call sites hold an `Option<Arc<FieldEncryptionService>>`; `None` means
 //! field encryption is not ready, which is only acceptable while the active
@@ -116,6 +120,9 @@ pub trait FieldKeyStore: Send + Sync {
     /// The newest key row, or `None` before the first activation.
     async fn latest_field_key(&self) -> Result<Option<StoredFieldKey>, FieldEncryptionError>;
 
+    /// The number of stored key rows.
+    async fn field_key_row_count(&self) -> Result<u32, FieldEncryptionError>;
+
     /// Insert the first key row. Returns `false` when a concurrent activation
     /// already inserted a row for that version.
     async fn insert_first_field_key(&self, key: &NewFieldKey)
@@ -142,6 +149,18 @@ impl<T: GenericClient + Send + Sync> FieldKeyStore for T {
             wrapped_dek: row.get(3),
             transit_key_version: row.get(4),
         }))
+    }
+
+    async fn field_key_row_count(&self) -> Result<u32, FieldEncryptionError> {
+        let count: i64 = self
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_field_encryption_keys",
+                &[],
+            )
+            .await
+            .map_err(|_| FieldEncryptionError::KeyStoreUnavailable)?
+            .get(0);
+        u32::try_from(count).map_err(|_| FieldEncryptionError::KeyStoreUnavailable)
     }
 
     async fn insert_first_field_key(
@@ -198,10 +217,31 @@ impl FieldEncryptionService {
     ) -> Result<Self, FieldEncryptionError> {
         match provider {
             FieldEncryptionProvider::Transit(config) => {
+                // Phase 1 holds exactly one key row, at version 1. Zero rows
+                // mean first activation; anything else fails closed before the
+                // provider is reached, because the runtime below opens
+                // envelopes only under the active version and a second row
+                // would strand every earlier one.
+                let stored_rows = store.field_key_row_count().await?;
+                if stored_rows > 1 {
+                    return Err(FieldEncryptionError::KeyStateInvalid);
+                }
+                let stored = if stored_rows == 1 {
+                    let stored = store
+                        .latest_field_key()
+                        .await?
+                        .ok_or(FieldEncryptionError::KeyStateInvalid)?;
+                    if stored.key_version != 1 {
+                        return Err(FieldEncryptionError::KeyStateInvalid);
+                    }
+                    Some(stored)
+                } else {
+                    None
+                };
                 let client = TransitDataKeyClient::initialize(config.clone())
                     .await
                     .map_err(|_| FieldEncryptionError::DataKeyUnavailable)?;
-                if let Some(stored) = store.latest_field_key().await? {
+                if let Some(stored) = stored {
                     let (key_version, dek) = unwrap_stored_transit_key(&client, &stored).await?;
                     return Ok(Self::from_data_key(
                         registry_id.to_owned(),
@@ -426,7 +466,9 @@ async fn unwrap_stored_transit_key(
 ) -> Result<(u32, Zeroizing<[u8; 32]>), FieldEncryptionError> {
     if stored.provider_kind != TRANSIT_PROVIDER_KIND
         || stored.algorithm != FIELD_ENCRYPTION_ALGORITHM
-        || stored.key_version <= 0
+        // Phase 1: exactly version 1; multi-version support arrives with
+        // rotation in Phase 2.
+        || stored.key_version != 1
         || stored
             .transit_key_version
             .is_none_or(|version| version <= 0)
@@ -635,6 +677,10 @@ mod tests {
             Ok(self.rows.last().cloned())
         }
 
+        async fn field_key_row_count(&self) -> Result<u32, FieldEncryptionError> {
+            Ok(u32::try_from(self.rows.len()).expect("test rows fit a u32"))
+        }
+
         async fn insert_first_field_key(
             &self,
             _key: &NewFieldKey,
@@ -826,6 +872,65 @@ mod tests {
         assert!(
             matches!(result, Err(FieldEncryptionError::ProviderMismatch)),
             "stored key rows from another provider must block local-file activation"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// A Transit binding whose socket is never reached: the refusals below
+    /// fail closed on the stored rows before the provider is contacted.
+    fn transit_provider_config() -> FieldEncryptionProvider {
+        FieldEncryptionProvider::Transit(
+            TransitDataKeyConfig::new(
+                "/nonexistent/transit-proxy.sock",
+                "transit",
+                "breg-field-dek",
+                Duration::from_millis(1),
+            )
+            .expect("fixture config builds"),
+        )
+    }
+
+    #[tokio::test]
+    async fn transit_activation_refuses_more_than_one_key_row() {
+        let root = secret_root("refuses-second-row");
+        let secrets =
+            SecretResolver::new([SecretProvider::File], &root).expect("fixture resolver builds");
+        let conflicting = MemoryKeyStore::new(vec![
+            stored_row(1, TRANSIT_PROVIDER_KIND),
+            stored_row(2, TRANSIT_PROVIDER_KIND),
+        ]);
+        let result = FieldEncryptionService::initialize(
+            &transit_provider_config(),
+            REGISTRY_ID,
+            "sha256:fixture",
+            &secrets,
+            &conflicting,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(FieldEncryptionError::KeyStateInvalid)),
+            "a second key row must never activate"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn transit_activation_refuses_a_row_from_another_version() {
+        let root = secret_root("refuses-version-two");
+        let secrets =
+            SecretResolver::new([SecretProvider::File], &root).expect("fixture resolver builds");
+        let conflicting = MemoryKeyStore::new(vec![stored_row(2, TRANSIT_PROVIDER_KIND)]);
+        let result = FieldEncryptionService::initialize(
+            &transit_provider_config(),
+            REGISTRY_ID,
+            "sha256:fixture",
+            &secrets,
+            &conflicting,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(FieldEncryptionError::KeyStateInvalid)),
+            "a key row from any version but the first must never activate"
         );
         fs::remove_dir_all(&root).ok();
     }
