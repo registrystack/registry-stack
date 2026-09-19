@@ -105,16 +105,19 @@ pub trait DeliverySeams: Send + Sync + 'static {
     ) -> Result<ProposalOutcome, DeliveryError>;
 
     /// Recover a proposal that may already have committed when the current
-    /// accepted answer carries no proposal.
+    /// accepted answer carries no proposal or the final attempt accepts no
+    /// answer at all.
     ///
     /// `None` means this delivery has no committed proposal receipt and the
-    /// worker may settle the current non-proposal answer normally. A returned
-    /// outcome is recorded instead, so a proposal that committed before a
-    /// failed finalize cannot later be hidden by a changed `none` or refusal
-    /// answer. The product owns the receipt and the stable conflict outcome;
-    /// the worker supplies only the delivery identity. This call must use the
-    /// same serialization boundary as [`Self::apply_proposal`], including
-    /// while an expired-lease application is still in flight.
+    /// worker may settle the current non-proposal answer or exhausted failure
+    /// normally. A returned outcome is recorded instead, so a proposal that
+    /// committed before a failed finalize cannot later be hidden by a changed
+    /// `none` or refusal answer, or by retries that all fail before accepting
+    /// an answer. The product owns the receipt and the stable conflict
+    /// outcome; the worker supplies only the delivery identity. This call
+    /// must use the same serialization boundary as
+    /// [`Self::apply_proposal`], including while an expired-lease application
+    /// is still in flight.
     async fn recover_proposal_receipt(
         &self,
         recovery: ProposalReceiptRecovery<'_>,
@@ -261,8 +264,8 @@ pub struct ProposalApplication<'a> {
     pub answer_digest: &'a [u8; 32],
 }
 
-/// One accepted non-proposal answer checked against any proposal receipt the
-/// product may already have committed for the same delivery.
+/// One non-proposal or exhausted no-answer attempt checked against any
+/// proposal receipt the product may already have committed for the delivery.
 #[derive(Clone, Copy, Debug)]
 pub struct ProposalReceiptRecovery<'a> {
     /// The delivered event the current answer addresses.
