@@ -21,7 +21,9 @@ use registry_platform_httputil::destination::{
 use tokio_postgres::Transaction;
 use uuid::Uuid;
 
-use crate::{ErrorCategory, HookHandlerKind};
+use crate::{
+    BoundedText, ErrorCategory, HookHandlerKind, MAX_REFUSAL_CODE_BYTES, MAX_REFUSAL_SUMMARY_BYTES,
+};
 
 /// One pooled product connection framed for the worker.
 ///
@@ -72,6 +74,31 @@ pub trait DeliverySeams: Send + Sync + 'static {
     /// back bytes and a failure category, so no script engine, module
     /// format, or executor type crosses into this crate.
     fn handler(&self, binding: HookHandlerBinding<'_>) -> Option<Self::Handler>;
+
+    /// Apply one accepted proposal and report what became of it.
+    ///
+    /// This is the seam a proposal crosses from the library's delivery
+    /// bookkeeping into the product's mutation path. The product validates
+    /// the proposal document through the same path any other proposed change
+    /// takes, authorizes it under the principal the hook declared, and
+    /// applies it in a fresh transaction of its own, never inside this
+    /// worker's claim, material, or finalize transactions.
+    ///
+    /// The application's identity is the event id, the compiled delivery id,
+    /// and the digest of exactly the answer bytes: stable across attempts
+    /// and replay generations, so a redelivered answer resolves as the same
+    /// application rather than a second one. The product's own idempotency
+    /// mechanism holds that promise; the worker relies on it.
+    ///
+    /// Returning [`DeliveryError`] means the outcome is uncertain: the apply
+    /// may or may not have committed. The worker fails closed. The delivery
+    /// row is never marked delivered on an uncertain apply, and the lease is
+    /// left to expire so the retry re-asks this seam and the idempotent
+    /// replay resolves it.
+    async fn apply_proposal(
+        &self,
+        application: ProposalApplication<'_>,
+    ) -> Result<ProposalOutcome, DeliveryError>;
 
     /// Record one neutral delivery-audit event in the product's audit
     /// journal, inside the transaction the worker is about to commit. Every
@@ -186,6 +213,71 @@ pub struct HookHandlerBinding<'a> {
     pub package_revision: &'a str,
     /// The `sha256:<hex>` digest of the reviewed script or module.
     pub handler_digest: &'a str,
+}
+
+/// One accepted proposal the worker hands the product to apply.
+///
+/// The library never opens the proposal document: validating it,
+/// authorizing it under the principal the hook declared, and applying it
+/// are the product's job, through the same path any other proposed change
+/// takes. Everything here is identity and the exact bytes the row records,
+/// so the product binds what was recorded, not what it reconstructs.
+#[derive(Clone, Copy, Debug)]
+pub struct ProposalApplication<'a> {
+    /// The delivered event the proposal answers.
+    pub event_id: Uuid,
+    /// The compiled delivery the proposal was delivered under.
+    pub compiled_delivery_id: &'a str,
+    /// The package revision the delivery row was captured under.
+    pub package_revision: &'a str,
+    /// The canonical stored envelope bytes that were delivered.
+    pub envelope: &'a [u8],
+    /// The canonical handler message bytes that carried the proposal.
+    pub answer: &'a [u8],
+    /// The digest of exactly `answer`, the component that keeps the
+    /// application's identity stable across attempts and generations.
+    pub answer_digest: &'a [u8; 32],
+}
+
+/// A bounded refusal code on a proposal outcome, under the same ceiling a
+/// handler refusal code carries so one bound governs every recorded reason.
+pub type ProposalCode = BoundedText<MAX_REFUSAL_CODE_BYTES>;
+
+/// A bounded summary on a proposal outcome, under the same ceiling a handler
+/// refusal summary carries.
+pub type ProposalSummary = BoundedText<MAX_REFUSAL_SUMMARY_BYTES>;
+
+/// What became of one proposal the worker handed the product.
+///
+/// [`ProposalOutcome::Refused`] is a deterministic refusal: the proposal
+/// failed validation or authorization, retrying the delivery cannot change
+/// it, and the delivery row still completes as delivered. A hook that
+/// declared no principal is not that case: it is a deployment defect, and
+/// its proposal is [`ProposalOutcome::DeadLettered`] with the reason, so the
+/// row is terminal without applying anything.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProposalOutcome {
+    /// The proposal was applied; `resulting_revision` is the revision the
+    /// applied mutation produced.
+    Applied {
+        /// The revision of the record the applied mutation produced.
+        resulting_revision: i64,
+    },
+    /// The proposal was refused by validation or authorization, and nothing
+    /// was applied.
+    Refused {
+        /// The product's stable refusal code.
+        code: ProposalCode,
+        /// A bounded, human-readable summary of the refusal.
+        summary: ProposalSummary,
+    },
+    /// The proposal can never be applied, and the delivery is terminal.
+    DeadLettered {
+        /// The product's stable reason code.
+        code: ProposalCode,
+        /// A bounded, human-readable summary of the reason.
+        summary: ProposalSummary,
+    },
 }
 
 /// One runnable local handler, resolved by the product for a delivery row's

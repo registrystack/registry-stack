@@ -129,6 +129,23 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                  expired_at timestamptz,
                  handler_message bytea,
                  handler_message_digest bytea,
+                 proposal_disposition text
+                     CONSTRAINT registry_webhook_delivery_state_proposal_values CHECK (
+                         proposal_disposition IS NULL
+                         OR proposal_disposition IN ('none', 'applied', 'refused', 'dead_lettered')
+                     ),
+                 proposal_resulting_revision bigint
+                     CHECK (proposal_resulting_revision IS NULL OR proposal_resulting_revision > 0),
+                 proposal_code text
+                     CONSTRAINT registry_webhook_delivery_state_proposal_code_bounds CHECK (
+                         proposal_code IS NULL
+                         OR (proposal_code <> '' AND octet_length(proposal_code) <= 128)
+                     ),
+                 proposal_summary text
+                     CONSTRAINT registry_webhook_delivery_state_proposal_summary_bounds CHECK (
+                         proposal_summary IS NULL
+                         OR (proposal_summary <> '' AND octet_length(proposal_summary) <= 1024)
+                     ),
                  updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
                  PRIMARY KEY (event_id, compiled_delivery_id),
                  FOREIGN KEY (event_id, compiled_delivery_id)
@@ -184,6 +201,24 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                      OR (state = 'delivered'
                          AND octet_length(handler_message) BETWEEN 1 AND 1048576
                          AND octet_length(handler_message_digest) = 32)
+                 ),
+                 CONSTRAINT registry_webhook_delivery_state_proposal CHECK (
+                     (proposal_disposition IS NULL
+                         AND proposal_resulting_revision IS NULL
+                         AND proposal_code IS NULL
+                         AND proposal_summary IS NULL)
+                     OR (proposal_disposition = 'none'
+                         AND proposal_resulting_revision IS NULL
+                         AND proposal_code IS NULL
+                         AND proposal_summary IS NULL)
+                     OR (proposal_disposition = 'applied'
+                         AND proposal_resulting_revision IS NOT NULL
+                         AND proposal_code IS NULL
+                         AND proposal_summary IS NULL)
+                     OR (proposal_disposition IN ('refused', 'dead_lettered')
+                         AND proposal_resulting_revision IS NULL
+                         AND proposal_code IS NOT NULL
+                         AND proposal_summary IS NOT NULL)
                  )
              );",
     // Delivery-state work indexes.
@@ -451,6 +486,90 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                  END IF;
              END
              $registry_webhook_state_upgrade$;",
+    // Proposal bookkeeping: what became of the proposal an accepted answer
+    // carried, readable from the row without reconstructing it from logs. A
+    // delivered row records 'none', 'applied', or 'refused'; a row the
+    // proposal path dead-letters records 'dead_lettered' with its reason.
+    // Legacy rows keep NULL in all four columns, as do rows that dead-letter
+    // without ever accepting an answer.
+    "             ALTER TABLE {schema}.registry_webhook_delivery_state
+                 ADD COLUMN IF NOT EXISTS proposal_disposition text;",
+    "             ALTER TABLE {schema}.registry_webhook_delivery_state
+                 ADD COLUMN IF NOT EXISTS proposal_resulting_revision bigint;",
+    "             ALTER TABLE {schema}.registry_webhook_delivery_state
+                 ADD COLUMN IF NOT EXISTS proposal_code text;",
+    "             ALTER TABLE {schema}.registry_webhook_delivery_state
+                 ADD COLUMN IF NOT EXISTS proposal_summary text;",
+    "             DO $registry_webhook_state_proposal_upgrade$
+             BEGIN
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid =
+                            '{schema}.registry_webhook_delivery_state'::regclass
+                        AND conname = 'registry_webhook_delivery_state_proposal_values'
+                 ) THEN
+                     ALTER TABLE {schema}.registry_webhook_delivery_state
+                         ADD CONSTRAINT registry_webhook_delivery_state_proposal_values CHECK (
+                             proposal_disposition IS NULL
+                             OR proposal_disposition IN ('none', 'applied', 'refused', 'dead_lettered')
+                         );
+                 END IF;
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid =
+                            '{schema}.registry_webhook_delivery_state'::regclass
+                        AND conname = 'registry_webhook_delivery_state_proposal_code_bounds'
+                 ) THEN
+                     ALTER TABLE {schema}.registry_webhook_delivery_state
+                         ADD CONSTRAINT registry_webhook_delivery_state_proposal_code_bounds
+                             CHECK (
+                                 proposal_code IS NULL
+                                 OR (proposal_code <> ''
+                                     AND octet_length(proposal_code) <= 128)
+                             );
+                 END IF;
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid =
+                            '{schema}.registry_webhook_delivery_state'::regclass
+                        AND conname = 'registry_webhook_delivery_state_proposal_summary_bounds'
+                 ) THEN
+                     ALTER TABLE {schema}.registry_webhook_delivery_state
+                         ADD CONSTRAINT registry_webhook_delivery_state_proposal_summary_bounds
+                             CHECK (
+                                 proposal_summary IS NULL
+                                 OR (proposal_summary <> ''
+                                     AND octet_length(proposal_summary) <= 1024)
+                             );
+                 END IF;
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid =
+                            '{schema}.registry_webhook_delivery_state'::regclass
+                        AND conname = 'registry_webhook_delivery_state_proposal'
+                 ) THEN
+                     ALTER TABLE {schema}.registry_webhook_delivery_state
+                         ADD CONSTRAINT registry_webhook_delivery_state_proposal CHECK (
+                             (proposal_disposition IS NULL
+                                 AND proposal_resulting_revision IS NULL
+                                 AND proposal_code IS NULL
+                                 AND proposal_summary IS NULL)
+                             OR (proposal_disposition = 'none'
+                                 AND proposal_resulting_revision IS NULL
+                                 AND proposal_code IS NULL
+                                 AND proposal_summary IS NULL)
+                             OR (proposal_disposition = 'applied'
+                                 AND proposal_resulting_revision IS NOT NULL
+                                 AND proposal_code IS NULL
+                                 AND proposal_summary IS NULL)
+                             OR (proposal_disposition IN ('refused', 'dead_lettered')
+                                 AND proposal_resulting_revision IS NULL
+                                 AND proposal_code IS NOT NULL
+                                 AND proposal_summary IS NOT NULL)
+                         );
+                 END IF;
+             END
+             $registry_webhook_state_proposal_upgrade$;",
 ];
 
 // The persistent objects the statements above create, unqualified. The
@@ -642,9 +761,65 @@ mod tests {
     }
 
     #[test]
+    fn a_delivery_row_records_what_became_of_its_proposal() {
+        // The operator's question is answerable from the row alone: did the
+        // accepted answer propose anything, and what became of the proposal?
+        // Four dispositions, each with exactly its own companions, on the
+        // fresh creation and in the upgrade block alike.
+        let statements = rendered(KERNEL_SCHEMA);
+        let values = statements
+            .iter()
+            .filter(|statement| {
+                statement.contains("registry_webhook_delivery_state_proposal_values CHECK (")
+                    && statement.contains(
+                        "proposal_disposition IN ('none', 'applied', 'refused', 'dead_lettered')",
+                    )
+            })
+            .count();
+        assert_eq!(
+            values, 2,
+            "the closed disposition vocabulary exists on creation and on upgrade"
+        );
+        let combinations = statements
+            .iter()
+            .filter(|statement| {
+                statement.contains("registry_webhook_delivery_state_proposal CHECK (")
+                    && statement.contains("proposal_resulting_revision IS NOT NULL")
+                    && statement.contains("proposal_code IS NOT NULL")
+                    && statement.contains("proposal_summary IS NOT NULL")
+            })
+            .count();
+        assert_eq!(
+            combinations, 2,
+            "each disposition carries exactly its own companions, on creation and on upgrade"
+        );
+        let joined = statements.join("\n");
+        for combination in [
+            "proposal_disposition = 'none'",
+            "proposal_disposition = 'applied'",
+            "proposal_disposition IN ('refused', 'dead_lettered')",
+        ] {
+            assert!(
+                joined.contains(combination),
+                "{combination} is one of the recorded dispositions"
+            );
+        }
+        assert!(
+            joined.contains("octet_length(proposal_code) <= 128"),
+            "a refusal code is bounded in the row, not only in the message"
+        );
+        assert!(
+            joined.contains("octet_length(proposal_summary) <= 1024"),
+            "a refusal summary is bounded in the row, not only in the message"
+        );
+        assert!(joined
+            .contains("proposal_resulting_revision IS NULL OR proposal_resulting_revision > 0"));
+    }
+
+    #[test]
     fn every_statement_is_qualified_by_the_schema() {
         let statements = rendered(KERNEL_SCHEMA);
-        assert_eq!(statements.len(), 20);
+        assert_eq!(statements.len(), 25);
         for statement in &statements {
             assert!(
                 statement.contains(KERNEL_SCHEMA),
