@@ -114,7 +114,10 @@ impl<S: DeliverySeams> DeliveryService<S> {
         let rows = transaction
             .query(
                 &self.sql(
-                    "SELECT DISTINCT delivery.logical_destination_id,
+                    "SELECT DISTINCT delivery.handler_kind,
+                                 delivery.logical_destination_id,
+                                 delivery.compiled_delivery_id,
+                                 delivery.package_revision,
                                  delivery.destination_binding_digest
                    FROM {schema}.registry_webhook_delivery_state AS state
                    JOIN {schema}.registry_webhook_deliveries AS delivery
@@ -136,13 +139,43 @@ impl<S: DeliverySeams> DeliveryService<S> {
             )
             .await?;
         for row in rows {
-            let logical_id = bounded_text(&row, 0, 64)?;
-            let binding_digest = bounded_text(&row, 1, 71)?;
-            if self
-                .seams
-                .destination(&logical_id)
-                .is_none_or(|destination| destination.binding_digest() != binding_digest)
-            {
+            let handler_kind = bounded_text(&row, 0, 8)
+                .ok()
+                .and_then(|kind| HookHandlerKind::from_spelling(&kind));
+            let logical_destination_id = row
+                .try_get::<_, Option<String>>(1)?
+                .filter(|id| id.len() <= 64);
+            let compiled_delivery_id = bounded_delivery_id(&row, 2)?;
+            let package_revision = bounded_text(&row, 3, 256)?;
+            let destination_binding_digest = bounded_text(&row, 4, 71)?;
+            // The binding a retained row must still use is the one it was
+            // written against: for the `url` kind that is the activated
+            // destination, and for a local kind it is the reviewed program
+            // the deployed package holds under the same digest.
+            let binding_activated = match handler_kind {
+                Some(HookHandlerKind::Url) => logical_destination_id
+                    .as_deref()
+                    .and_then(|id| self.seams.destination(id))
+                    .is_some_and(|destination| {
+                        destination.binding_digest() == destination_binding_digest
+                    }),
+                Some(kind @ (HookHandlerKind::Rhai | HookHandlerKind::Wasm)) => {
+                    logical_destination_id.is_none()
+                        && self
+                            .seams
+                            .handler(HookHandlerBinding {
+                                kind,
+                                compiled_delivery_id: &compiled_delivery_id,
+                                package_revision: &package_revision,
+                                handler_digest: &destination_binding_digest,
+                            })
+                            .is_some_and(|handler| {
+                                handler.handler_digest() == destination_binding_digest
+                            })
+                }
+                None => false,
+            };
+            if !binding_activated {
                 return Err(DeliveryError::Unavailable);
             }
         }
@@ -1223,7 +1256,10 @@ impl<S: DeliverySeams> DeliveryService<S> {
             _ => return Err(DeliveryError::Unavailable),
         };
         let columns = proposal_columns(state, proposal)?;
-        let message = answer.map(|answer| answer.bytes.clone());
+        // The raw answer is erased when delivery becomes terminal: the row
+        // retains the digest, disposition, code, and bounded summary, never
+        // the answer bytes, so nothing delivered stays readable as a payload.
+        let message: Option<Vec<u8>> = None;
         let message_digest = answer.map(|answer| answer.digest.to_vec());
         transaction
             .execute(
