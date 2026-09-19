@@ -630,7 +630,7 @@ fn validate_history_value(
 /// stored field records: an object naming only the envelope tag with a string
 /// payload. The payload's base64 and the envelope itself stay the crypto
 /// layer's business at the response edge.
-fn tagged_envelope_member(value: &Value) -> bool {
+pub(crate) fn tagged_envelope_member(value: &Value) -> bool {
     let Value::Object(member) = value else {
         return false;
     };
