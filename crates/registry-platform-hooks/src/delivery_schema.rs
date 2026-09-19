@@ -199,6 +199,7 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                  CONSTRAINT registry_webhook_delivery_state_answer CHECK (
                      (handler_message IS NULL AND handler_message_digest IS NULL)
                      OR (state = 'delivered'
+                         AND handler_message_digest IS NOT NULL
                          AND octet_length(handler_message_digest) = 32
                          AND (handler_message IS NULL
                               OR octet_length(handler_message) BETWEEN 1 AND 1048576))
@@ -484,6 +485,7 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                      ADD CONSTRAINT registry_webhook_delivery_state_answer CHECK (
                          (handler_message IS NULL AND handler_message_digest IS NULL)
                          OR (state = 'delivered'
+                             AND handler_message_digest IS NOT NULL
                              AND octet_length(handler_message_digest) = 32
                              AND (handler_message IS NULL
                                   OR octet_length(handler_message) BETWEEN 1 AND 1048576))
@@ -757,6 +759,7 @@ mod tests {
                 statement.contains("registry_webhook_delivery_state_answer CHECK (")
                     && statement
                         .contains("handler_message IS NULL AND handler_message_digest IS NULL")
+                    && statement.contains("handler_message_digest IS NOT NULL")
                     && statement.contains("octet_length(handler_message_digest) = 32")
                     && statement.contains("OR octet_length(handler_message) BETWEEN 1 AND 1048576")
             })

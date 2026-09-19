@@ -994,6 +994,26 @@ async fn real_postgres_redelivered_hook_answer_applies_once() {
         Some(proposal_message_digest().as_slice()),
         "the digest of exactly the answer is what the row retains"
     );
+    let malformed = setup
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_webhook_delivery_state
+             SET handler_message = $3, handler_message_digest = NULL
+             WHERE event_id = $1 AND compiled_delivery_id = $2",
+            &[&event.event_id, &delivery_id, &HOOK_PROPOSAL_MESSAGE],
+        )
+        .await
+        .expect_err("a delivered raw answer without its digest is refused by the schema");
+    assert_eq!(
+        malformed.code(),
+        Some(&tokio_postgres::error::SqlState::CHECK_VIOLATION),
+        "the answer-shape refusal is enforced by a database CHECK"
+    );
+    assert_eq!(
+        malformed.as_db_error().and_then(|error| error.constraint()),
+        Some("registry_webhook_delivery_state_answer")
+    );
     assert_eq!(record_count(&setup, "followup").await, 1);
 
     // The worker applied the proposal and died before finalization: the row
@@ -1342,6 +1362,70 @@ async fn real_postgres_receipt_recovery_waits_for_an_in_flight_application() {
     assert_eq!(row.disposition.as_deref(), Some("dead_lettered"));
     assert_eq!(row.code.as_deref(), Some("hook.proposal.answer_conflict"));
     assert_eq!(record_count(&setup, "followup").await, 1);
+
+    setup.teardown().await;
+    receiver.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_exhausted_failed_retry_recovers_a_committed_proposal() {
+    let receiver = HttpsReceiver::start().await;
+    let url_registry = compile_proposal_registry(
+        &format!(
+            "[{}]",
+            hook_json(
+                "case-created",
+                true,
+                r#"{"kind":"url","destinationId":"case-operations"}"#,
+            )
+        ),
+        "[]",
+        &[],
+    );
+    let setup = setup(url_registry, &receiver, true).await;
+    let mut mutation_client = setup
+        .pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+    let event = create_case(&setup, &mut mutation_client, "failed-retry-recovery").await;
+    let delivery_id = single_delivery(&event).to_owned();
+    let payload = outbox_payload(&setup, &event).await;
+    drop(mutation_client);
+
+    receiver
+        .enqueue(ResponsePlan::Answer {
+            body: HOOK_PROPOSAL_MESSAGE.to_vec(),
+        })
+        .await;
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered)
+    );
+    rewind_to_crashed_lease(&setup, &event, &delivery_id, &payload).await;
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Idle),
+        "the expired first lease is reaped to its final retry"
+    );
+    wait_until_delivery_is_due(&setup, &event, &delivery_id).await;
+
+    receiver.enqueue(ResponsePlan::NonSuccess).await;
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::DeadLettered),
+        "the exhausted failed retry recovers the committed proposal receipt"
+    );
+    let row = delivery_row(&setup, event.event_id, &delivery_id).await;
+    assert_eq!(row.state, "dead_lettered");
+    assert_eq!(row.attempt, 2);
+    assert_eq!(row.disposition.as_deref(), Some("dead_lettered"));
+    assert_eq!(row.code.as_deref(), Some("hook.proposal.answer_conflict"));
+    assert_eq!(
+        record_count(&setup, "followup").await,
+        1,
+        "the committed proposal stands and is not applied again"
+    );
 
     setup.teardown().await;
     receiver.stop().await;
@@ -2036,6 +2120,8 @@ fn write_secret(path: &std::path::Path, value: &[u8]) {
 enum ResponsePlan {
     /// A 2xx that answers with the exact body a remote hook handler returns.
     Answer { body: Vec<u8> },
+    /// A retryable HTTP failure that carries no accepted handler answer.
+    NonSuccess,
 }
 
 struct HttpsReceiver {
@@ -2089,6 +2175,7 @@ impl HttpsReceiver {
                     }
                     let (status, body) = match plans.lock().await.pop_front() {
                         Some(ResponsePlan::Answer { body }) => (200, body),
+                        Some(ResponsePlan::NonSuccess) => (503, Vec::new()),
                         None => (204, Vec::new()),
                     };
                     let reason = match status {

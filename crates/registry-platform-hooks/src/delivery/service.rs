@@ -1126,8 +1126,25 @@ impl<S: DeliverySeams> DeliveryService<S> {
         let AttemptResult {
             outcome,
             answer,
-            proposal,
+            mut proposal,
         } = attempt;
+        // A proposal may have committed before an earlier worker lost its
+        // lease or failed to finalize. If every later attempt fails before
+        // accepting an answer, recover that receipt before the last attempt
+        // becomes an all-null dead letter. Nonterminal failures keep the
+        // ordinary retry path and avoid an extra database lookup.
+        if proposal.is_none()
+            && answer.is_none()
+            && claim.attempt >= claim.deployed_maximum_attempts
+        {
+            proposal = self
+                .seams
+                .recover_proposal_receipt(ProposalReceiptRecovery {
+                    event_id: claim.event_id,
+                    compiled_delivery_id: &claim.compiled_delivery_id,
+                })
+                .await?;
+        }
         let mut client = self.seams.connection().await?;
         let transaction = client.transaction().await?;
         self.seams.verify_transaction(&transaction).await?;
