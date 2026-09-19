@@ -1556,6 +1556,8 @@ fn object_cover(
             cover.target == target
                 || reference_target_cover_matches_implicit_constraint(cover, object)
                 || pattern_cover_matches_implicit_constraint(cover, object)
+                || encryption_cover_matches_implicit_lookup_column(cover, object)
+                || encryption_cover_matches_implicit_lookup_index(cover, object)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -1597,6 +1599,51 @@ fn pattern_cover_matches_implicit_constraint(
             .member_id
             .as_deref()
             .and_then(|member| member.strip_prefix("pattern:"))
+            == cover.target.member_id.as_deref()
+}
+
+/// The blind-index sibling column carries no change code of its own: the
+/// encryption and lookup change codes reach it through the physical-name
+/// inventory member `"{field}#lookup"`, the way a reference or pattern change
+/// reaches its implicit constraint.
+#[cfg(feature = "tooling")]
+fn encryption_cover_matches_implicit_lookup_column(
+    cover: &ReviewedChangeCover,
+    object: &ReviewedMigrationObject,
+) -> bool {
+    matches!(
+        cover.code,
+        CompiledRegistryChangeCode::FieldEncryptionChanged
+            | CompiledRegistryChangeCode::FieldLookupChanged
+    ) && object.kind == ReviewedMigrationObjectKind::Field
+        && cover.target.kind == CompiledRegistryChangeTargetKind::Field
+        && cover.target.entity_id.as_deref() == Some(object.entity_id.as_str())
+        && object
+            .member_id
+            .as_deref()
+            .and_then(|member| member.strip_suffix("#lookup"))
+            == cover.target.member_id.as_deref()
+}
+
+/// The unique blind-index lookup index is compiler-owned but bound to the
+/// field's lookup, registered as the inventory member `"lookup:{field}"`, so
+/// an encryption or lookup change covers the SQL that creates or retires it.
+#[cfg(feature = "tooling")]
+fn encryption_cover_matches_implicit_lookup_index(
+    cover: &ReviewedChangeCover,
+    object: &ReviewedMigrationObject,
+) -> bool {
+    matches!(
+        cover.code,
+        CompiledRegistryChangeCode::FieldEncryptionChanged
+            | CompiledRegistryChangeCode::FieldLookupChanged
+    ) && object.kind == ReviewedMigrationObjectKind::Index
+        && cover.target.kind == CompiledRegistryChangeTargetKind::Field
+        && cover.target.entity_id.as_deref() == Some(object.entity_id.as_str())
+        && object
+            .member_id
+            .as_deref()
+            .and_then(|member| member.strip_prefix("lookup:"))
             == cover.target.member_id.as_deref()
 }
 

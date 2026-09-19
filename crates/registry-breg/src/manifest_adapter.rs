@@ -400,6 +400,10 @@ fn project_field(
     metadata: Option<&ManifestProjectionFieldSource>,
     vocabularies: &[ManifestProjectionVocabularySource],
 ) -> Option<FieldManifest> {
+    // Encrypted storage has no portable plaintext representation to project.
+    if field.encryption.is_some() {
+        return None;
+    }
     let (field_type, constraints) = match &field.field_type {
         FieldTypeSource::Boolean => (FieldType::Boolean, FieldConstraints::default()),
         FieldTypeSource::String {
@@ -649,6 +653,7 @@ mod tests {
                 classification: Classification::Internal,
                 valid_time_role: None,
                 physical_name: "field_measurement".to_owned(),
+                encryption: None,
             },
             None,
             &[],

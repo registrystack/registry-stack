@@ -657,6 +657,7 @@ mod tests {
             sql_name: id.replace('-', "_"),
             field_type,
             classification: Classification::Restricted,
+            encryption: None,
         }
     }
 
@@ -689,6 +690,7 @@ mod tests {
                         classification: field.logical.classification,
                         valid_time_role: field.valid_time_role,
                         physical_name: field.physical_name.clone(),
+                        encryption: None,
                     },
                 )
             })
@@ -784,6 +786,7 @@ mod tests {
                 classification: Classification::Restricted,
                 valid_time_role: None,
                 physical_name: "f_note".to_owned(),
+                encryption: None,
             },
         );
         entity.stored_fields.push(note);
@@ -855,6 +858,7 @@ mod tests {
                 classification: Classification::Restricted,
                 valid_time_role: None,
                 physical_name: "f_note".to_owned(),
+                encryption: None,
             },
         );
         active.stored_fields.push(extra);
