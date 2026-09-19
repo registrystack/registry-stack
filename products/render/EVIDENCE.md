@@ -360,9 +360,14 @@ Sealed loads now capture the complete bundle through held directory
 descriptors, opening every component in the configured root spelling and every
 descendant with `NOFOLLOW`, and refusing symlinks and non-regular files without
 a pathname reopen.
-The manifest hash map is verified over those captured bytes, and the same
-immutable snapshot supplies the manifest, labels, schemas, fonts, templates,
-package sources, and other project/package files consumed by Typst.
+The manifest is opened and parsed first through the secured root descriptor, so
+a missing, malformed, or unsealed manifest is refused before any descendant is
+read. Its exact bytes are retained in the snapshot. The manifest hash map is
+verified over the captured bytes, and the same immutable snapshot supplies the
+manifest, labels, schemas, fonts, templates, package sources, and other
+project/package files consumed by Typst. Sealing uses the same root traversal
+and hashes the captured bytes, so it cannot accept a root or ancestor symlink
+that loading would immediately refuse.
 
 Executable proof covers both sides of the former verified/use gap:
 
@@ -370,14 +375,18 @@ Executable proof covers both sides of the former verified/use gap:
   labels, schema, and font paths after capture; assembly still consumes the
   captured bytes.
 - `bundle::tests::bundle_root_and_ancestor_symlinks_are_refused_for_every_spelling`
-  covers a root symlink with a trailing slash and a symlinked ancestor.
+  covers a root symlink with a trailing slash and a symlinked ancestor for both
+  snapshot loading and sealing.
+- `bundle::tests::sealed_load_checks_the_manifest_before_capturing_descendants`
+  places a refused symlink beside missing, malformed, and unsealed manifests;
+  each manifest result wins before descendant capture.
 - `golden::sealed_template_and_package_bytes_are_bound_to_the_loaded_snapshot`
   replaces the template, a package source, and a non-source file after sealed
   load; every render remains byte-identical under the original bundle hash.
 - The existing per-render serve drift test still refuses drift present before
   a worker captures its snapshot.
 
-On the hardened revision, all 75 Registry Render tests pass (25 unit, 14
+On the hardened revision, all 76 Registry Render tests pass (26 unit, 14
 golden, 19 serve end-to-end, 17 scaffold/CLI), along with locked all-target
 check, clippy with warnings denied, and formatting.
 

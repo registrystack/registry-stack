@@ -60,23 +60,62 @@ pub(crate) struct BundleSnapshot {
 }
 
 impl BundleSnapshot {
-    fn load(root: &Path) -> Result<Self, RenderProblem> {
-        let mut files = BTreeMap::new();
-        capture_bundle_files(root, &mut files)?;
-        Ok(Self {
-            files: Arc::new(files),
-        })
+    fn load(
+        root: &Path,
+        require_sealed: bool,
+    ) -> Result<(Self, Manifest, Vec<u8>, std::fs::File), RenderProblem> {
+        #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+        {
+            use std::ffi::OsStr;
+
+            let directory = open_bundle_root(root)?;
+            let manifest_bytes = read_bundle_file(
+                &directory,
+                OsStr::new(MANIFEST_FILE),
+                &root.join(MANIFEST_FILE),
+            )?;
+            let manifest = Manifest::parse(&manifest_bytes)?;
+            if require_sealed && !manifest.is_sealed() {
+                return Err(RenderProblem::new(
+                    ProblemKind::BundleUnsealed,
+                    "serve requires a sealed bundle; run `registry-render seal` first",
+                ));
+            }
+
+            let mut files = BTreeMap::new();
+            files.insert(MANIFEST_FILE.to_owned(), Bytes::new(manifest_bytes.clone()));
+            capture_bundle_directory(&directory, Path::new(""), root, &mut files)?;
+            Ok((
+                Self {
+                    files: Arc::new(files),
+                },
+                manifest,
+                manifest_bytes,
+                directory,
+            ))
+        }
+
+        #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+        {
+            let _ = require_sealed;
+            Err(RenderProblem::new(
+                ProblemKind::ManifestInvalid,
+                format!(
+                    "cannot securely snapshot bundle {} on this platform",
+                    root.display()
+                ),
+            ))
+        }
     }
 
-    fn manifest(&self) -> Result<(Manifest, Vec<u8>), RenderProblem> {
-        let bytes = self.get(MANIFEST_FILE).ok_or_else(|| {
-            RenderProblem::new(
-                ProblemKind::ManifestInvalid,
-                format!("bundle has no {MANIFEST_FILE}"),
-            )
-        })?;
-        let manifest = Manifest::parse(bytes.as_slice())?;
-        Ok((manifest, bytes.as_slice().to_vec()))
+    fn hashes(&self) -> BTreeMap<String, String> {
+        let mut files = BTreeMap::new();
+        for (path, bytes) in self.iter() {
+            if path != MANIFEST_FILE {
+                files.insert(path.clone(), sha256_hex(bytes.as_slice()));
+            }
+        }
+        files
     }
 
     pub(crate) fn get(&self, path: &str) -> Option<Bytes> {
@@ -104,18 +143,6 @@ const SNAPSHOT_FILE_FLAGS: rustix::fs::OFlags = rustix::fs::OFlags::RDONLY
     .union(rustix::fs::OFlags::NOFOLLOW)
     .union(rustix::fs::OFlags::NONBLOCK)
     .union(rustix::fs::OFlags::CLOEXEC);
-
-/// Capture a bundle without following a symbolic link at the root, any
-/// directory component, or any leaf. Registry Render is released for Linux
-/// and macOS, where descriptor-relative traversal provides that guarantee.
-#[cfg(any(target_os = "linux", target_vendor = "apple"))]
-fn capture_bundle_files(
-    root: &Path,
-    files: &mut BTreeMap<String, Bytes>,
-) -> Result<(), RenderProblem> {
-    let directory = open_bundle_root(root)?;
-    capture_bundle_directory(&directory, Path::new(""), root, files)
-}
 
 /// Open each spelling component relative to the descriptor for its parent.
 /// `O_NOFOLLOW` only protects the final component of a single `open`, so an
@@ -172,6 +199,49 @@ fn open_bundle_root(root: &Path) -> Result<std::fs::File, RenderProblem> {
 }
 
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+fn read_bundle_file(
+    directory: &std::fs::File,
+    name: &std::ffi::OsStr,
+    display: &Path,
+) -> Result<Vec<u8>, RenderProblem> {
+    use std::io::Read as _;
+
+    use rustix::fs::{openat, Mode};
+
+    let descriptor =
+        openat(directory, name, SNAPSHOT_FILE_FLAGS, Mode::empty()).map_err(|err| {
+            RenderProblem::new(
+                ProblemKind::ManifestInvalid,
+                format!(
+                    "bundle entry cannot be opened without following links: {}: {err}",
+                    display.display()
+                ),
+            )
+        })?;
+    let mut file = std::fs::File::from(descriptor);
+    let metadata = file.metadata().map_err(|err| {
+        RenderProblem::new(
+            ProblemKind::ManifestInvalid,
+            format!("cannot inspect bundle entry {}: {err}", display.display()),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(RenderProblem::new(
+            ProblemKind::ManifestInvalid,
+            format!("bundle entry is not a regular file: {}", display.display()),
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|err| {
+        RenderProblem::new(
+            ProblemKind::ManifestInvalid,
+            format!("cannot read bundle entry {}: {err}", display.display()),
+        )
+    })?;
+    Ok(bytes)
+}
+
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn capture_bundle_directory(
     directory: &std::fs::File,
     relative: &Path,
@@ -179,7 +249,6 @@ fn capture_bundle_directory(
     files: &mut BTreeMap<String, Bytes>,
 ) -> Result<(), RenderProblem> {
     use std::ffi::OsStr;
-    use std::io::Read as _;
     use std::os::unix::ffi::OsStrExt as _;
 
     use rustix::fs::{openat, Dir, Mode};
@@ -217,6 +286,11 @@ fn capture_bundle_directory(
                 ),
             ));
         };
+        if relative.as_os_str().is_empty() && os_name == OsStr::new(MANIFEST_FILE) {
+            // The root manifest was deliberately read and parsed first. Keep
+            // those exact bytes instead of reopening the path during capture.
+            continue;
+        }
         let child_relative = relative.join(utf8_name);
         let display = root.join(&child_relative);
 
@@ -226,36 +300,7 @@ fn capture_bundle_directory(
                 capture_bundle_directory(&child, &child_relative, root, files)?;
             }
             Err(_) => {
-                let descriptor = openat(directory, name, SNAPSHOT_FILE_FLAGS, Mode::empty())
-                    .map_err(|err| {
-                        RenderProblem::new(
-                            ProblemKind::ManifestInvalid,
-                            format!(
-                                "bundle entry cannot be opened without following links: {}: {err}",
-                                display.display()
-                            ),
-                        )
-                    })?;
-                let mut file = std::fs::File::from(descriptor);
-                let metadata = file.metadata().map_err(|err| {
-                    RenderProblem::new(
-                        ProblemKind::ManifestInvalid,
-                        format!("cannot inspect bundle entry {}: {err}", display.display()),
-                    )
-                })?;
-                if !metadata.is_file() {
-                    return Err(RenderProblem::new(
-                        ProblemKind::ManifestInvalid,
-                        format!("bundle entry is not a regular file: {}", display.display()),
-                    ));
-                }
-                let mut bytes = Vec::new();
-                file.read_to_end(&mut bytes).map_err(|err| {
-                    RenderProblem::new(
-                        ProblemKind::ManifestInvalid,
-                        format!("cannot read bundle entry {}: {err}", display.display()),
-                    )
-                })?;
+                let bytes = read_bundle_file(directory, os_name, &display)?;
                 let key = relative_path_key(&child_relative)?;
                 if files.insert(key.clone(), Bytes::new(bytes)).is_some() {
                     return Err(RenderProblem::new(
@@ -269,26 +314,11 @@ fn capture_bundle_directory(
     Ok(())
 }
 
-#[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
-fn capture_bundle_files(
-    root: &Path,
-    _files: &mut BTreeMap<String, Bytes>,
-) -> Result<(), RenderProblem> {
-    Err(RenderProblem::new(
-        ProblemKind::ManifestInvalid,
-        format!(
-            "cannot securely snapshot bundle {} on this platform",
-            root.display()
-        ),
-    ))
-}
-
 impl Bundle {
     /// Load a bundle without requiring it to be sealed. If it is sealed, the
     /// hashes are verified.
     pub fn load(root: &Path) -> Result<Self, RenderProblem> {
-        let snapshot = BundleSnapshot::load(root)?;
-        let (manifest, manifest_bytes) = snapshot.manifest()?;
+        let (snapshot, manifest, manifest_bytes, _directory) = BundleSnapshot::load(root, false)?;
         if manifest.is_sealed() {
             verify_hashes(&snapshot, &manifest)?;
         }
@@ -297,14 +327,7 @@ impl Bundle {
 
     /// Load a bundle and require a verified seal.
     pub fn load_sealed(root: &Path) -> Result<Self, RenderProblem> {
-        let snapshot = BundleSnapshot::load(root)?;
-        let (manifest, manifest_bytes) = snapshot.manifest()?;
-        if !manifest.is_sealed() {
-            return Err(RenderProblem::new(
-                ProblemKind::BundleUnsealed,
-                "serve requires a sealed bundle; run `registry-render seal` first",
-            ));
-        }
+        let (snapshot, manifest, manifest_bytes, _directory) = BundleSnapshot::load(root, true)?;
         verify_hashes(&snapshot, &manifest)?;
         Self::assemble(root, manifest, manifest_bytes, snapshot)
     }
@@ -413,36 +436,81 @@ impl Bundle {
     /// Compute and write per-file hashes into the bundle's manifest, making
     /// it sealed. Returns the new manifest.
     pub fn seal(root: &Path) -> Result<Manifest, RenderProblem> {
-        let (mut manifest, _) = read_manifest(root)?;
-        let hashes = Manifest::compute_hashes(root)?;
-        manifest.hashes = Some(hashes);
+        let (snapshot, mut manifest, _, directory) = BundleSnapshot::load(root, false)?;
+        manifest.hashes = Some(snapshot.hashes());
         let serialized = serde_norway::to_string(&manifest).map_err(|err| {
             RenderProblem::new(
                 ProblemKind::Internal,
                 format!("cannot serialize manifest: {err}"),
             )
         })?;
-        let target = root.join(MANIFEST_FILE);
-        std::fs::write(&target, serialized).map_err(|err| {
-            RenderProblem::new(
-                ProblemKind::ManifestInvalid,
-                format!("cannot write {}: {err}", target.display()),
-            )
-        })?;
+        write_manifest(&directory, root, serialized.as_bytes())?;
         Ok(manifest)
     }
 }
 
-fn read_manifest(root: &Path) -> Result<(Manifest, Vec<u8>), RenderProblem> {
-    let path = root.join(MANIFEST_FILE);
-    let bytes = std::fs::read(&path).map_err(|err| {
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+fn write_manifest(
+    directory: &std::fs::File,
+    root: &Path,
+    bytes: &[u8],
+) -> Result<(), RenderProblem> {
+    use std::io::Write as _;
+
+    use rustix::fs::{openat, Mode, OFlags};
+
+    let flags = OFlags::WRONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let descriptor = openat(directory, MANIFEST_FILE, flags, Mode::empty()).map_err(|err| {
         RenderProblem::new(
             ProblemKind::ManifestInvalid,
-            format!("cannot read {}: {err}", path.display()),
+            format!(
+                "cannot open {} for writing: {err}",
+                root.join(MANIFEST_FILE).display()
+            ),
         )
     })?;
-    let manifest = Manifest::parse(&bytes)?;
-    Ok((manifest, bytes))
+    let mut file = std::fs::File::from(descriptor);
+    let metadata = file.metadata().map_err(|err| {
+        RenderProblem::new(
+            ProblemKind::ManifestInvalid,
+            format!(
+                "cannot inspect bundle entry {}: {err}",
+                root.join(MANIFEST_FILE).display()
+            ),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(RenderProblem::new(
+            ProblemKind::ManifestInvalid,
+            format!(
+                "bundle entry is not a regular file: {}",
+                root.join(MANIFEST_FILE).display()
+            ),
+        ));
+    }
+    file.set_len(0)
+        .and_then(|()| file.write_all(bytes))
+        .map_err(|err| {
+            RenderProblem::new(
+                ProblemKind::ManifestInvalid,
+                format!("cannot write {}: {err}", root.join(MANIFEST_FILE).display()),
+            )
+        })
+}
+
+#[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+fn write_manifest(
+    _directory: &std::fs::File,
+    root: &Path,
+    _bytes: &[u8],
+) -> Result<(), RenderProblem> {
+    Err(RenderProblem::new(
+        ProblemKind::ManifestInvalid,
+        format!(
+            "cannot securely seal bundle {} on this platform",
+            root.display()
+        ),
+    ))
 }
 
 fn verify_hashes(snapshot: &BundleSnapshot, manifest: &Manifest) -> Result<(), RenderProblem> {
@@ -591,15 +659,48 @@ mod tests {
         let direct_link = base.join("current");
         symlink(&direct_target, &direct_link).unwrap();
         let trailing_slash = PathBuf::from(format!("{}/", direct_link.display()));
-        let error = BundleSnapshot::load(&trailing_slash).unwrap_err();
+        let error = BundleSnapshot::load(&trailing_slash, false).unwrap_err();
+        assert_eq!(error.kind, ProblemKind::ManifestInvalid);
+        let error = Bundle::seal(&trailing_slash).unwrap_err();
         assert_eq!(error.kind, ProblemKind::ManifestInvalid);
 
         let ancestor_target = base.join("ancestor-target");
         std::fs::create_dir_all(ancestor_target.join("bundle")).unwrap();
         let ancestor_link = base.join("deploy");
         symlink(&ancestor_target, &ancestor_link).unwrap();
-        let error = BundleSnapshot::load(&ancestor_link.join("bundle")).unwrap_err();
+        let ancestor_bundle = ancestor_link.join("bundle");
+        let error = BundleSnapshot::load(&ancestor_bundle, false).unwrap_err();
         assert_eq!(error.kind, ProblemKind::ManifestInvalid);
+        let error = Bundle::seal(&ancestor_bundle).unwrap_err();
+        assert_eq!(error.kind, ProblemKind::ManifestInvalid);
+    }
+
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    #[test]
+    fn sealed_load_checks_the_manifest_before_capturing_descendants() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root_path = dir.path().canonicalize().unwrap();
+        let root = root_path.as_path();
+        symlink(root, root.join("descendant-link")).unwrap();
+
+        let missing = Bundle::load_sealed(root).unwrap_err();
+        assert_eq!(missing.kind, ProblemKind::ManifestInvalid);
+        assert!(missing.detail.contains(MANIFEST_FILE));
+
+        std::fs::write(root.join(MANIFEST_FILE), "not: [valid").unwrap();
+        let malformed = Bundle::load_sealed(root).unwrap_err();
+        assert_eq!(malformed.kind, ProblemKind::ManifestInvalid);
+        assert!(malformed.detail.contains("manifest.yaml is not valid"));
+
+        std::fs::write(
+            root.join(MANIFEST_FILE),
+            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments: []\n",
+        )
+        .unwrap();
+        let unsealed = Bundle::load_sealed(root).unwrap_err();
+        assert_eq!(unsealed.kind, ProblemKind::BundleUnsealed);
     }
 
     #[test]
@@ -629,8 +730,8 @@ mod tests {
         .unwrap();
         Bundle::seal(root).unwrap();
 
-        let snapshot = BundleSnapshot::load(root).unwrap();
-        let (manifest, manifest_bytes) = snapshot.manifest().unwrap();
+        let (snapshot, manifest, manifest_bytes, _directory) =
+            BundleSnapshot::load(root, false).unwrap();
         let expected_hash = sha256_hex(&manifest_bytes);
 
         // Every path used by assembly changes after capture. Assembly must
