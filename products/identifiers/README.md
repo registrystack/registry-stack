@@ -35,10 +35,12 @@ products/identifiers/scripts/check.sh
 
 The publisher imports this catalog from one exact Registry Stack commit. It
 copies artifact bytes only after checking their recorded digest and publishes
-exactly the identifiers in that catalog. An identifier removed from current
-source is removed from the resolver. A current entry may update the metadata
-for the same identifier, but neither the catalog nor the publisher may change
-an identifier's kind or reuse it for a different meaning.
+the active identifiers in that catalog. A previously published identifier
+removed from current source remains resolvable as `deprecated`, using its last
+reviewed metadata. A current entry may update the metadata for the same
+identifier, but neither the catalog nor the publisher may change an
+identifier's kind or reuse it for a different meaning. Immutable artifact paths
+remain available after the corresponding canonical artifact advances.
 
 The canonical schema URI may identify the current schema within its named
 compatibility line. The publisher also exposes the exact imported bytes by
@@ -63,8 +65,9 @@ or release blocker.
 - Trust boundary: identifier metadata describes existing product behavior. It
   creates no principal, claim, permission, disclosure rule, credential, or
   signing authority.
-- Recovery: fix forward with a reviewed catalog and redeploy. A removed URI may
-  remain absent, but it must never be reused or repurposed.
+- Recovery: rerun publication for the exact released source and catalog digest,
+  or fix forward with a reviewed catalog. A removed URI remains reserved and
+  resolvable; it must never be reused or repurposed.
 
 ## Definition of Done
 
@@ -79,8 +82,9 @@ true:
 - Product problem generation preserves each closed value-free problem inventory
   and adds no authentication or disclosure behavior.
 - Retired Relay V1, Registry Notary, Registry Platform operations, registryctl,
-  and release-lock identifiers are absent from the generated catalog and
-  resolver.
+  and release-lock identifiers are absent from the generated active catalog.
+  A path that was already published remains available as historical resolver
+  output and cannot be reused.
 - Registry-owned Relay V2 vocabulary identifiers are published; Solmara demo
   identifiers and legacy SHACL fixture identifiers remain outside the public
   catalog because they are not Registry Stack contracts.
@@ -90,9 +94,10 @@ true:
 - Future release manifests from version `0.19.1` bind the catalog path, digest,
   and entry count without making live resolver availability a release gate.
 - The publisher imports an exact Registry Stack commit, verifies every digest,
-  publishes exactly the active catalog, generates the complete static site,
-  and has pull-request validation, automated source synchronization, and a
-  scheduled live smoke check.
+  publishes the active catalog plus deprecated historical identifiers and
+  retained immutable artifacts, generates the complete static site, and has
+  pull-request validation, automated source synchronization, and a scheduled
+  exact-byte live smoke check.
 - Focused Rust, generator, CI-routing, documentation, publisher, and
   cross-repository checks pass with no unrelated changes.
 - Separate draft pull requests exist for `registry-stack` and

@@ -46,6 +46,7 @@ jobs:
       promotion_revision: ${{ steps.identity.outputs.promotion_revision }}
       workflow_revision: ${{ steps.candidate.outputs.workflow_revision }}
       docs_sha256: ${{ steps.candidate.outputs.docs_sha256 }}
+      identifier_catalog_sha256: ${{ steps.candidate.outputs.identifier_catalog_sha256 }}
       client_registries: ${{ steps.candidate.outputs.client_registries }}
       client_registry_matrix: ${{ steps.candidate.outputs.client_registry_matrix }}
       client_registry_pypi_matrix: ${{ steps.candidate.outputs.client_registry_pypi_matrix }}
@@ -233,6 +234,11 @@ jobs:
               --deny-self-hosted-runners
           done
           docs_sha256=
+          identifier_catalog_sha256="$(
+            git show \
+              "${{ steps.identity.outputs.source_sha }}:products/identifiers/generated/catalog.v1.json" \
+              | sha256sum | awk '{print $1}'
+          )"
           IFS=. read -r major minor patch <<<"${{ steps.identity.outputs.version }}"
           if ((
             major > 0 ||
@@ -300,6 +306,7 @@ jobs:
             echo "release_id=${release_id}"
             echo "workflow_revision=${workflow_revision}"
             echo "docs_sha256=${docs_sha256}"
+            echo "identifier_catalog_sha256=${identifier_catalog_sha256}"
             echo "client_registries=${client_registries}"
             echo "client_registry_matrix=${client_registry_matrix}"
             echo "client_registry_pypi_matrix=${client_registry_pypi_matrix}"
@@ -1548,3 +1555,70 @@ jobs:
             -f "released_tag=${{ needs.verify.outputs.tag }}" \
             -f "docs_sha256=${{ needs.verify.outputs.docs_sha256 }}" \
             -f "request_id=${{ inputs.request_id }}"
+
+  publish-identifiers:
+    name: Publish exact identifier catalog
+    if: >-
+      always() &&
+      (needs.publish.result == 'success' ||
+       needs.closeout-published.result == 'success')
+    needs:
+      - verify
+      - publish
+      - closeout-published
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Dispatch and verify exact identifier publication
+        env:
+          GH_TOKEN: ${{ secrets.IDENTIFIER_PUBLISHER_TOKEN }}
+          RELEASE_REQUEST_ID: ${{ inputs.request_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          request_id="${RELEASE_REQUEST_ID}"
+          if [[ -z "${request_id}" ]]; then
+            request_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          fi
+          title="Publish Registry Stack identifiers ${{ needs.verify.outputs.tag }} (${request_id})"
+          previous_run_id="$(
+            gh run list \
+              --repo registrystack/registrystack-id \
+              --workflow deploy-cloudflare-workers.yml \
+              --event workflow_dispatch \
+              --limit 100 \
+              --json databaseId,displayTitle \
+              --jq "[.[] | select(.displayTitle == \"${title}\") | .databaseId] | max // 0"
+          )"
+          gh workflow run deploy-cloudflare-workers.yml \
+            --repo registrystack/registrystack-id \
+            --ref main \
+            -f "released_tag=${{ needs.verify.outputs.tag }}" \
+            -f "source_sha=${{ needs.verify.outputs.source_sha }}" \
+            -f "catalog_sha256=${{ needs.verify.outputs.identifier_catalog_sha256 }}" \
+            -f "request_id=${request_id}"
+
+          deadline=$((SECONDS + 120))
+          target_run_id=
+          while [[ -z "${target_run_id}" ]]; do
+            target_run_id="$(
+              gh run list \
+                --repo registrystack/registrystack-id \
+                --workflow deploy-cloudflare-workers.yml \
+                --event workflow_dispatch \
+                --limit 100 \
+                --json databaseId,displayTitle \
+                --jq "[.[] | select(.displayTitle == \"${title}\" and .databaseId > ${previous_run_id}) | .databaseId] | max // empty"
+            )"
+            if [[ -n "${target_run_id}" ]]; then
+              break
+            fi
+            if (( SECONDS >= deadline )); then
+              echo "Timed out correlating the identifier publication run" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          gh run watch "${target_run_id}" \
+            --repo registrystack/registrystack-id \
+            --exit-status

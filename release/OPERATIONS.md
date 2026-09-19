@@ -24,6 +24,12 @@ Start release preparation when:
   workflow write access.
 - The `npm`, `pypi`, and `pypi-evidence` GitHub environments exist with the
   intended release approvers.
+- The `IDENTIFIER_PUBLISHER_TOKEN` repository secret is a fine-grained token
+  with Actions read/write access only to `registrystack/registrystack-id`.
+  Cloudflare credentials remain in that publisher repository.
+- A reviewed `registrystack-id` synchronization pull request for the exact
+  release source commit and identifier catalog digest has been merged. The
+  release dispatch deploys that committed bundle and fails closed if it differs.
 - Every dependency pinned to a long-term-support line has been checked for
   remaining upstream support: more than six months must remain, or the
   next-LTS migration is already promoted to a release blocker for this cut.
@@ -819,10 +825,10 @@ The command re-verifies the plan against the exact candidate, protected-main
 ancestry, source commit policy, and current public destinations. It creates and
 inspects the exact annotated candidate tag, pushes only that tag ref, dispatches
 publication with a unique correlation ID, follows only the correlated run, runs
-the public verifier, and waits for the correlated documentation deployment. The
-tag is annotated but not cryptographically signed. The command never approves a
-protected environment. It prints the environment and exact run URL when an
-authorized reviewer must use **Review deployments**.
+the public verifier, and waits for the correlated documentation and identifier
+deployments. The tag is annotated but not cryptographically signed. The command
+never approves a protected environment. It prints the environment and exact run
+URL when an authorized reviewer must use **Review deployments**.
 
 The command is resumable. Rerun the same `publish --plan ... --wait` invocation
 after an interruption. It accepts only an exact local-only or immutable remote
@@ -831,8 +837,10 @@ through the fail-closed workflow, and treats an already public release as
 complete only after public verification. If publication became immutable before
 its documentation dispatch completed, the same command reuses a healthy
 correlated docs run or dispatches a new exact tag-and-digest-bound docs run. It
-never moves a tag or overwrites mismatched public state. Add `--verbose-wait`
-only when raw job output is useful.
+also dispatches the identifier publisher again with the same released tag,
+source commit, and catalog digest; that deployment is idempotent and performs
+its live smoke before succeeding. It never moves a tag or overwrites mismatched
+public state. Add `--verbose-wait` only when raw job output is useful.
 
 For break-glass manual operation, omitting `--plan-output` from
 `verify-candidate` still prints the three low-level tag, push, and dispatch
@@ -867,6 +875,13 @@ Publication:
    The same workflow rebuilds `/dev/` on every push to protected `main` while
    retaining the latest authenticated docs-bearing release at the canonical
    and versioned routes.
+8. Dispatches `registrystack-id` with the exact released tag, source commit,
+   and catalog SHA-256, waits for the correlated deployment, and requires the
+   complete live catalog smoke. The publisher verifies the tag target and main
+   ancestry, requires its reviewed committed bundle to match that source and
+   digest, retains older identifiers and digest-addressed artifacts, and deploys
+   only after its deterministic checks pass. It never imports unreviewed source
+   during deployment.
 
 The candidate attestations bind the payload build, while the signed checksum
 chain and checksum provenance authenticate the public inventory and its
@@ -922,6 +937,7 @@ workflow, and it adds no release gate.
 | Candidate expires before the tag is pushed | Request and verify a new candidate |
 | Bound draft or publication step fails while the candidate remains valid | Fix the workflow on protected `main` if needed, then rerun `registry-release publish --plan <candidate-plan.json> --wait` |
 | Documentation dispatch or deployment fails after publication | Rerun `registry-release publish --plan <candidate-plan.json> --wait`; it verifies the immutable release and safely dispatches a new exact docs request when no healthy correlated run remains |
+| Identifier dispatch, deployment, or live smoke fails after publication | Rerun `registry-release publish --plan <candidate-plan.json> --wait`; the already-public release takes the exact closeout path and republishes the same tag, source commit, and catalog digest. If the publisher bundle does not match, merge the reviewed synchronization for that exact released source before retrying. If it reports conflicting immutable bytes, stop and fix forward with a new release |
 | One final image tag already has the expected digest | Retry; publication accepts and re-verifies the exact digest |
 | npm or PyPI already has every expected client byte | Retry; publication accepts and re-verifies the exact registry state |
 | npm or PyPI has only an exact subset of the client packages | Retry; publication uploads only the absent exact packages |
