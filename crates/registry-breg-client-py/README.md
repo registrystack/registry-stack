@@ -46,6 +46,14 @@ Use `get_record_revision` for one strict-decoded historical envelope and
 bytes. `get_record(..., request_history_after_proposal_version=version)` asks
 for proposal history after a known version.
 
+`request_history(record)` is a pure projection over one already loaded record.
+It returns a strict `BRegRetainedRequestHistoryPage`, or `None` when history was
+not returned. A loaded proposal with an empty `result_references` list means only
+that no results were visible in that observation. Pass the page cursor to a
+later explicit `get_record`; the helper does not page, fetch targets, retry, or
+widen authority. Result references grant no read authority, and their target
+revision is applied provenance rather than a current ETag or write precondition.
+
 ## Direct and atomic mutations
 
 Immediate actions explicitly acquire target conditions when the served action

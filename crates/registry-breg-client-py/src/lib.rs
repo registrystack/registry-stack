@@ -22,8 +22,11 @@ use breg_client_sdk::{
     BRegPreparedLifecycle as CorePreparedLifecycle, BRegProblemCode, BRegProtocolFailure,
     BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
     BRegRelationshipContinuationProjection, BRegRelationshipListRequest,
-    BRegRequestApplicationDisposition, BRegRequestProposal, BRegRequestReview,
-    BRegRequestReviewMode, BRegRequestState, BRegSnapshotContinuation,
+    BRegRequestApplicationDisposition, BRegRequestMetadata, BRegRequestProposal,
+    BRegRequestResultReference as CoreRequestResultReference, BRegRequestReview,
+    BRegRequestReviewMode, BRegRequestState,
+    BRegRetainedRequestHistoryPage as CoreRetainedRequestHistoryPage,
+    BRegRetainedRequestProposal as CoreRetainedRequestProposal, BRegSnapshotContinuation,
     BRegSnapshotContinuationProjection, BRegSnapshotListRequest, BRegTombstoneBinding,
     BaseRegistryClient as RustClient, BaseRegistryClientError as RustClientError,
     RegistryRecordRepresentation, RegistryRecordResponse, TokenError,
@@ -1121,6 +1124,186 @@ struct LifecycleAuthority {
 #[pyclass(name = "BRegLifecycleAction", module = "registry_breg_client", frozen)]
 struct LifecycleAction {
     inner: CoreLifecycleAction,
+}
+
+#[pyclass(
+    name = "BRegRequestResultReference",
+    module = "registry_breg_client",
+    frozen
+)]
+struct RequestResultReference {
+    inner: CoreRequestResultReference,
+}
+
+#[pymethods]
+impl RequestResultReference {
+    #[getter]
+    fn target_entity_identifier(&self) -> String {
+        self.inner.target_entity_identifier().to_owned()
+    }
+
+    #[getter]
+    fn target_record_identifier(&self) -> String {
+        self.inner.target_record_identifier().to_string()
+    }
+
+    #[getter]
+    fn target_revision(&self) -> u64 {
+        self.inner.target_revision()
+    }
+
+    fn __repr__(&self) -> &'static str {
+        "BRegRequestResultReference(<redacted>)"
+    }
+}
+
+#[pyclass(
+    name = "BRegRetainedRequestProposal",
+    module = "registry_breg_client",
+    frozen
+)]
+struct RetainedRequestProposal {
+    inner: CoreRetainedRequestProposal,
+}
+
+#[pymethods]
+impl RetainedRequestProposal {
+    #[getter]
+    fn request_entity_identifier(&self) -> String {
+        self.inner.request_entity_identifier().to_owned()
+    }
+
+    #[getter]
+    fn request_identifier(&self) -> String {
+        self.inner.request_identifier().to_string()
+    }
+
+    #[getter]
+    fn proposal_version(&self) -> u32 {
+        self.inner.proposal_version().get()
+    }
+
+    #[getter]
+    fn breg_state(&self) -> &'static str {
+        state_name(self.inner.breg_state())
+    }
+
+    #[getter]
+    fn current(&self) -> bool {
+        self.inner.current()
+    }
+
+    #[getter]
+    fn detail_erased(&self) -> bool {
+        self.inner.detail_erased()
+    }
+
+    #[getter]
+    fn application_identifier(&self) -> Option<String> {
+        self.inner
+            .application_identifier()
+            .map(|value| value.to_string())
+    }
+
+    #[getter]
+    fn result_link_count(&self) -> u16 {
+        self.inner.result_link_count()
+    }
+
+    #[getter]
+    fn result_references(&self) -> Vec<RequestResultReference> {
+        self.inner
+            .result_references()
+            .iter()
+            .cloned()
+            .map(|inner| RequestResultReference { inner })
+            .collect()
+    }
+
+    fn __repr__(&self) -> &'static str {
+        "BRegRetainedRequestProposal(<redacted>)"
+    }
+}
+
+#[pyclass(
+    name = "BRegRetainedRequestHistoryPage",
+    module = "registry_breg_client",
+    frozen
+)]
+struct RetainedRequestHistoryPage {
+    inner: CoreRetainedRequestHistoryPage,
+}
+
+#[pymethods]
+impl RetainedRequestHistoryPage {
+    #[getter]
+    fn proposals(&self) -> Vec<RetainedRequestProposal> {
+        self.inner
+            .proposals()
+            .iter()
+            .cloned()
+            .map(|inner| RetainedRequestProposal { inner })
+            .collect()
+    }
+
+    #[getter]
+    fn next_after_proposal_version(&self) -> Option<u32> {
+        self.inner
+            .next_after_proposal_version()
+            .map(|value| value.get())
+    }
+
+    fn find_proposal(
+        &self,
+        py: Python<'_>,
+        request_entity_identifier: &str,
+        request_identifier: &str,
+        proposal_version: u64,
+    ) -> PyResult<Option<RetainedRequestProposal>> {
+        let request_identifier = uuid::Uuid::parse_str(request_identifier)
+            .map_err(|_| invalid(py, "request_identifier must be a UUID"))?;
+        let proposal_version = u32::try_from(proposal_version)
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| invalid(py, "proposal_version must be 1 through 4294967295"))?;
+        Ok(self
+            .inner
+            .proposals()
+            .iter()
+            .find(|proposal| {
+                proposal.request_entity_identifier() == request_entity_identifier
+                    && proposal.request_identifier() == request_identifier
+                    && proposal.proposal_version().get() == proposal_version
+            })
+            .cloned()
+            .map(|inner| RetainedRequestProposal { inner }))
+    }
+
+    fn find_application(
+        &self,
+        py: Python<'_>,
+        request_entity_identifier: &str,
+        request_identifier: &str,
+        proposal_version: u64,
+        application_identifier: &str,
+    ) -> PyResult<Option<RetainedRequestProposal>> {
+        let application_identifier = uuid::Uuid::parse_str(application_identifier)
+            .map_err(|_| invalid(py, "application_identifier must be a UUID"))?;
+        Ok(self
+            .find_proposal(
+                py,
+                request_entity_identifier,
+                request_identifier,
+                proposal_version,
+            )?
+            .filter(|proposal| {
+                proposal.inner.application_identifier() == Some(application_identifier)
+            }))
+    }
+
+    fn __repr__(&self) -> &'static str {
+        "BRegRetainedRequestHistoryPage(<redacted>)"
+    }
 }
 
 #[pyclass(name = "BRegPreparedCreate", module = "registry_breg_client", frozen)]
@@ -2480,6 +2663,34 @@ impl BaseRegistryClient {
             })
     }
 
+    /// Decode one already loaded record's retained request-history page.
+    /// This performs no I/O and never advances the continuation.
+    #[pyo3(signature = (record, *, format="json"))]
+    fn request_history(
+        &self,
+        py: Python<'_>,
+        record: &Bound<'_, PyAny>,
+        format: &str,
+    ) -> PyResult<Option<RetainedRequestHistoryPage>> {
+        let record = record_value(py, record, record_format(py, format)?)?;
+        let metadata = BRegRequestMetadata::from_record(&record.data)
+            .map_err(|_| invalid(py, "record request history does not conform"))?;
+        let Some(metadata) = metadata else {
+            return Ok(None);
+        };
+        if metadata.retained_history().is_some_and(|history| {
+            history.proposals().iter().any(|proposal| {
+                proposal.request_entity_identifier() != record.meta.entity_type_identifier
+            })
+        }) {
+            return Err(invalid(py, "record request history does not conform"));
+        }
+        Ok(metadata
+            .retained_history()
+            .cloned()
+            .map(|inner| RetainedRequestHistoryPage { inner }))
+    }
+
     #[pyo3(signature = (authority, record, action, idempotency_key, *, format="json"))]
     fn prepare_lifecycle_action(
         &self,
@@ -2611,6 +2822,9 @@ fn registry_breg_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ActionTargetConditions>()?;
     module.add_class::<LifecycleAuthority>()?;
     module.add_class::<LifecycleAction>()?;
+    module.add_class::<RequestResultReference>()?;
+    module.add_class::<RetainedRequestProposal>()?;
+    module.add_class::<RetainedRequestHistoryPage>()?;
     module.add_class::<PreparedCreate>()?;
     module.add_class::<PreparedLifecycle>()?;
     module.add_class::<RecoveredCreate>()?;

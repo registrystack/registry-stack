@@ -34,7 +34,8 @@ const work = new casework.CaseworkClient({
 - `evidence`: Evidence Gateway, request and verify signed minimum-disclosure
   assertions.
 - `relay`: Registry Relay, scoped read-only APIs over existing sources.
-- `breg`: Base Registry Engine, records, contracts, writes, and lifecycle.
+- `breg`: Base Registry Engine, records, contracts, writes, lifecycle, and typed
+  applied-request result navigation.
 - `casework`: Registry Casework, staff inbox, claims, drafts, decisions,
   recovery, history, holdings, and directory bootstrap.
 

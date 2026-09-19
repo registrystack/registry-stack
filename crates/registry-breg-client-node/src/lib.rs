@@ -25,7 +25,10 @@ use registry_breg_client::{
     BRegPreparedCreate as CorePreparedCreate, BRegPreparedLifecycle as CorePreparedLifecycle,
     BRegProblemCode, BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
     BRegRelationshipContinuation, BRegRelationshipContinuationProjection,
-    BRegRelationshipListRequest, BRegRequestReview, BRegSnapshotContinuation,
+    BRegRelationshipListRequest, BRegRequestMetadata,
+    BRegRequestResultReference as CoreRequestResultReference, BRegRequestReview, BRegRequestState,
+    BRegRetainedRequestHistoryPage as CoreRetainedRequestHistoryPage,
+    BRegRetainedRequestProposal as CoreRetainedRequestProposal, BRegSnapshotContinuation,
     BRegSnapshotContinuationProjection, BRegSnapshotListRequest, BRegTombstoneBinding,
     BRegWebhookDelivery as CoreWebhookDelivery, BRegWebhookVerificationError,
     BaseRegistryClient as CoreClient, BaseRegistryClientConfig, BaseRegistryClientError,
@@ -176,6 +179,189 @@ pub struct RawOutcome {
     pub media_type: String,
     pub trace_id: String,
     pub etag: Option<String>,
+}
+
+/// One inert caller-visible target written by an applied request.
+#[napi]
+pub struct RequestResultReference {
+    inner: CoreRequestResultReference,
+}
+
+#[napi]
+impl RequestResultReference {
+    #[napi(getter)]
+    pub fn target_entity_identifier(&self) -> String {
+        self.inner.target_entity_identifier().to_owned()
+    }
+
+    #[napi(getter)]
+    pub fn target_record_identifier(&self) -> String {
+        self.inner.target_record_identifier().to_string()
+    }
+
+    #[napi(getter)]
+    pub fn target_revision(&self) -> i64 {
+        self.inner.target_revision() as i64
+    }
+
+    #[napi(js_name = "toString")]
+    pub fn redacted_string(&self) -> &'static str {
+        "BRegRequestResultReference(<redacted>)"
+    }
+}
+
+/// One exact retained proposal in an explicitly loaded history page.
+#[napi]
+pub struct RetainedRequestProposal {
+    inner: CoreRetainedRequestProposal,
+}
+
+#[napi]
+impl RetainedRequestProposal {
+    #[napi(getter)]
+    pub fn request_entity_identifier(&self) -> String {
+        self.inner.request_entity_identifier().to_owned()
+    }
+
+    #[napi(getter)]
+    pub fn request_identifier(&self) -> String {
+        self.inner.request_identifier().to_string()
+    }
+
+    #[napi(getter)]
+    pub fn proposal_version(&self) -> u32 {
+        self.inner.proposal_version().get()
+    }
+
+    #[napi(getter)]
+    pub fn breg_state(&self) -> &'static str {
+        request_state_name(self.inner.breg_state())
+    }
+
+    #[napi(getter)]
+    pub fn current(&self) -> bool {
+        self.inner.current()
+    }
+
+    #[napi(getter)]
+    pub fn detail_erased(&self) -> bool {
+        self.inner.detail_erased()
+    }
+
+    #[napi(getter)]
+    pub fn application_identifier(&self) -> Option<String> {
+        self.inner
+            .application_identifier()
+            .map(|value| value.to_string())
+    }
+
+    #[napi(getter)]
+    pub fn result_link_count(&self) -> u16 {
+        self.inner.result_link_count()
+    }
+
+    #[napi(getter)]
+    pub fn result_references(&self) -> Vec<RequestResultReference> {
+        self.inner
+            .result_references()
+            .iter()
+            .cloned()
+            .map(|inner| RequestResultReference { inner })
+            .collect()
+    }
+
+    #[napi(js_name = "toString")]
+    pub fn redacted_string(&self) -> &'static str {
+        "BRegRetainedRequestProposal(<redacted>)"
+    }
+}
+
+/// One explicitly loaded retained request-history page.
+#[napi]
+pub struct RetainedRequestHistoryPage {
+    inner: CoreRetainedRequestHistoryPage,
+}
+
+#[napi]
+impl RetainedRequestHistoryPage {
+    #[napi(getter)]
+    pub fn proposals(&self) -> Vec<RetainedRequestProposal> {
+        self.inner
+            .proposals()
+            .iter()
+            .cloned()
+            .map(|inner| RetainedRequestProposal { inner })
+            .collect()
+    }
+
+    #[napi(getter)]
+    pub fn next_after_proposal_version(&self) -> Option<u32> {
+        self.inner
+            .next_after_proposal_version()
+            .map(|value| value.get())
+    }
+
+    #[napi]
+    pub fn find_proposal(
+        &self,
+        request_entity_identifier: String,
+        request_identifier: String,
+        proposal_version: u32,
+    ) -> Result<Option<RetainedRequestProposal>> {
+        let request_identifier = uuid::Uuid::parse_str(&request_identifier)
+            .map_err(|_| binding_error("invalid_request", "requestIdentifier must be a UUID"))?;
+        Ok(self
+            .inner
+            .proposals()
+            .iter()
+            .find(|proposal| {
+                proposal.request_entity_identifier() == request_entity_identifier
+                    && proposal.request_identifier() == request_identifier
+                    && proposal.proposal_version().get() == proposal_version
+            })
+            .cloned()
+            .map(|inner| RetainedRequestProposal { inner }))
+    }
+
+    #[napi]
+    pub fn find_application(
+        &self,
+        request_entity_identifier: String,
+        request_identifier: String,
+        proposal_version: u32,
+        application_identifier: String,
+    ) -> Result<Option<RetainedRequestProposal>> {
+        let application_identifier =
+            uuid::Uuid::parse_str(&application_identifier).map_err(|_| {
+                binding_error("invalid_request", "applicationIdentifier must be a UUID")
+            })?;
+        Ok(self
+            .find_proposal(
+                request_entity_identifier,
+                request_identifier,
+                proposal_version,
+            )?
+            .filter(|proposal| {
+                proposal.inner.application_identifier() == Some(application_identifier)
+            }))
+    }
+
+    #[napi(js_name = "toString")]
+    pub fn redacted_string(&self) -> &'static str {
+        "BRegRetainedRequestHistoryPage(<redacted>)"
+    }
+}
+
+fn request_state_name(value: BRegRequestState) -> &'static str {
+    match value {
+        BRegRequestState::Draft => "draft",
+        BRegRequestState::Submitted => "submitted",
+        BRegRequestState::Approved => "approved",
+        BRegRequestState::NeedsChanges => "needs_changes",
+        BRegRequestState::Rejected => "rejected",
+        BRegRequestState::Canceled => "canceled",
+        BRegRequestState::Applied => "applied",
+    }
 }
 
 /// Inert original Create request evidence. The bytes carry values and an
@@ -2831,6 +3017,37 @@ impl BaseRegistryClient {
                 };
                 mapped_error(json!({"kind": "lifecycle_promotion", "code": code, "message": error.to_string()}))
             })
+    }
+
+    /// Decode one already loaded record's retained request-history page.
+    /// This performs no I/O and does not advance the returned continuation.
+    #[napi]
+    pub fn request_history(
+        &self,
+        record: Value,
+        format_value: Option<String>,
+    ) -> Result<Option<RetainedRequestHistoryPage>> {
+        let record = parse_record(record, format(format_value)?)?;
+        let metadata = BRegRequestMetadata::from_record(&record.data).map_err(|_| {
+            binding_error("invalid_request", "record request history does not conform")
+        })?;
+        let Some(metadata) = metadata else {
+            return Ok(None);
+        };
+        if metadata.retained_history().is_some_and(|history| {
+            history.proposals().iter().any(|proposal| {
+                proposal.request_entity_identifier() != record.meta.entity_type_identifier
+            })
+        }) {
+            return Err(binding_error(
+                "invalid_request",
+                "record request history does not conform",
+            ));
+        }
+        Ok(metadata
+            .retained_history()
+            .cloned()
+            .map(|inner| RetainedRequestHistoryPage { inner }))
     }
 
     #[napi]

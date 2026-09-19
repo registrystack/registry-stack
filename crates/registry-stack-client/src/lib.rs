@@ -14,9 +14,10 @@ pub mod breg {
         BRegMetadata, BRegMetadataSelectionError, BRegMutationRequestError, BRegOperationKind,
         BRegPage, BRegPatchBinding, BRegPatchBuilder, BRegPatchRequest, BRegPlanRefusal,
         BRegProbeStatus, BRegProblemCode, BRegProtocolFailure, BRegRawDocument, BRegRecordFormat,
-        BRegRecordOptions, BRegRequestError, BRegResponseMetadata, BRegVerifiedWebhookDelivery,
-        BRegWebhookDelivery, BRegWebhookVerificationError, BaseRegistryClient,
-        BaseRegistryClientConfig, BaseRegistryClientError, Uuid,
+        BRegRecordOptions, BRegRequestError, BRegRequestMetadata, BRegRequestResultReference,
+        BRegResponseMetadata, BRegRetainedRequestHistoryPage, BRegRetainedRequestProposal,
+        BRegVerifiedWebhookDelivery, BRegWebhookDelivery, BRegWebhookVerificationError,
+        BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError, Uuid,
     };
 }
 

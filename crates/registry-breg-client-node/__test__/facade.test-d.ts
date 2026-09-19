@@ -14,6 +14,7 @@ import {
   BRegPreparedLifecycle,
   BRegRecoveredCreate,
   BRegRecoveredLifecycle,
+  BRegRetainedRequestHistoryPage,
   BRegTombstoneBinding,
   AsOfListContinuation,
   CurrentListContinuation,
@@ -51,6 +52,7 @@ declare const asOfContinuation: AsOfListContinuation
 declare const snapshotContinuation: SnapshotListContinuation
 declare const relationshipContinuation: RelationshipListContinuation
 declare const geoJsonContinuation: GeoJsonListContinuation
+declare const historyPage: BRegRetainedRequestHistoryPage
 
 const verifiedWebhook: VerifiedWebhookDelivery = verifyWebhookDelivery({
   method: 'POST',
@@ -83,6 +85,8 @@ client.patchRecord(patch, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', [
   { op: 'replace', field: 'name', value: 'Grace' },
 ], 'patch-person-1')
 client.lifecycleActions(authority, record)
+client.requestHistory(record)?.proposals.flatMap((proposal) => proposal.resultReferences)
+historyPage.findApplication('request', '9f6973f9-10b3-4c58-b41b-494cba26796f', 2, '8f6973f9-10b3-4c58-b41b-494cba26796f')?.resultReferences[0].targetRevision.toFixed()
 client.executeLifecycleAction(action, 'approve-request-1')
 client.recordRevisions('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', 'auditor')
 client.getRecordRevision('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', 2)

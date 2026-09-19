@@ -936,7 +936,10 @@ fn retained_decisions_preserve_disclosed_withheld_and_absent_reasons() {
     absent["reasonPresent"] = json!(false);
     let mut request = request_metadata(vec![]);
     request["decisions"] = json!([visible.clone(), base.clone(), absent]);
-    request["history"] = json!({"proposals":[{"decisions":[visible.clone()]}]});
+    request["history"] = json!({
+        "proposals": [retained_proposal(6, false, None, vec![], vec![visible.clone()])],
+        "nextAfterProposalVersion": null
+    });
     let decoded = BRegRequestMetadata::from_value(request.clone(), false).unwrap();
     assert_eq!(decoded.decisions().len(), 3);
     assert_eq!(
@@ -951,8 +954,8 @@ fn retained_decisions_preserve_disclosed_withheld_and_absent_reasons() {
     assert!(decoded.decisions()[1].reason().is_none());
     assert!(!decoded.decisions()[2].reason_present());
     assert_eq!(
-        decoded.retained_history().unwrap()["proposals"][0]["decisions"][0],
-        visible
+        decoded.retained_history().unwrap().proposals()[0].decisions()[0].actor_reference(),
+        Some("opaque-reviewer")
     );
     assert_eq!(
         decoded.retained_decisions()[0].actor_reference(),
@@ -990,4 +993,196 @@ fn retained_decisions_preserve_disclosed_withheld_and_absent_reasons() {
             .retained_decisions()
             .is_empty()
     );
+}
+
+#[test]
+fn retained_history_exposes_exact_inert_application_results() {
+    let mut request = request_metadata(vec![]);
+    request["bregState"] = json!("applied");
+    request["history"] = json!({
+        "proposals": [retained_proposal(
+            7,
+            true,
+            Some(APPLICATION_ID),
+            vec![json!({
+                "targetEntityId": "case-target",
+                "targetRecordId": TARGET_ID,
+                "targetRevision": 4
+            })],
+            vec![]
+        )],
+        "nextAfterProposalVersion": 7
+    });
+    let decoded = BRegRequestMetadata::from_value(request, false).unwrap();
+    let history = decoded.retained_history().expect("history was loaded");
+    assert_eq!(history.next_after_proposal_version().unwrap().get(), 7);
+    let proposal = history
+        .find_application(
+            "case-request",
+            uuid::Uuid::parse_str(RECORD_ID).unwrap(),
+            decoded.proposal_version(),
+            uuid::Uuid::parse_str(APPLICATION_ID).unwrap(),
+        )
+        .expect("exact application is on this page");
+    assert_eq!(proposal.breg_state(), BRegRequestState::Applied);
+    assert_eq!(proposal.result_link_count(), 1);
+    assert_eq!(proposal.result_references().len(), 1);
+    assert_eq!(
+        proposal.result_references()[0].target_entity_identifier(),
+        "case-target"
+    );
+    assert_eq!(proposal.result_references()[0].target_revision(), 4);
+    assert!(history
+        .find_application(
+            "case-request",
+            uuid::Uuid::parse_str(RECORD_ID).unwrap(),
+            decoded.proposal_version(),
+            uuid::Uuid::parse_str(TARGET_ID).unwrap(),
+        )
+        .is_none());
+
+    let debug = format!(
+        "{history:?} {proposal:?} {:?}",
+        proposal.result_references()
+    );
+    for secret in [RECORD_ID, TARGET_ID, APPLICATION_ID, "case-target"] {
+        assert!(!debug.contains(secret), "debug output leaked {secret}");
+    }
+}
+
+#[test]
+fn retained_history_distinguishes_not_loaded_from_an_observed_empty_result_list() {
+    let mut absent = request_metadata(vec![]);
+    absent.as_object_mut().unwrap().remove("history");
+    assert!(BRegRequestMetadata::from_value(absent, false)
+        .unwrap()
+        .retained_history()
+        .is_none());
+
+    let mut exhausted = request_metadata(vec![]);
+    exhausted["history"] = Value::Null;
+    assert!(BRegRequestMetadata::from_value(exhausted, false)
+        .unwrap()
+        .retained_history()
+        .is_none());
+
+    let mut observed = request_metadata(vec![]);
+    observed["history"] = json!({
+        "proposals": [retained_proposal(6, false, None, vec![], vec![])],
+        "nextAfterProposalVersion": null
+    });
+    let observed = BRegRequestMetadata::from_value(observed, false).unwrap();
+    let proposal = &observed.retained_history().unwrap().proposals()[0];
+    assert_eq!(proposal.result_link_count(), 0);
+    assert!(proposal.result_references().is_empty());
+}
+
+#[test]
+fn applied_history_accepts_an_earlier_unapplied_proposal() {
+    let mut request = request_metadata(vec![]);
+    request["bregState"] = json!("applied");
+    let mut earlier = retained_proposal(6, false, None, vec![], vec![]);
+    earlier["bregState"] = json!("applied");
+    request["history"] = json!({
+        "proposals": [
+            earlier,
+            retained_proposal(7, true, Some(APPLICATION_ID), vec![], vec![]),
+        ],
+        "nextAfterProposalVersion": null
+    });
+
+    let decoded = BRegRequestMetadata::from_value(request, false).unwrap();
+    let history = decoded.retained_history().expect("history was loaded");
+    assert_eq!(history.proposals().len(), 2);
+    assert!(history.proposals()[0].application_identifier().is_none());
+    assert_eq!(
+        history.proposals()[0].breg_state(),
+        BRegRequestState::Applied
+    );
+    assert!(history.proposals()[1].application_identifier().is_some());
+}
+
+#[test]
+fn retained_history_refuses_malformed_and_inconsistent_shapes() {
+    let valid_result = json!({
+        "targetEntityId": "case-target",
+        "targetRecordId": TARGET_ID,
+        "targetRevision": 4
+    });
+    let valid = retained_proposal(
+        7,
+        true,
+        Some(APPLICATION_ID),
+        vec![valid_result.clone()],
+        vec![],
+    );
+    let candidates = [
+        ("requestEntityId", json!("bad id")),
+        ("requestId", json!("not-a-uuid")),
+        ("proposalVersion", json!(0)),
+        ("resultLinkCount", json!(2)),
+        ("applicationId", Value::Null),
+        ("bregState", json!("submitted")),
+        ("unknown", json!(true)),
+    ];
+    for (field, value) in candidates {
+        let mut request = request_metadata(vec![]);
+        request["bregState"] = json!("applied");
+        let mut proposal = valid.clone();
+        proposal[field] = value;
+        request["history"] = json!({"proposals": [proposal], "nextAfterProposalVersion": null});
+        assert!(
+            BRegRequestMetadata::from_value(request, false).is_err(),
+            "accepted {field}"
+        );
+    }
+    for (field, value) in [
+        ("targetEntityId", json!("bad id")),
+        ("targetRecordId", json!("not-a-uuid")),
+        ("targetRevision", json!(0)),
+        ("targetRevision", json!(9_007_199_254_740_992_u64)),
+        ("unknown", json!(true)),
+    ] {
+        let mut request = request_metadata(vec![]);
+        request["bregState"] = json!("applied");
+        let mut result = valid_result.clone();
+        result[field] = value;
+        request["history"] = json!({
+            "proposals": [retained_proposal(7, true, Some(APPLICATION_ID), vec![result], vec![])],
+            "nextAfterProposalVersion": null
+        });
+        assert!(
+            BRegRequestMetadata::from_value(request, false).is_err(),
+            "accepted {field}"
+        );
+    }
+    let mut invalid_cursor = request_metadata(vec![]);
+    invalid_cursor["history"] = json!({
+        "proposals": [retained_proposal(6, false, None, vec![], vec![])],
+        "nextAfterProposalVersion": 5
+    });
+    assert!(BRegRequestMetadata::from_value(invalid_cursor, false).is_err());
+}
+
+fn retained_proposal(
+    proposal_version: u32,
+    current: bool,
+    application_id: Option<&str>,
+    result_links: Vec<Value>,
+    decisions: Vec<Value>,
+) -> Value {
+    json!({
+        "requestEntityId": "case-request",
+        "requestId": RECORD_ID,
+        "proposalVersion": proposal_version,
+        "bregState": if application_id.is_some() { "applied" } else { "submitted" },
+        "current": current,
+        "contractFingerprint": DIGEST,
+        "detailErased": false,
+        "applicationId": application_id,
+        "resultLinkCount": result_links.len(),
+        "resultLinks": result_links,
+        "effectDigest": DIGEST,
+        "decisions": decisions
+    })
 }

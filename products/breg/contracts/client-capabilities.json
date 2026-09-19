@@ -251,6 +251,18 @@
       ]
     },
     {
+      "id": "applied-request-results",
+      "rust": [
+        "retained_history"
+      ],
+      "node": [
+        "requestHistory"
+      ],
+      "python": [
+        "request_history"
+      ]
+    },
+    {
       "id": "relationships",
       "rust": [
         "list_relationship_records",
