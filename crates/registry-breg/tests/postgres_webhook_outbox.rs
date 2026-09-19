@@ -654,6 +654,21 @@ async fn real_postgres_answer_constraint_upgrade_erases_legacy_handler_message()
         .expect("upgraded delivery state reads");
     assert_eq!(row.get::<_, Option<Vec<u8>>>(0), None);
     assert_eq!(row.get::<_, Option<Vec<u8>>>(1), Some(answer_digest));
+    let raw_answer = migration
+        .execute(
+            "UPDATE registry_internal.registry_webhook_delivery_state
+                SET handler_message = $2
+              WHERE event_id = $1 AND compiled_delivery_id = 'case-created:webhook'",
+            &[&event_id, &answer],
+        )
+        .await
+        .expect_err("the upgraded constraint refuses every retained raw answer");
+    assert_eq!(
+        raw_answer
+            .as_db_error()
+            .and_then(|error| error.constraint()),
+        Some("registry_webhook_delivery_state_answer_digest_required")
+    );
 
     migration_task.abort();
     database.cleanup().await;
