@@ -35,12 +35,12 @@ pub use registry_casework_core::{
     OccurrenceKind, OccurrenceState, OneOfPredicate, OpaqueActorRef, OperationName, Page,
     PageStatus, QueueRecord, RecoverAttemptRequest, ReleaseRequest, RequesterHostedItem,
     RoutingActivity, RoutingCondition, RoutingPredicate, RoutingRule, SaveDraftRequest,
-    SourceBinding, SourcePolicy, SourceReceipt, SourceRequestPolicy, StaffingDiagnostic,
-    SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause, SubjectRef, TaskApprovalRequest,
-    TaskAssertionResponse, TaskGrantBounds, TaskGrantList, TaskGrantRevocation, TaskGrantStatus,
-    TaskGrantStatusDetails, TaskGrantView, TaskPermission, TaskTemplatePreview,
-    TaskTemplatePreviews, TeamRecord, WorkItem, WorkItemPage, WorkItemRouting, WorkingDaysAfter,
-    WorkingDaysBefore, WorkingWeekday,
+    SchedulingTaskPermission, SourceBinding, SourcePolicy, SourceReceipt, SourceRequestPolicy,
+    StaffingDiagnostic, SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause, SubjectRef,
+    TaskApprovalRequest, TaskAssertionResponse, TaskGrantBounds, TaskGrantList,
+    TaskGrantRevocation, TaskGrantStatus, TaskGrantStatusDetails, TaskGrantView, TaskPermission,
+    TaskTemplatePreview, TaskTemplatePreviews, TeamRecord, WorkItem, WorkItemPage, WorkItemRouting,
+    WorkingDaysAfter, WorkingDaysBefore, WorkingWeekday,
 };
 pub use registry_platform_httputil::client::BearerToken;
 pub use task_assertion_source::CaseworkTaskAssertionSource;

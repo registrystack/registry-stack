@@ -286,9 +286,9 @@ pub struct AuditConfig {
     pub hash_key_ref: String,
 }
 
-/// Where due reminder intents are dispatched. An absent reminders destination
-/// is a supported deployment: intents are written and stay local, so an
-/// operator can adopt the product before wiring a notification bus.
+/// Where due reminder and lifecycle-hook intents are dispatched. An absent
+/// reminders destination and an empty hook map are supported: intents stay
+/// local, so an operator can adopt the product before wiring delivery buses.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

@@ -47,9 +47,9 @@ Complete new-image onboarding outside the release clock, in this order:
    token on the command line:
 
 ```sh
-package="${PACKAGE:?set PACKAGE to relay, evidence, discovery, breg, or casework}"
+package="${PACKAGE:?set PACKAGE to relay, evidence, discovery, breg, casework, or scheduling}"
 case "${package}" in
-  relay|evidence|discovery|breg|casework) ;;
+  relay|evidence|discovery|breg|casework|scheduling) ;;
   *) echo "unsupported release image package: ${package}" >&2; exit 1 ;;
 esac
 
@@ -106,7 +106,8 @@ printf '%s' "${GHCR_BOOTSTRAP_TOKEN:?set a classic PAT with write:packages}" \
 Starting with `v0.21.0`, the release requires public `relay`, `evidence`, and
 `mint` packages, joined by `discovery` from `v0.24.0`, `breg` from
 `v0.26.0`, and `casework` from `v0.30.0`. Mint is retired from `v0.31.0`;
-the published `v0.30.0` and older release inventories remain unchanged. After selecting
+`scheduling` joins from `v0.33.0`. The published `v0.32.0` and older release
+inventories remain unchanged. After selecting
 the candidate version, derive its exact image roster and verify each final
 destination:
 
@@ -153,6 +154,13 @@ not establish that `casework` or `casework-candidate` has already been
 provisioned. Complete the onboarding steps above, add `casework-candidate` to
 the cleanup allowlist only after its private package exists, and merge its
 reviewed advisory baseline before requesting that candidate.
+
+Selecting `v0.33.0` or later also includes Scheduling in both checks. The
+release source deliberately deny-lists the public `scheduling` package while
+leaving `scheduling-candidate` out of scheduled cleanup until its private
+package identity exists. Provision both identities, add `scheduling-candidate`
+to the cleanup allowlist with its matching test, and merge a reviewed
+Scheduling advisory baseline before requesting a `v0.33.0` or later candidate.
 
 The daily cleanup tolerates one delete failure: GitHub's 400 stating that
 publicly visible package versions with more than 5000 downloads cannot be
@@ -665,7 +673,7 @@ evidence with the scanner versions pinned in the candidate workflow:
 ```sh
 run_id=<failed-run-id>
 run_attempt=<failed-run-attempt>
-name=relay # or evidence, discovery, or breg
+name=relay # or evidence, discovery, breg, casework, or scheduling
 candidate_tag="ghcr.io/registrystack/${name}-candidate:candidate-${run_id}-${run_attempt}"
 digest="$(crane digest "${candidate_tag}")"
 candidate_ref="ghcr.io/registrystack/${name}-candidate@${digest}"

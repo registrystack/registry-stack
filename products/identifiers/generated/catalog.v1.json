@@ -2716,7 +2716,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "ad049c6b8d0fc70d989197131cd4c674cf728548415b265fd1f2147814f41247",
+        "sha256": "2158f213b60c1da4498818dc6ac456d937ac965984552a0007ad6bd5dfba4938",
         "mediaType": "application/schema+json"
       }
     },

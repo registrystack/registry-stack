@@ -226,7 +226,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "target.mkdir(parents=True, exist_ok=True)\n"
             "for binary in ('registry-manifest', 'relay', 'relayctl', 'evidence', "
             "'evidencectl', 'evidence-oid4vci', 'discovery', 'breg', 'bregctl', "
-            "'casework', 'caseworkctl'):\n"
+            "'casework', 'caseworkctl', 'scheduling'):\n"
             "    (target / binary).write_text('fixture binary\\n')\n",
             encoding="utf-8",
         )
@@ -254,10 +254,11 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "breg = ['breg', 'bregctl'] if parsed >= (0, 26, 0) else []\n"
             "selected = (core if group in ('all', 'core') else []) + "
             "(breg if group in ('all', 'breg') else []) + "
-            "(['casework', 'caseworkctl'] if parsed >= (0, 30, 0) and group in ('all', 'casework') else [])\n"
+            "(['casework', 'caseworkctl'] if parsed >= (0, 30, 0) and group in ('all', 'casework') else []) + "
+            "(['scheduling'] if parsed >= (0, 33, 0) and group in ('all', 'scheduling') else [])\n"
             "for name in selected:\n"
             "    (bin_dir / f'{name}-{tag}-linux-amd64').write_text(name + '\\n')\n"
-            "for name in ('discovery', 'breg', 'casework', 'evidence', 'relay'):\n"
+            "for name in ('discovery', 'breg', 'casework', 'scheduling', 'evidence', 'relay'):\n"
             "    if name in selected:\n"
             "        (image_dir / name).write_text(name + '\\n')\n",
             encoding="utf-8",

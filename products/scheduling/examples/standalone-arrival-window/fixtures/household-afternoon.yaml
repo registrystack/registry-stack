@@ -1,0 +1,52 @@
+apiVersion: registry.registrystack.org/scheduling-fixture/v1alpha1
+kind: SchedulingFixture
+name: household-afternoon
+now: 2026-10-09T20:00:00Z
+facts:
+  locations:
+    - id: civic-hall
+      timezone: Asia/Bangkok
+initial: []
+cases:
+  - name: a-small-household-fits-the-first-band
+    request:
+      offering: household-afternoon
+      start: 2026-10-10T07:00:00Z
+      party:
+        recipients: 3
+        attendees: 3
+      policyRevision: 3
+      windowRevision: 1
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: admitted
+      units: 1
+  - name: a-household-above-the-highest-band-is-refused
+    request:
+      offering: household-afternoon
+      start: 2026-10-10T07:00:00Z
+      party:
+        recipients: 9
+        attendees: 9
+      policyRevision: 3
+      windowRevision: 1
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: refused
+      code: party.capacity-inadequate
+  - name: a-mid-size-household-fits-the-second-band
+    request:
+      offering: household-afternoon
+      start: 2026-10-10T07:00:00Z
+      party:
+        recipients: 6
+        attendees: 6
+      policyRevision: 3
+      windowRevision: 1
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: admitted
+      units: 2

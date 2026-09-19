@@ -31,7 +31,14 @@ class EvidenceTaskBounds(TypedDict):
 class BregTaskBounds(TypedDict):
     type: Literal["breg"]
     permissions: list[TaskPermission]
-TaskGrantBounds: TypeAlias = EvidenceTaskBounds | BregTaskBounds
+class SchedulingTaskPermission(TypedDict):
+    service: str
+    location: str
+    actions: list[str]
+class SchedulingTaskBounds(TypedDict):
+    type: Literal["scheduling"]
+    permissions: list[SchedulingTaskPermission]
+TaskGrantBounds: TypeAlias = EvidenceTaskBounds | BregTaskBounds | SchedulingTaskBounds
 class EvidenceRequesterContext(TypedDict):
     requesterTags: list[str]
     audience: str

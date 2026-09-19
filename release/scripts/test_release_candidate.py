@@ -49,6 +49,7 @@ def security_evidence_members(
         "casework",
         "breg",
         "relay",
+        "scheduling",
     ),
 ) -> dict[str, bytes]:
     refs = {
@@ -381,6 +382,7 @@ class ReleaseCandidateTest(TestCase):
             "breg",
             "casework",
             "relay",
+            "scheduling",
         )
         evidence_members = security_evidence_members(image_names)
         evidence_name = "registry-stack-v1.2.3-security-evidence.tar.gz"
@@ -851,6 +853,24 @@ class ReleaseCandidateTest(TestCase):
         self.assertEqual("installer", future["casework-v0.30.0-install.sh"])
         self.assertEqual("installer", future["casework-install.sh"])
 
+    def test_scheduling_image_joins_only_the_v0_33_roster(self) -> None:
+        self.assertNotIn("scheduling", self.module._candidate_image_names("0.32.0"))
+        self.assertEqual(
+            {
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
+                "relay",
+                "scheduling",
+            },
+            self.module._candidate_image_names("0.33.0"),
+        )
+        self.assertNotIn(
+            "scheduling-v0.33.0-linux-amd64",
+            self.module._relay_v2_payload_inventory("0.33.0"),
+        )
+
     def test_retirement_preserves_every_v0_30_release(self) -> None:
         for version, expected in (
             ("0.30.0", True),
@@ -872,6 +892,8 @@ class ReleaseCandidateTest(TestCase):
             ("0.30.0", "breg casework discovery evidence mint relay\n"),
             ("0.30.1", "breg casework discovery evidence mint relay\n"),
             ("0.31.0", "breg casework discovery evidence relay\n"),
+            ("0.32.0", "breg casework discovery evidence relay\n"),
+            ("0.33.0", "breg casework discovery evidence relay scheduling\n"),
         )
         for version, expected in cases:
             with self.subTest(version=version):
@@ -912,6 +934,25 @@ class ReleaseCandidateTest(TestCase):
             self.module._candidate_image_names("0.31.0"),
             self.module.check_image_onboarding(root, "0.31.0"),
         )
+
+    def test_v0_33_scheduling_onboarding_stays_closed_until_external_setup(self) -> None:
+        root = self.onboarding_repository()
+        shutil.copy2(
+            ROOT / "release/docker/Dockerfile.scheduling",
+            root / "release/docker/Dockerfile.scheduling",
+        )
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "scheduling advisory baseline is missing",
+        ):
+            self.module.check_image_onboarding(root, "0.33.0")
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "CANDIDATE_PACKAGES must contain scheduling-candidate",
+        ):
+            self.module.check_image_onboarding(
+                root, "0.33.0", allow_missing_baseline=True
+            )
 
     def test_image_onboarding_rejects_a_noncanonical_version(self) -> None:
         with self.assertRaisesRegex(
@@ -962,7 +1003,7 @@ class ReleaseCandidateTest(TestCase):
         recipe = root / "release/scripts/build-release-image.sh"
         recipe.write_text(
             recipe.read_text(encoding="utf-8").replace(
-                "discovery|evidence|breg|casework|relay",
+                "discovery|evidence|breg|casework|scheduling|relay",
                 "discovery|evidence|mint|relay",
             ),
             encoding="utf-8",
@@ -1284,7 +1325,7 @@ class ReleaseCandidateTest(TestCase):
         candidate, _, bundle_root, _ = self.make_v2_candidate()
         members = security_evidence_members()
         required = self.module._security_evidence_required_files(
-            self.module.CASEWORK_RUNTIME_IMAGE_NAMES
+            self.module.SCHEDULING_RUNTIME_IMAGE_NAMES
         )
         for missing in sorted(required):
             with self.subTest(missing=missing):

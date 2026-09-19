@@ -14,6 +14,9 @@
   the offering's service, its location, and the action, bounded to 64
   permissions of 32 actions with no wildcard. Only the grant's expiry is
   re-checked inside the capacity transaction.
+- Document the maintained Casework approval and stock ThunderID exchange path,
+  and feed its exact exchanged bearer through Scheduling's real authenticator
+  before the adopter uses it for an appointment.
 - Emit each committed scheduling change as a CloudEvents 1.0 event through the
   outbox to a configured reminder destination, and keep intents readable in
   place when no destination is configured.
@@ -21,9 +24,13 @@
   listing cursors after fifteen minutes. Appointment, history, outbox, and
   audit retention are deferred.
 - Provide `schedulingctl init`, `check`, `test`, `explain`, and `package`, and
-  write a complete `runtime.example.yaml` beside every initialized project.
+  write complete `runtime.example.yaml` and `records.yaml` documents beside
+  every initialized project.
 - Carry the product's own contract checks, security-invariant matrix, and
   offline authoring journey under this folder.
 - Deliver declared `after` URL observers for confirmed, rescheduled, and
   cancelled appointments from a transactionally captured, bounded projection;
   refuse conditions, principals, local handlers, and observer proposals.
+- Re-check hold expiry after locking its supply during confirmation, so a
+  delayed confirmation cannot claim capacity that became bookable and was
+  committed elsewhere after the hold expired.

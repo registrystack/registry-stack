@@ -62,7 +62,7 @@
     },
     "DestinationsConfig": {
       "additionalProperties": false,
-      "description": "Where due reminder intents are dispatched. An absent reminders destination\nis a supported deployment: intents are written and stay local, so an\noperator can adopt the product before wiring a notification bus.",
+      "description": "Where due reminder and lifecycle-hook intents are dispatched. An absent\nreminders destination and an empty hook map are supported: intents stay\nlocal, so an operator can adopt the product before wiring delivery buses.",
       "properties": {
         "hooks": {
           "additionalProperties": {
@@ -293,7 +293,7 @@
         },
         "hookPayloadDays": {
           "default": 7,
-          "description": "Lifetime of canonical hook envelopes retained for retry, dead-letter\ninspection, and optional operator replay.",
+          "description": "Lifetime of canonical hook envelopes retained for retry and\ndead-letter inspection.",
           "format": "uint16",
           "maximum": 65535,
           "minimum": 0,

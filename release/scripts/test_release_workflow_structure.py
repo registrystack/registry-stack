@@ -335,6 +335,21 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             {"discovery", "evidence", "mint", "breg", "relay"},
             module._candidate_image_names("0.26.0"),
         )
+        self.assertEqual(
+            {"breg", "casework", "discovery", "evidence", "relay"},
+            module._candidate_image_names("0.32.0"),
+        )
+        self.assertEqual(
+            {
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
+                "relay",
+                "scheduling",
+            },
+            module._candidate_image_names("0.33.0"),
+        )
         self.assertFalse(
             any(
                 "registry-notary" in name
@@ -512,7 +527,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertEqual("validate", shards["needs"])
         self.assertFalse(shards["strategy"]["fail-fast"])
         self.assertEqual(
-            ["core", "breg", "casework"],
+            ["core", "breg", "casework", "scheduling"],
             shards["strategy"]["matrix"]["group"],
         )
         checkout = shards["steps"][0]
@@ -539,9 +554,14 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         downloads = [
             step for step in consumer["steps"] if "download-artifact@" in str(step)
         ]
-        self.assertEqual(3, len(downloads))
+        self.assertEqual(4, len(downloads))
         self.assertEqual(
-            {"binary-shards/core", "binary-shards/breg", "binary-shards/casework"},
+            {
+                "binary-shards/core",
+                "binary-shards/breg",
+                "binary-shards/casework",
+                "binary-shards/scheduling",
+            },
             {step["with"]["path"] for step in downloads},
         )
         merge = step_run(
@@ -552,6 +572,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "--core binary-shards/core",
             "--breg binary-shards/breg",
             "--casework binary-shards/casework",
+            "--scheduling binary-shards/scheduling",
             '--builder-image "${RELEASE_BUILDER_IMAGE}"',
         ):
             self.assertIn(binding, merge)
@@ -1866,6 +1887,21 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 "evidence",
                 "relay",
             ],
+            "v0.32.0": [
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
+                "relay",
+            ],
+            "v0.33.0": [
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
+                "relay",
+                "scheduling",
+            ],
         }
         manifests = {}
         for tag, image_names in cases.items():
@@ -1919,8 +1955,26 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         )
         self.assertNotEqual(0, rejected.returncode)
 
-        self.assertIn("breg|casework|discovery|evidence|mint|relay)", verify)
+        missing_scheduling = dict(manifests["v0.33.0"])
+        missing_scheduling["images"] = [
+            image
+            for image in missing_scheduling["images"]
+            if image["name"] != "scheduling"
+        ]
+        rejected = subprocess.run(
+            ["jq", "-e", "--arg", "tag", "v0.33.0", jq_filter],
+            input=json.dumps(missing_scheduling),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(0, rejected.returncode)
+
+        self.assertIn(
+            "breg|casework|discovery|evidence|mint|relay|scheduling)", verify
+        )
         self.assertIn("`casework` from\n`v0.30.0`", verify)
+        self.assertIn("Registry Scheduling joins at `v0.33.0`", verify)
 
     def test_operator_docs_match_the_latest_non_prerelease_contract(self) -> None:
         operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")

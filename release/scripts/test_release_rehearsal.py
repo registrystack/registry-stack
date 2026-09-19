@@ -221,7 +221,8 @@ class ReleaseRehearsalTest(unittest.TestCase):
         binary_job = document["jobs"]["canonical-linux-binaries"]
         self.assertFalse(binary_job["strategy"]["fail-fast"])
         self.assertEqual(
-            ["core", "breg", "casework"], binary_job["strategy"]["matrix"]["group"]
+            ["core", "breg", "casework", "scheduling"],
+            binary_job["strategy"]["matrix"]["group"],
         )
         self.assertEqual(
             "${{ github.sha }}", binary_job["steps"][0]["with"]["ref"]
@@ -262,6 +263,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn("breg-v${REHEARSAL_VERSION}-linux-amd64", merge)
         self.assertIn("bregctl-v${REHEARSAL_VERSION}-linux-amd64", merge)
         self.assertIn("--casework binary-shards/casework", merge)
+        self.assertIn("--scheduling binary-shards/scheduling", merge)
         self.assertIn("casework-v${REHEARSAL_VERSION}-linux-amd64", merge)
         self.assertIn("caseworkctl-v${REHEARSAL_VERSION}-linux-amd64", merge)
         self.assertIn(
@@ -271,6 +273,10 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn(
             "if (( release_major > 0 || release_minor >= 30 )); then", merge
         )
+        self.assertIn(
+            "if (( release_major > 0 || release_minor >= 33 )); then", merge
+        )
+        self.assertIn("dist/image-bin/scheduling --version", merge)
         self.assertNotIn("${{ inputs.", merge)
         for forbidden in (
             "npm publish",

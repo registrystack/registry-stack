@@ -37,6 +37,7 @@ PUBLIC_PACKAGES = (
     "mint",
     "breg",
     "casework",
+    "scheduling",
     "relay",
 )
 

@@ -35,10 +35,13 @@ use registry_scheduling::runtime::{
     AuditPublisher,
 };
 use registry_scheduling::service::SchedulingService;
-use registry_scheduling::store::{CommitError, Commitment, PostgresStore, SupplyContext};
+use registry_scheduling::store::{
+    CommitError, CommitOutcome, Commitment, PostgresStore, SupplyContext,
+};
 use registry_scheduling_core::{
-    location_closure_intervals, location_open_intervals, parse_policy_yaml, AdmissionRequest,
-    LocationRecord, PartyCounts, PoolMember, ResourcePool, SchedulingFacts,
+    location_closure_intervals, location_open_intervals, parse_policy_yaml, AdmissionRefusal,
+    AdmissionRequest, LocationRecord, OfferingPolicy, PartyCounts, PoolMember, ResourcePool,
+    SchedulingFacts, SchedulingPolicy,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -451,6 +454,45 @@ fn authenticator() -> SchedulingAuthenticator {
         JwksFetcherConfig::defaults(),
     ));
     SchedulingAuthenticator::new(&oidc, verifier, keys)
+}
+
+/// Resolve the owned exact-time supply pieces a direct store commitment can
+/// borrow. The HTTP service performs the same resolution before it opens the
+/// capacity transaction.
+fn exact_supply_parts(
+    policy: &SchedulingPolicy,
+    facts: &SchedulingFacts,
+    offering: &OfferingPolicy,
+) -> (
+    Vec<PoolMember>,
+    Vec<registry_platform_calendar::CalendarInterval>,
+    Vec<registry_platform_calendar::CalendarInterval>,
+) {
+    let exact = offering
+        .exact_time
+        .as_ref()
+        .expect("the test offering is exact-time");
+    let members = facts
+        .pool(&exact.pool)
+        .expect("the seeded pool")
+        .members
+        .clone();
+    let timezone = facts
+        .location(&offering.location)
+        .expect("the seeded location")
+        .timezone
+        .clone();
+    let exceptions: Vec<_> = facts
+        .exceptions
+        .iter()
+        .filter(|exception| exception.location == offering.location)
+        .map(|exception| exception.borrowed())
+        .collect();
+    let open = location_open_intervals(policy, &offering.location, &timezone, &exceptions)
+        .expect("resolve the openings");
+    let closures = location_closure_intervals(facts, &offering.location, &timezone)
+        .expect("resolve the closures");
+    (members, open, closures)
 }
 
 /// Sign an access token, filling in the claims a real token always carries.
@@ -1621,6 +1663,175 @@ async fn an_expired_hold_returns_capacity_and_refuses_confirmation() {
         .await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(problem["code"], "hold.released");
+}
+
+/// SEC-01 and SEC-11 at their shared transaction boundary. A confirmation may
+/// enter while its hold is live and pause before it reaches the supply anchor.
+/// Once the hold expires, a later transaction may reclaim and book that
+/// capacity. The delayed confirmation must observe expiry after it takes the
+/// anchor; transferring under its older request time would leave two active
+/// bookings on one member.
+#[tokio::test]
+async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "expiry-race-hold",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "the setup hold commits: {hold}"
+    );
+    let hold_id =
+        Uuid::parse_str(hold["holdId"].as_str().expect("a hold id")).expect("a hold UUID");
+    let expires_at = moment(&hold, "expiresAt");
+    let confirmation_started_at = expires_at - TimeDelta::seconds(1);
+    let after_expiry = expires_at + TimeDelta::seconds(1);
+    let hold_actor = fx
+        .store
+        .claim(hold_id)
+        .await
+        .expect("read the held claim")
+        .expect("the hold stands")
+        .actor;
+
+    // Capture the confirmation's request clock and resolved supply while the
+    // hold is live, then stop it before the capacity transaction opens. This
+    // is the same gap as authentication and supply resolution in the service.
+    let delayed_store = fx.store.clone();
+    let delayed_revision = fx.revision;
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+    let delayed = tokio::spawn(async move {
+        let policy = parse_policy_yaml(POLICY).expect("the scheduling test policy");
+        let offering = policy.offering(OFFERING).expect("the test offering");
+        let (facts, facts_revision) = delayed_store
+            .facts()
+            .await
+            .expect("resolve supply before the stall");
+        let (members, open, closures) = exact_supply_parts(&policy, &facts, offering);
+        let supply = SupplyContext::ExactTime {
+            exact: offering
+                .exact_time
+                .as_ref()
+                .expect("the exact-time offering"),
+            members: &members,
+            open: &open,
+            closures: &closures,
+        };
+        let commitment = Commitment {
+            now: confirmation_started_at,
+            policy_revision: i64::try_from(delayed_revision).expect("a bounded revision"),
+            facts_revision,
+            actor: &hold_actor,
+            actor_issuer: ISSUER,
+            actor_subject: "principal-agent",
+            idempotency_key: "expiry-race-confirm",
+            request_hash: "sha256:expiry-race-confirm",
+            attempt_expires_at: confirmation_started_at + TimeDelta::days(7),
+            grant_exp_unix: None,
+            audit_event: Uuid::new_v4(),
+            audit_record: operator_audit(),
+            hooks: None,
+        };
+        started_tx
+            .send(())
+            .expect("the test is waiting for the captured confirmation");
+        resume_rx.await.expect("resume the delayed confirmation");
+        delayed_store
+            .confirm_hold(hold_id, offering, &supply, commitment)
+            .await
+    });
+    started_rx
+        .await
+        .expect("the confirmation captured its live-hold context");
+
+    // A later request sees the hold as expired and legitimately books the
+    // released capacity before the older confirmation reaches its anchor.
+    let policy = parse_policy_yaml(POLICY).expect("the scheduling test policy");
+    let offering = policy.offering(OFFERING).expect("the test offering");
+    let (facts, facts_revision) = fx.store.facts().await.expect("resolve current supply");
+    let (members, open, closures) = exact_supply_parts(&policy, &facts, offering);
+    let supply = SupplyContext::ExactTime {
+        exact: offering
+            .exact_time
+            .as_ref()
+            .expect("the exact-time offering"),
+        members: &members,
+        open: &open,
+        closures: &closures,
+    };
+    let request: AdmissionRequest =
+        serde_json::from_value(admission(&fx, OFFERING, slot)).expect("the admission request");
+    let competing = fx
+        .store
+        .create_appointment(
+            offering,
+            &supply,
+            &request,
+            Commitment {
+                now: after_expiry,
+                policy_revision: i64::try_from(fx.revision).expect("a bounded revision"),
+                facts_revision,
+                actor: "competing-actor",
+                actor_issuer: ISSUER,
+                actor_subject: "competing-principal",
+                idempotency_key: "expiry-race-booking",
+                request_hash: "sha256:expiry-race-booking",
+                attempt_expires_at: after_expiry + TimeDelta::days(7),
+                grant_exp_unix: None,
+                audit_event: Uuid::new_v4(),
+                audit_record: operator_audit(),
+                hooks: None,
+            },
+        )
+        .await
+        .expect("the expired hold releases capacity to the competing booking");
+    assert!(matches!(competing, CommitOutcome::Booking(_)));
+
+    // The delayed confirmation now reaches the anchor under a clock after the
+    // hold's expiry. It must refuse instead of transferring already-booked
+    // capacity under its older request observation.
+    fx.store.pin_clock(Arc::new(move || after_expiry));
+    resume_tx
+        .send(())
+        .expect("the delayed confirmation is still waiting");
+    let confirmation = delayed.await.expect("the confirmation task answers");
+    assert!(
+        matches!(
+            confirmation,
+            Err(CommitError::Refused(AdmissionRefusal::HoldExpired))
+        ),
+        "the delayed confirmation is refused as expired: {confirmation:?}"
+    );
+
+    let counts = fx
+        .admin
+        .query_one(
+            "SELECT \
+                 (SELECT count(*) FROM scheduling_claims \
+                  WHERE kind='booking' AND state='active' AND displayed_start=$1), \
+                 (SELECT state FROM scheduling_claims WHERE claim_id=$2)",
+            &[&slot, &hold_id],
+        )
+        .await
+        .expect("read the capacity decision");
+    assert_eq!(
+        counts.get::<_, i64>(0),
+        1,
+        "the expired hold never creates a second active booking"
+    );
+    assert_eq!(
+        counts.get::<_, String>(1),
+        "active",
+        "the refused confirmation rolls back without consuming the hold row"
+    );
 }
 
 #[tokio::test]
