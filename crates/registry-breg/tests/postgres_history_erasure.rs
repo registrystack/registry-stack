@@ -68,6 +68,7 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use base64::Engine as _;
 use registry_platform_audit::AuditProfile;
 use serde_json::{json, Value};
 use tracing::instrument::WithSubscriber;
@@ -383,6 +384,7 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
 
     let http = snapshot_client_http(
         &database,
+        &migration,
         Arc::new(registry),
         expected.clone(),
         audit_profile.clone(),
@@ -2185,22 +2187,56 @@ async fn assert_erasure_audit_is_minimized(database: &TestDatabase, profile: &Au
 
 async fn snapshot_client_http(
     database: &TestDatabase,
+    key_store: &tokio_postgres::Client,
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: ExpectedRegistryIdentity,
     audit: AuditProfile,
 ) -> client_http::ClientHttp {
     use registry_breg::api::{HttpService, ReadRuntimeIdentity};
     use registry_breg::cursor::CursorCodec;
+    use registry_breg::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
     use registry_breg::postgres::{PostgresRecordReadService, PostgresSnapshotReadService};
-    use zeroize::Zeroizing;
+    use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
 
     let pool = database
         .runtime_config
         .build_pool()
         .expect("runtime pool builds after history erasure");
+    let secret_root = tempfile::tempdir().expect("field-encryption secret root creates");
+    let dek_path = secret_root.path().join("field-dek");
+    std::fs::write(
+        &dek_path,
+        base64::engine::general_purpose::STANDARD.encode([0x42_u8; 32]),
+    )
+    .expect("field-encryption data key writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&dek_path, std::fs::Permissions::from_mode(0o600))
+            .expect("field-encryption data key is owner-only");
+    }
+    let dek_ref = SecretReference::parse("secret:file/field-dek")
+        .expect("field-encryption key reference parses");
+    let secrets = SecretResolver::new([SecretProvider::File], secret_root.path())
+        .expect("field-encryption secret resolver builds");
+    let field_encryption = Arc::new(
+        FieldEncryptionService::initialize(
+            &FieldEncryptionProvider::LocalFile { dek_ref },
+            registry.registry_id(),
+            &identity.package_revision,
+            &secrets,
+            key_store,
+        )
+        .await
+        .expect("local field-encryption key state activates"),
+    );
     let lock_key = RegistryLockKey::derive(registry.registry_id()).unwrap();
     let cursors = Arc::new(
-        CursorCodec::new(Zeroizing::new(vec![0x5b; 32]), Duration::from_secs(300)).unwrap(),
+        CursorCodec::new(
+            zeroize::Zeroizing::new(vec![0x5b; 32]),
+            Duration::from_secs(300),
+        )
+        .unwrap(),
     );
     let records = PostgresRecordReadService::new(
         pool.clone(),
@@ -2210,7 +2246,8 @@ async fn snapshot_client_http(
         Duration::from_secs(2),
         audit.clone(),
         cursors.clone(),
-    );
+    )
+    .with_field_encryption(Arc::clone(&field_encryption));
     let snapshots = PostgresSnapshotReadService::new(
         pool,
         registry.clone(),
@@ -2219,7 +2256,8 @@ async fn snapshot_client_http(
         Duration::from_secs(2),
         audit,
         cursors.clone(),
-    );
+    )
+    .with_field_encryption(Arc::clone(&field_encryption));
     let service = HttpService::new(
         registry,
         ReadRuntimeIdentity {
@@ -2230,7 +2268,8 @@ async fn snapshot_client_http(
         Arc::new(SnapshotReady),
         cursors,
     )
-    .with_snapshots(Arc::new(snapshots));
+    .with_snapshots(Arc::new(snapshots))
+    .with_field_encryption(field_encryption);
     let claims = registry_breg::api::VerifiedRequestClaims::authenticated(
         "registry_principal",
         "history-erasure-sdk-reader",
