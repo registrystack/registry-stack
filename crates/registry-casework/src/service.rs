@@ -2117,7 +2117,7 @@ pub enum ServiceError {
     #[error("the source became unavailable after the durable attempt was stored")]
     PostWriteSourceUnavailable(Uuid),
     #[error(transparent)]
-    HostedValidation(#[from] registry_casework_core::HostedValidationError),
+    ReviewValidation(#[from] registry_casework_core::ReviewValidationError),
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]

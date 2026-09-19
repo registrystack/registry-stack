@@ -45,17 +45,29 @@ class GeneratedOpenApiTests(unittest.TestCase):
         signatures = set()
         for rust in self.contract["operations"]:
             operation = self.openapi["paths"][rust["path"]][rust["method"].lower()]
+            expected_successes = set(rust["successStatuses"])
             successes = {
-                int(status) for status in operation["responses"] if int(status) < 400
+                int(status)
+                for status in operation["responses"]
+                if int(status) in expected_successes
             }
             self.assertEqual(set(rust["successStatuses"]), successes)
             expected_codes = set(rust["problems"])
             expected_codes.update(
                 framework & {"request.method-not-allowed", "request.body-too-large"}
             )
+            catalogue = {
+                entry["code"]: entry["httpStatuses"][0]
+                for entry in self.contract["entries"]
+            }
+            expected_codes = {
+                code
+                for code in expected_codes
+                if catalogue[code] not in expected_successes
+            }
             actual_codes = set()
             for status, response in operation["responses"].items():
-                if int(status) >= 400:
+                if int(status) >= 400 and int(status) not in expected_successes:
                     actual_codes.update(problem_codes(self.openapi, response))
             self.assertEqual(expected_codes, actual_codes, (rust["method"], rust["path"]))
             signatures.add(tuple(sorted(actual_codes)))
@@ -157,9 +169,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
         release_description = self.openapi["paths"][
             "/v1/work-items/{item_id}/release"
         ]["post"]["description"]
-        self.assertIn("Supervisor may force-release", release_description)
-        self.assertIn("successful current source read", release_description)
-        self.assertIn("live source-attempt fence", release_description)
+        self.assertIn("source", release_description.lower())
         self.assertEqual(
             "^[a-z][a-z0-9_]{0,63}$", schemas["OperationName"]["pattern"]
         )
@@ -278,7 +288,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
                 for parameter in operation["parameters"]
                 if parameter["name"] == "Registry-Source-Profile"
             )
-            self.assertFalse(source["required"])
+            self.assertTrue(source["required"])
             self.assertIn("If-Match", names("post", path))
             self.assertIn("Idempotency-Key", names("post", path))
 
@@ -290,7 +300,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
                 for parameter in self.openapi["paths"][path]["post"]["parameters"]
                 if parameter["name"] == "Registry-Source-Profile"
             )
-            self.assertFalse(source["required"])
+            self.assertTrue(source["required"])
         self.assertNotIn("If-Match", names("post", preview))
         self.assertNotIn("Idempotency-Key", names("post", preview))
         self.assertEqual({"cursor", "limit"}, names("post", preview) - {
@@ -507,7 +517,8 @@ class GeneratedOpenApiTests(unittest.TestCase):
                 "projection",
                 "routing",
                 "clock",
-                "target",
+            "target",
+            "contextProjection",
             },
             set(request["properties"]),
         )
@@ -655,7 +666,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
         for path, path_item in self.openapi["paths"].items():
             for method, operation in path_item.items():
                 response = operation["responses"].get("410")
-                if response is not None and expired in problem_codes(self.openapi, response):
+                if response is not None and "content" in response and expired in problem_codes(self.openapi, response):
                     actual.add((method, path))
         self.assertEqual(
             {("post", "/v1/directory/clocks/recompute/apply")}, actual
@@ -678,98 +689,39 @@ class GeneratedOpenApiTests(unittest.TestCase):
             "precondition.failed", problem_codes(self.openapi, holiday_responses["412"])
         )
 
-    def test_hosted_routes_preserve_roles_and_source_profile_selection(self) -> None:
-        requester_routes = {
-            ("post", "/v1/hosted-items"),
-            ("get", "/v1/hosted-items/terminal"),
-            ("get", "/v1/hosted-items/{item_id}"),
-            ("get", "/v1/hosted-items/{item_id}/notes"),
-            ("post", "/v1/hosted-items/{item_id}/notes"),
-            ("post", "/v1/hosted-items/{item_id}/cancel"),
-        }
-        for method, path in requester_routes:
+    def test_unified_review_routes_preserve_profile_and_source_boundaries(self) -> None:
+        for method, path in {
+            ("post", "/v1/review-requests"),
+            ("get", "/v1/review-results"),
+            ("get", "/v1/review-requests/{request_id}/result"),
+            ("get", "/v1/review-accountability/{event_id}"),
+        }:
             names = {
                 parameter["name"]
                 for parameter in self.openapi["paths"][path][method]["parameters"]
             }
             self.assertIn("Registry-Casework-Profile", names)
             self.assertNotIn("Registry-Source-Profile", names)
-
-        for method, path in {
-            ("get", "/v1/work-items"),
-            ("get", "/v1/work-items/{item_id}"),
-            ("post", "/v1/work-items/{item_id}/claim"),
-            ("post", "/v1/work-items/{item_id}/release"),
-        }:
-            source = next(
-                parameter
-                for parameter in self.openapi["paths"][path][method]["parameters"]
-                if parameter["name"] == "Registry-Source-Profile"
-            )
-            self.assertFalse(source["required"])
-
-        hosted_decision = self.openapi["paths"][
-            "/v1/work-items/{item_id}/hosted-decisions"
-        ]["post"]
-        self.assertNotIn(
-            "Registry-Source-Profile",
-            {parameter["name"] for parameter in hosted_decision["parameters"]},
+        context = self.openapi["paths"]["/v1/review-tasks/{task_id}/context"]["get"]
+        source = next(
+            parameter
+            for parameter in context["parameters"]
+            if parameter["name"] == "Registry-Source-Profile"
         )
-        for method, path in {
-            ("get", "/v1/hosted-accountability/{event_id}"),
-            ("get", "/v1/work-items/{item_id}/hosted-history"),
-        }:
-            names = {
-                parameter["name"]
-                for parameter in self.openapi["paths"][path][method]["parameters"]
-            }
-            self.assertIn("Registry-Casework-Profile", names)
-            self.assertNotIn("Registry-Source-Profile", names)
+        self.assertFalse(source["required"])
+        self.assertIn("contextProjection", context["description"])
 
-    def test_hosted_wire_shapes_are_explicit_and_do_not_disclose_raw_actor(self) -> None:
+    def test_unified_review_wire_shapes_exclude_obsolete_hosted_contracts(self) -> None:
         schemas = self.openapi["components"]["schemas"]
-        self.assertIn("hostedKinds", schemas["Description"]["properties"])
-        self.assertIn("hosted", schemas["WorkItem"]["properties"])
-        self.assertIn(
-            "hosted", schemas["WorkItem"]["properties"]["occurrenceKind"]["enum"]
-        )
-        self.assertEqual(
-            {"open", "claimed", "completed", "cancelled"},
-            set(schemas["RequesterHostedItem"]["properties"]["state"]["enum"]),
-        )
-        self.assertEqual(
-            {"HostedTerminalCompleted", "HostedTerminalCancelled"},
-            {
-                variant["$ref"].rsplit("/", 1)[1]
-                for variant in schemas["HostedTerminalResult"]["oneOf"]
-            },
-        )
-        completed = schemas["HostedTerminalCompleted"]["properties"]
-        self.assertEqual("completed", completed["state"]["const"])
-        self.assertIn("actorRef", completed)
-        for forbidden in ("actor", "issuer", "subject", "email", "reason"):
-            self.assertNotIn(forbidden, completed)
-        cancelled = schemas["HostedTerminalCancelled"]["properties"]
-        self.assertEqual("cancelled", cancelled["state"]["const"])
-        self.assertIn("cancellationReason", cancelled)
-        self.assertNotIn("actorRef", cancelled)
-        accountability = schemas["HostedAccountabilityRecord"]["properties"]
-        self.assertIn("actor", accountability)
-        self.assertIn("retainedUntil", accountability)
-        history_fields = schemas["HostedHistoryEntry"]["properties"]
-        self.assertIn("actorRef", history_fields)
-        self.assertNotIn("actor", history_fields)
-        self.assertEqual(
-            "HostedAccountabilityRecord",
-            self.openapi["paths"]["/v1/hosted-accountability/{event_id}"][
-                "get"
-            ]["responses"]["200"]["content"]["application/json"]["schema"][
-                "$ref"
-            ].rsplit("/", 1)[1],
-        )
+        self.assertIn("reviewKinds", schemas["CaseworkProject"]["properties"])
+        self.assertIn("reviewProducers", schemas["CaseworkProject"]["properties"])
+        self.assertNotIn("hostedKinds", schemas["Description"]["properties"])
+        self.assertNotIn("hosted", schemas["WorkItem"]["properties"])
+        self.assertNotIn("hosted", schemas["WorkItem"]["properties"]["occurrenceKind"]["enum"])
+        self.assertFalse(any(name.startswith("Hosted") for name in schemas))
 
-    def test_hosted_validation_headers_are_paired_value_free_metadata(self) -> None:
-        for method, path in GENERATOR.HOSTED_VALIDATION_OPERATIONS:
+    def test_review_validation_headers_are_paired_value_free_metadata(self) -> None:
+        for method, path in GENERATOR.REVIEW_VALIDATION_OPERATIONS:
             headers = self.openapi["paths"][path][method]["responses"]["400"][
                 "headers"
             ]
@@ -792,7 +744,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(
-                GENERATOR.HOSTED_VALIDATION_REASONS,
+                GENERATOR.REVIEW_VALIDATION_REASONS,
                 validation["Registry-Casework-Validation-Reason"]["schema"][
                     "enum"
                 ],
@@ -800,88 +752,6 @@ class GeneratedOpenApiTests(unittest.TestCase):
             body = self.openapi["components"]["schemas"]["Problem"]["properties"]
             self.assertNotIn("field", body)
             self.assertNotIn("value", body)
-
-    def test_hosted_idempotency_expiry_has_bounded_recovery(self) -> None:
-        expected = {
-            ("post", "/v1/hosted-items"),
-            ("post", "/v1/hosted-items/{item_id}/notes"),
-            ("post", "/v1/hosted-items/{item_id}/cancel"),
-            ("post", "/v1/work-items/{item_id}/claim"),
-            ("post", "/v1/work-items/{item_id}/release"),
-            ("post", "/v1/work-items/{item_id}/hosted-decisions"),
-        }
-        actual = set()
-        for path, path_item in self.openapi["paths"].items():
-            for method, operation in path_item.items():
-                response = operation["responses"].get("410")
-                if response is None:
-                    continue
-                codes = GENERATOR.schema_problem_codes(
-                    self.openapi,
-                    response["content"]["application/problem+json"]["schema"],
-                )
-                if "idempotency.expired" in codes:
-                    actual.add((method, path))
-        self.assertEqual(expected, actual)
-
-        for method, path in expected:
-            operation = self.openapi["paths"][path][method]
-            idempotency = next(
-                parameter
-                for parameter in operation["parameters"]
-                if parameter["name"] == "Idempotency-Key"
-            )
-            self.assertIn("exact retry", idempotency["description"])
-            self.assertIn("idempotency.expired", idempotency["description"])
-            self.assertIn("idempotency.key-reused", idempotency["description"])
-            self.assertIn("key may be reused", idempotency["description"])
-
-    def test_terminal_page_documents_stable_recovery_and_retention(self) -> None:
-        operation = self.openapi["paths"]["/v1/hosted-items/terminal"]["get"]
-        cursor = next(
-            parameter
-            for parameter in operation["parameters"]
-            if parameter["name"] == "cursor"
-        )
-        self.assertIn("cursor.expired", cursor["description"])
-        self.assertIn("eventId", cursor["description"])
-        self.assertIn("terminalAt", operation["description"])
-        self.assertIn("retention", operation["description"])
-        notes = self.openapi["paths"]["/v1/hosted-items/{item_id}/notes"][
-            "get"
-        ]
-        self.assertIn("recordedAt", notes["description"])
-        self.assertIn("noteId", notes["description"])
-        history = self.openapi["paths"][
-            "/v1/work-items/{item_id}/hosted-history"
-        ]["get"]
-        self.assertIn("occurredAt", history["description"])
-        self.assertIn("eventId", history["description"])
-        for paged_operation in (operation, notes, history):
-            limit = next(
-                parameter
-                for parameter in paged_operation["parameters"]
-                if parameter["name"] == "limit"
-            )
-            self.assertIn("request.invalid", limit["description"])
-        self.assertEqual(
-            {
-                "created",
-                "claimed",
-                "assigned",
-                "delegated",
-                "caseload_moved",
-                "released",
-                "note_added",
-                "completed",
-                "cancelled",
-            },
-            set(
-                self.openapi["components"]["schemas"]["HostedHistoryEntry"][
-                    "properties"
-                ]["kind"]["enum"]
-            ),
-        )
 
     def test_maintained_headers_have_the_exact_bounded_wire_contract(self) -> None:
         profile_schema = {

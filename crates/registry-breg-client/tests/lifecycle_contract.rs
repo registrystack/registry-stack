@@ -28,6 +28,7 @@ const OTHER_ID: &str = "00000000-0000-4000-8000-000000000002";
 const APPLICATION_ID: &str = "00000000-0000-4000-8000-000000000003";
 const RESULT_ID: &str = "00000000-0000-4000-8000-000000000004";
 const EVENT_ID: &str = "00000000-0000-4000-8000-000000000005";
+const TARGET_ID: &str = "00000000-0000-4000-8000-000000000006";
 const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const ACTION_ETAG: &str =
     "\"breg-action-hmac-sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"";
@@ -380,6 +381,7 @@ fn receipt_for(operation: BRegLifecycleOperation) -> BRegLifecycleActionReceipt 
 fn retained_history_exposes_exact_inert_application_results() {
     let mut request = request_metadata(vec![]);
     request["bregState"] = json!("applied");
+    request["application"] = retained_application();
     request["history"] = json!({
         "proposals": [retained_proposal(
             7,
@@ -461,6 +463,7 @@ fn retained_history_distinguishes_not_loaded_from_an_observed_empty_result_list(
 fn applied_history_accepts_an_earlier_unapplied_proposal() {
     let mut request = request_metadata(vec![]);
     request["bregState"] = json!("applied");
+    request["application"] = retained_application();
     let mut earlier = retained_proposal(6, false, None, vec![]);
     earlier["bregState"] = json!("applied");
     request["history"] = json!({
@@ -489,12 +492,7 @@ fn retained_history_refuses_malformed_and_inconsistent_shapes() {
         "targetRecordId": TARGET_ID,
         "targetRevision": 4
     });
-    let valid = retained_proposal(
-        7,
-        true,
-        Some(APPLICATION_ID),
-        vec![valid_result.clone()],
-    );
+    let valid = retained_proposal(7, true, Some(APPLICATION_ID), vec![valid_result.clone()]);
     let candidates = [
         ("requestEntityId", json!("bad id")),
         ("requestId", json!("not-a-uuid")),
@@ -561,5 +559,14 @@ fn retained_proposal(
         "resultLinkCount": result_links.len(),
         "resultLinks": result_links,
         "effectDigest": DIGEST
+    })
+}
+
+fn retained_application() -> Value {
+    json!({
+        "applicationId": APPLICATION_ID,
+        "proposalVersion": 7,
+        "effectDigest": DIGEST,
+        "appliedAt": "2026-09-19T01:00:00Z"
     })
 }

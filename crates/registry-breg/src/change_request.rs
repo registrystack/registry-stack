@@ -2219,23 +2219,6 @@ fn validate_permission_access_requirements(
     }
 }
 
-fn validate_target_fields(
-    entity: &CompiledEntity,
-    fields: &BTreeSet<String>,
-    path: &str,
-    errors: &mut Vec<Diagnostic>,
-) {
-    for field in fields {
-        if !entity.fields.contains_key(field) && !entity.attachments.contains_key(field) {
-            errors.push(Diagnostic::error(
-                "change_request.permission.field_unknown",
-                path,
-                "a change-request permission refers to an unknown target field or attachment slot",
-            ));
-        }
-    }
-}
-
 fn validate_row_boundaries(
     entity: &CompiledEntity,
     boundaries: &[RowBoundarySource],

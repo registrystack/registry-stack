@@ -23,7 +23,13 @@ pub struct TaskTemplate {
     pub eligible_teams: Vec<String>,
     pub eligible_profiles: Vec<String>,
     pub source: String,
+    /// Unified review kinds whose currently-held tasks may issue this grant.
+    /// This is a separate eligibility mode from source work-item kinds/states.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review_kinds: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub item_kinds: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub item_states: Vec<OccurrenceState>,
     pub agent: IssuerPrincipal,
     pub client: String,
@@ -113,7 +119,10 @@ impl TaskTemplate {
             .iter()
             .find(|source| source.id == self.source)
             .ok_or(TaskGrantError::Policy)?;
-        if !crate::valid_directory_identifier(&self.id)
+        let work_item_mode = !self.item_kinds.is_empty() || !self.item_states.is_empty();
+        let review_mode = !self.review_kinds.is_empty();
+        if work_item_mode == review_mode
+            || !crate::valid_directory_identifier(&self.id)
             || !bounded(&self.version, 128)
             || !bounded(&self.label, 160)
             || !unique(&self.eligible_teams, 32)
@@ -128,28 +137,42 @@ impl TaskTemplate {
                         && matches!(profile.role, CaseworkRole::Staff | CaseworkRole::Supervisor)
                 })
             })
-            || !unique(&self.item_kinds, 32)
-            || self.item_kinds.iter().any(|kind| {
-                !source
-                    .requests
-                    .iter()
-                    .any(|request| request.entity == *kind)
-            })
-            || self.item_states.is_empty()
+            || (work_item_mode && !unique(&self.item_kinds, 32))
+            || (work_item_mode
+                && self.item_kinds.iter().any(|kind| {
+                    !source
+                        .requests
+                        .iter()
+                        .any(|request| request.entity == *kind)
+                }))
+            || (work_item_mode && self.item_states.is_empty())
             || self.item_states.len() > 4
-            || self.item_states.iter().any(|state| {
-                !matches!(
-                    state,
-                    OccurrenceState::Claimed
-                        | OccurrenceState::WaitingApplicant
-                        | OccurrenceState::WaitingApplication
-                )
-            })
+            || (work_item_mode
+                && self.item_states.iter().any(|state| {
+                    !matches!(
+                        state,
+                        OccurrenceState::Claimed
+                            | OccurrenceState::WaitingApplicant
+                            | OccurrenceState::WaitingApplication
+                    )
+                }))
             || self
                 .item_states
                 .iter()
                 .enumerate()
                 .any(|(index, state)| self.item_states[..index].contains(state))
+            || (review_mode && !unique(&self.review_kinds, 32))
+            || self.review_kinds.iter().any(|kind| {
+                !project.review_kinds.iter().any(|candidate| {
+                    candidate.id == *kind
+                        && candidate.stages.iter().any(|stage| {
+                            stage
+                                .deciding_profiles
+                                .iter()
+                                .any(|profile| self.eligible_profiles.contains(profile))
+                        })
+                })
+            })
             || !bounded(&self.agent.issuer, 512)
             || !bounded(&self.agent.subject, 512)
             || !bounded(&self.client, 512)
@@ -276,6 +299,40 @@ pub struct TaskGrant {
     pub subjects: BTreeMap<String, Value>,
     pub approved_at: u64,
     pub expires_at: u64,
+}
+
+/// Protected review-native task grant. It binds authorization to the exact
+/// active task holder, task revision, immutable review subject, and governed
+/// template version/digest. A terminal review outcome never creates one.
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewTaskGrant {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub request_id: Uuid,
+    pub task_revision: i64,
+    pub holder: IssuerPrincipal,
+    pub template: TaskTemplate,
+    pub template_digest: crate::ContentDigest,
+    pub source_issuer: String,
+    pub approver_profile: String,
+    pub subject: crate::SubjectBinding,
+    pub source_subject: SubjectRef,
+    pub proposal: TaskProposalIdentity,
+    pub subjects: BTreeMap<String, Value>,
+    pub approved_at: u64,
+    pub expires_at: u64,
+}
+
+impl fmt::Debug for ReviewTaskGrant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReviewTaskGrant")
+            .field("task_id", &self.task_id)
+            .field("request_id", &self.request_id)
+            .field("task_revision", &self.task_revision)
+            .field("expires_at", &self.expires_at)
+            .finish_non_exhaustive()
+    }
 }
 impl fmt::Debug for TaskGrant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

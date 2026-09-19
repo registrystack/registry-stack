@@ -536,7 +536,7 @@ fn change_request_correction_project(
     extra_entity: &str,
     request_reason_classification: &str,
     target_label_classification: &str,
-    review_boundaries: &str,
+    _review_boundaries: &str,
     apply_boundaries: &str,
     reviewer_scopes: &str,
 ) -> Vec<u8> {
@@ -574,7 +574,8 @@ fn change_request_correction_project(
                 "set":{{"site":{{"fromField":"proposed-site"}}}},
                 "clear":["label"]
               }}],
-              "review":{{"stages":[{{"id":"review","approvals":1,"excludeSubmitter":true}}]}}
+              "review":{{"authority":"casework-main","policyId":"placement-correction"}},
+              "onApproved":{{"mode":"manual"}}
             }}
           }}{extra_entity}],
           "accessProfiles":[{{
@@ -584,8 +585,7 @@ fn change_request_correction_project(
             }}]
           }},{{
             "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":{reviewer_scopes},"permissions":[{{
-              "rowBoundaries": [], "entity":"placement-correction-request","operations":["get","list","submit_request","approve_request","reject_request","request_revision"],"readableFields":["placement","proposed-site","reason"],
-              "reviewStages":[{{"stage":"review","targets":[{{"entity":"placement","readableFields":["site","label"],"rowBoundaries":{review_boundaries}}}]}}]
+              "rowBoundaries": [], "entity":"placement-correction-request","operations":["get","list","submit_request"],"readableFields":["placement","proposed-site","reason"]
             }}]
           }},{{
             "id":"request-applier","principalClaim":"principal","permissions":[{{
@@ -712,7 +712,8 @@ fn change_request_correction_compiles_to_immutable_plan_and_scoped_grants() {
                 "set":{"site":{"fromField":"proposed-site"}},
                 "clear":["label"]
               }],
-              "review":{"stages":[{"id":"review","approvals":1,"excludeSubmitter":true}]}
+              "review":{"authority":"casework-main","policyId":"placement-correction"},
+              "onApproved":{"mode":"manual"}
             }
           }],
           "accessProfiles":[{
@@ -723,8 +724,7 @@ fn change_request_correction_compiles_to_immutable_plan_and_scoped_grants() {
             }]
           },{
             "id":"request-reviewer","default":true,"principalClaim":"principal","permissions":[{
-              "entity":"placement-correction-request","operations":["get","list","submit_request","approve_request","reject_request","request_revision"],"readableFields":["placement","proposed-site","reason"],
-              "reviewStages":[{"stage":"review","targets":[{"entity":"placement","readableFields":["site","label"],"rowBoundaries":[]}]}],
+              "entity":"placement-correction-request","operations":["get","list","submit_request"],"readableFields":["placement","proposed-site","reason"],
               "rowBoundaries": []
             }]
           },{
@@ -751,13 +751,16 @@ fn change_request_correction_compiles_to_immutable_plan_and_scoped_grants() {
     assert_eq!(request.maximum_targets, 16);
     assert_eq!(request.maximum_field_mutations, 128);
     assert_eq!(request.maximum_snapshot_bytes, 2_097_152);
-    assert!(request.actions.iter().any(|action| {
-        action.operation == ChangeRequestOperation::ApproveRequest
-            && action.review_stage.as_deref() == Some("review")
-    }));
-    assert!(request.actions.iter().any(|action| {
-        action.operation == ChangeRequestOperation::ApplyRequest && action.review_stage.is_none()
-    }));
+    assert!(request
+        .actions
+        .iter()
+        .any(|action| action.operation == ChangeRequestOperation::ApplyRequest));
+    assert!(matches!(
+        &request.review,
+        registry_breg::model::CompiledChangeRequestReview::Required(requirement)
+            if requirement.authority == "casework-main"
+                && requirement.policy_id == "placement-correction"
+    ));
     let effect = &request.effects[0];
     assert!(matches!(
         effect.target.binding,
@@ -775,12 +778,6 @@ fn change_request_correction_compiles_to_immutable_plan_and_scoped_grants() {
         mutation,
         CompiledChangeRequestMutation::Clear { field } if field == "label"
     )));
-    assert!(request.review_permissions.iter().any(|grant| {
-        grant.profile_id == "request-reviewer"
-            && grant.stage == "review"
-            && grant.target_entity_id == "placement"
-            && grant.readable_fields == BTreeSet::from(["site".to_owned(), "label".to_owned()])
-    }));
     assert!(request.apply_permissions.iter().any(|grant| {
         grant.profile_id == "request-applier" && grant.target_entity_id == "placement"
     }));
@@ -814,37 +811,14 @@ fn change_request_routes_compile_to_finite_action_inventory() {
     let submit = route("records.placement-correction-request.request.submit");
     assert_eq!(submit.method, HttpMethod::Post);
     assert_eq!(submit.operation, Operation::SubmitRequest);
-    assert_eq!(submit.request_stage, None);
     assert_eq!(
         submit.path,
         "/v1/records/placement-correction-requests/{record_id}/actions/submit"
     );
     assert_eq!(submit.access_profiles, vec!["request-reviewer".to_owned()]);
 
-    let approve = route("records.placement-correction-request.request.stages.review.approve");
-    assert_eq!(approve.operation, Operation::ApproveRequest);
-    assert_eq!(approve.request_stage.as_deref(), Some("review"));
-    assert_eq!(
-        approve.path,
-        "/v1/records/placement-correction-requests/{record_id}/actions/stages/review/approve"
-    );
-    assert_eq!(approve.access_profiles, vec!["request-reviewer".to_owned()]);
-
-    let reject = route("records.placement-correction-request.request.stages.review.reject");
-    assert_eq!(reject.operation, Operation::RejectRequest);
-    assert_eq!(reject.request_stage.as_deref(), Some("review"));
-
-    let revision =
-        route("records.placement-correction-request.request.stages.review.request_revision");
-    assert_eq!(revision.operation, Operation::RequestRevision);
-    assert_eq!(
-        revision.path,
-        "/v1/records/placement-correction-requests/{record_id}/actions/stages/review/request-revision"
-    );
-
     let apply = route("records.placement-correction-request.request.apply");
     assert_eq!(apply.operation, Operation::ApplyRequest);
-    assert_eq!(apply.request_stage, None);
     assert_eq!(apply.access_profiles, vec!["request-applier".to_owned()]);
 
     let access = compiled
@@ -891,10 +865,8 @@ fn change_request_openapi_exposes_finite_action_contract_and_request_metadata() 
                 "set":{"site":{"fromField":"proposed-site"}},
                 "clear":["label"]
               }],
-              "review":{"stages":[
-                {"id":"review","approvals":1,"excludeSubmitter":true},
-                {"id":"final-approval","approvals":1,"excludeSubmitter":true}
-              ]}
+              "review":{"authority":"casework-main","policyId":"placement-correction"},
+              "onApproved":{"mode":"manual"}
             }
           }],
           "accessProfiles":[{
@@ -910,14 +882,12 @@ fn change_request_openapi_exposes_finite_action_contract_and_request_metadata() 
             }]
           },{
             "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
-              "entity":"placement-correction-request","operations":["get","list","approve_request","reject_request","request_revision"],"readableFields":["placement","proposed-site","reason"],
-              "reviewStages":[{"stage":"review","targets":[{"entity":"placement","readableFields":["site","label"],"rowBoundaries":[]}]}],
+              "entity":"placement-correction-request","operations":["get","list"],"readableFields":["placement","proposed-site","reason"],
               "rowBoundaries": []
             }]
           },{
             "id":"supervisor","principalClaim":"principal","permissions":[{
-              "entity":"placement-correction-request","operations":["approve_request","reject_request","request_revision"],"readableFields":["placement","proposed-site","reason"],
-              "reviewStages":[{"stage":"final-approval","targets":[{"entity":"placement","readableFields":["site","label"],"rowBoundaries":[]}]}],
+              "entity":"placement-correction-request","operations":["get"],"readableFields":["placement","proposed-site","reason"],
               "rowBoundaries": []
             }]
           },{
@@ -952,7 +922,6 @@ fn change_request_openapi_exposes_finite_action_contract_and_request_metadata() 
         submit_request["x-registry-requestAction"],
         json!({
             "operation": "submit_request",
-            "stage": null,
             "method": "post",
             "path": "/v1/records/placement-correction-requests/{record_id}/actions/submit",
             "requestEntity": "placement-correction-request",
@@ -985,11 +954,10 @@ fn change_request_openapi_exposes_finite_action_contract_and_request_metadata() 
         .get("ETag")
         .is_none());
 
-    let approve_request = &value["paths"]
-        ["/v1/records/placement-correction-requests/{record_id}/actions/stages/review/approve"]
-        ["post"];
+    let apply_request = &value["paths"]
+        ["/v1/records/placement-correction-requests/{record_id}/actions/apply"]["post"];
     assert_eq!(
-        approve_request["x-registry-requestAction"]["requiredPreconditions"],
+        apply_request["x-registry-requestAction"]["requiredPreconditions"],
         json!([
             "Idempotency-Key",
             "If-Match",
@@ -997,19 +965,19 @@ fn change_request_openapi_exposes_finite_action_contract_and_request_metadata() 
             "effectDigest"
         ])
     );
-    let approve_input =
-        &value["components"]["schemas"]["placement-correction-request-approve_request-input"];
-    assert_eq!(approve_input["additionalProperties"], false);
+    let apply_input =
+        &value["components"]["schemas"]["placement-correction-request-apply_request-input"];
+    assert_eq!(apply_input["additionalProperties"], false);
     assert_eq!(
-        approve_input["required"],
+        apply_input["required"],
         json!(["proposalVersion", "effectDigest"])
     );
     assert_eq!(
-        approve_input["properties"]["proposalVersion"]["maximum"],
+        apply_input["properties"]["proposalVersion"]["maximum"],
         u32::MAX
     );
     assert_eq!(
-        approve_input["properties"]["effectDigest"]["pattern"],
+        apply_input["properties"]["effectDigest"]["pattern"],
         "^sha256:[0-9a-f]{64}$"
     );
     let revise_input =
@@ -1033,8 +1001,13 @@ fn change_request_openapi_exposes_finite_action_contract_and_request_metadata() 
     );
     assert_eq!(
         value["components"]["schemas"]["placement-correction-request"]["x-registry-changeRequest"]
-            ["stages"][1]["id"],
-        "final-approval"
+            ["review"],
+        json!({"authority":"casework-main","policyId":"placement-correction"})
+    );
+    assert_eq!(
+        value["components"]["schemas"]["placement-correction-request"]["x-registry-changeRequest"]
+            ["onApproved"],
+        json!({"mode":"manual"})
     );
 }
 
@@ -1124,7 +1097,7 @@ fn change_request_fingerprint_tracks_relevant_contract_closure_only() {
     .contract_fingerprint;
     assert_ne!(base, target_schema_changed);
 
-    let review_authority_changed = compiled_request(change_request_correction_project(
+    let reviewer_scope_changed = compiled_request(change_request_correction_project(
         "change-request-fingerprint",
         "",
         "",
@@ -1135,7 +1108,7 @@ fn change_request_fingerprint_tracks_relevant_contract_closure_only() {
         "[\"change-review\"]",
     ))
     .contract_fingerprint;
-    assert_ne!(base, review_authority_changed);
+    assert_eq!(base, reviewer_scope_changed);
 
     let apply_boundary_changed = compiled_request(change_request_correction_project(
         "change-request-fingerprint",
@@ -1198,8 +1171,6 @@ fn correction_with_target_access_requirements() -> serde_json::Value {
     }
     source["accessProfiles"][0]["permissions"][0]["rowBoundaries"] =
         serde_json::json!([boundary.clone()]);
-    source["accessProfiles"][1]["permissions"][0]["reviewStages"][0]["targets"][0]
-        ["rowBoundaries"] = serde_json::json!([boundary.clone()]);
     source["accessProfiles"][2]["permissions"][0]["applyTargets"][0]["rowBoundaries"] =
         serde_json::json!([boundary]);
     source
@@ -1210,18 +1181,11 @@ fn change_request_review_and_apply_cannot_omit_target_access_requirements() {
     let source = correction_with_target_access_requirements();
     compile_json(&serde_json::to_vec(&source).unwrap())
         .expect("explicit requirements are satisfied");
-    for (profile_index, target_path, surface) in [
-        (
-            1,
-            "/permissions/0/reviewStages/0/targets/0/rowBoundaries",
-            "reviewStages",
-        ),
-        (
-            2,
-            "/permissions/0/applyTargets/0/rowBoundaries",
-            "applyTargets",
-        ),
-    ] {
+    for (profile_index, target_path, surface) in [(
+        2,
+        "/permissions/0/applyTargets/0/rowBoundaries",
+        "applyTargets",
+    )] {
         for (path, replacement, code) in [
             (
                 "/requiredScopes",
@@ -1397,17 +1361,13 @@ fn change_request_multi_record_create_and_patch_orders_reserved_references() {
                 {"id":"membership","target":{"entity":"membership"},"operation":"create","set":{"person":{"fromEffect":"person"},"household":{"fromField":"household"}}},
                 {"target":{"fromField":"household"},"operation":"patch","set":{"contact-person":{"fromEffect":"person"}}}
               ],
-              "review":{"stages":[{"id":"review","approvals":1}]}
+              "review":{"authority":"casework-main","policyId":"registration"},
+              "onApproved":{"mode":"manual"}
             }
           }],
           "accessProfiles":[{
             "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
-              "entity":"registration-request","operations":["get","list","submit_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["household","name"],
-              "reviewStages":[{"stage":"review","targets":[
-                {"entity":"person","readableFields":["display-name"], "rowBoundaries": []},
-                {"entity":"membership","readableFields":["person","household"], "rowBoundaries": []},
-                {"entity":"household","readableFields":["contact-person"], "rowBoundaries": []}
-              ]}],
+              "entity":"registration-request","operations":["get","list","submit_request","apply_request"],"readableFields":["household","name"],
               "applyTargets":[{"entity":"person", "rowBoundaries": []},{"entity":"membership", "rowBoundaries": []},{"entity":"household", "rowBoundaries": []}],
               "rowBoundaries": []
             }]
@@ -1454,7 +1414,7 @@ fn change_request_multi_record_create_and_patch_orders_reserved_references() {
 
 #[test]
 fn change_request_compile_refuses_direct_write_bypass_and_incomplete_grants() {
-    let source = |grant_ops: &str, review_fields: &str, apply_targets: &str| {
+    let source = |grant_ops: &str, apply_targets: &str| {
         format!(
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
@@ -1473,13 +1433,12 @@ fn change_request_compile_refuses_direct_write_bypass_and_incomplete_grants() {
                   {{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}}
                 ],
                 "changeRequest":{{"effects":[{{"target":{{"fromField":"placement"}},"operation":"patch","set":{{"site":{{"fromField":"site"}}}}}}],
-                  "review":{{"stages":[{{"id":"review","approvals":1}}]}}}}
+                  "review":{{"authority":"casework-main","policyId":"correction-review"}},"onApproved":{{"mode":"manual"}}}}
               }}],
               "accessProfiles":[{{
                 "id":"target-writer","principalClaim":"principal","permissions":[{{"rowBoundaries": [], "entity":"placement","operations":{grant_ops},"readableFields":["site"],"writableFields":["site"]}}]
               }},{{
-                "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{{"rowBoundaries": [], "entity":"correction-request","operations":["get","submit_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["placement","site"],
-                  "reviewStages":[{{"stage":"review","targets":[{{"rowBoundaries": [], "entity":"placement","readableFields":{review_fields}}}]}}],
+                "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{{"rowBoundaries": [], "entity":"correction-request","operations":["get","submit_request","apply_request"],"readableFields":["placement","site"],
                   "applyTargets":{apply_targets}
                 }}]
               }}]
@@ -1490,7 +1449,6 @@ fn change_request_compile_refuses_direct_write_bypass_and_incomplete_grants() {
     let direct = compile_json(
         source(
             r#"["get","patch"]"#,
-            r#"["site"]"#,
             r#"[{"entity":"placement","rowBoundaries":[]}]"#,
         )
         .as_bytes(),
@@ -1501,21 +1459,7 @@ fn change_request_compile_refuses_direct_write_bypass_and_incomplete_grants() {
         .iter()
         .any(|diagnostic| diagnostic.code == "change_control.direct_write_grant"));
 
-    let blind = compile_json(
-        source(
-            r#"["get"]"#,
-            r#"[]"#,
-            r#"[{"entity":"placement","rowBoundaries":[]}]"#,
-        )
-        .as_bytes(),
-    )
-    .expect_err("review grants must cover changed fields");
-    assert!(blind
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.review_projection.incomplete"));
-
-    let partial_apply = compile_json(source(r#"["get"]"#, r#"["site"]"#, r#"[]"#).as_bytes())
+    let partial_apply = compile_json(source(r#"["get"]"#, r#"[]"#).as_bytes())
         .expect_err("apply grants must cover every target entity");
     assert!(partial_apply
         .diagnostics()
@@ -1537,12 +1481,11 @@ fn change_request_compile_refuses_ambiguous_references_cycles_overlaps_and_null_
               }},{{
                 "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
                 "fields":[{request_fields}],
-                "changeRequest":{{"effects":[{effect}],"review":{{"stages":[{{"id":"review","approvals":1}}]}}}}
+                "changeRequest":{{"effects":[{effect}],"review":{{"authority":"casework-main","policyId":"request-review"}},"onApproved":{{"mode":"manual"}}}}
               }}],
               "accessProfiles":[{{
                 "id":"operator","default":true,"principalClaim":"principal","permissions":[{{
-                  "rowBoundaries": [], "entity":"request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["target","value","optional-value"],
-                  "reviewStages":[{{"stage":"review","targets":[{{"rowBoundaries": [], "entity":"record","readableFields":["label","parent"]}}]}}],
+                  "rowBoundaries": [], "entity":"request","operations":["get","submit_request","apply_request"],"readableFields":["target","value","optional-value"],
                   "applyTargets":[{{"rowBoundaries": [], "entity":"record"}}]
                 }}]
               }}]
@@ -1691,12 +1634,11 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
               {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"stages":[{"id":"review","approvals":1}]}}
+              "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"principal","permissions":[{
-              "entity":"request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["target","label"],
-              "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"], "rowBoundaries": []}]}],
+              "entity":"request","operations":["get","submit_request","apply_request"],"readableFields":["target","label"],
               "applyTargets":[{"entity":"target", "rowBoundaries": []}],
               "rowBoundaries": []
             }]
@@ -1724,12 +1666,11 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
               {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"stages":[{"id":"review","approvals":1}]}}
+              "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"principal","permissions":[{
-              "entity":"request","operations":["get","tombstone","submit_request","approve_request","apply_request"],"readableFields":["target","label"],
-              "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"], "rowBoundaries": []}]}],
+              "entity":"request","operations":["get","tombstone","submit_request","apply_request"],"readableFields":["target","label"],
               "applyTargets":[{"entity":"target", "rowBoundaries": []}],
               "rowBoundaries": []
             }]
@@ -1745,7 +1686,6 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
     let mut effects = Vec::new();
     let mut target_fields = Vec::new();
     let mut request_fields = Vec::new();
-    let mut review_fields = Vec::new();
     for index in 0..129 {
         let id = format!("field-{index}");
         target_fields.push(format!(
@@ -1754,7 +1694,6 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
         request_fields.push(format!(
             r#"{{"id":"{id}","type":"string","maxLength":8,"required":true,"classification":"internal"}}"#
         ));
-        review_fields.push(format!(r#""{id}""#));
     }
     request_fields.push(
         r#"{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"}"#
@@ -1775,16 +1714,14 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
           "entities":[{{"id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{{"requiredFor":["patch"]}},
             "fields":[{}]}},{{"id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
             "fields":[{}],
-            "changeRequest":{{"effects":[{}],"review":{{"stages":[{{"id":"review","approvals":1}}]}}}}
+            "changeRequest":{{"effects":[{}],"review":{{"authority":"casework-main","policyId":"request-review"}},"onApproved":{{"mode":"manual"}}}}
           }}],
-          "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","permissions":[{{"rowBoundaries": [], "entity":"request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["target"],
-            "reviewStages":[{{"stage":"review","targets":[{{"rowBoundaries": [], "entity":"target","readableFields":[{}]}}]}}],
+          "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","permissions":[{{"rowBoundaries": [], "entity":"request","operations":["get","submit_request","apply_request"],"readableFields":["target"],
             "applyTargets":[{{"rowBoundaries": [], "entity":"target"}}]}}]}}]
         }}"#,
         target_fields.join(","),
         request_fields.join(","),
-        effects.join(","),
-        review_fields.join(",")
+        effects.join(",")
     );
     let too_many_fields = compile_json(bounded.as_bytes())
         .expect_err("field-mutation ceiling is enforced at compile time");
@@ -1843,10 +1780,9 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
               {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"stages":[{"id":"review","approvals":1}]}}
+              "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
-          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","permissions":[{"entity":"request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["target","label"],
-            "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"], "rowBoundaries": []}]}],
+          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","permissions":[{"entity":"request","operations":["get","submit_request","apply_request"],"readableFields":["target","label"],
             "applyTargets":[{"entity":"target", "rowBoundaries": []}], "rowBoundaries": []}]}]
         }"#,
     )
@@ -1871,7 +1807,7 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
               {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"stages":[{"id":"review","approvals":1}]}}
+              "review":{"authority":"casework-main","policyId":"inner-review"},"onApproved":{"mode":"manual"}}
           },{
             "id":"outer-request","primaryDataset":"test-dataset","route":"outer-requests","mutationMode":"mutable",
             "fields":[
@@ -1879,16 +1815,14 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
               {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"target":{"fromField":"inner"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"stages":[{"id":"review","approvals":1}]}}
+              "review":{"authority":"casework-main","policyId":"outer-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","permissions":[{
-            "entity":"inner-request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["target","label"],
-            "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"], "rowBoundaries": []}]}],
+            "entity":"inner-request","operations":["get","submit_request","apply_request"],"readableFields":["target","label"],
             "applyTargets":[{"entity":"target", "rowBoundaries": []}],
             "rowBoundaries": []
           },{
-            "entity":"outer-request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["inner","label"],
-            "reviewStages":[{"stage":"review","targets":[{"entity":"inner-request","readableFields":["label"], "rowBoundaries": []}]}],
+            "entity":"outer-request","operations":["get","submit_request","apply_request"],"readableFields":["inner","label"],
             "applyTargets":[{"entity":"inner-request", "rowBoundaries": []}],
             "rowBoundaries": []
           }]}]
@@ -1899,37 +1833,6 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
         .diagnostics()
         .iter()
         .any(|diagnostic| diagnostic.code == "change_request.effect.nested_request_target"));
-
-    let stages = (0..33)
-        .map(|index| format!(r#"{{"id":"stage-{index}","approvals":1}}"#))
-        .collect::<Vec<_>>()
-        .join(",");
-    let too_many_stages = format!(
-        r#"{{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{{"id":"too-many-stages","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-          "entities":[{{"id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable","changeControl":{{"requiredFor":["patch"]}},
-            "fields":[{{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}}]
-          }},{{"id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
-            "fields":[
-              {{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"}},
-              {{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}}
-            ],
-            "changeRequest":{{"effects":[{{"target":{{"fromField":"target"}},"operation":"patch","set":{{"label":{{"fromField":"label"}}}}}}],
-              "review":{{"stages":[{stages}]}}}}
-          }}],
-          "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","permissions":[{{"rowBoundaries": [], "entity":"request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["target","label"],
-            "reviewStages":[{{"stage":"stage-0","targets":[{{"rowBoundaries": [], "entity":"target","readableFields":["label"]}}]}}],
-            "applyTargets":[{{"rowBoundaries": [], "entity":"target"}}]}}]}}]
-        }}"#
-    );
-    let too_many_stages =
-        compile_json(too_many_stages.as_bytes()).expect_err("stage count is finite and bounded");
-    assert!(too_many_stages
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.review.stage_count"));
 }
 
 #[test]
@@ -5629,7 +5532,6 @@ fn public_profile_cannot_process_an_internal_field() {
             request_visibility: None,
             lookups: Vec::new(),
             read_paths: Vec::new(),
-            review_stages: Vec::new(),
             apply_targets: Vec::new(),
             submitter_targets: Default::default(),
             request_presence: Vec::new(),

@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::CaseworkRole;
+use crate::ReviewKindPolicy;
 use crate::{check_clock_policies, check_routing_policy, CalendarPolicy, ClockPolicy, RoutingRule};
-use crate::{HostedKindPolicy, ReviewKindPolicy};
 
 pub const CASEWORK_API_VERSION: &str = "registry.registrystack.org/casework/v1alpha1";
 pub const CASEWORK_KIND: &str = "CaseworkProject";
@@ -67,8 +67,6 @@ pub struct CaseworkProject {
     pub queues: Vec<QueuePolicy>,
     #[serde(default)]
     pub sources: Vec<SourcePolicy>,
-    #[serde(default)]
-    pub hosted_kinds: Vec<HostedKindPolicy>,
     #[serde(default)]
     pub review_kinds: Vec<ReviewKindPolicy>,
     #[serde(default)]
@@ -170,74 +168,12 @@ impl CaseworkProject {
         if !access_roles_are_separately_scoped(&self.access_profiles) {
             return Err(ConfigError::AccessProfileScopes);
         }
-        let hosted_kinds: BTreeSet<_> = self.hosted_kinds.iter().map(|kind| &kind.id).collect();
-        for (kind_index, kind) in self.hosted_kinds.iter().enumerate() {
-            if !queues.contains(&kind.queue) {
-                return Err(ConfigError::Reference {
-                    path: format!("hostedKinds[{kind_index}].queue"),
-                    target: "queue",
-                });
-            }
-            for (profile_index, profile_id) in kind.deciding_profiles.iter().enumerate() {
-                if self
-                    .access_profiles
-                    .iter()
-                    .find(|profile| profile.id == *profile_id)
-                    .is_none_or(|profile| {
-                        !matches!(profile.role, CaseworkRole::Staff | CaseworkRole::Supervisor)
-                    })
-                {
-                    return Err(ConfigError::Reference {
-                        path: format!(
-                            "hostedKinds[{kind_index}].decidingProfiles[{profile_index}]"
-                        ),
-                        target: "staff or supervisor access profile",
-                    });
-                }
-            }
-        }
-        for (profile_index, profile) in self.access_profiles.iter().enumerate() {
-            if profile.role == CaseworkRole::Requester {
-                for (kind_index, kind) in profile.kinds.iter().enumerate() {
-                    if !hosted_kinds.contains(kind) {
-                        return Err(ConfigError::Reference {
-                            path: format!("accessProfiles[{profile_index}].kinds[{kind_index}]"),
-                            target: "hosted kind",
-                        });
-                    }
-                }
-            }
-        }
-        if self.hosted_kinds.len() > crate::MAXIMUM_HOSTED_KINDS
-            || hosted_kinds.len() != self.hosted_kinds.len()
-            || !self.hosted_kinds.is_empty()
-                && !self
-                    .access_profiles
-                    .iter()
-                    .any(|profile| profile.role == CaseworkRole::Requester)
-            || self.hosted_kinds.iter().any(|kind| kind.check().is_err())
-            || self
-                .access_profiles
-                .iter()
-                .any(|profile| match profile.role {
-                    CaseworkRole::Requester => {
-                        profile.kinds.len() > crate::MAXIMUM_HOSTED_KINDS
-                            || profile.kinds.iter().collect::<BTreeSet<_>>().len()
-                                != profile.kinds.len()
-                    }
-                    CaseworkRole::Staff
-                    | CaseworkRole::Supervisor
-                    | CaseworkRole::Administrator => !profile.kinds.is_empty(),
-                })
-        {
-            return Err(ConfigError::HostedKinds);
-        }
         let review_kinds = self
             .review_kinds
             .iter()
             .map(|kind| kind.id.as_str())
             .collect::<BTreeSet<_>>();
-        if self.review_kinds.len() > crate::MAXIMUM_HOSTED_KINDS
+        if self.review_kinds.len() > crate::MAXIMUM_REVIEW_KINDS
             || review_kinds.len() != self.review_kinds.len()
             || self.review_kinds.iter().any(|kind| kind.check().is_err())
         {
@@ -336,7 +272,7 @@ impl CaseworkProject {
                 }
             }
         }
-        if self.sources.is_empty() && self.hosted_kinds.is_empty() && self.review_kinds.is_empty() {
+        if self.sources.is_empty() && self.review_kinds.is_empty() {
             return Err(ConfigError::NoConfiguredWork);
         }
         let calendar_ids = self
@@ -404,6 +340,16 @@ impl CaseworkProject {
                         target.id.is_empty()
                             || parse_elapsed_seconds(&target.after.elapsed).is_none()
                     })
+                    || request.context_projection.len() > 32
+                    || request
+                        .context_projection
+                        .iter()
+                        .collect::<BTreeSet<_>>()
+                        .len()
+                        != request.context_projection.len()
+                    || request.context_projection.iter().any(|field| {
+                        field.is_empty() || field.len() > 128 || field.chars().any(char::is_control)
+                    })
                 {
                     return Err(ConfigError::Identifier);
                 }
@@ -438,7 +384,7 @@ impl CaseworkProject {
 /// profile must require a scope absent from the combined scopes of all other
 /// profiles at the same or a lower role. Otherwise credentials assembled from
 /// those grants could select authority belonging to this profile, including
-/// authority retained under an earlier hosted-kind policy. A higher-role
+/// authority retained under an earlier review policy. A higher-role
 /// credential may still explicitly carry the scopes required by a lower role.
 fn access_roles_are_separately_scoped(profiles: &[AccessProfile]) -> bool {
     fn role_rank(role: CaseworkRole) -> u8 {
@@ -480,10 +426,6 @@ pub struct AccessProfile {
     pub principal_claim: String,
     pub required_scopes: Vec<String>,
     pub role: CaseworkRole,
-    /// Hosted kinds a Requester profile may create. Human profiles never use
-    /// this list to acquire payload access or decision authority.
-    #[serde(default)]
-    pub kinds: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -512,7 +454,7 @@ impl ReviewProducerPolicy {
                 .trusted_initiator_issuer
                 .as_ref()
                 .is_none_or(|issuer| bounded_config_text(issuer, 512))
-            && (1..=crate::MAXIMUM_HOSTED_RETENTION_DAYS).contains(&self.recovery_days)
+            && (1..=crate::MAXIMUM_REVIEW_RETENTION_DAYS).contains(&self.recovery_days)
             && !self.source_namespaces.is_empty()
             && self.source_namespaces.len() <= 64
             && self
@@ -522,7 +464,7 @@ impl ReviewProducerPolicy {
             && self.source_namespaces.iter().collect::<BTreeSet<_>>().len()
                 == self.source_namespaces.len()
             && !self.kinds.is_empty()
-            && self.kinds.len() <= crate::MAXIMUM_HOSTED_KINDS
+            && self.kinds.len() <= crate::MAXIMUM_REVIEW_KINDS
             && self.kinds.iter().all(|value| valid_review_name(value))
             && self.kinds.iter().collect::<BTreeSet<_>>().len() == self.kinds.len()
             && self
@@ -586,6 +528,11 @@ pub struct SourceRequestPolicy {
     pub display_reference: Option<DisplayReferencePolicy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projection: Vec<String>,
+    /// Source fields that may be returned to an authorized human reviewing a
+    /// unified source-context task. Values are fetched afresh through that
+    /// caller's source credential and are never retained by Casework.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_projection: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routing: Vec<RoutingRule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -692,13 +639,11 @@ pub enum ConfigError {
         "every access profile must require a scope absent from the combined scopes of every other profile at the same or a lower role"
     )]
     AccessProfileScopes,
-    #[error("the hosted kind policy or its profile grants are invalid")]
-    HostedKinds,
     #[error("the unified review kind policy or its stage grants are invalid")]
     ReviewKinds,
     #[error("the unified review producer admission policy is invalid")]
     ReviewProducers,
-    #[error("the Casework project configures no source or hosted work")]
+    #[error("the Casework project configures no source or unified review work")]
     NoConfiguredWork,
     #[error("a source routing policy is invalid")]
     Routing,
@@ -751,18 +696,16 @@ impl ConfigLoadError {
 mod tests {
     use super::*;
     use crate::{
-        standalone_decision_starter_kind, ReviewContextStrategy, ReviewKindPurpose,
-        ReviewRetentionPolicy, ReviewStagePolicy,
+        ReviewContextStrategy, ReviewKindPurpose, ReviewRetentionPolicy, ReviewStagePolicy,
     };
     use serde_json::json;
 
-    fn profile(id: &str, role: CaseworkRole, kinds: &[&str]) -> AccessProfile {
+    fn profile(id: &str, role: CaseworkRole) -> AccessProfile {
         AccessProfile {
             id: id.to_owned(),
             principal_claim: "registry_principal".to_owned(),
             required_scopes: vec![format!("casework:{id}")],
             role,
-            kinds: kinds.iter().map(|kind| (*kind).to_owned()).collect(),
         }
     }
 
@@ -776,33 +719,22 @@ mod tests {
                 version: "1".to_owned(),
             },
             access_profiles: vec![
-                profile("staff", CaseworkRole::Staff, &[]),
-                profile("supervisor", CaseworkRole::Supervisor, &[]),
-                profile("administrator", CaseworkRole::Administrator, &[]),
-                profile("requester", CaseworkRole::Requester, &["decision"]),
+                profile("staff", CaseworkRole::Staff),
+                profile("supervisor", CaseworkRole::Supervisor),
+                profile("administrator", CaseworkRole::Administrator),
+                profile("requester", CaseworkRole::Requester),
             ],
             queues: vec![QueuePolicy {
                 id: "decisions".to_owned(),
                 label: "Decisions".to_owned(),
             }],
             sources: Vec::new(),
-            hosted_kinds: vec![standalone_decision_starter_kind()],
-            review_kinds: Vec::new(),
-            review_producers: Vec::new(),
+            review_kinds: vec![review_kind()],
+            review_producers: vec![review_producer()],
             calendars: Vec::new(),
             clocks: Vec::new(),
             inbox: InboxPolicy::default(),
         }
-    }
-
-    fn hosted_kind(id: &str, deciding_profiles: &[&str]) -> HostedKindPolicy {
-        let mut kind = standalone_decision_starter_kind();
-        kind.id = id.to_owned();
-        kind.deciding_profiles = deciding_profiles
-            .iter()
-            .map(|profile| (*profile).to_owned())
-            .collect();
-        kind
     }
 
     fn review_kind() -> ReviewKindPolicy {
@@ -864,51 +796,33 @@ mod tests {
                 queue: queue.to_owned(),
                 display_reference: None,
                 projection: Vec::new(),
+                context_projection: Vec::new(),
                 routing: Vec::new(),
                 clock: None,
                 target: None,
             }],
         }];
-        candidate.hosted_kinds.clear();
+        candidate.review_kinds.clear();
+        candidate.review_producers.clear();
         candidate.access_profiles.pop();
         candidate
     }
 
     #[test]
-    fn standalone_work_requires_an_explicit_hosted_kind() {
+    fn standalone_work_requires_an_explicit_review_kind() {
         let mut project = project();
         assert_eq!(project.check(), Ok(()));
 
-        project.hosted_kinds.clear();
+        project.review_kinds.clear();
+        project.review_producers.clear();
         project.access_profiles.pop();
         assert_eq!(project.check(), Err(ConfigError::NoConfiguredWork));
     }
 
     #[test]
-    fn requester_grants_are_closed_over_declared_kinds() {
-        let mut candidate = project();
-        candidate.access_profiles[3].kinds = vec!["undeclared".to_owned()];
-        assert_eq!(
-            candidate.check().unwrap_err().path(),
-            "accessProfiles[3].kinds[0]"
-        );
-
-        let mut candidate = project();
-        candidate.access_profiles[2].kinds = vec!["decision".to_owned()];
-        assert_eq!(candidate.check(), Err(ConfigError::HostedKinds));
-    }
-
-    #[test]
     fn review_producers_are_exact_and_recovery_fits_result_retention() {
-        let mut candidate = project();
-        candidate.review_kinds = vec![review_kind()];
-        candidate.review_producers = vec![review_producer()];
+        let candidate = project();
         assert_eq!(candidate.check(), Ok(()));
-
-        let mut review_only = candidate.clone();
-        review_only.hosted_kinds.clear();
-        review_only.access_profiles[3].kinds.clear();
-        assert_eq!(review_only.check(), Ok(()));
 
         let mut changed_identity = candidate.clone();
         let mut duplicate = changed_identity.review_producers[0].clone();
@@ -944,11 +858,7 @@ mod tests {
     #[test]
     fn every_same_role_profile_requires_an_independently_selectable_scope() {
         let mut candidate = project();
-        candidate
-            .hosted_kinds
-            .push(hosted_kind("appeal", &["staff"]));
-        let mut appeal_requester =
-            profile("appeal-requester", CaseworkRole::Requester, &["appeal"]);
+        let mut appeal_requester = profile("appeal-requester", CaseworkRole::Requester);
         appeal_requester.required_scopes = candidate.access_profiles[3].required_scopes.clone();
         candidate.access_profiles.push(appeal_requester);
         assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
@@ -956,33 +866,33 @@ mod tests {
         let mut candidate = project();
         // Current equality cannot prove that retained items pinned the same
         // deciding-profile set under an earlier policy.
-        let mut retained_profile = profile("retained-staff", CaseworkRole::Staff, &[]);
+        let mut retained_profile = profile("retained-staff", CaseworkRole::Staff);
         retained_profile.required_scopes = candidate.access_profiles[0].required_scopes.clone();
         candidate.access_profiles.push(retained_profile);
-        candidate.hosted_kinds[0]
+        candidate.review_kinds[0].stages[0]
             .deciding_profiles
             .push("retained-staff".to_owned());
         assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
 
         let mut combined = project();
         combined.access_profiles[0].required_scopes = vec!["casework:a".to_owned()];
-        let mut staff_b = profile("staff-b", CaseworkRole::Staff, &[]);
+        let mut staff_b = profile("staff-b", CaseworkRole::Staff);
         staff_b.required_scopes = vec!["casework:b".to_owned()];
         combined.access_profiles.push(staff_b);
-        let mut appeal_staff = profile("appeal-staff", CaseworkRole::Staff, &[]);
+        let mut appeal_staff = profile("appeal-staff", CaseworkRole::Staff);
         appeal_staff.required_scopes = vec!["casework:a".to_owned(), "casework:b".to_owned()];
         combined.access_profiles.push(appeal_staff);
-        combined
-            .hosted_kinds
-            .push(hosted_kind("appeal", &["appeal-staff"]));
+        combined.review_kinds[0].stages[0]
+            .deciding_profiles
+            .push("appeal-staff".to_owned());
         assert_eq!(combined.check(), Err(ConfigError::AccessProfileScopes));
 
         let mut remapped = project();
-        let mut alternate = profile("staff-by-sub", CaseworkRole::Staff, &[]);
+        let mut alternate = profile("staff-by-sub", CaseworkRole::Staff);
         alternate.principal_claim = "sub".to_owned();
         alternate.required_scopes = remapped.access_profiles[0].required_scopes.clone();
         remapped.access_profiles.push(alternate);
-        remapped.hosted_kinds[0]
+        remapped.review_kinds[0].stages[0]
             .deciding_profiles
             .push("staff-by-sub".to_owned());
         assert_eq!(remapped.check(), Err(ConfigError::AccessProfileScopes));
@@ -994,7 +904,7 @@ mod tests {
         candidate.access_profiles[0].required_scopes =
             vec!["casework:a".to_owned(), "casework:b".to_owned()];
         candidate.access_profiles[3].required_scopes = vec!["casework:a".to_owned()];
-        let mut peer = profile("staff-b", CaseworkRole::Staff, &[]);
+        let mut peer = profile("staff-b", CaseworkRole::Staff);
         peer.required_scopes = vec!["casework:b".to_owned()];
         candidate.access_profiles.push(peer);
 
@@ -1008,14 +918,14 @@ mod tests {
             "casework:staff".to_owned(),
             "casework:staff-primary".to_owned(),
         ];
-        let mut alternate = profile("staff-by-sub", CaseworkRole::Staff, &[]);
+        let mut alternate = profile("staff-by-sub", CaseworkRole::Staff);
         alternate.principal_claim = "sub".to_owned();
         alternate.required_scopes = vec![
             "casework:staff".to_owned(),
             "casework:staff-alternate".to_owned(),
         ];
         candidate.access_profiles.push(alternate);
-        candidate.hosted_kinds[0]
+        candidate.review_kinds[0].stages[0]
             .deciding_profiles
             .push("staff-by-sub".to_owned());
         assert_eq!(candidate.check(), Ok(()));
@@ -1059,6 +969,22 @@ mod tests {
     }
 
     #[test]
+    fn source_context_projection_is_unique_and_bounded() {
+        let mut candidate = project_with_source_queue("decisions");
+        candidate.sources[0].requests[0].context_projection =
+            vec!["summary".to_owned(), "attachment-metadata".to_owned()];
+        assert_eq!(candidate.check(), Ok(()));
+
+        candidate.sources[0].requests[0]
+            .context_projection
+            .push("summary".to_owned());
+        assert_eq!(candidate.check(), Err(ConfigError::Identifier));
+
+        candidate.sources[0].requests[0].context_projection = vec!["x".repeat(129)];
+        assert_eq!(candidate.check(), Err(ConfigError::Identifier));
+    }
+
+    #[test]
     fn higher_roles_are_not_reachable_through_lower_role_scope_sets() {
         let mut candidate = project();
         candidate.access_profiles[0].required_scopes =
@@ -1083,7 +1009,6 @@ mod tests {
             principal_claim: "registry_principal".to_owned(),
             required_scopes: vec!["casework:b".to_owned()],
             role: CaseworkRole::Staff,
-            kinds: Vec::new(),
         });
         assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
 
@@ -1184,7 +1109,6 @@ mod tests {
                 "casework:supervisor-secondary".to_owned(),
             ],
             role: CaseworkRole::Supervisor,
-            kinds: Vec::new(),
         });
         assert_eq!(candidate.check(), Ok(()));
     }
@@ -1205,12 +1129,12 @@ mod tests {
     }
 
     #[test]
-    fn administrator_is_not_a_hosted_deciding_profile() {
+    fn administrator_is_not_a_review_deciding_profile() {
         let mut project = project();
-        project.hosted_kinds[0].deciding_profiles = vec!["administrator".to_owned()];
+        project.review_kinds[0].stages[0].deciding_profiles = vec!["administrator".to_owned()];
         assert_eq!(
             project.check().unwrap_err().path(),
-            "hostedKinds[0].decidingProfiles[0]"
+            "reviewKinds[0].stages[0].decidingProfiles[0]"
         );
     }
 

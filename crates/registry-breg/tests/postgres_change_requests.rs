@@ -12,17 +12,12 @@ mod client_http;
 #[allow(dead_code)]
 mod postgres_harness;
 
-#[path = "support/reviewer_reasons.rs"]
-mod reviewer_reasons;
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::body::{to_bytes, Body};
-use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
-use axum::middleware::Next;
 use postgres_harness::TestDatabase;
 use registry_breg as breg;
 use registry_breg::action_evidence::ActionEvidenceEvaluator;
@@ -49,8 +44,6 @@ use registry_breg_client::{
 };
 use registry_platform_audit::AuditProfile;
 use serde_json::{json, Value};
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 use tower::Service as _;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -73,7 +66,6 @@ async fn reviewed_application_guard_rejects_changed_target_without_partial_effec
     let database = TestDatabase::create(8).await;
     let mut source = serde_json::to_value(two_stage_project()).unwrap();
     source["entities"][2]["changeRequest"]["application"] = json!({
-        "mode":"manual",
         "preconditions":{"targets":[{
             "id":"placement-guard", "entity":"asset-placement", "fromField":"placement",
             "requires":[{"field":"tenant", "equalsFromRequestField":"tenant"}]
@@ -90,30 +82,6 @@ async fn reviewed_application_guard_rejects_changed_target_without_partial_effec
         None,
     );
     let (request, digest) = submit_two_stage_correction(&app).await;
-    run_action(
-        &app,
-        &request.id,
-        "correction-requests",
-        "reviewer",
-        claims("reviewer", REVIEWER, Some("review")),
-        "guard-review",
-        "approve_request",
-        Some("review"),
-        |_| json!({"proposalVersion":1,"effectDigest":digest}),
-    )
-    .await;
-    run_action(
-        &app,
-        &request.id,
-        "correction-requests",
-        "final-reviewer",
-        claims("final-reviewer", "independent-reviewer", Some("final")),
-        "guard-final-review",
-        "approve_request",
-        Some("final"),
-        |_| json!({"proposalVersion":1,"effectDigest":digest}),
-    )
-    .await;
     let placement = &registry.entities()["asset-placement"];
     database
         .admin
@@ -191,7 +159,6 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
         "subjectResolution":"trusted-provider-exact-selector"
     }]);
     source["entities"][2]["changeRequest"]["application"] = json!({
-        "mode":"manual",
         "preconditions":{"targets":[{
             "id":"site-guard", "entity":"asset-site", "fromField":"proposed-site",
             "requires":[{"field":"tenant", "equalsFromRequestField":"tenant"}]
@@ -265,34 +232,6 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
     );
     let replay_app = router(replay_service);
     let (request, digest) = submit_two_stage_correction(&replay_app).await;
-    run_action(
-        &replay_app,
-        &request.id,
-        "correction-requests",
-        "reviewer",
-        claims("reviewer", REVIEWER, Some("review")),
-        "evidence-review",
-        "approve_request",
-        Some("review"),
-        |_| json!({"proposalVersion":1,"effectDigest":digest}),
-    )
-    .await;
-    run_action(
-        &replay_app,
-        &request.id,
-        "correction-requests",
-        "final-reviewer",
-        claims(
-            "final-reviewer",
-            "evidence-independent-reviewer",
-            Some("final"),
-        ),
-        "evidence-final-review",
-        "approve_request",
-        Some("final"),
-        |_| json!({"proposalVersion":1,"effectDigest":digest}),
-    )
-    .await;
     let target = &registry.entities()["asset-site"];
     let table = quote_sql_identifier(&target.physical_table);
     let name_column = quote_sql_identifier(&target.fields["name"].physical_name);
@@ -660,7 +599,6 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
         if_match: tampered_if_match(&apply.if_match),
         proposal_version: apply.proposal_version,
         effect_digest: apply.effect_digest.clone(),
-        review: Value::Null,
     };
     let refused = send_action(
         &replay_app,
@@ -695,7 +633,6 @@ async fn retained_attachment_apply_access_checks_frozen_guard_row_boundaries() {
     let database = TestDatabase::create(8).await;
     let mut source = serde_json::to_value(attachment_project()).unwrap();
     source["entities"][2]["changeRequest"]["application"] = json!({
-        "mode":"manual",
         "preconditions":{"targets":[{
             "id":"site-guard", "entity":"asset-site", "fromField":"proposed-site",
             "requires":[{"field":"tenant", "equalsFromRequestField":"tenant"}]
@@ -1687,16 +1624,6 @@ fn attachment_project() -> registry_breg::contract::RegistryProject {
             .filter(|grant| grant.entity == "correction-request")
         {
             grant.readable_fields.insert("evidence".to_owned());
-            for stage in &mut grant.review_stages {
-                stage
-                    .targets
-                    .push(registry_breg::contract::ReviewStageTargetPermissionSource {
-                        entity: "correction-request".to_owned(),
-                        readable_fields: BTreeSet::from(["evidence".to_owned()]),
-                        row_boundaries: vec![],
-                    });
-            }
-
             if profile.id == "submitter" {
                 grant.writable_fields.insert("evidence".to_owned());
                 grant.request_visibility =
@@ -1722,8 +1649,7 @@ fn attachment_project() -> registry_breg::contract::RegistryProject {
         .clone();
     other_target.id = "other-target-reviewer".to_owned();
     other_target.default = false;
-    other_target.permissions[0].review_stages[0].targets[0].row_boundaries[0].claim =
-        "target_tenant_claim".to_owned();
+    other_target.permissions[0].row_boundaries[0].claim = "target_tenant_claim".to_owned();
     project.access_profiles.push(other_target);
 
     for variant in [
@@ -1741,32 +1667,11 @@ fn attachment_project() -> registry_breg::contract::RegistryProject {
         profile.id = variant.to_owned();
         profile.default = false;
         let grant = &mut profile.permissions[0];
-        let stage = &mut grant.review_stages[0];
         match variant {
-            "reviewer-no-slot" => stage
-                .targets
-                .retain(|target| target.entity != "correction-request"),
-            "reviewer-empty-slot" => stage
-                .targets
-                .iter_mut()
-                .find(|target| target.entity == "correction-request")
-                .unwrap()
-                .readable_fields
-                .clear(),
-            "reviewer-other-stage" => {
-                let target = stage.targets.pop().unwrap();
-                grant
-                    .review_stages
-                    .push(registry_breg::contract::ReviewStagePermissionSource {
-                        stage: "final".to_owned(),
-                        targets: vec![target],
-                    });
+            "reviewer-no-slot" | "reviewer-empty-slot" | "reviewer-other-stage" => {
+                grant.readable_fields.remove("evidence");
             }
-            _ => stage
-                .targets
-                .iter_mut()
-                .find(|target| target.entity == "correction-request")
-                .unwrap()
+            _ => grant
                 .row_boundaries
                 .push(registry_breg::contract::RowBoundarySource {
                     field: "reason".to_owned(),
@@ -2459,7 +2364,7 @@ async fn attachment_download_journey(
             actor.clone(),
         )
         .await;
-        assert_eq!(metadata.body["data"]["evidence"]["sha256"], original_hash);
+        assert_eq!(metadata.body["data"]["evidence"]["sha256"], Value::Null);
         assert_eq!(
             send(
                 &app,
@@ -2650,7 +2555,7 @@ async fn attachment_download_journey(
         |_| json!({}),
     )
     .await;
-    for profile in ["reviewer-self-reason", "applier-self-reason"] {
+    for profile in ["applier-self-reason"] {
         for (version, reason, expected) in [
             (1, first_reason.as_str(), StatusCode::OK),
             (1, "second proposal reason", StatusCode::NOT_FOUND),
@@ -2674,7 +2579,7 @@ async fn attachment_download_journey(
                 .await
                 .status(),
                 expected,
-                "{profile} reads only the exact proposal's authorized intake"
+                "{profile} version {version} with reason {reason:?} reads only the exact proposal's authorized intake"
             );
         }
     }
@@ -2690,7 +2595,7 @@ async fn attachment_download_journey(
     assert_eq!(
         previous.status(),
         StatusCode::OK,
-        "reviewer can reauthorize the exact prior frozen targets"
+        "a directly authorized reader can retrieve the retained prior attachment"
     );
     assert_eq!(
         to_bytes(previous.into_body(), 1024).await.unwrap().as_ref(),
@@ -2988,9 +2893,8 @@ async fn real_postgres_http_change_request_correction_uses_frozen_review_and_app
     let app = change_request_router(&database, registry.clone(), identity, PACKAGE_ID, None);
     let steward = claims("steward", "steward-principal", None);
     let submitter = claims("submitter", SUBMITTER, None);
-    let reviewer = claims("reviewer", REVIEWER, Some("review"));
     let applier = claims("applier", APPLIER, Some("apply"));
-    assert_served_action_openapi_refs(&app, reviewer.clone(), applier.clone()).await;
+    assert_served_action_openapi_refs(&app, applier.clone()).await;
 
     let old_site = create_record(
         &app,
@@ -3095,45 +2999,20 @@ async fn real_postgres_http_change_request_correction_uses_frozen_review_and_app
     assert!(effect_digest.starts_with("sha256:"));
     assert_eq!(submitted["request"]["application"], Value::Null);
 
-    let before_review = get_record(
-        &app,
-        &format!(
-            "/v1/records/correction-requests/{}?accessProfile=reviewer",
-            request.id
-        ),
-        reviewer.clone(),
-    )
-    .await;
-    assert_eq!(before_review.body["request"]["bregState"], "submitted");
-    assert_eq!(before_review.body["request"]["effectDigest"], effect_digest);
-    let approve_action = action(&before_review.body, "approve_request", Some("review"));
-    assert_eq!(approve_action.proposal_version, Some(1));
-    assert_eq!(
-        approve_action.effect_digest.as_deref(),
-        Some(effect_digest.as_str())
-    );
-    let targets = approve_action.review["targets"]
-        .as_array()
-        .expect("review action exposes target snapshots");
+    let targets = request_targets(&database, "correction-request", &request.id).await;
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0]["entityId"], "asset-placement");
     assert_eq!(targets[0]["recordId"], placement.id);
     assert_eq!(targets[0]["operation"], "patch");
     assert_eq!(targets[0]["baseRevision"], 1);
-    assert_eq!(targets[0]["before"], json!({"site": old_site.id}));
-    assert_eq!(targets[0]["after"], json!({"site": new_site.id}));
-
-    let approved = action_response(
-        &app,
-        &approve_action.href,
-        "approve-correction-request",
-        &approve_action.if_match,
-        reviewer.clone(),
-        json!({"proposalVersion": 1, "effectDigest": effect_digest}),
-    )
-    .await;
-    assert_eq!(approved["request"]["bregState"], "approved");
-    assert_eq!(approved["request"]["application"], Value::Null);
+    assert_eq!(
+        targets[0]["before"],
+        json!({"tenant":TENANT,"site":old_site.id,"valid-from":"2026-08-31","valid-to":null})
+    );
+    assert_eq!(
+        targets[0]["after"],
+        json!({"tenant":TENANT,"site":new_site.id,"valid-from":"2026-08-31","valid-to":null})
+    );
 
     let before_apply = get_record(
         &app,
@@ -3144,7 +3023,7 @@ async fn real_postgres_http_change_request_correction_uses_frozen_review_and_app
         applier.clone(),
     )
     .await;
-    assert_eq!(before_apply.body["request"]["bregState"], "approved");
+    assert_eq!(before_apply.body["request"]["bregState"], "submitted");
     let apply_action = action(&before_apply.body, "apply_request", None);
     assert_eq!(apply_action.proposal_version, Some(1));
 
@@ -3209,7 +3088,6 @@ async fn real_postgres_http_change_request_correction_uses_frozen_review_and_app
         &request_revisions,
         &[
             "records.correction-request.request.apply",
-            "records.correction-request.request.stages.review.approve",
             "records.correction-request.request.submit",
             "records.correction-request.create",
         ],
@@ -3243,336 +3121,6 @@ async fn real_postgres_http_change_request_correction_uses_frozen_review_and_app
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn breg_client_drives_every_real_postgres_change_request_lifecycle_operation() {
-    let database = TestDatabase::create(8).await;
-    let registry = Arc::new(compiled_registry());
-    let identity = install_registry(&database, &registry, "breg-client-lifecycle", true).await;
-    let app = change_request_router(&database, registry, identity, "breg-client-lifecycle", None);
-
-    // Direct mutations only prepare the records that the lifecycle journey
-    // consumes. Every change-request transition below crosses the real HTTP
-    // boundary through BaseRegistryClient.
-    let steward = claims("steward", "client-lifecycle-steward", None);
-    let submitter = claims("submitter", SUBMITTER, None);
-    let old_site = create_record(
-        &app,
-        "/v1/records/sites?accessProfile=steward",
-        steward.clone(),
-        "client-lifecycle-create-old-site",
-        json!({"tenant": TENANT, "name": "client-lifecycle-old"}),
-    )
-    .await;
-    let new_site = create_record(
-        &app,
-        "/v1/records/sites?accessProfile=steward",
-        steward.clone(),
-        "client-lifecycle-create-new-site",
-        json!({"tenant": TENANT, "name": "client-lifecycle-new"}),
-    )
-    .await;
-    let placement = create_record(
-        &app,
-        "/v1/records/placements?accessProfile=steward",
-        steward,
-        "client-lifecycle-create-placement",
-        json!({
-            "tenant": TENANT,
-            "site": old_site.id,
-            "validFrom": "2026-09-01",
-            "validTo": Value::Null
-        }),
-    )
-    .await;
-    let applied_request = create_record(
-        &app,
-        "/v1/records/correction-requests?accessProfile=submitter",
-        submitter.clone(),
-        "client-lifecycle-create-applied-request",
-        json!({
-            "tenant": TENANT,
-            "placement": placement.id,
-            "proposedSite": new_site.id,
-            "reason": "exercise revision, approval, and application"
-        }),
-    )
-    .await;
-    let rejected_request = create_record(
-        &app,
-        "/v1/records/correction-requests?accessProfile=submitter",
-        submitter.clone(),
-        "client-lifecycle-create-rejected-request",
-        json!({
-            "tenant": TENANT,
-            "placement": placement.id,
-            "proposedSite": old_site.id,
-            "reason": "exercise rejection"
-        }),
-    )
-    .await;
-    let canceled_request = create_record(
-        &app,
-        "/v1/records/correction-requests?accessProfile=submitter",
-        submitter,
-        "client-lifecycle-create-canceled-request",
-        json!({
-            "tenant": TENANT,
-            "placement": placement.id,
-            "proposedSite": new_site.id,
-            "reason": "exercise cancellation"
-        }),
-    )
-    .await;
-
-    let server = serve_change_request_client_http(app).await;
-    let submitter_client = change_request_client(server.base_url(), "submitter-token");
-    let reviewer_client = change_request_client(server.base_url(), "reviewer-token");
-    let applier_client = change_request_client(server.base_url(), "applier-token");
-    let steward_client = change_request_client(server.base_url(), "steward-token");
-
-    // Runtime metadata is caller-filtered and remains the sole authority that
-    // can promote the actor-specific links carried by a request record.
-    let submitter_authority = lifecycle_authority(&submitter_client, "submitter").await;
-    let reviewer_authority = lifecycle_authority(&reviewer_client, "reviewer").await;
-    let applier_authority = lifecycle_authority(&applier_client, "applier").await;
-    let mut exercised = BTreeSet::new();
-
-    let before_submit =
-        client_request_record(&submitter_client, &applied_request.id, "submitter").await;
-    assert_eq!(
-        request_metadata(&before_submit).breg_state(),
-        BRegRequestState::Draft
-    );
-    let submit_action = promoted_client_action(
-        &submitter_client,
-        &submitter_authority,
-        &before_submit,
-        BRegLifecycleOperation::SubmitRequest,
-    );
-    let submit_key = idempotency_key("client-lifecycle-submit-v1");
-    let submitted = submitter_client
-        .execute_lifecycle_action(&submit_action, &submit_key)
-        .await
-        .expect("the metadata- and record-bound submit action succeeds");
-    assert!(
-        submitted.value.actor_reference().is_some(),
-        "a lifecycle receipt carries the acting caller's opaque correlation reference"
-    );
-    exercised.insert(BRegLifecycleOperation::SubmitRequest);
-    let after_submit =
-        client_request_record(&submitter_client, &applied_request.id, "submitter").await;
-    assert_client_receipt_matches_refetch(&submitted.value, &after_submit);
-    assert_eq!(
-        request_metadata(&after_submit).breg_state(),
-        BRegRequestState::Submitted
-    );
-
-    let replayed_submit = submitter_client
-        .execute_lifecycle_action(&submit_action, &submit_key)
-        .await
-        .expect("a caller retry reuses the exact action and idempotency key");
-    assert_eq!(replayed_submit.value, submitted.value);
-    let stale_submit = submitter_client
-        .execute_lifecycle_action(
-            &submit_action,
-            &idempotency_key("client-lifecycle-stale-submit"),
-        )
-        .await
-        .expect_err("a stale action cannot be rebound under a different caller key");
-    assert_eq!(
-        stale_submit.problem_code(),
-        Some(BRegProblemCode::PreconditionFailed)
-    );
-
-    let before_revision =
-        client_request_record(&reviewer_client, &applied_request.id, "reviewer").await;
-    let request_revision_action = promoted_client_action(
-        &reviewer_client,
-        &reviewer_authority,
-        &before_revision,
-        BRegLifecycleOperation::RequestRevision,
-    );
-    let review = request_revision_action
-        .review()
-        .expect("a review decision carries frozen target snapshots");
-    assert_eq!(review.targets().len(), 1);
-    assert_eq!(review.targets()[0].entity_identifier(), "asset-placement");
-    assert_eq!(review.targets()[0].record_identifier(), placement.id);
-    let needs_changes = execute_client_action_and_refetch(
-        &reviewer_client,
-        &request_revision_action,
-        "client-lifecycle-request-revision",
-        &applied_request.id,
-        "reviewer",
-    )
-    .await;
-    exercised.insert(BRegLifecycleOperation::RequestRevision);
-    assert_eq!(
-        request_metadata(&needs_changes).breg_state(),
-        BRegRequestState::NeedsChanges
-    );
-
-    let before_revise =
-        client_request_record(&submitter_client, &applied_request.id, "submitter").await;
-    let revise_action = promoted_client_action(
-        &submitter_client,
-        &submitter_authority,
-        &before_revise,
-        BRegLifecycleOperation::ReviseRequest,
-    );
-    let revised = execute_client_action_and_refetch(
-        &submitter_client,
-        &revise_action,
-        "client-lifecycle-revise",
-        &applied_request.id,
-        "submitter",
-    )
-    .await;
-    exercised.insert(BRegLifecycleOperation::ReviseRequest);
-    assert_eq!(
-        request_metadata(&revised).breg_state(),
-        BRegRequestState::Draft
-    );
-    assert_eq!(request_metadata(&revised).proposal_version().get(), 2);
-
-    let resubmit_action = promoted_client_action(
-        &submitter_client,
-        &submitter_authority,
-        &revised,
-        BRegLifecycleOperation::SubmitRequest,
-    );
-    let resubmitted = execute_client_action_and_refetch(
-        &submitter_client,
-        &resubmit_action,
-        "client-lifecycle-submit-v2",
-        &applied_request.id,
-        "submitter",
-    )
-    .await;
-    assert_eq!(
-        request_metadata(&resubmitted).breg_state(),
-        BRegRequestState::Submitted
-    );
-
-    let before_approve =
-        client_request_record(&reviewer_client, &applied_request.id, "reviewer").await;
-    let approve_action = promoted_client_action(
-        &reviewer_client,
-        &reviewer_authority,
-        &before_approve,
-        BRegLifecycleOperation::ApproveRequest,
-    );
-    assert_eq!(approve_action.stage(), Some("review"));
-    let approved = execute_client_action_and_refetch(
-        &reviewer_client,
-        &approve_action,
-        "client-lifecycle-approve",
-        &applied_request.id,
-        "reviewer",
-    )
-    .await;
-    exercised.insert(BRegLifecycleOperation::ApproveRequest);
-    assert_eq!(
-        request_metadata(&approved).breg_state(),
-        BRegRequestState::Approved
-    );
-
-    let before_apply = client_request_record(&applier_client, &applied_request.id, "applier").await;
-    let apply_action = promoted_client_action(
-        &applier_client,
-        &applier_authority,
-        &before_apply,
-        BRegLifecycleOperation::ApplyRequest,
-    );
-    let applied = execute_client_action_and_refetch(
-        &applier_client,
-        &apply_action,
-        "client-lifecycle-apply",
-        &applied_request.id,
-        "applier",
-    )
-    .await;
-    exercised.insert(BRegLifecycleOperation::ApplyRequest);
-    let applied_metadata = request_metadata(&applied);
-    assert_eq!(applied_metadata.breg_state(), BRegRequestState::Applied);
-    assert!(applied_metadata.application().is_some());
-    let changed_placement =
-        client_record(&steward_client, "placements", &placement.id, "steward").await;
-    assert_eq!(
-        changed_placement.data.domain_data.get("site"),
-        Some(&Value::String(new_site.id.clone()))
-    );
-
-    let rejected_draft =
-        client_request_record(&submitter_client, &rejected_request.id, "submitter").await;
-    let rejected_submit = promoted_client_action(
-        &submitter_client,
-        &submitter_authority,
-        &rejected_draft,
-        BRegLifecycleOperation::SubmitRequest,
-    );
-    execute_client_action_and_refetch(
-        &submitter_client,
-        &rejected_submit,
-        "client-lifecycle-reject-submit",
-        &rejected_request.id,
-        "submitter",
-    )
-    .await;
-    let before_reject =
-        client_request_record(&reviewer_client, &rejected_request.id, "reviewer").await;
-    let reject_action = promoted_client_action(
-        &reviewer_client,
-        &reviewer_authority,
-        &before_reject,
-        BRegLifecycleOperation::RejectRequest,
-    );
-    let rejected = execute_client_action_and_refetch(
-        &reviewer_client,
-        &reject_action,
-        "client-lifecycle-reject",
-        &rejected_request.id,
-        "reviewer",
-    )
-    .await;
-    exercised.insert(BRegLifecycleOperation::RejectRequest);
-    assert_eq!(
-        request_metadata(&rejected).breg_state(),
-        BRegRequestState::Rejected
-    );
-
-    let canceled_draft =
-        client_request_record(&submitter_client, &canceled_request.id, "submitter").await;
-    let cancel_action = promoted_client_action(
-        &submitter_client,
-        &submitter_authority,
-        &canceled_draft,
-        BRegLifecycleOperation::CancelRequest,
-    );
-    let canceled = execute_client_action_and_refetch(
-        &submitter_client,
-        &cancel_action,
-        "client-lifecycle-cancel",
-        &canceled_request.id,
-        "submitter",
-    )
-    .await;
-    exercised.insert(BRegLifecycleOperation::CancelRequest);
-    assert_eq!(
-        request_metadata(&canceled).breg_state(),
-        BRegRequestState::Canceled
-    );
-
-    assert_eq!(
-        exercised,
-        BRegLifecycleOperation::ALL.into_iter().collect(),
-        "the real PostgreSQL client journey covers the closed lifecycle operation set"
-    );
-
-    server.finish().await;
-    database.cleanup().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_http_change_request_apply_lost_response_replays_same_and_different_key_receipts(
 ) {
     let database = TestDatabase::create(8).await;
@@ -3595,7 +3143,6 @@ async fn real_postgres_http_change_request_apply_lost_response_replays_same_and_
     );
     let steward = claims("steward", "lost-response-steward", None);
     let submitter = claims("submitter", "lost-response-submitter", None);
-    let reviewer = claims("reviewer", "lost-response-reviewer", Some("review"));
     let applier = claims("applier", "lost-response-applier", Some("apply"));
 
     let old_site = create_record(
@@ -3653,22 +3200,7 @@ async fn real_postgres_http_change_request_apply_lost_response_replays_same_and_
         |_| json!({}),
     )
     .await;
-    let effect_digest = submitted["request"]["effectDigest"]
-        .as_str()
-        .expect("submission freezes digest")
-        .to_owned();
-    run_action(
-        &app,
-        &request.id,
-        "correction-requests",
-        "reviewer",
-        reviewer,
-        "lost-approve-correction-request",
-        "approve_request",
-        Some("review"),
-        |_| json!({"proposalVersion": 1, "effectDigest": effect_digest}),
-    )
-    .await;
+    assert!(submitted["request"]["effectDigest"].is_string());
 
     let before_apply = get_record(
         &lost_response_app,
@@ -3789,7 +3321,6 @@ async fn real_postgres_http_change_request_apply_lost_response_replays_same_and_
         if_match: tampered_if_match(&apply.if_match),
         proposal_version: apply.proposal_version,
         effect_digest: apply.effect_digest.clone(),
-        review: Value::Null,
     };
     let bad_precondition = send_action(
         &app,
@@ -3853,160 +3384,6 @@ async fn real_postgres_http_change_request_apply_lost_response_replays_same_and_
     assert_eq!(changed_placement.body["revision"], 2);
     assert_eq!(changed_placement.body["data"]["site"], new_site.id);
     assert_eq!(application_result_count(&database).await, 1);
-    database.cleanup().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn real_postgres_http_change_request_approval_history_commit_replays_without_new_position() {
-    let database = TestDatabase::create(8).await;
-    let registry = Arc::new(compiled_registry());
-    let identity = install_registry(
-        &database,
-        &registry,
-        "approval-history-change-request",
-        true,
-    )
-    .await;
-    let app = change_request_router(
-        &database,
-        registry.clone(),
-        identity,
-        "approval-history-change-request",
-        None,
-    );
-    let steward = claims("steward", "approval-history-steward", None);
-    let submitter = claims("submitter", "approval-history-submitter", None);
-    let reviewer = claims("reviewer", "approval-history-reviewer", Some("review"));
-
-    let old_site = create_record(
-        &app,
-        "/v1/records/sites?accessProfile=steward",
-        steward.clone(),
-        "approval-history-create-old-site",
-        json!({"tenant": TENANT, "name": "approval-history-old"}),
-    )
-    .await;
-    let new_site = create_record(
-        &app,
-        "/v1/records/sites?accessProfile=steward",
-        steward.clone(),
-        "approval-history-create-new-site",
-        json!({"tenant": TENANT, "name": "approval-history-new"}),
-    )
-    .await;
-    let placement = create_record(
-        &app,
-        "/v1/records/placements?accessProfile=steward",
-        steward,
-        "approval-history-create-placement",
-        json!({
-            "tenant": TENANT,
-            "site": old_site.id,
-            "validFrom": "2026-08-31",
-            "validTo": Value::Null
-        }),
-    )
-    .await;
-    let request = create_record(
-        &app,
-        "/v1/records/correction-requests?accessProfile=submitter",
-        submitter.clone(),
-        "approval-history-create-correction-request",
-        json!({
-            "tenant": TENANT,
-            "placement": placement.id,
-            "proposedSite": new_site.id,
-            "reason": "approval history commit proof"
-        }),
-    )
-    .await;
-    let submitted = run_action(
-        &app,
-        &request.id,
-        "correction-requests",
-        "submitter",
-        submitter,
-        "approval-history-submit-correction-request",
-        "submit_request",
-        None,
-        |_| json!({}),
-    )
-    .await;
-    let effect_digest = submitted["request"]["effectDigest"]
-        .as_str()
-        .expect("submission freezes digest")
-        .to_owned();
-
-    let before_review = get_record(
-        &app,
-        &format!(
-            "/v1/records/correction-requests/{}?accessProfile=reviewer",
-            request.id
-        ),
-        reviewer.clone(),
-    )
-    .await;
-    let approve = action(&before_review.body, "approve_request", Some("review"));
-    let approve_body = json!({"proposalVersion": 1, "effectDigest": effect_digest});
-    let before_history = history_commit_counts(&database).await;
-    let approved = send_action(
-        &app,
-        &approve,
-        "approval-history-approve-correction-request",
-        reviewer.clone(),
-        approve_body.clone(),
-    )
-    .await;
-    assert_eq!(
-        approved.status,
-        StatusCode::OK,
-        "approval failed with body {}",
-        approved.body
-    );
-    assert_eq!(approved.body["request"]["bregState"], "approved");
-    assert_snapshot_reference(&approved.body["snapshot"]);
-    let after_approval_history = history_commit_counts(&database).await;
-    assert_eq!(
-        after_approval_history.commits - before_history.commits,
-        1,
-        "fresh approval must allocate exactly one history commit"
-    );
-    assert_eq!(
-        after_approval_history.members - before_history.members,
-        1,
-        "approval commits only the request row revision"
-    );
-    let members = history_members_for_snapshot(&database, &approved.body["snapshot"]).await;
-    assert_eq!(members.len(), 1);
-    assert_eq!(members[0].entity_id, "correction-request");
-    assert_eq!(members[0].record_id.to_string(), request.id);
-    assert_eq!(
-        members[0].record_revision,
-        approved.body["revision"]
-            .as_i64()
-            .expect("approval response carries request revision")
-    );
-
-    let replayed = send_action(
-        &app,
-        &approve,
-        "approval-history-approve-correction-request",
-        reviewer,
-        approve_body,
-    )
-    .await;
-    assert_eq!(
-        replayed.status,
-        StatusCode::OK,
-        "approval replay failed with body {}",
-        replayed.body
-    );
-    assert_eq!(replayed.body, approved.body);
-    assert_eq!(
-        history_commit_counts(&database).await,
-        after_approval_history,
-        "idempotent approval replay must not allocate another commit position"
-    );
     database.cleanup().await;
 }
 
@@ -4198,7 +3575,10 @@ async fn real_postgres_http_change_request_apply_terminal_fault_rolls_back_reque
         applier,
     )
     .await;
-    assert_eq!(request_after_fault.body["request"]["bregState"], "approved");
+    assert_eq!(
+        request_after_fault.body["request"]["bregState"],
+        "submitted"
+    );
     assert_eq!(
         request_after_fault.body["request"]["application"],
         Value::Null
@@ -4400,50 +3780,24 @@ async fn real_postgres_http_change_request_registration_applies_reserved_creates
         |_| json!({}),
     )
     .await;
-    let digest = submitted["request"]["effectDigest"]
-        .as_str()
-        .expect("submission freezes digest")
-        .to_owned();
-    let before_approve = get_record(
-        &app,
-        &format!(
-            "/v1/records/registration-requests/{}?accessProfile=operator",
-            request.id
-        ),
-        operator.clone(),
-    )
-    .await;
-    let approve = action(&before_approve.body, "approve_request", Some("review"));
-    let targets = approve.review["targets"]
-        .as_array()
-        .expect("target snapshots");
+    assert!(submitted["request"]["effectDigest"].is_string());
+    let targets = request_targets(&database, "registration-request", &request.id).await;
     assert_eq!(targets.len(), 3);
-    let person_id = target_record_id(targets, "person");
-    let membership_id = target_record_id(targets, "membership");
+    let person_id = target_record_id(&targets, "person");
+    let membership_id = target_record_id(&targets, "membership");
     assert_ne!(person_id, membership_id);
     assert_eq!(
-        target_after(targets, "person"),
-        json!({"tenant": TENANT, "displayName": "Ada Lovelace"})
+        target_after(&targets, "person"),
+        json!({"tenant": TENANT, "display-name": "Ada Lovelace"})
     );
     assert_eq!(
-        target_after(targets, "membership"),
+        target_after(&targets, "membership"),
         json!({"tenant": TENANT, "household": household.id, "person": person_id})
     );
     assert_eq!(
-        target_after(targets, "household"),
-        json!({"contactPerson": person_id})
+        target_after(&targets, "household"),
+        json!({"tenant":TENANT,"label":"household one","contact-person":person_id})
     );
-
-    let approved = action_response(
-        &app,
-        &approve.href,
-        "approve-registration-request",
-        &approve.if_match,
-        operator.clone(),
-        json!({"proposalVersion": 1, "effectDigest": digest}),
-    )
-    .await;
-    assert_eq!(approved["request"]["bregState"], "approved");
 
     let applied = run_action(
         &app,
@@ -4671,7 +4025,6 @@ async fn real_postgres_http_change_request_registration_applies_reserved_creates
         &request_revisions,
         &[
             "records.registration-request.request.apply",
-            "records.registration-request.request.stages.review.approve",
             "records.registration-request.request.submit",
             "records.registration-request.create",
         ],
@@ -4844,35 +4197,10 @@ async fn real_postgres_http_change_request_registration_rolls_back_after_partial
         |_| json!({}),
     )
     .await;
-    let digest = submitted["request"]["effectDigest"]
-        .as_str()
-        .expect("submission freezes digest")
-        .to_owned();
-    let before_approve = get_record(
-        &setup_app,
-        &format!(
-            "/v1/records/registration-requests/{}?accessProfile=operator",
-            request.id
-        ),
-        operator.clone(),
-    )
-    .await;
-    let approve = action(&before_approve.body, "approve_request", Some("review"));
-    let approved = action_response(
-        &setup_app,
-        &approve.href,
-        "fault-approve-registration-request",
-        &approve.if_match,
-        operator.clone(),
-        json!({"proposalVersion": 1, "effectDigest": digest}),
-    )
-    .await;
-    assert_eq!(approved["request"]["bregState"], "approved");
-    let targets = approve.review["targets"]
-        .as_array()
-        .expect("target snapshots");
-    let person_id = target_record_id(targets, "person");
-    let membership_id = target_record_id(targets, "membership");
+    assert!(submitted["request"]["effectDigest"].is_string());
+    let targets = request_targets(&database, "registration-request", &request.id).await;
+    let person_id = target_record_id(&targets, "person");
+    let membership_id = target_record_id(&targets, "membership");
 
     let before_apply = get_record(
         &fault_app,
@@ -4956,6 +4284,7 @@ async fn real_postgres_http_change_request_apply_serialization_retries_are_bound
     let operator = claims("operator", "sql-retry-operator", None);
 
     let failed = create_approved_registration(
+        &database,
         &app,
         steward.clone(),
         operator.clone(),
@@ -5008,8 +4337,14 @@ async fn real_postgres_http_change_request_apply_serialization_retries_are_bound
     assert_eq!(application_result_count(&database).await, 0);
 
     set_serialization_retry_failures(&database, 2).await;
-    let approved =
-        create_approved_registration(&app, steward, operator.clone(), "sql-retry-succeeds").await;
+    let approved = create_approved_registration(
+        &database,
+        &app,
+        steward,
+        operator.clone(),
+        "sql-retry-succeeds",
+    )
+    .await;
     let applied = send_registration_apply(
         &app,
         &approved.request_id,
@@ -5101,7 +4436,8 @@ async fn real_postgres_http_change_request_apply_deadline_cancels_blocked_sql() 
     let steward = claims("steward", "sql-deadline-steward", None);
     let operator = claims("operator", "sql-deadline-operator", None);
     let approved =
-        create_approved_registration(&app, steward, operator.clone(), "sql-deadline").await;
+        create_approved_registration(&database, &app, steward, operator.clone(), "sql-deadline")
+            .await;
 
     let started = Instant::now();
     let blocked = send_registration_apply(
@@ -5187,8 +4523,14 @@ async fn real_postgres_http_change_request_apply_cancels_when_startup_timeout_dr
     );
     let steward = claims("steward", "startup-timeout-steward", None);
     let operator = claims("operator", "startup-timeout-operator", None);
-    let approved =
-        create_approved_registration(&app, steward, operator.clone(), "startup-timeout").await;
+    let approved = create_approved_registration(
+        &database,
+        &app,
+        steward,
+        operator.clone(),
+        "startup-timeout",
+    )
+    .await;
 
     let started = Instant::now();
     let timed_out = send_registration_apply(
@@ -5242,665 +4584,6 @@ async fn real_postgres_http_change_request_apply_cancels_when_startup_timeout_dr
         0,
         "startup timeout cancellation must not allow a late application commit"
     );
-    database.cleanup().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires actual local issuers and PostgreSQL; run test-issuer-portability.py --with-postgres"]
-async fn stock_to_keycloak_continues_persisted_review_with_stable_principal() {
-    let database = TestDatabase::create(8).await;
-    let mut project = two_stage_project();
-    for profile in &mut project.access_profiles {
-        if !profile.required_purposes.is_empty() {
-            profile.required_purposes = BTreeSet::from(["registry-administration".to_owned()]);
-            profile.required_scopes = BTreeSet::from(["registry:read".to_owned()]);
-        }
-    }
-    let registry = Arc::new(
-        compile_project(&project, &[], CompileProfile::Authoring).expect("portable review policy"),
-    );
-    let identity = install_registry(&database, &registry, "two-stage-change-request", true).await;
-    let app = change_request_router(
-        &database,
-        registry.clone(),
-        identity.clone(),
-        "two-stage-change-request",
-        None,
-    );
-    let (request, digest) = submit_two_stage_correction(&app).await;
-    let root =
-        std::env::var_os("BREG_ISSUER_JOURNEY_DIR").expect("actual issuer material directory");
-    let root = std::path::Path::new(&root);
-    let manifest: Value =
-        serde_json::from_slice(&std::fs::read(root.join("journey.json")).expect("issuer manifest"))
-            .expect("manifest JSON");
-    let authenticator = |issuer: &Value| {
-        let jwks = serde_json::from_slice(
-            &std::fs::read(root.join(issuer["jwks_file"].as_str().expect("JWKS filename")))
-                .expect("public JWKS"),
-        )
-        .expect("JWKS JSON");
-        let config = registry_platform_oidc::TokenVerifierConfig::access_token_profile(
-            issuer["issuer"].as_str().expect("issuer"),
-            vec![manifest["audience"].as_str().expect("audience").to_owned()],
-            vec![serde_json::from_value(issuer["algorithm"].clone()).expect("algorithm")],
-            vec![issuer["token_type"]
-                .as_str()
-                .expect("token type")
-                .to_owned()],
-        )
-        .with_max_token_lifetime(Some(Duration::from_secs(300)));
-        Arc::new(
-            registry_breg::auth::RegistryAuthenticator::new(
-                &registry,
-                config,
-                Arc::new(registry_platform_oidc::JwksFetcher::new_static(
-                    jwks,
-                    registry_platform_oidc::JwksFetcherConfig::defaults(),
-                )),
-                registry_breg::auth::AuthorityClaimConfig::new(
-                    "registry_principal",
-                    Some("purpose".to_owned()),
-                ),
-            )
-            .expect("explicit issuer authority contract"),
-        )
-    };
-    let stock = authenticator(&manifest["stock"]);
-    let keycloak = authenticator(&manifest["keycloak"]);
-    let stock_token = Zeroizing::new(
-        std::fs::read_to_string(root.join("stock.token")).expect("stock issuer token"),
-    );
-    let service_token = Zeroizing::new(
-        std::fs::read_to_string(root.join("service.token")).expect("Keycloak service token"),
-    );
-    let human_token = Zeroizing::new(
-        std::fs::read_to_string(root.join("human.token")).expect("Keycloak human token"),
-    );
-    drop(app);
-    let stock_app = registry_breg::api::authenticated_router(
-        change_request_service(
-            &database,
-            registry.clone(),
-            identity.clone(),
-            "two-stage-change-request",
-            None,
-        ),
-        stock,
-    );
-    let first = bearer_request(
-        &stock_app,
-        Method::GET,
-        &format!(
-            "/v1/records/correction-requests/{}?accessProfile=reviewer",
-            request.id
-        ),
-        &stock_token,
-        &[],
-        Vec::new(),
-    )
-    .await;
-    assert_eq!(first.status, StatusCode::OK);
-    let first_approve = action(&first.body, "approve_request", Some("review"));
-    let first_result = bearer_action(
-        &stock_app,
-        &first_approve,
-        "issuer-first-approval",
-        &stock_token,
-        &digest,
-    )
-    .await;
-    assert_eq!(first_result.status, StatusCode::OK);
-    let first_page = bearer_request(
-        &stock_app,
-        Method::GET,
-        "/v1/records/sites?accessProfile=steward&$top=1",
-        &stock_token,
-        &[],
-        Vec::new(),
-    )
-    .await;
-    assert_eq!(first_page.status, StatusCode::OK);
-    let cursor = first_page.body["pageInfo"]["nextCursor"]
-        .as_str()
-        .expect("two sites produce a continuation")
-        .to_owned();
-    drop(stock_app);
-    let keycloak_app = registry_breg::api::authenticated_router(
-        change_request_service(
-            &database,
-            registry,
-            identity,
-            "two-stage-change-request",
-            None,
-        ),
-        keycloak,
-    );
-    let continuation = format!("/v1/records/sites?accessProfile=steward&$skiptoken={cursor}");
-    let next_page = bearer_request(
-        &keycloak_app,
-        Method::GET,
-        &continuation,
-        &service_token,
-        &[],
-        Vec::new(),
-    )
-    .await;
-    assert_eq!(
-        next_page.status,
-        StatusCode::OK,
-        "stable authority continues the old issuer's cursor"
-    );
-    assert_ne!(
-        next_page.body["items"][0]["id"]
-            .as_str()
-            .expect("next page record"),
-        first_page.body["items"][0]["id"]
-            .as_str()
-            .expect("first page record")
-    );
-    assert_eq!(
-        bearer_request(
-            &keycloak_app,
-            Method::GET,
-            &continuation,
-            &human_token,
-            &[],
-            Vec::new()
-        )
-        .await
-        .status,
-        StatusCode::BAD_REQUEST,
-        "another principal cannot reuse the cursor after cutover"
-    );
-    let uri = format!(
-        "/v1/records/correction-requests/{}?accessProfile=final-reviewer",
-        request.id
-    );
-    assert_eq!(
-        bearer_request(
-            &keycloak_app,
-            Method::GET,
-            &uri,
-            &stock_token,
-            &[],
-            Vec::new()
-        )
-        .await
-        .status,
-        StatusCode::UNAUTHORIZED
-    );
-    let final_review = bearer_request(
-        &keycloak_app,
-        Method::GET,
-        &uri,
-        &human_token,
-        &[],
-        Vec::new(),
-    )
-    .await;
-    assert_eq!(final_review.status, StatusCode::OK);
-    assert_eq!(final_review.body["request"]["proposalVersion"], 1);
-    let final_approve = action(&final_review.body, "approve_request", Some("final"));
-    let excluded = bearer_request(
-        &keycloak_app,
-        Method::GET,
-        &uri,
-        &service_token,
-        &[],
-        Vec::new(),
-    )
-    .await;
-    assert_eq!(excluded.status, StatusCode::OK);
-    assert!(
-        excluded.body["request"]["actions"]
-            .as_array()
-            .is_none_or(|actions| actions
-                .iter()
-                .all(|action| action["operation"] != "approve_request")),
-        "the same stable principal remains excluded after issuer replacement"
-    );
-    assert_eq!(
-        bearer_action(
-            &keycloak_app,
-            &final_approve,
-            "issuer-same-principal",
-            &service_token,
-            &digest
-        )
-        .await
-        .status,
-        StatusCode::PRECONDITION_FAILED,
-        "the new issuer cannot make the same institutional actor an independent reviewer"
-    );
-    let approved = bearer_action(
-        &keycloak_app,
-        &final_approve,
-        "issuer-independent-principal",
-        &human_token,
-        &digest,
-    )
-    .await;
-    assert_eq!(approved.status, StatusCode::OK);
-    assert_eq!(approved.body["request"]["bregState"], "approved");
-    assert_eq!(approved.body["request"]["effectDigest"], digest);
-    // A committed first-stage receipt remains owned by the same principal after issuer replacement.
-    let replay = bearer_action(
-        &keycloak_app,
-        &first_approve,
-        "issuer-first-approval",
-        &service_token,
-        &digest,
-    )
-    .await;
-    assert_eq!(replay.status, StatusCode::OK);
-    assert_eq!(replay.body, first_result.body);
-    database.cleanup().await;
-}
-
-async fn submit_two_stage_correction(app: &axum::Router) -> (CreatedRecord, String) {
-    let steward = claims("steward", "two-stage-steward", None);
-    let submitter = claims("submitter", SUBMITTER, None);
-
-    let old_site = create_record(
-        app,
-        "/v1/records/sites?accessProfile=steward",
-        steward.clone(),
-        "two-create-old-site",
-        json!({"tenant": TENANT, "name": "two-old"}),
-    )
-    .await;
-    let new_site = create_record(
-        app,
-        "/v1/records/sites?accessProfile=steward",
-        steward.clone(),
-        "two-create-new-site",
-        json!({"tenant": TENANT, "name": "two-new"}),
-    )
-    .await;
-    let placement = create_record(
-        app,
-        "/v1/records/placements?accessProfile=steward",
-        steward,
-        "two-create-placement",
-        json!({"tenant": TENANT, "site": old_site.id}),
-    )
-    .await;
-    let request = create_record(
-        app,
-        "/v1/records/correction-requests?accessProfile=submitter",
-        submitter.clone(),
-        "two-create-correction-request",
-        json!({
-            "tenant": TENANT,
-            "placement": placement.id,
-            "proposedSite": new_site.id,
-            "reason": "two-stage correction"
-        }),
-    )
-    .await;
-    let submitted = run_action(
-        app,
-        &request.id,
-        "correction-requests",
-        "submitter",
-        submitter.clone(),
-        "two-submit-correction-request",
-        "submit_request",
-        None,
-        |_| json!({}),
-    )
-    .await;
-    let digest = submitted["request"]["effectDigest"]
-        .as_str()
-        .expect("submission freezes digest")
-        .to_owned();
-
-    (request, digest)
-}
-
-async fn bearer_request(
-    app: &axum::Router,
-    method: Method,
-    uri: &str,
-    token: &str,
-    headers: &[(&str, &str)],
-    body: Vec<u8>,
-) -> ResponseParts {
-    let authorization = Zeroizing::new(format!("Bearer {token}"));
-    let mut headers = headers.to_vec();
-    headers.push(("authorization", authorization.as_str()));
-    response_parts(send(app, method, uri, None, &headers, body).await).await
-}
-
-async fn bearer_action(
-    app: &axum::Router,
-    action: &RequestAction,
-    key: &str,
-    token: &str,
-    digest: &str,
-) -> ResponseParts {
-    bearer_request(
-        app,
-        Method::POST,
-        &action.href,
-        token,
-        &[
-            ("content-type", "application/json"),
-            ("idempotency-key", key),
-            ("if-match", &action.if_match),
-        ],
-        serde_json::to_vec(&json!({"proposalVersion": 1, "effectDigest": digest}))
-            .expect("action JSON"),
-    )
-    .await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn real_postgres_prior_stage_reviewer_cannot_approve_independent_final_stage() {
-    let database = TestDatabase::create(8).await;
-    let registry = Arc::new(two_stage_registry());
-    let identity = install_registry(&database, &registry, "two-stage-change-request", true).await;
-    let app = change_request_router(
-        &database,
-        registry.clone(),
-        identity.clone(),
-        "two-stage-change-request",
-        None,
-    );
-    let (request, digest) = submit_two_stage_correction(&app).await;
-    let reviewer = claims("reviewer", REVIEWER, Some("review"));
-    let final_reviewer = claims("final-reviewer", "final-reviewer-principal", Some("final"));
-
-    let first_review = get_record(
-        &app,
-        &format!(
-            "/v1/records/correction-requests/{}?accessProfile=reviewer",
-            request.id
-        ),
-        reviewer.clone(),
-    )
-    .await;
-    let first_approve = action(&first_review.body, "approve_request", Some("review"));
-    action_response(
-        &app,
-        &first_approve.href,
-        "two-first-approval",
-        &first_approve.if_match,
-        reviewer.clone(),
-        json!({"proposalVersion": 1, "effectDigest": digest}),
-    )
-    .await;
-
-    // Reconstruct the service so stage independence is established by the
-    // committed workflow, not a previous request's in-memory actor context.
-    drop(app);
-    let app = change_request_router(
-        &database,
-        registry,
-        identity,
-        "two-stage-change-request",
-        None,
-    );
-    let final_review = get_record(
-        &app,
-        &format!(
-            "/v1/records/correction-requests/{}?accessProfile=final-reviewer",
-            request.id
-        ),
-        final_reviewer.clone(),
-    )
-    .await;
-    let approve = action(&final_review.body, "approve_request", Some("final"));
-    let reused_principal = claims("final-reviewer", REVIEWER, Some("final"));
-    let excluded = get_record(
-        &app,
-        &format!(
-            "/v1/records/correction-requests/{}?accessProfile=final-reviewer",
-            request.id
-        ),
-        reused_principal.clone(),
-    )
-    .await;
-    assert!(
-        excluded.body["request"]["actions"]
-            .as_array()
-            .is_none_or(|actions| actions
-                .iter()
-                .all(|action| action["operation"] != "approve_request")),
-        "persisted prior-stage actor has no final approval capability"
-    );
-    let denied = send_action(
-        &app,
-        &approve,
-        "independent-final-same-principal",
-        reused_principal,
-        json!({"proposalVersion": 1, "effectDigest": approve.effect_digest}),
-    )
-    .await;
-    assert_eq!(
-        denied.status,
-        StatusCode::PRECONDITION_FAILED,
-        "an excluded actor cannot borrow another reviewer's lifecycle capability"
-    );
-    let unchanged = get_record(
-        &app,
-        &format!(
-            "/v1/records/correction-requests/{}?accessProfile=final-reviewer",
-            request.id
-        ),
-        final_reviewer.clone(),
-    )
-    .await;
-    let approve_after_denial = action(&unchanged.body, "approve_request", Some("final"));
-    assert_eq!(
-        approve_after_denial.if_match, approve.if_match,
-        "refused review does not advance the persisted workflow"
-    );
-    let approved = action_response(
-        &app,
-        &approve_after_denial.href,
-        "independent-final-other-principal",
-        &approve_after_denial.if_match,
-        final_reviewer,
-        json!({"proposalVersion": 1, "effectDigest": approve_after_denial.effect_digest}),
-    )
-    .await;
-    assert_eq!(approved["request"]["bregState"], "approved");
-    assert_eq!(approved["request"]["proposalVersion"], 1);
-    database.cleanup().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn real_postgres_http_change_request_two_stage_stale_rebase_and_cancel_are_bound() {
-    let database = TestDatabase::create(8).await;
-    let registry = Arc::new(two_stage_registry());
-    let identity = install_registry(&database, &registry, "two-stage-change-request", true).await;
-    let app = change_request_router(
-        &database,
-        registry.clone(),
-        identity,
-        "two-stage-change-request",
-        None,
-    );
-    let steward = claims("steward", "two-stage-steward", None);
-    let submitter = claims("submitter", SUBMITTER, None);
-    let reviewer = claims("reviewer", REVIEWER, Some("review"));
-    let final_reviewer = claims("final-reviewer", "final-reviewer-principal", Some("final"));
-    let applier = claims("applier", APPLIER, Some("apply"));
-
-    let old_site = create_record(
-        &app,
-        "/v1/records/sites?accessProfile=steward",
-        steward.clone(),
-        "two-create-old-site",
-        json!({"tenant": TENANT, "name": "two-old"}),
-    )
-    .await;
-    let new_site = create_record(
-        &app,
-        "/v1/records/sites?accessProfile=steward",
-        steward.clone(),
-        "two-create-new-site",
-        json!({"tenant": TENANT, "name": "two-new"}),
-    )
-    .await;
-    let placement = create_record(
-        &app,
-        "/v1/records/placements?accessProfile=steward",
-        steward,
-        "two-create-placement",
-        json!({"tenant": TENANT, "site": old_site.id}),
-    )
-    .await;
-    let request = create_record(
-        &app,
-        "/v1/records/correction-requests?accessProfile=submitter",
-        submitter.clone(),
-        "two-create-correction-request",
-        json!({
-            "tenant": TENANT,
-            "placement": placement.id,
-            "proposedSite": new_site.id,
-            "reason": "two-stage correction"
-        }),
-    )
-    .await;
-    let submitted = run_action(
-        &app,
-        &request.id,
-        "correction-requests",
-        "submitter",
-        submitter.clone(),
-        "two-submit-correction-request",
-        "submit_request",
-        None,
-        |_| json!({}),
-    )
-    .await;
-    let digest = submitted["request"]["effectDigest"]
-        .as_str()
-        .expect("submission freezes digest")
-        .to_owned();
-
-    let first_review = get_record(
-        &app,
-        &format!(
-            "/v1/records/correction-requests/{}?accessProfile=reviewer",
-            request.id
-        ),
-        reviewer.clone(),
-    )
-    .await;
-    let first_approve = action(&first_review.body, "approve_request", Some("review"));
-    action_response(
-        &app,
-        &first_approve.href,
-        "two-first-approval",
-        &first_approve.if_match,
-        reviewer.clone(),
-        json!({"proposalVersion": 1, "effectDigest": digest}),
-    )
-    .await;
-
-    let no_apply_yet = get_record(
-        &app,
-        &format!(
-            "/v1/records/correction-requests/{}?accessProfile=applier",
-            request.id
-        ),
-        applier.clone(),
-    )
-    .await;
-    assert!(
-        no_apply_yet.body["request"]["actions"]
-            .as_array()
-            .is_none_or(|actions| actions
-                .iter()
-                .all(|action| action["operation"] != "apply_request")),
-        "apply must not be advertised before the final stage approval"
-    );
-    let stale_duplicate = send_action(
-        &app,
-        &first_approve,
-        "two-stale-duplicate-approval",
-        reviewer,
-        json!({"proposalVersion": 1, "effectDigest": first_approve.effect_digest.clone()}),
-    )
-    .await;
-    assert_eq!(stale_duplicate.status, StatusCode::PRECONDITION_FAILED);
-
-    let final_review = get_record(
-        &app,
-        &format!(
-            "/v1/records/correction-requests/{}?accessProfile=final-reviewer",
-            request.id
-        ),
-        final_reviewer.clone(),
-    )
-    .await;
-    assert!(final_review.body["request"]["actions"]
-        .as_array()
-        .expect("actions")
-        .iter()
-        .any(|action| action["stage"] == "final"));
-    let revision = action(&final_review.body, "request_revision", Some("final"));
-    let needs_changes = action_response(
-        &app,
-        &revision.href,
-        "two-request-revision",
-        &revision.if_match,
-        final_reviewer,
-        json!({"proposalVersion": 1, "effectDigest": revision.effect_digest.clone()}),
-    )
-    .await;
-    assert_eq!(needs_changes["request"]["bregState"], "needs_changes");
-
-    let before_rebase = get_record(
-        &app,
-        &format!(
-            "/v1/records/correction-requests/{}?accessProfile=submitter",
-            request.id
-        ),
-        submitter.clone(),
-    )
-    .await;
-    let rebase = action(&before_rebase.body, "revise_request", None);
-    let draft_v2 = action_response(
-        &app,
-        &rebase.href,
-        "two-rebase-correction-request",
-        &rebase.if_match,
-        submitter.clone(),
-        json!({"rebase": true}),
-    )
-    .await;
-    assert_eq!(draft_v2["request"]["bregState"], "draft");
-    assert_eq!(draft_v2["request"]["proposalVersion"], 2);
-
-    let stale_v1_approval = send_action(
-        &app,
-        &first_approve,
-        "two-stale-v1-approval",
-        claims("reviewer", REVIEWER, Some("review")),
-        json!({"proposalVersion": 1, "effectDigest": first_approve.effect_digest.clone()}),
-    )
-    .await;
-    assert_eq!(stale_v1_approval.status, StatusCode::PRECONDITION_FAILED);
-
-    let cancel = run_action(
-        &app,
-        &request.id,
-        "correction-requests",
-        "submitter",
-        submitter,
-        "two-cancel-correction-request",
-        "cancel_request",
-        None,
-        |_| json!({}),
-    )
-    .await;
-    assert_eq!(cancel["request"]["bregState"], "canceled");
     database.cleanup().await;
 }
 
@@ -6067,7 +4750,7 @@ async fn real_postgres_http_change_request_cancel_belongs_to_the_request_owner()
         json!({}),
     )
     .await;
-    assert_eq!(canceled["request"]["bregState"], "canceled");
+    assert_eq!(canceled["request"]["bregState"], "cancelled");
     database.cleanup().await;
 }
 
@@ -6488,11 +5171,70 @@ struct ApprovedRegistration {
     membership_id: String,
 }
 
+async fn submit_two_stage_correction(app: &axum::Router) -> (CreatedRecord, String) {
+    let steward = claims("steward", "two-stage-steward", None);
+    let submitter = claims("submitter", SUBMITTER, None);
+    let old_site = create_record(
+        app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "two-create-old-site",
+        json!({"tenant": TENANT, "name": "two-old"}),
+    )
+    .await;
+    let new_site = create_record(
+        app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "two-create-new-site",
+        json!({"tenant": TENANT, "name": "two-new"}),
+    )
+    .await;
+    let placement = create_record(
+        app,
+        "/v1/records/placements?accessProfile=steward",
+        steward,
+        "two-create-placement",
+        json!({"tenant": TENANT, "site": old_site.id}),
+    )
+    .await;
+    let request = create_record(
+        app,
+        "/v1/records/correction-requests?accessProfile=submitter",
+        submitter.clone(),
+        "two-create-correction-request",
+        json!({
+            "tenant": TENANT,
+            "placement": placement.id,
+            "proposedSite": new_site.id,
+            "reason": "direct application correction"
+        }),
+    )
+    .await;
+    let submitted = run_action(
+        app,
+        &request.id,
+        "correction-requests",
+        "submitter",
+        submitter,
+        "two-submit-correction-request",
+        "submit_request",
+        None,
+        |_| json!({}),
+    )
+    .await;
+    let digest = submitted["request"]["effectDigest"]
+        .as_str()
+        .expect("submission freezes digest")
+        .to_owned();
+    (request, digest)
+}
+
 async fn create_approved_correction(
     app: &axum::Router,
     steward: VerifiedRequestClaims,
     submitter: VerifiedRequestClaims,
-    reviewer: VerifiedRequestClaims,
+    _reader: VerifiedRequestClaims,
     key_prefix: &str,
     reason: &str,
 ) -> ApprovedCorrection {
@@ -6538,7 +5280,7 @@ async fn create_approved_correction(
         }),
     )
     .await;
-    let submitted = run_action(
+    run_action(
         app,
         &request.id,
         "correction-requests",
@@ -6550,22 +5292,6 @@ async fn create_approved_correction(
         |_| json!({}),
     )
     .await;
-    let effect_digest = submitted["request"]["effectDigest"]
-        .as_str()
-        .expect("submission freezes digest")
-        .to_owned();
-    run_action(
-        app,
-        &request.id,
-        "correction-requests",
-        "reviewer",
-        reviewer,
-        &format!("{key_prefix}-approve-correction-request"),
-        "approve_request",
-        Some("review"),
-        |_| json!({"proposalVersion": 1, "effectDigest": effect_digest}),
-    )
-    .await;
     ApprovedCorrection {
         request_id: request.id,
         placement_id: placement.id,
@@ -6575,6 +5301,7 @@ async fn create_approved_correction(
 }
 
 async fn create_approved_registration(
+    database: &TestDatabase,
     app: &axum::Router,
     steward: VerifiedRequestClaims,
     operator: VerifiedRequestClaims,
@@ -6596,7 +5323,7 @@ async fn create_approved_registration(
         json!({"tenant": TENANT, "household": household.id, "name": "Ada Lovelace"}),
     )
     .await;
-    let submitted = run_action(
+    run_action(
         app,
         &request.id,
         "registration-requests",
@@ -6608,35 +5335,9 @@ async fn create_approved_registration(
         |_| json!({}),
     )
     .await;
-    let digest = submitted["request"]["effectDigest"]
-        .as_str()
-        .expect("submission freezes digest")
-        .to_owned();
-    let before_approve = get_record(
-        app,
-        &format!(
-            "/v1/records/registration-requests/{}?accessProfile=operator",
-            request.id
-        ),
-        operator.clone(),
-    )
-    .await;
-    let approve = action(&before_approve.body, "approve_request", Some("review"));
-    let targets = approve.review["targets"]
-        .as_array()
-        .expect("approval action carries target snapshots");
-    let person_id = target_record_id(targets, "person");
-    let membership_id = target_record_id(targets, "membership");
-    let approved = action_response(
-        app,
-        &approve.href,
-        &format!("{key_prefix}-approve-registration-request"),
-        &approve.if_match,
-        operator,
-        json!({"proposalVersion": 1, "effectDigest": digest}),
-    )
-    .await;
-    assert_eq!(approved["request"]["bregState"], "approved");
+    let targets = request_targets(database, "registration-request", &request.id).await;
+    let person_id = target_record_id(&targets, "person");
+    let membership_id = target_record_id(&targets, "membership");
     ApprovedRegistration {
         request_id: request.id,
         household_id: household.id,
@@ -6763,7 +5464,6 @@ struct RequestAction {
     if_match: String,
     proposal_version: Option<u64>,
     effect_digest: Option<String>,
-    review: Value,
 }
 
 fn action(body: &Value, operation: &str, stage: Option<&str>) -> RequestAction {
@@ -6787,7 +5487,6 @@ fn action(body: &Value, operation: &str, stage: Option<&str>) -> RequestAction {
             .to_owned(),
         proposal_version: action["proposalVersion"].as_u64(),
         effect_digest: action["effectDigest"].as_str().map(str::to_owned),
-        review: action.get("review").cloned().unwrap_or(Value::Null),
     }
 }
 
@@ -6914,30 +5613,7 @@ fn assert_record_meta(meta: Value) {
     }
 }
 
-async fn assert_served_action_openapi_refs(
-    app: &axum::Router,
-    reviewer: VerifiedRequestClaims,
-    applier: VerifiedRequestClaims,
-) {
-    let reviewer_openapi = response_parts(
-        send(
-            app,
-            Method::GET,
-            "/openapi.json?accessProfile=reviewer",
-            Some(reviewer),
-            &[],
-            Vec::new(),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(reviewer_openapi.status, StatusCode::OK);
-    assert_action_input_component(
-        &reviewer_openapi.body,
-        "/v1/records/correction-requests/{record_id}/actions/stages/review/approve",
-        "approve_request",
-    );
-
+async fn assert_served_action_openapi_refs(app: &axum::Router, applier: VerifiedRequestClaims) {
     let applier_openapi = response_parts(
         send(
             app,
@@ -7511,6 +6187,38 @@ impl ReadinessProbe for AlwaysReady {
     }
 }
 
+async fn request_targets(
+    database: &TestDatabase,
+    request_entity_id: &str,
+    request_id: &str,
+) -> Vec<Value> {
+    let request_id = Uuid::parse_str(request_id).expect("request id is a UUID");
+    database
+        .admin
+        .query(
+            "SELECT target_entity_id,target_record_id,operation,expected_revision,
+                    base_snapshot,after_snapshot
+             FROM registry_internal.registry_request_targets
+             WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=1
+             ORDER BY target_entity_id,target_record_id",
+            &[&request_entity_id, &request_id],
+        )
+        .await
+        .expect("frozen request targets load")
+        .into_iter()
+        .map(|row| {
+            json!({
+                "entityId": row.get::<_, String>(0),
+                "recordId": row.get::<_, Uuid>(1).to_string(),
+                "operation": row.get::<_, String>(2),
+                "baseRevision": row.get::<_, Option<i64>>(3),
+                "before": row.get::<_, Option<Value>>(4),
+                "after": row.get::<_, Option<Value>>(5),
+            })
+        })
+        .collect()
+}
+
 fn bounded_snapshot_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
@@ -7548,7 +6256,8 @@ fn bounded_snapshot_registry() -> registry_breg::CompiledRegistry {
                   "operation":"patch",
                   "set":{"site":{"fromField":"proposed-site"}}
                 }],
-                "review":{"stages":[{"id":"review","approvals":1,"excludeSubmitter":true}]}
+                "review":{"mode":"none"},
+                "onApproved":{"mode":"manual"}
               }
             }
           ],
@@ -7585,14 +6294,9 @@ fn bounded_snapshot_registry() -> registry_breg::CompiledRegistry {
               "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],
               "permissions":[{
                 "entity":"correction-request",
-                "operations":["get","list","approve_request","reject_request","request_revision"],
+                "operations":["get","list"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
-                "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-                "reviewStages":[{"stage":"review","targets":[{
-                  "entity":"asset-placement",
-                  "readableFields":["site"],
-                  "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-                }]}]
+                "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
               }]
             },
             {
@@ -7649,16 +6353,16 @@ fn long_logical_id_registry() -> registry_breg::CompiledRegistry {
                   "operation":"patch",
                   "set":{"site":{"fromField":"proposed-site"}}
                 }],
-                "review":{"stages":[{"id":"review","approvals":1,"excludeSubmitter":true}]}
+                "review":{"mode":"none"},
+                "onApproved":{"mode":"manual"}
               }
             }
           ],
           "accessProfiles":[{
             "id":"reviewer","default":true,"principalClaim":"registry_principal","permissions":[{
               "entity":"placement-correction-request",
-              "operations":["get","list","submit_request","approve_request","apply_request"],
+              "operations":["get","list","submit_request","apply_request"],
               "readableFields":["tenant","placement","proposed-site","reason"],
-              "reviewStages":[{"stage":"review","targets":[{"entity":"asset-placement","readableFields":["site"], "rowBoundaries": []}]}],
               "applyTargets":[{"entity":"asset-placement", "rowBoundaries": []}],
               "rowBoundaries": []
             }]
@@ -7720,7 +6424,8 @@ fn registration_registry_with_pattern(pattern: Option<&str>) -> registry_breg::C
                   {"id":"membership","target":{"entity":"membership"},"operation":"create","set":{"tenant":{"fromField":"tenant"},"person":{"fromEffect":"person"},"household":{"fromField":"household"}}},
                   {"target":{"fromField":"household"},"operation":"patch","set":{"contact-person":{"fromEffect":"person"}}}
                 ],
-                "review":{"stages":[{"id":"review","approvals":1}]}
+                "review":{"mode":"none"},
+                "onApproved":{"mode":"manual"}
               }
             }
           ],
@@ -7741,16 +6446,11 @@ fn registration_registry_with_pattern(pattern: Option<&str>) -> registry_breg::C
               "permissions":[
                 {
                   "entity":"registration-request",
-                  "operations":["create","get","list","revisions","patch","submit_request","approve_request","reject_request","request_revision","revise_request","cancel_request","apply_request"],
+                  "operations":["create","get","list","revisions","patch","submit_request","revise_request","cancel_request","apply_request"],
                   "revisionAccess":true,
                   "readableFields":["tenant","household","name"],
                   "writableFields":["tenant","household","name"],
                   "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-                  "reviewStages":[{"stage":"review","targets":[
-                    {"entity":"person","readableFields":["tenant","display-name"],"rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]},
-                    {"entity":"membership","readableFields":["tenant","person","household"],"rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]},
-                    {"entity":"household","readableFields":["contact-person"],"rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}
-                  ]}],
                   "applyTargets":[
                     {"entity":"person","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]},
                     {"entity":"membership","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]},
@@ -7815,7 +6515,6 @@ fn registration_registry_with_pattern(pattern: Option<&str>) -> registry_breg::C
         ]);
         grant.writable_fields.clear();
         grant.revision_access = false;
-        grant.review_stages.clear();
         project.access_profiles.push(applier);
     }
     compile_project(&project, &[], CompileProfile::Authoring)
@@ -7863,10 +6562,8 @@ fn two_stage_project() -> registry_breg::contract::RegistryProject {
                   "operation":"patch",
                   "set":{"site":{"fromField":"proposed-site"}}
                 }],
-                "review":{"stages":[
-                  {"id":"review","approvals":1,"excludeSubmitter":true},
-                  {"id":"final","approvals":1,"excludeSubmitter":true,"excludePreviousReviewers":true}
-                ]}
+                "review":{"mode":"none"},
+                "onApproved":{"mode":"manual"}
               }
             }
           ],
@@ -7903,28 +6600,18 @@ fn two_stage_project() -> registry_breg::contract::RegistryProject {
               "id":"reviewer","default":true,"principalClaim":"registry_principal","requiredPurposes":["review"],
               "permissions":[{
                 "entity":"correction-request",
-                "operations":["get","list","approve_request","reject_request","request_revision"],
+                "operations":["get","list"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
-                "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-                "reviewStages":[{"stage":"review","targets":[{
-                  "entity":"asset-placement",
-                  "readableFields":["site"],
-                  "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-                }]}]
+                "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
               }]
             },
             {
               "id":"final-reviewer","principalClaim":"registry_principal","requiredPurposes":["final"],
               "permissions":[{
                 "entity":"correction-request",
-                "operations":["get","list","approve_request","reject_request","request_revision"],
+                "operations":["get","list"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
-                "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-                "reviewStages":[{"stage":"final","targets":[{
-                  "entity":"asset-placement",
-                  "readableFields":["site"],
-                  "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-                }]}]
+                "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
               }]
             },
             {
@@ -7988,7 +6675,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                   "operation":"patch",
                   "set":{"site":{"fromField":"proposed-site"}}
                 }],
-                "review":{"stages":[{"id":"review","approvals":1,"excludeSubmitter":true}]}
+                "review":{"mode":"none"},
+                "onApproved":{"mode":"manual"}
               }
             }
           ],
@@ -8026,17 +6714,9 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],
               "permissions":[{
                 "entity":"correction-request",
-                "operations":["get","list","approve_request","reject_request","request_revision"],
+                "operations":["get","list"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
-                "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-                "reviewStages":[{
-                  "stage":"review",
-                  "targets":[{
-                    "entity":"asset-placement",
-                    "readableFields":["site"],
-                    "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-                  }]
-                }]
+                "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
               }]
             },
             {
@@ -8075,6 +6755,7 @@ async fn reviewed_native_pattern_failure_rolls_back_prior_effect_and_preserves_f
     );
     let operator = claims("operator", "pattern-operator", None);
     let approved = create_approved_registration(
+        &database,
         &app,
         claims("steward", "pattern-steward", None),
         operator.clone(),
@@ -8115,13 +6796,6 @@ async fn reviewed_native_pattern_failure_rolls_back_prior_effect_and_preserves_f
     assert!(!registry.entities()["membership"]
         .access_profiles
         .contains_key("blind-applier"));
-    assert!(registry.entities()["registration-request"]
-        .change_request
-        .as_ref()
-        .unwrap()
-        .review_permissions
-        .iter()
-        .all(|grant| grant.profile_id != "blind-applier"));
     let blind_request = get_record(
         &app,
         &format!(

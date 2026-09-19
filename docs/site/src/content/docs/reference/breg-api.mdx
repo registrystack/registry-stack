@@ -320,27 +320,28 @@ snapshot at or after the earliest erased commit unavailable, including later one
 ## Change requests
 
 A change request is a record of an entity that declares `changeRequest`. Creating it stores a
-proposal; a proposal changes its targets only when it is applied. The record moves through seven
-server states:
+draft; a submitted proposal changes its targets only when it is applied. BReg owns five source
+states:
 
 ```text
-draft ──submit──▶ submitted ──approve (every stage)──▶ approved ──apply──▶ applied
-  ▲                   │ reject ──▶ rejected ──revise──▶ draft
-  │                   └ request-revision ──▶ needs_changes ──revise──▶ draft
-  └── cancel from any state except applied and canceled ──▶ canceled (owner only)
+draft ──submit──▶ submitted ──apply with exact approved evidence──▶ applied
+  ▲                   │
+  └────revise─────────┘
+draft or submitted ──cancel by owner──▶ cancelled
+an older proposal replaced by a newer one ──▶ superseded
 ```
 
-Three of those transitions belong to the principal that owns the request. `submit` and `revise`
-move the owner's own draft, and `cancel` is the owner's withdrawal: a reviewer rejects a request
-rather than cancelling it. Another principal does not see those actions in `actions`, and calling
-one regardless is refused with `precondition.failed`.
+`submit`, `revise`, and `cancel` belong to the principal that owns the request. Another principal
+does not see those actions in `actions`, and calling one regardless is refused with
+`precondition.failed`. Review decisions and reviewer stages belong to the configured external
+authority, such as Registry Casework. BReg does not expose local approval routes.
 
-Two declarations shorten the path. With `review: {mode: none}` there are no stages, and `submit`
-moves the request straight to `approved`. When the proposal's disposition is `apply`, from
-`application.mode: automatic` or from a planner that chose `apply`, the submit or the final
-approval also applies the request in the same transaction. That action is offered only to a
-profile holding `apply_request` and `applyTargets` for every target; another profile does not see
-it in `actions`, and calling it regardless is refused with `precondition.failed`.
+With `review: {mode: none}`, the ordinary apply action needs no external result. Otherwise BReg
+submits the exact frozen proposal binding to `review.authority` and accepts application only after
+it has reconciled an approved result for the same subject, policy, and submission digest.
+`onApproved.mode: manual` waits for a currently authorized caller. `automatic` names a logical
+executor whose separately configured ordinary credential follows the same BReg apply action and
+guards. A completion notification never carries application authority.
 
 An `rhai` planner runs at submit. A planner that produces no plan refuses the submission with
 `400 request.plan_refused`, whose detail names the failure kind from the planner's closed
@@ -355,10 +356,17 @@ A read of the request record adds `data.request`:
   "bregState": "submitted",
   "proposalVersion": 2,
   "effectDigest": "sha256:9f2c…",
-  "proposal": {"reviewMode": "staged", "applicationDisposition": "queue"},
+  "proposal": {"review": {"authority": "casework", "policyId": "asset-placement-correction"}},
+  "review": {
+    "submission": {"state": "accepted", "authority": "casework", "requestId": "…", "submissionDigest": "sha256:…", "policy": {"id": "asset-placement-correction", "version": "1", "digest": "sha256:…"}},
+    "result": {"state": "approved", "resultId": "…", "completedAt": "2026-09-20T00:00:00.000000Z", "availableUntil": "2026-10-20T00:00:00.000000Z"},
+    "delivery": {"state": "reconciled", "eventId": "…", "receivedAt": "2026-09-20T00:00:01.000000Z"},
+    "application": {"mode": "manual", "state": "ready"},
+    "recovery": {"state": "none"}
+  },
   "editable": false,
   "actions": [
-    {"operation": "approve_request", "stage": "review", "href": "/v1/records/placement-corrections/2d7e…/actions/stages/review/approve", "ifMatch": "\"breg-hmac-sha256:…\""}
+    {"operation": "apply_request", "href": "/v1/records/placement-corrections/2d7e…/actions/apply?accessProfile=correction-applier", "ifMatch": "\"breg-hmac-sha256:…\"", "proposalVersion": 2, "effectDigest": "sha256:9f2c…"}
   ]
 }
 ```
@@ -366,43 +374,34 @@ A read of the request record adds `data.request`:
 `actions` lists only what the caller's profile may do in the current state, with the exact
 `href` and the `ifMatch` value to send. Follow those links rather than composing routes.
 
-`proposal` appears once the request has been submitted and describes the frozen proposal's policy:
-`reviewMode` is `staged` or `none`, `applicationDisposition` is `apply` or `queue`, and a queued
-plan adds `queueReason` with its `code` and `label`. `editable` is `true` only while the request
-is a draft, the caller owns it, and the selected profile may patch it.
+`proposal` appears once the request has been submitted and describes its frozen review binding.
+`review` is separately disclosure-controlled by `readableRequestFields: [review_state]`. It reports
+durable submission, terminal result, delivery, application, and recovery state. Optional binding,
+result, delivery, and application identifiers are omitted until known. These observations do not
+grant authority. `editable` is `true` only while the request is a draft, the caller owns it, and
+the selected profile may patch it.
 
 <ApiReferenceTable id="request-actions" />
 
-Every action requires `If-Match` and `Idempotency-Key`. A decision or an apply names the exact
-proposal it acts on through `proposalVersion` and `effectDigest`; both come from the read that
-showed the action. The server rejects a decision whose binding no longer matches, so a reviewer
-never approves a proposal that changed under them. A stage with `excludeSubmitter: true` refuses
-the principal that submitted the request.
+Every action requires `If-Match` and `Idempotency-Key`. An apply names the exact proposal through
+`proposalVersion` and `effectDigest`; both come from the read that showed the action. BReg rejects
+a stale or substituted binding before applying any effect.
 
-Approve, reject, request-revision, and apply bodies may also include an optional `reason` string of up
-to 4096 Unicode characters: the approver's or applier's recorded remark, not only an explanation of a
-refusal. The server preserves whitespace and Unicode exactly, accepts an empty string, and refuses
-null, other types, NUL, or longer text with `400 request.invalid`. Include the same reason when
-replaying an action with its original idempotency key; changing it is a different request body.
+An apply body may also include an optional `reason` string of up to 4096 Unicode characters.
+The server preserves whitespace and Unicode exactly, accepts an empty string, and refuses null,
+other types, NUL, or longer text with `400 request.invalid`. Include the same reason when replaying
+an action with its original idempotency key; changing it is a different request body. The applied
+request's `data.request.application` carries `reasonPresent`, and carries `reason` only when retained
+and permitted by the selected profile. Request-detail erasure removes the text while retaining the
+presence flag.
 
-Read the current proposal's decisions in `data.request.decisions`. Each decision has `stageId`,
-`kind`, `decidedAt`, and `reasonPresent`; `reason` appears only when retained and permitted by the
-selected profile. Retained proposal history exposes the same decision shape under
-`data.request.history.proposals[].decisions`. A request grant defaults to
-`readableRequestFields: [reason]`; set `readableRequestFields: []` to hide explanation text while
-keeping the decision facts and reason-presence flag. Anonymous profiles never receive reason
-text. Request-detail erasure removes the text while retaining reason presence and the decision
-facts. The applied request's `data.request.application` carries the same disclosure for the applier's
-remark: `reasonPresent` always, and `reason` under the same `readableRequestFields` rule, with the
-text removed but the presence retained by request-detail erasure.
-
-`readableRequestFields` also accepts `review_state`, which discloses `review` and `reviewTiming`
-on the request record, and `actor_reference`, which discloses `submitterReference` and
+`readableRequestFields` accepts `review_state`, which discloses the closed `review` projection,
+and `actor_reference`, which discloses `submitterReference` and
 `applierReference`. Both require a non-anonymous profile. Every change-request action response
 separately includes `actorReference`, the caller-supplied actor identity recorded with that
 action, independent of `readableRequestFields`.
 
-{/* Evidence: crates/registry-breg/src/artifacts.rs openapi_request_action_input_schema; crates/registry-breg/src/postgres/request_read.rs decisions_value; crates/registry-breg/src/contract.rs readable_request_fields; crates/registry-breg/src/request_retention.rs; crates/registry-breg/tests/postgres_request_upgrade_retention.rs. */}
+{/* Evidence: crates/registry-breg/src/artifacts.rs openapi_request_action_input_schema; crates/registry-breg/src/postgres/request_read.rs request_proposal_metadata and may_disclose_review_state; crates/registry-breg/src/review_store.rs read_projection; crates/registry-breg/src/contract.rs readable_request_fields; crates/registry-breg/src/request_retention.rs. */}
 
 `GET /v1/registry` lists the same grant as `readableRequestFields` on each operation, beside
 `readableFields`, so a caller can learn before a read which request fields its selected profile
@@ -413,7 +412,7 @@ without a change request, lists no request fields.
     crates/registry-breg/tests/http_read_only.rs, workspace_metadata_projects_request_field_disclosure_per_caller_profile. */}
 
 History returns up to 50 whole proposals per page. The response byte budget can shorten a page
-without splitting a proposal's decisions. To continue, send the returned
+without splitting a proposal. To continue, send the returned
 `data.request.history.nextAfterProposalVersion` as `requestHistoryAfterProposalVersion` on the
 same request GET, keeping the same access profile. Follow each returned cursor until it is
 null; a page with fewer than 50 proposals can still have a next page.
@@ -499,9 +498,10 @@ Upload, replacement, and removal advance request concurrency state. Submission
 binds the slot manifest into proposal integrity. Revision and rebase carry slot
 references into the next draft; editing that draft preserves earlier submitted
 manifests. Downloads use the explicit proposal version, never a hash or storage
-URL. Owner, stage reviewer, and applier access use their current compiled request
-read authority, including request entries in `reviewStages[].targets[]` and
-`applyTargets`. Field projection also applies: a slot reaches a caller only
+URL. Owner and applier access use their current compiled request read authority.
+Casework reviewers read source context through a separately configured Casework source profile;
+the caller's delegated credential is checked against that ordinary BReg read grant. `applyTargets`
+continues to constrain the applier. Field projection also applies: a slot reaches a caller only
 through the profile's `readableFields`. The authored `classification` is served
 so a caller can handle the bytes accordingly; it grants and withholds nothing.
 

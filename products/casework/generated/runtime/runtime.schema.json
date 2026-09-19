@@ -308,6 +308,40 @@
         }
       ]
     },
+    "ReviewCompletionRuntimeConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "bearerTokenRef": {
+          "type": "string"
+        },
+        "maximumAttempts": {
+          "default": 12,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "retrySeconds": {
+          "default": 30,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeoutMilliseconds": {
+          "default": 5000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "bearerTokenRef"
+      ],
+      "type": "object"
+    },
     "RuntimePackageConfig": {
       "additionalProperties": false,
       "properties": {
@@ -529,6 +563,12 @@
     },
     "package": {
       "$ref": "#/$defs/RuntimePackageConfig"
+    },
+    "reviewCompletionDestinations": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ReviewCompletionRuntimeConfig"
+      },
+      "type": "object"
     },
     "secretProviders": {
       "$ref": "#/$defs/SecretProvidersConfig"

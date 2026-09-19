@@ -16,17 +16,19 @@ use axum::{
 };
 use registry_casework::{
     router, CaseworkAuthenticator, CaseworkService, DatabaseConfig, HttpState, HumanIdentityConfig,
-    PostgresStore,
+    PostgresStore, ReviewTaskDecisionRequest,
 };
 use registry_casework_core::{
     AccessProfile, ActiveSubjectsPage, AuthoritativeObservation, CallerSubjectView,
     CaseworkIdentity, CaseworkProject, CaseworkRole, ContentDigest, DiscoveryCursor,
     EphemeralCredential, EventRequest, ExecutePreparedRequest, HumanIdentity, InboxPolicy,
     PrepareActionRequest, PreparedSourceAttempt, QueuePolicy, ReviewContext, ReviewContextStrategy,
-    ReviewCreateRequest, ReviewKindPolicy, ReviewKindPurpose, ReviewProducerPolicy,
-    ReviewRequestAccepted, ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskPage, SourceAdapter,
-    SourceAdapterError, SourceBinding, SourceContextBinding, SourceReceipt, SubjectBinding,
-    SubjectRef, TransitionHint, CASEWORK_PROFILE_HEADER, SOURCE_PROFILE_HEADER,
+    ReviewCreateRequest, ReviewKindPolicy, ReviewKindPurpose, ReviewOutcomePolicy,
+    ReviewOutcomeSettlement, ReviewProducerPolicy, ReviewRequestAccepted, ReviewResult,
+    ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskPage,
+    ReviewerDecisionKind, SourceAdapter, SourceAdapterError, SourceBinding, SourceContextBinding,
+    SourceReceipt, SubjectBinding, SubjectRef, TransitionHint, CASEWORK_PROFILE_HEADER,
+    SOURCE_PROFILE_HEADER,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::FetchUrlPolicy;
@@ -42,6 +44,7 @@ const AUDIENCE: &str = "urn:test:casework-review";
 #[derive(Clone)]
 struct ReviewSource {
     revoked: Arc<AtomicBool>,
+    changed: Arc<AtomicBool>,
 }
 
 #[async_trait]
@@ -92,12 +95,16 @@ impl SourceAdapter for ReviewSource {
             subject: subject.clone(),
             binding: SourceBinding {
                 source_revision: "source-revision-1".to_owned(),
-                version: "1".to_owned(),
+                version: if self.changed.load(Ordering::SeqCst) {
+                    "2".to_owned()
+                } else {
+                    "1".to_owned()
+                },
                 integrity: Some(ContentDigest::for_bytes(subject.id.as_bytes()).to_string()),
                 generation: self.binding_generation().to_owned(),
             },
             display_reference: None,
-            disclosed: BTreeMap::new(),
+            disclosed: BTreeMap::from([("summary".to_owned(), json!("Authorized source view"))]),
             permitted_operations: Vec::new(),
         })
     }
@@ -123,7 +130,6 @@ fn profile(id: &str, role: CaseworkRole) -> AccessProfile {
         principal_claim: "registry_principal".to_owned(),
         required_scopes: vec![format!("casework:{id}")],
         role,
-        kinds: Vec::new(),
     }
 }
 
@@ -146,33 +152,72 @@ fn project(issuer: &str) -> CaseworkProject {
             label: "Review".to_owned(),
         }],
         sources: Vec::new(),
-        hosted_kinds: Vec::new(),
-        review_kinds: vec![ReviewKindPolicy {
-            id: "registry-correction".to_owned(),
-            version: "1".to_owned(),
-            purpose: ReviewKindPurpose::Approval,
-            context_strategy: ReviewContextStrategy::Source,
-            stages: vec![ReviewStagePolicy {
-                id: "review".to_owned(),
-                queue: "review".to_owned(),
-                deciding_profiles: vec!["staff".to_owned()],
-                required_approvals: 1,
-                exclude_initiator: true,
-                exclude_previous_stage_reviewers: true,
-            }],
-            clocks: Vec::new(),
-            retention: ReviewRetentionPolicy {
-                terminal_days: 90,
-                accountability_days: 365,
+        review_kinds: vec![
+            ReviewKindPolicy {
+                id: "registry-correction".to_owned(),
+                version: "1".to_owned(),
+                purpose: ReviewKindPurpose::Approval,
+                context_strategy: ReviewContextStrategy::Source,
+                stages: vec![ReviewStagePolicy {
+                    id: "review".to_owned(),
+                    queue: "review".to_owned(),
+                    deciding_profiles: vec!["staff".to_owned()],
+                    required_approvals: 1,
+                    exclude_initiator: true,
+                    exclude_previous_stage_reviewers: true,
+                }],
+                clocks: Vec::new(),
+                retention: ReviewRetentionPolicy {
+                    terminal_days: 90,
+                    accountability_days: 365,
+                },
+                display_schema: json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["summary"],
+                    "properties": {"summary": {"type": "string", "maxLength": 160}}
+                }),
+                result_schema: None,
+                outcomes: Vec::new(),
             },
-            display_schema: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {}
-            }),
-            result_schema: None,
-            outcomes: Vec::new(),
-        }],
+            ReviewKindPolicy {
+                id: "registry-answer".to_owned(),
+                version: "1".to_owned(),
+                purpose: ReviewKindPurpose::Answer,
+                context_strategy: ReviewContextStrategy::Submitted,
+                stages: vec![ReviewStagePolicy {
+                    id: "answer".to_owned(),
+                    queue: "review".to_owned(),
+                    deciding_profiles: vec!["staff".to_owned()],
+                    required_approvals: 1,
+                    exclude_initiator: true,
+                    exclude_previous_stage_reviewers: true,
+                }],
+                clocks: Vec::new(),
+                retention: ReviewRetentionPolicy {
+                    terminal_days: 90,
+                    accountability_days: 365,
+                },
+                display_schema: json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {}
+                }),
+                result_schema: Some(json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["answer"],
+                    "properties": {"answer": {"type": "string", "maxLength": 160}}
+                })),
+                outcomes: vec![ReviewOutcomePolicy {
+                    id: "found".to_owned(),
+                    label: "Found".to_owned(),
+                    settlement: ReviewOutcomeSettlement::Answered,
+                    reason_required: false,
+                    result_required: true,
+                }],
+            },
+        ],
         review_producers: vec![ReviewProducerPolicy {
             id: "registry".to_owned(),
             profile: "producer".to_owned(),
@@ -180,7 +225,10 @@ fn project(issuer: &str) -> CaseworkProject {
             subject: "registry-service".to_owned(),
             trusted_initiator_issuer: Some(issuer.to_owned()),
             source_namespaces: vec!["registry".to_owned()],
-            kinds: vec!["registry-correction".to_owned()],
+            kinds: vec![
+                "registry-correction".to_owned(),
+                "registry-answer".to_owned(),
+            ],
             recovery_days: 30,
             completion: None,
         }],
@@ -215,7 +263,7 @@ fn review_request(reference: &str, issuer: &str) -> ReviewCreateRequest {
     }
 }
 
-async fn app(idp: &MockIdp) -> (axum::Router, Arc<AtomicBool>) {
+async fn app(idp: &MockIdp) -> (axum::Router, Arc<AtomicBool>, Arc<AtomicBool>) {
     let base = env::var("CASEWORK_REVIEW_TEST_DATABASE_URL")
         .expect("CASEWORK_REVIEW_TEST_DATABASE_URL is required for review HTTP tests");
     let schema = format!("review_http_{}", Uuid::new_v4().simple());
@@ -281,11 +329,13 @@ async fn app(idp: &MockIdp) -> (axum::Router, Arc<AtomicBool>) {
         HumanIdentityConfig::default(),
     );
     let revoked = Arc::new(AtomicBool::new(false));
+    let changed = Arc::new(AtomicBool::new(false));
     let service = CaseworkService::new(
         store,
         project.clone(),
         [Arc::new(ReviewSource {
             revoked: Arc::clone(&revoked),
+            changed: Arc::clone(&changed),
         }) as Arc<dyn SourceAdapter>],
     )
     .expect("review HTTP service");
@@ -296,6 +346,7 @@ async fn app(idp: &MockIdp) -> (axum::Router, Arc<AtomicBool>) {
             project: Arc::new(project),
         }),
         revoked,
+        changed,
     )
 }
 
@@ -337,8 +388,22 @@ fn create_http_request(body: &ReviewCreateRequest, token: Option<&str>) -> Reque
 #[tokio::test]
 async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
     let idp = MockIdp::start().await;
-    let (app, source_revoked) = app(&idp).await;
+    let (app, source_revoked, source_changed) = app(&idp).await;
     let request = review_request("producer-ref-1", &idp.issuer());
+
+    let obsolete_hosted_route = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/hosted-items")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .expect("obsolete hosted route request"),
+        )
+        .await
+        .expect("obsolete hosted route response");
+    assert_eq!(obsolete_hosted_route.status(), StatusCode::NOT_FOUND);
 
     let unauthenticated = app
         .clone()
@@ -367,8 +432,10 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
             .expect("bounded review kind response"),
     )
     .expect("review kind JSON");
-    assert_eq!(kinds.len(), 1);
-    assert_eq!(kinds[0].identity.id, "registry-correction");
+    assert_eq!(kinds.len(), 2);
+    assert!(kinds
+        .iter()
+        .any(|kind| kind.identity.id == "registry-correction"));
 
     let serialized = serde_json::to_string(&request).expect("serialize duplicate-key request");
     let duplicate_key_body = serialized.replacen('{', r#"{"kind":"registry-correction","#, 1);
@@ -389,18 +456,13 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
         .expect("duplicate-key response");
     assert_eq!(duplicate_key.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
-    let created = app
+    let lost_create_response = app
         .clone()
         .oneshot(create_http_request(&request, Some(&token)))
         .await
         .expect("created response");
-    assert_eq!(created.status(), StatusCode::CREATED);
-    let created: ReviewRequestAccepted = serde_json::from_slice(
-        &to_bytes(created.into_body(), 32 * 1024)
-            .await
-            .expect("bounded create response"),
-    )
-    .expect("create response JSON");
+    assert_eq!(lost_create_response.status(), StatusCode::CREATED);
+    drop(lost_create_response);
 
     let reviewer_token = reviewer_token(&idp);
     let missing_source_profile = app
@@ -447,7 +509,92 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
     assert_eq!(visible_tasks.items.len(), 1);
     let task_id = visible_tasks.items[0].task_id;
 
+    let missing_context_source_profile = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-tasks/{task_id}/context"))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .body(Body::empty())
+                .expect("task context without source profile"),
+        )
+        .await
+        .expect("task context response without source profile");
+    assert_eq!(
+        missing_context_source_profile.status(),
+        StatusCode::BAD_REQUEST
+    );
+    let current_context = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-tasks/{task_id}/context"))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("source-authorized task context"),
+        )
+        .await
+        .expect("source-authorized task context response");
+    assert_eq!(current_context.status(), StatusCode::OK);
+    let current_context: serde_json::Value = serde_json::from_slice(
+        &to_bytes(current_context.into_body(), 64 * 1024)
+            .await
+            .expect("bounded current task context"),
+    )
+    .expect("current task context JSON");
+    assert_eq!(current_context["context"]["bindingStatus"], "current");
+    assert_eq!(
+        current_context["context"]["projection"]["display"]["summary"],
+        "Authorized source view"
+    );
+    assert!(current_context.get("initiator").is_none());
+
+    source_changed.store(true, Ordering::SeqCst);
+    let changed_context = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-tasks/{task_id}/context"))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("changed-binding task context"),
+        )
+        .await
+        .expect("changed-binding task context response");
+    assert_eq!(changed_context.status(), StatusCode::OK);
+    let changed_context: serde_json::Value = serde_json::from_slice(
+        &to_bytes(changed_context.into_body(), 64 * 1024)
+            .await
+            .expect("bounded changed-binding task context"),
+    )
+    .expect("changed-binding task context JSON");
+    assert_eq!(
+        changed_context["context"]["bindingStatus"],
+        "binding_changed"
+    );
+    assert!(changed_context["context"].get("projection").is_none());
+    source_changed.store(false, Ordering::SeqCst);
+
     source_revoked.store(true, Ordering::SeqCst);
+    let concealed_context = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-tasks/{task_id}/context"))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("concealed task context"),
+        )
+        .await
+        .expect("concealed task context response");
+    assert_eq!(concealed_context.status(), StatusCode::NOT_FOUND);
     let revoked_tasks = app
         .clone()
         .oneshot(
@@ -490,6 +637,12 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
         .await
         .expect("recovered response");
     assert_eq!(recovered.status(), StatusCode::CREATED);
+    let created: ReviewRequestAccepted = serde_json::from_slice(
+        &to_bytes(recovered.into_body(), 32 * 1024)
+            .await
+            .expect("bounded recovered create response"),
+    )
+    .expect("recovered create response JSON");
 
     let changed = app
         .clone()
@@ -535,6 +688,144 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
         .await
         .expect("source-scoped response");
     assert_eq!(source_scoped.status(), StatusCode::BAD_REQUEST);
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_http() {
+    let idp = MockIdp::start().await;
+    let (app, _, _) = app(&idp).await;
+    let mut request = review_request("answer-ref-1", &idp.issuer());
+    request.kind = "registry-answer".to_owned();
+    request.subject.id = "answer-record-1".to_owned();
+    request.subject.digest = ContentDigest::for_bytes(b"answer-record-1");
+    request.context = ReviewContext::Submitted {
+        snapshot: json!({}),
+    };
+
+    let producer_token = token(&idp);
+    let created = app
+        .clone()
+        .oneshot(create_http_request(&request, Some(&producer_token)))
+        .await
+        .expect("create standalone answer response");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created: ReviewRequestAccepted = serde_json::from_slice(
+        &to_bytes(created.into_body(), 32 * 1024)
+            .await
+            .expect("bounded standalone answer create response"),
+    )
+    .expect("standalone answer create JSON");
+
+    let reviewer_token = reviewer_token(&idp);
+    let tasks = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/review-tasks")
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .body(Body::empty())
+                .expect("standalone answer task list request"),
+        )
+        .await
+        .expect("standalone answer task list response");
+    assert_eq!(tasks.status(), StatusCode::OK);
+    let tasks: ReviewTaskPage = serde_json::from_slice(
+        &to_bytes(tasks.into_body(), 32 * 1024)
+            .await
+            .expect("bounded standalone answer task list"),
+    )
+    .expect("standalone answer task list JSON");
+    assert_eq!(tasks.items.len(), 1);
+    let task_id = tasks.items[0].task_id;
+
+    let claimed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/review-tasks/{task_id}/claim"))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header("if-match", "\"1\"")
+                .header("idempotency-key", "claim-answer-record-1")
+                .body(Body::empty())
+                .expect("claim standalone answer request"),
+        )
+        .await
+        .expect("claim standalone answer response");
+    assert_eq!(claimed.status(), StatusCode::OK);
+
+    let decision = ReviewTaskDecisionRequest {
+        decision: ReviewerDecisionKind::Answer {
+            outcome: "found".to_owned(),
+            reason: None,
+            result: Some(json!({"answer":"The structured answer"})),
+        },
+    };
+    let decided = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/review-tasks/{task_id}/decisions"))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(CONTENT_TYPE, "application/json")
+                .header("if-match", "\"2\"")
+                .header("idempotency-key", "answer-answer-record-1")
+                .body(Body::from(
+                    serde_json::to_vec(&decision).expect("serialize answer decision"),
+                ))
+                .expect("decide standalone answer request"),
+        )
+        .await
+        .expect("decide standalone answer response");
+    assert_eq!(decided.status(), StatusCode::NO_CONTENT);
+
+    let result = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-requests/{}/result", created.request_id))
+                .header("authorization", format!("Bearer {producer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .body(Body::empty())
+                .expect("poll standalone answer request"),
+        )
+        .await
+        .expect("poll standalone answer response");
+    assert_eq!(result.status(), StatusCode::OK);
+    let result: ReviewResult = serde_json::from_slice(
+        &to_bytes(result.into_body(), 32 * 1024)
+            .await
+            .expect("bounded standalone answer result"),
+    )
+    .expect("standalone answer result JSON");
+    assert_eq!(result.status, ReviewResultStatus::Answered);
+    assert_eq!(
+        result.result,
+        Some(json!({"answer":"The structured answer"}))
+    );
+
+    let unknown = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-requests/{}/result", Uuid::new_v4()))
+                .header("authorization", format!("Bearer {producer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .body(Body::empty())
+                .expect("unknown review result request"),
+        )
+        .await
+        .expect("unknown review result response");
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    assert!(to_bytes(unknown.into_body(), 1024)
+        .await
+        .expect("bounded unknown result body")
+        .is_empty());
 
     idp.stop().await;
 }

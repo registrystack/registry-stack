@@ -1,24 +1,57 @@
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 use chrono::{DateTime, Utc};
-use registry_review_protocol::{ContentDigest, ReviewResultStatus, SubjectBinding};
+use jsonschema::{Draft, JSONSchema};
+use registry_review_protocol::{ContentDigest, PolicyBinding, ReviewResultStatus, SubjectBinding};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::{
-    ClockPolicy, HostedDecisionRequest, HostedKindPolicy, HostedKindPolicySnapshot,
-    HostedOutcomePolicy, HostedPolicyError, HostedRetentionPolicy, HostedValidationError,
-    IssuerPrincipal,
-};
+use crate::{ClockPolicy, IssuerPrincipal, SourceBinding};
 
+pub const MAXIMUM_REVIEW_KINDS: usize = 64;
+pub const MAXIMUM_REVIEW_RETENTION_DAYS: u32 = 3_650;
 pub const MAXIMUM_REVIEW_STAGES: usize = 32;
 pub const MAXIMUM_REVIEW_PROFILES_PER_STAGE: usize = 32;
 pub const MAXIMUM_REVIEW_APPROVALS_PER_STAGE: u16 = 32;
 
-pub type ReviewRetentionPolicy = HostedRetentionPolicy;
+const MAXIMUM_REVIEW_OUTCOMES: usize = 16;
+const MAXIMUM_REVIEW_SCHEMA_BYTES: usize = 64 * 1024;
+const MAXIMUM_REVIEW_DISPLAY_BYTES: usize = 16 * 1024;
+const MAXIMUM_REVIEW_VALUE_DEPTH: usize = 16;
+const MAXIMUM_REVIEW_REASON_BYTES: usize = 2_000;
+const MAXIMUM_REVIEW_RESULT_BYTES: usize = 16 * 1024;
+const MAXIMUM_REVIEW_RESULT_CONSTRAINTS_BYTES: usize = 16 * 1024;
+const MAXIMUM_REVIEW_CONSTRAINT_CHOICES: usize = 64;
+const MAXIMUM_REVIEW_CONSTRAINT_TITLE_CHARS: usize = 120;
+
+const RESULT_PATH: &str = "$.result";
+const RESULT_CONSTRAINTS_PATH: &str = "$.resultConstraints";
+
 pub type ReviewPolicyDigest = ContentDigest;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewRetentionPolicy {
+    pub terminal_days: u32,
+    pub accountability_days: u32,
+}
+
+impl ReviewRetentionPolicy {
+    fn check(&self) -> Result<(), ReviewPolicyError> {
+        if self.terminal_days == 0
+            || self.accountability_days < self.terminal_days
+            || self.accountability_days > MAXIMUM_REVIEW_RETENTION_DAYS
+        {
+            return Err(ReviewPolicyError::Retention);
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "scope", rename_all = "snake_case", deny_unknown_fields)]
@@ -90,13 +123,11 @@ pub struct ReviewOutcomePolicy {
 }
 
 impl ReviewOutcomePolicy {
-    fn hosted(&self) -> HostedOutcomePolicy {
-        HostedOutcomePolicy {
-            id: self.id.clone(),
-            label: self.label.clone(),
-            reason_required: self.reason_required,
-            result_required: self.result_required,
-        }
+    fn is_valid(&self) -> bool {
+        valid_identifier(&self.id)
+            && !self.label.trim().is_empty()
+            && self.label.len() <= 120
+            && self.label.chars().all(|character| !character.is_control())
     }
 }
 
@@ -156,6 +187,9 @@ pub struct ReviewKindPolicy {
 
 impl ReviewKindPolicy {
     pub fn check(&self) -> Result<(), ReviewPolicyError> {
+        if !valid_identifier(&self.id) || !valid_version(&self.version) {
+            return Err(ReviewPolicyError::Identity);
+        }
         if self.stages.is_empty() || self.stages.len() > MAXIMUM_REVIEW_STAGES {
             return Err(ReviewPolicyError::Stages);
         }
@@ -197,7 +231,19 @@ impl ReviewKindPolicy {
             }
         }
 
-        self.hosted_validation_policy().check()?;
+        self.retention.check()?;
+        check_closed_object_schema(&self.display_schema)?;
+        if let Some(result_schema) = &self.result_schema {
+            check_closed_object_schema(result_schema)?;
+        }
+        if self.outcomes.len() > MAXIMUM_REVIEW_OUTCOMES
+            || !all_unique(self.outcomes.iter().map(|outcome| outcome.id.as_str()))
+            || self.outcomes.iter().any(|outcome| !outcome.is_valid())
+            || (self.result_schema.is_none()
+                && self.outcomes.iter().any(|outcome| outcome.result_required))
+        {
+            return Err(ReviewPolicyError::Outcomes);
+        }
         Ok(())
     }
 
@@ -228,32 +274,6 @@ impl ReviewKindPolicy {
             result_schema: self.result_schema.clone(),
             outcomes: self.outcomes.clone(),
         })
-    }
-
-    fn hosted_validation_policy(&self) -> HostedKindPolicy {
-        let stage = &self.stages[0];
-        HostedKindPolicy {
-            id: self.id.clone(),
-            version: self.version.clone(),
-            queue: stage.queue.clone(),
-            deciding_profiles: stage.deciding_profiles.clone(),
-            retention: self.retention.clone(),
-            display_schema: self.display_schema.clone(),
-            result_schema: self.result_schema.clone(),
-            outcomes: if self.outcomes.is_empty() {
-                vec![HostedOutcomePolicy {
-                    id: "approval".to_owned(),
-                    label: "Approval".to_owned(),
-                    reason_required: false,
-                    result_required: false,
-                }]
-            } else {
-                self.outcomes
-                    .iter()
-                    .map(ReviewOutcomePolicy::hosted)
-                    .collect()
-            },
-        }
     }
 }
 
@@ -291,19 +311,18 @@ impl ReviewKindPolicySnapshot {
         Ok(())
     }
 
-    pub fn validate_display(&self, display: &Value) -> Result<(), ReviewValidationError> {
+    pub fn validate_display(&self, display: &Value) -> Result<(), ReviewDecisionValidationError> {
         self.verify()?;
-        self.hosted_snapshot()?.validate_display(display)?;
+        validate_display(&self.display_schema, display)?;
         Ok(())
     }
 
     pub fn validate_result_constraints(
         &self,
         constraints: &Value,
-    ) -> Result<(), ReviewValidationError> {
+    ) -> Result<(), ReviewDecisionValidationError> {
         self.verify()?;
-        self.hosted_snapshot()?
-            .validate_result_constraints(constraints)?;
+        validate_result_constraints(self.result_schema.as_ref(), constraints)?;
         Ok(())
     }
 
@@ -313,14 +332,52 @@ impl ReviewKindPolicySnapshot {
         reason: Option<&str>,
         result: Option<&Value>,
         constraints: Option<&Value>,
-    ) -> Result<(), ReviewValidationError> {
+    ) -> Result<(), ReviewDecisionValidationError> {
         self.verify()?;
-        HostedDecisionRequest {
-            outcome: outcome.to_owned(),
-            reason: reason.map(str::to_owned),
-            result: result.cloned(),
+        let outcome_policy = self
+            .outcomes
+            .iter()
+            .find(|candidate| candidate.id == outcome)
+            .ok_or_else(|| {
+                ReviewValidationError::new("$.outcome", ReviewValidationReason::OutcomeNotDeclared)
+            })?;
+        if reason.is_some_and(|reason| !bounded_text(reason, MAXIMUM_REVIEW_REASON_BYTES)) {
+            return Err(ReviewValidationError::new(
+                "$.reason",
+                ReviewValidationReason::TextInvalid,
+            )
+            .into());
         }
-        .check(&self.hosted_snapshot()?, constraints)?;
+        if outcome_policy.reason_required && reason.is_none_or(|reason| reason.trim().is_empty()) {
+            return Err(ReviewValidationError::new(
+                "$.reason",
+                ReviewValidationReason::ReasonRequired,
+            )
+            .into());
+        }
+        match (result, self.result_schema.as_ref()) {
+            (Some(result), Some(schema)) => {
+                validate_result(schema, result)?;
+                if let Some(constraints) = constraints {
+                    validate_result_narrowing(constraints, result)?;
+                }
+            }
+            (Some(_), None) => {
+                return Err(ReviewValidationError::new(
+                    RESULT_PATH,
+                    ReviewValidationReason::ResultNotDeclared,
+                )
+                .into());
+            }
+            (None, Some(_)) if outcome_policy.result_required => {
+                return Err(ReviewValidationError::new(
+                    RESULT_PATH,
+                    ReviewValidationReason::ResultRequired,
+                )
+                .into());
+            }
+            (None, _) => {}
+        }
         Ok(())
     }
 
@@ -337,13 +394,6 @@ impl ReviewKindPolicySnapshot {
             result_schema: self.result_schema.clone(),
             outcomes: self.outcomes.clone(),
         }
-    }
-
-    fn hosted_snapshot(&self) -> Result<HostedKindPolicySnapshot, ReviewPolicyError> {
-        self.as_policy()
-            .hosted_validation_policy()
-            .snapshot()
-            .map_err(ReviewPolicyError::from)
     }
 }
 
@@ -374,6 +424,57 @@ pub struct ReviewTaskPage {
     pub items: Vec<ReviewerTask>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<Uuid>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewSourceBindingStatus {
+    Current,
+    BindingChanged,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewSourceProjection {
+    pub binding: SourceBinding,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_reference: Option<String>,
+    #[serde(default)]
+    /// Exact source values from the current human caller's read, limited by
+    /// the authored source context projection and the pinned kind schema.
+    pub display: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "strategy",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum ReviewTaskContextData {
+    Submitted {
+        snapshot: Value,
+    },
+    Source {
+        reference: String,
+        binding_status: ReviewSourceBindingStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        projection: Option<ReviewSourceProjection>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewTaskContext {
+    pub task_id: Uuid,
+    pub request_id: Uuid,
+    pub subject: SubjectBinding,
+    pub requester_reference: String,
+    pub policy: PolicyBinding,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_constraints: Option<Value>,
+    pub context: ReviewTaskContextData,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -445,6 +546,33 @@ pub struct ReviewAccountabilityRecord {
     pub result_digest: Option<String>,
     pub occurred_at: DateTime<Utc>,
     pub retained_until: DateTime<Utc>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewClockState {
+    Running,
+    Paused,
+    Completed,
+    Cancelled,
+    SourceFactsMissing,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewClockOccurrence {
+    pub clock_occurrence_id: Uuid,
+    pub clock_id: String,
+    pub correlation: ReviewClockCorrelation,
+    pub state: ReviewClockState,
+    pub policy_digest: ContentDigest,
+    pub anchor_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_risk_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -539,7 +667,7 @@ impl ReviewProgress {
         initiator: Option<IssuerPrincipal>,
         result_constraints: Option<Value>,
         policy: &ReviewKindPolicySnapshot,
-    ) -> Result<Self, ReviewValidationError> {
+    ) -> Result<Self, ReviewDecisionValidationError> {
         policy.verify()?;
         if let Some(constraints) = &result_constraints {
             policy.validate_result_constraints(constraints)?;
@@ -775,6 +903,8 @@ fn validate_settlement_outcome(
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum ReviewPolicyError {
+    #[error("the review policy identity is invalid")]
+    Identity,
     #[error("a review policy must declare one to thirty-two ordered stages")]
     Stages,
     #[error("review stage identifiers, queues, or deciding profiles are invalid")]
@@ -789,28 +919,95 @@ pub enum ReviewPolicyError {
     AnswerStages,
     #[error("answer policies can declare only answered outcomes")]
     AnswerOutcomes,
+    #[error("the review retention policy is invalid")]
+    Retention,
+    #[error("a review display or result schema is invalid or unbounded")]
+    Schema,
+    #[error("the review outcomes are invalid")]
+    Outcomes,
     #[error("the review policy could not be canonically encoded")]
     Canonical,
     #[error("the review policy snapshot digest does not match its contents")]
     DigestMismatch,
-    #[error("the shared structured policy is invalid: {0}")]
-    Hosted(#[from] HostedPolicyError),
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
-pub enum ReviewValidationError {
+pub enum ReviewDecisionValidationError {
     #[error(transparent)]
     Policy(#[from] ReviewPolicyError),
     #[error(transparent)]
-    Structured(#[from] HostedValidationError),
+    Structured(#[from] ReviewValidationError),
 }
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewValidationReason {
+    KindNotAllowed,
+    ReferenceInvalid,
+    ObjectRequired,
+    MaximumBytesExceeded,
+    MaximumDepthExceeded,
+    SchemaMismatch,
+    OutcomeNotDeclared,
+    ReasonRequired,
+    TextInvalid,
+    ResultNotDeclared,
+    ResultRequired,
+    FieldNotDeclared,
+    ConstraintInvalid,
+    ConstraintViolated,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewValidationError {
+    pub path: String,
+    pub reason: ReviewValidationReason,
+}
+
+impl ReviewValidationError {
+    pub fn new(path: impl Into<String>, reason: ReviewValidationReason) -> Self {
+        Self::with_fallback(path, reason, "$.display")
+    }
+
+    fn result_error(path: impl Into<String>, reason: ReviewValidationReason) -> Self {
+        Self::with_fallback(path, reason, RESULT_PATH)
+    }
+
+    fn with_fallback(
+        path: impl Into<String>,
+        reason: ReviewValidationReason,
+        fallback: &str,
+    ) -> Self {
+        let path = path.into();
+        Self {
+            path: if path.len() <= 256 && path.bytes().all(valid_path_byte) {
+                path
+            } else {
+                fallback.to_owned()
+            },
+            reason,
+        }
+    }
+}
+
+impl fmt::Display for ReviewValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "review request validation failed at {}",
+            self.path
+        )
+    }
+}
+
+impl std::error::Error for ReviewValidationError {}
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum ReviewDecisionError {
     #[error(transparent)]
     Policy(#[from] ReviewPolicyError),
     #[error(transparent)]
-    Validation(#[from] ReviewValidationError),
+    Validation(#[from] ReviewDecisionValidationError),
     #[error("the review request is already settled")]
     AlreadySettled,
     #[error("the task and decision do not belong to this request")]
@@ -837,6 +1034,507 @@ pub enum ReviewDecisionError {
     ReasonInvalid,
 }
 
+fn check_closed_object_schema(schema: &Value) -> Result<(), ReviewPolicyError> {
+    let root = schema.as_object().ok_or(ReviewPolicyError::Schema)?;
+    if root.get("type") != Some(&Value::String("object".to_owned()))
+        || root.get("additionalProperties") != Some(&Value::Bool(false))
+        || !bounded_json(schema, MAXIMUM_REVIEW_VALUE_DEPTH)
+        || !schema_refs_are_local(schema)
+        || !object_schemas_are_closed(schema)
+        || !registry_platform_canonical_json::canonicalize_json(schema)
+            .is_ok_and(|bytes| bytes.len() <= MAXIMUM_REVIEW_SCHEMA_BYTES)
+        || JSONSchema::options()
+            .with_draft(Draft::Draft202012)
+            .compile(schema)
+            .is_err()
+    {
+        return Err(ReviewPolicyError::Schema);
+    }
+    Ok(())
+}
+
+fn validate_display(schema: &Value, display: &Value) -> Result<(), ReviewValidationError> {
+    if !display.is_object() {
+        return Err(ReviewValidationError::new(
+            "$.display",
+            ReviewValidationReason::ObjectRequired,
+        ));
+    }
+    if !bounded_json(display, MAXIMUM_REVIEW_VALUE_DEPTH) {
+        return Err(ReviewValidationError::new(
+            "$.display",
+            ReviewValidationReason::MaximumDepthExceeded,
+        ));
+    }
+    if !registry_platform_canonical_json::canonicalize_json(display)
+        .is_ok_and(|bytes| bytes.len() <= MAXIMUM_REVIEW_DISPLAY_BYTES)
+    {
+        return Err(ReviewValidationError::new(
+            "$.display",
+            ReviewValidationReason::MaximumBytesExceeded,
+        ));
+    }
+    let compiled = JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .compile(schema)
+        .map_err(|_| {
+            ReviewValidationError::new("$.display", ReviewValidationReason::SchemaMismatch)
+        })?;
+    if let Err(errors) = compiled.validate(display) {
+        let path = errors
+            .into_iter()
+            .next()
+            .map(|error| {
+                let path = error.instance_path.to_string();
+                if path.is_empty() {
+                    "$.display".to_owned()
+                } else {
+                    format!("$.display{path}")
+                }
+            })
+            .unwrap_or_else(|| "$.display".to_owned());
+        return Err(ReviewValidationError::new(
+            path,
+            ReviewValidationReason::SchemaMismatch,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_result(schema: &Value, result: &Value) -> Result<(), ReviewValidationError> {
+    if !result.is_object() {
+        return Err(ReviewValidationError::result_error(
+            RESULT_PATH,
+            ReviewValidationReason::ObjectRequired,
+        ));
+    }
+    if !bounded_json(result, MAXIMUM_REVIEW_VALUE_DEPTH) {
+        return Err(ReviewValidationError::result_error(
+            RESULT_PATH,
+            ReviewValidationReason::MaximumDepthExceeded,
+        ));
+    }
+    if !registry_platform_canonical_json::canonicalize_json(result)
+        .is_ok_and(|bytes| bytes.len() <= MAXIMUM_REVIEW_RESULT_BYTES)
+    {
+        return Err(ReviewValidationError::result_error(
+            RESULT_PATH,
+            ReviewValidationReason::MaximumBytesExceeded,
+        ));
+    }
+    let compiled = JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .compile(schema)
+        .map_err(|_| {
+            ReviewValidationError::result_error(RESULT_PATH, ReviewValidationReason::SchemaMismatch)
+        })?;
+    if let Err(errors) = compiled.validate(result) {
+        let path = errors
+            .into_iter()
+            .next()
+            .map(|error| {
+                let path = error.instance_path.to_string();
+                if path.is_empty() {
+                    RESULT_PATH.to_owned()
+                } else {
+                    format!("{RESULT_PATH}{path}")
+                }
+            })
+            .unwrap_or_else(|| RESULT_PATH.to_owned());
+        return Err(ReviewValidationError::result_error(
+            path,
+            ReviewValidationReason::SchemaMismatch,
+        ));
+    }
+    Ok(())
+}
+
+/// A requester may only narrow a kind's declared result fields. Choice values
+/// must satisfy the kind schema, and bounds must remain inside its bounds.
+fn validate_result_constraints(
+    schema: Option<&Value>,
+    constraints: &Value,
+) -> Result<(), ReviewValidationError> {
+    let schema = schema.ok_or_else(|| {
+        ReviewValidationError::new(
+            RESULT_CONSTRAINTS_PATH,
+            ReviewValidationReason::ResultNotDeclared,
+        )
+    })?;
+    if !constraints.is_object() {
+        return Err(ReviewValidationError::new(
+            RESULT_CONSTRAINTS_PATH,
+            ReviewValidationReason::ObjectRequired,
+        ));
+    }
+    if !bounded_json(constraints, MAXIMUM_REVIEW_VALUE_DEPTH) {
+        return Err(ReviewValidationError::new(
+            RESULT_CONSTRAINTS_PATH,
+            ReviewValidationReason::MaximumDepthExceeded,
+        ));
+    }
+    if !registry_platform_canonical_json::canonicalize_json(constraints)
+        .is_ok_and(|bytes| bytes.len() <= MAXIMUM_REVIEW_RESULT_CONSTRAINTS_BYTES)
+    {
+        return Err(ReviewValidationError::new(
+            RESULT_CONSTRAINTS_PATH,
+            ReviewValidationReason::MaximumBytesExceeded,
+        ));
+    }
+    let properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .ok_or_else(|| constraint_invalid(RESULT_CONSTRAINTS_PATH))?;
+    let mut relaxed = schema.clone();
+    if let Some(object) = relaxed.as_object_mut() {
+        object.remove("required");
+    }
+    let compiled = JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .compile(&relaxed)
+        .map_err(|_| constraint_invalid(RESULT_CONSTRAINTS_PATH))?;
+    for (field, constraint) in constraints.as_object().expect("checked as an object above") {
+        let field_path = result_field_path(RESULT_CONSTRAINTS_PATH, field);
+        let subschema = properties.get(field).ok_or_else(|| {
+            ReviewValidationError::new(field_path.clone(), ReviewValidationReason::FieldNotDeclared)
+        })?;
+        let constraint = constraint
+            .as_object()
+            .ok_or_else(|| constraint_invalid(&field_path))?;
+        for keyword in constraint.keys() {
+            if !matches!(
+                keyword.as_str(),
+                "enum" | "oneOf" | "minimum" | "maximum" | "minLength" | "maxLength"
+            ) {
+                return Err(constraint_invalid(&field_path));
+            }
+        }
+        let has_enum = constraint.contains_key("enum");
+        let has_one_of = constraint.contains_key("oneOf");
+        if has_enum && has_one_of {
+            return Err(constraint_invalid(&field_path));
+        }
+        if has_enum {
+            let values = constraint["enum"]
+                .as_array()
+                .ok_or_else(|| constraint_invalid(&field_path))?;
+            if values.is_empty() || values.len() > MAXIMUM_REVIEW_CONSTRAINT_CHOICES {
+                return Err(constraint_invalid(&field_path));
+            }
+            for value in values {
+                if !is_scalar(value) {
+                    return Err(constraint_invalid(&field_path));
+                }
+                validate_constraint_value(&compiled, field, value)
+                    .map_err(|()| constraint_invalid(&field_path))?;
+            }
+        }
+        if has_one_of {
+            let entries = constraint["oneOf"]
+                .as_array()
+                .ok_or_else(|| constraint_invalid(&field_path))?;
+            if entries.is_empty() || entries.len() > MAXIMUM_REVIEW_CONSTRAINT_CHOICES {
+                return Err(constraint_invalid(&field_path));
+            }
+            for entry in entries {
+                let entry = entry
+                    .as_object()
+                    .ok_or_else(|| constraint_invalid(&field_path))?;
+                let has_const = entry.contains_key("const");
+                let has_title = entry.contains_key("title");
+                if !has_const || entry.len() > 2 || (entry.len() == 2 && !has_title) {
+                    return Err(constraint_invalid(&field_path));
+                }
+                let value = entry
+                    .get("const")
+                    .filter(|value| is_scalar(value))
+                    .ok_or_else(|| constraint_invalid(&field_path))?;
+                if let Some(title) = entry.get("title") {
+                    let title = title
+                        .as_str()
+                        .ok_or_else(|| constraint_invalid(&field_path))?;
+                    if title.chars().count() > MAXIMUM_REVIEW_CONSTRAINT_TITLE_CHARS
+                        || title.chars().any(char::is_control)
+                    {
+                        return Err(ReviewValidationError::new(
+                            field_path.clone(),
+                            ReviewValidationReason::TextInvalid,
+                        ));
+                    }
+                }
+                validate_constraint_value(&compiled, field, value)
+                    .map_err(|()| constraint_invalid(&field_path))?;
+            }
+        }
+        check_constraint_bounds(&field_path, subschema, constraint)?;
+    }
+    Ok(())
+}
+
+fn check_constraint_bounds(
+    field_path: &str,
+    subschema: &Value,
+    constraint: &serde_json::Map<String, Value>,
+) -> Result<(), ReviewValidationError> {
+    let declares_type = |wanted: &[&str]| {
+        subschema.get("type").is_some_and(|value| match value {
+            Value::String(name) => wanted.contains(&name.as_str()),
+            Value::Array(names) => names
+                .iter()
+                .any(|name| name.as_str().is_some_and(|item| wanted.contains(&item))),
+            _ => false,
+        })
+    };
+    let minimum = constraint.get("minimum");
+    let maximum = constraint.get("maximum");
+    if minimum.is_some() || maximum.is_some() {
+        if !declares_type(&["number", "integer"]) || !plain_inline_bounds(subschema) {
+            return Err(constraint_invalid(field_path));
+        }
+        let minimum = minimum
+            .filter(|value| value.is_number())
+            .and_then(Value::as_f64);
+        let maximum = maximum
+            .filter(|value| value.is_number())
+            .and_then(Value::as_f64);
+        if constraint.contains_key("minimum") && minimum.is_none()
+            || constraint.contains_key("maximum") && maximum.is_none()
+            || minimum
+                .zip(maximum)
+                .is_some_and(|(minimum, maximum)| minimum > maximum)
+            || minimum
+                .zip(subschema.get("minimum").and_then(Value::as_f64))
+                .is_some_and(|(minimum, schema_minimum)| schema_minimum > minimum)
+            || maximum
+                .zip(subschema.get("maximum").and_then(Value::as_f64))
+                .is_some_and(|(maximum, schema_maximum)| maximum > schema_maximum)
+        {
+            return Err(constraint_invalid(field_path));
+        }
+    }
+    let min_length = constraint.get("minLength");
+    let max_length = constraint.get("maxLength");
+    if min_length.is_some() || max_length.is_some() {
+        if !declares_type(&["string"]) || !plain_inline_bounds(subschema) {
+            return Err(constraint_invalid(field_path));
+        }
+        let min_length = min_length
+            .filter(|value| value.is_number())
+            .and_then(Value::as_u64);
+        let max_length = max_length
+            .filter(|value| value.is_number())
+            .and_then(Value::as_u64);
+        if constraint.contains_key("minLength") && min_length.is_none()
+            || constraint.contains_key("maxLength") && max_length.is_none()
+            || min_length
+                .zip(max_length)
+                .is_some_and(|(minimum, maximum)| minimum > maximum)
+            || min_length
+                .zip(subschema.get("minLength").and_then(Value::as_u64))
+                .is_some_and(|(minimum, schema_minimum)| schema_minimum > minimum)
+            || max_length
+                .zip(subschema.get("maxLength").and_then(Value::as_u64))
+                .is_some_and(|(maximum, schema_maximum)| maximum > schema_maximum)
+        {
+            return Err(constraint_invalid(field_path));
+        }
+    }
+    Ok(())
+}
+
+fn validate_constraint_value(compiled: &JSONSchema, field: &str, value: &Value) -> Result<(), ()> {
+    let mut instance = serde_json::Map::new();
+    instance.insert(field.to_owned(), value.clone());
+    compiled.validate(&Value::Object(instance)).map_err(|_| ())
+}
+
+fn plain_inline_bounds(subschema: &Value) -> bool {
+    subschema.as_object().is_some_and(|object| {
+        !object.contains_key("$ref")
+            && !object.contains_key("allOf")
+            && !object.contains_key("anyOf")
+            && !object.contains_key("oneOf")
+    })
+}
+
+fn validate_result_narrowing(
+    constraints: &Value,
+    result: &Value,
+) -> Result<(), ReviewValidationError> {
+    let Some(fields) = constraints.as_object() else {
+        return Ok(());
+    };
+    let result_fields = result.as_object().expect("result validated as an object");
+    for (field, constraint) in fields {
+        let Some(value) = result_fields.get(field) else {
+            continue;
+        };
+        let field_path = result_field_path(RESULT_PATH, field);
+        let violated = || {
+            ReviewValidationError::result_error(
+                field_path.clone(),
+                ReviewValidationReason::ConstraintViolated,
+            )
+        };
+        if constraint
+            .get("enum")
+            .and_then(Value::as_array)
+            .is_some_and(|choices| !choices.contains(value))
+            || constraint
+                .get("oneOf")
+                .and_then(Value::as_array)
+                .is_some_and(|entries| {
+                    !entries
+                        .iter()
+                        .filter_map(|entry| entry.get("const"))
+                        .any(|allowed| allowed == value)
+                })
+            || constraint
+                .get("minimum")
+                .and_then(Value::as_f64)
+                .is_some_and(|minimum| value.as_f64().is_some_and(|number| number < minimum))
+            || constraint
+                .get("maximum")
+                .and_then(Value::as_f64)
+                .is_some_and(|maximum| value.as_f64().is_some_and(|number| number > maximum))
+            || constraint
+                .get("minLength")
+                .and_then(Value::as_u64)
+                .is_some_and(|minimum| {
+                    value
+                        .as_str()
+                        .is_some_and(|text| character_count(text) < minimum)
+                })
+            || constraint
+                .get("maxLength")
+                .and_then(Value::as_u64)
+                .is_some_and(|maximum| {
+                    value
+                        .as_str()
+                        .is_some_and(|text| character_count(text) > maximum)
+                })
+        {
+            return Err(violated());
+        }
+    }
+    Ok(())
+}
+
+fn character_count(text: &str) -> u64 {
+    u64::try_from(text.chars().count()).unwrap_or(u64::MAX)
+}
+
+fn is_scalar(value: &Value) -> bool {
+    matches!(value, Value::Bool(_) | Value::Number(_) | Value::String(_))
+}
+
+fn result_field_path(prefix: &str, field: &str) -> String {
+    if field.len() + prefix.len() < 256 && field.bytes().all(valid_path_byte) {
+        format!("{prefix}/{field}")
+    } else {
+        prefix.to_owned()
+    }
+}
+
+fn constraint_invalid(path: impl Into<String>) -> ReviewValidationError {
+    ReviewValidationError::with_fallback(
+        path,
+        ReviewValidationReason::ConstraintInvalid,
+        RESULT_CONSTRAINTS_PATH,
+    )
+}
+
+fn bounded_json(value: &Value, maximum_depth: usize) -> bool {
+    let mut pending = vec![(value, 1_usize)];
+    while let Some((value, depth)) = pending.pop() {
+        if depth > maximum_depth {
+            return false;
+        }
+        match value {
+            Value::Array(values) => {
+                pending.extend(values.iter().map(|value| (value, depth + 1)));
+            }
+            Value::Object(values) => {
+                pending.extend(values.values().map(|value| (value, depth + 1)));
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+        }
+    }
+    true
+}
+
+fn schema_refs_are_local(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.iter().all(|(key, value)| {
+            if key == "$ref" {
+                value
+                    .as_str()
+                    .is_some_and(|reference| reference == "#" || reference.starts_with("#/"))
+            } else {
+                schema_refs_are_local(value)
+            }
+        }),
+        Value::Array(values) => values.iter().all(schema_refs_are_local),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => true,
+    }
+}
+
+fn object_schemas_are_closed(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            let declares_object = object.get("type").is_some_and(|value| match value {
+                Value::String(value) => value == "object",
+                Value::Array(values) => values.iter().any(|value| value == "object"),
+                _ => false,
+            });
+            let uses_object_keywords = [
+                "properties",
+                "patternProperties",
+                "required",
+                "minProperties",
+                "maxProperties",
+                "dependentRequired",
+                "dependentSchemas",
+                "propertyNames",
+            ]
+            .iter()
+            .any(|keyword| object.contains_key(*keyword));
+            let closed = if declares_object || uses_object_keywords {
+                object.get("additionalProperties") == Some(&Value::Bool(false))
+            } else {
+                true
+            };
+            closed
+                && object
+                    .iter()
+                    .all(|(keyword, value)| match keyword.as_str() {
+                        "properties" | "patternProperties" | "dependentSchemas" | "$defs"
+                        | "definitions" => value
+                            .as_object()
+                            .is_none_or(|schemas| schemas.values().all(object_schemas_are_closed)),
+                        "allOf" | "anyOf" | "oneOf" | "prefixItems" => value
+                            .as_array()
+                            .is_none_or(|schemas| schemas.iter().all(object_schemas_are_closed)),
+                        "additionalProperties"
+                        | "unevaluatedProperties"
+                        | "propertyNames"
+                        | "contains"
+                        | "items"
+                        | "additionalItems"
+                        | "unevaluatedItems"
+                        | "not"
+                        | "if"
+                        | "then"
+                        | "else"
+                        | "contentSchema" => object_schemas_are_closed(value),
+                        _ => true,
+                    })
+        }
+        Value::Array(values) => values.iter().all(object_schemas_are_closed),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => true,
+    }
+}
+
 fn valid_identifier(value: &str) -> bool {
     let bytes = value.as_bytes();
     !bytes.is_empty()
@@ -845,6 +1543,24 @@ fn valid_identifier(value: &str) -> bool {
         && bytes[1..]
             .iter()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
+fn valid_version(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+}
+
+fn bounded_text(value: &str, maximum_bytes: usize) -> bool {
+    !value.trim().is_empty()
+        && value.len() <= maximum_bytes
+        && value.chars().all(|character| !character.is_control())
+}
+
+fn valid_path_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'$' | b'.' | b'/' | b'_' | b'-' | b'~')
 }
 
 fn all_unique<'a>(values: impl Iterator<Item = &'a str>) -> bool {
@@ -886,7 +1602,7 @@ mod tests {
             context_strategy: ReviewContextStrategy::Source,
             stages,
             clocks: Vec::new(),
-            retention: HostedRetentionPolicy {
+            retention: ReviewRetentionPolicy {
                 terminal_days: 90,
                 accountability_days: 365,
             },
@@ -924,7 +1640,7 @@ mod tests {
             context_strategy: ReviewContextStrategy::Submitted,
             stages: vec![stage("answer", 1)],
             clocks: Vec::new(),
-            retention: HostedRetentionPolicy {
+            retention: ReviewRetentionPolicy {
                 terminal_days: 90,
                 accountability_days: 365,
             },
@@ -1264,7 +1980,7 @@ mod tests {
             assert!(matches!(
                 record_review_decision(&snapshot, &mut progress, &task, invalid_result(result)),
                 Err(ReviewDecisionError::Validation(
-                    ReviewValidationError::Structured(_)
+                    ReviewDecisionValidationError::Structured(_)
                 ))
             ));
             assert!(progress.decisions.is_empty());
@@ -1279,6 +1995,120 @@ mod tests {
             invalid_result(Some(json!({"code": 4})))
         )
         .is_ok());
+    }
+
+    #[test]
+    fn review_schemas_are_closed_and_display_errors_are_bounded() {
+        let mut policy = answer_policy();
+        policy.display_schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {"details": {"properties": {"secret": {"type": "string"}}}}
+        });
+        assert_eq!(policy.check(), Err(ReviewPolicyError::Schema));
+
+        policy.display_schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {"details": {"$ref": "https://example.test/details.json"}}
+        });
+        assert_eq!(policy.check(), Err(ReviewPolicyError::Schema));
+
+        let snapshot = answer_policy().snapshot().unwrap();
+        let secret = "sensitive-display-value".repeat(20);
+        let error = snapshot
+            .validate_display(&json!({"question": secret}))
+            .expect_err("the display schema bounds question text");
+        let ReviewDecisionValidationError::Structured(error) = error else {
+            panic!("expected structured display validation failure");
+        };
+        assert_eq!(error.path, "$.display/question");
+        assert_eq!(error.reason, ReviewValidationReason::SchemaMismatch);
+        assert!(!error.to_string().contains("sensitive-display-value"));
+        assert!(!error.to_string().contains("hosted"));
+    }
+
+    #[test]
+    fn result_constraints_refuse_widening_and_apply_after_schema_validation() {
+        let snapshot = answer_policy().snapshot().unwrap();
+        assert_eq!(
+            snapshot.validate_result_constraints(&json!({
+                "code": {"minimum": 4, "maximum": 6}
+            })),
+            Ok(())
+        );
+        for (constraints, expected) in [
+            (
+                json!({"code": {"minimum": 0}}),
+                ReviewValidationReason::ConstraintInvalid,
+            ),
+            (
+                json!({"undeclared": {"enum": [4]}}),
+                ReviewValidationReason::FieldNotDeclared,
+            ),
+        ] {
+            let error = snapshot
+                .validate_result_constraints(&constraints)
+                .expect_err("constraints cannot widen the pinned result schema");
+            let ReviewDecisionValidationError::Structured(error) = error else {
+                panic!("expected structured constraint validation failure");
+            };
+            assert_eq!(error.reason, expected);
+        }
+
+        let request_id = Uuid::from_u128(100);
+        let task = task(request_id, 0, "answer", 1, "answerer");
+        let decide = |result: Value| ReviewerDecision {
+            task_id: task.task_id,
+            request_id,
+            stage_id: "answer".to_owned(),
+            reviewer: person("answerer"),
+            profile_id: "reviewer".to_owned(),
+            decision: ReviewerDecisionKind::Answer {
+                outcome: "approved".to_owned(),
+                reason: None,
+                result: Some(result),
+            },
+        };
+        for (result, expected) in [
+            (
+                json!({"code": "not-an-integer"}),
+                ReviewValidationReason::SchemaMismatch,
+            ),
+            (
+                json!({"code": 7}),
+                ReviewValidationReason::ConstraintViolated,
+            ),
+        ] {
+            let mut progress = ReviewProgress::new(
+                request_id,
+                None,
+                Some(json!({"code": {"minimum": 4, "maximum": 6}})),
+                &snapshot,
+            )
+            .unwrap();
+            let error = record_review_decision(&snapshot, &mut progress, &task, decide(result))
+                .expect_err("the result must satisfy the schema and its narrowing");
+            let ReviewDecisionError::Validation(ReviewDecisionValidationError::Structured(error)) =
+                error
+            else {
+                panic!("expected structured decision validation failure");
+            };
+            assert_eq!(error.reason, expected);
+            assert!(progress.decisions.is_empty());
+            assert!(progress.settlement.is_none());
+        }
+    }
+
+    #[test]
+    fn review_retention_and_outcome_vocabulary_are_bounded() {
+        let mut policy = answer_policy();
+        policy.retention.accountability_days = policy.retention.terminal_days - 1;
+        assert_eq!(policy.check(), Err(ReviewPolicyError::Retention));
+
+        let mut policy = answer_policy();
+        policy.outcomes.push(policy.outcomes[0].clone());
+        assert_eq!(policy.check(), Err(ReviewPolicyError::Outcomes));
     }
 
     #[test]

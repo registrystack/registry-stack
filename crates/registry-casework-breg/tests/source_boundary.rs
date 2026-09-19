@@ -20,6 +20,48 @@ const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef012
 fn adapter(base: &str) -> BregAdapter {
     adapter_with_reference_config(base, None)
 }
+fn adapter_with_context_projection(base: &str) -> BregAdapter {
+    let mut config = BregSourceConfig {
+        source_id: "source".into(),
+        entity: "correction".into(),
+        route: "correction".into(),
+        routing_metadata: RoutingSourceMetadata::default(),
+        context_projection: vec![
+            RoutingFieldDescriptor {
+                field: "summary".into(),
+                api_name: "summary".into(),
+                schema: json!({"type":"string","maxLength":32}),
+            },
+            RoutingFieldDescriptor {
+                field: "attachment-metadata".into(),
+                api_name: "attachmentMetadata".into(),
+                schema: json!({
+                    "type":"object",
+                    "additionalProperties":false,
+                    "required":["name"],
+                    "properties":{"name":{"type":"string","maxLength":32}}
+                }),
+            },
+        ],
+        display_reference: None,
+        binding_generation: "generation-1".into(),
+        expected_registry_revision: DIGEST.into(),
+        reader_profile: "reader".into(),
+        event_source: "urn:registrystack:registry:test:instance:test".into(),
+        event_type: "casework-lifecycle-v1".into(),
+    };
+    config.routing_metadata.stages.clear();
+    BregAdapter::new(
+        config,
+        BaseRegistryClient::new(
+            BaseRegistryClientConfig::new(base.parse().unwrap())
+                .with_token_provider(Arc::new(StaticToken::new("reader-token").unwrap())),
+        )
+        .unwrap(),
+        vec![42; 32],
+    )
+    .unwrap()
+}
 fn adapter_with_routing(base: &str) -> BregAdapter {
     BregAdapter::new(
         BregSourceConfig {
@@ -34,6 +76,7 @@ fn adapter_with_routing(base: &str) -> BregAdapter {
                     schema: json!({"type":"string","enum":["north","south"]}),
                 }],
             },
+            context_projection: Vec::new(),
             display_reference: None,
             binding_generation: "generation-1".into(),
             expected_registry_revision: DIGEST.into(),
@@ -74,6 +117,7 @@ fn adapter_with_reference_config(
             entity: "correction".into(),
             route: "correction".into(),
             routing_metadata,
+            context_projection: Vec::new(),
             display_reference,
             binding_generation: "generation-1".into(),
             expected_registry_revision: DIGEST.into(),
@@ -590,13 +634,25 @@ async fn live_registry_change_refuses_projection_under_the_imported_source_contr
     );
 }
 #[tokio::test]
-async fn caller_disclosure_never_reuses_reader_content_or_discloses_review_results() {
+async fn caller_context_projection_is_value_bounded_and_never_widens() {
     let server = MockServer::start().await;
     for token in ["alice-token", "bob-token"] {
         mount_metadata(&server, token, "reviewer").await;
         let mut caller_record = record("submitted", None);
+        caller_record["data"]["domainData"] = json!({
+            "summary":"Caller-visible correction",
+            "reason":"SOURCE-CONTENT-CANARY",
+            "verifiedEvidence":{"raw":"PRIVATE-EVIDENCE-CANARY"}
+        });
+        if token == "alice-token" {
+            caller_record["data"]["domainData"]["attachmentMetadata"] =
+                json!({"name":"evidence.pdf"});
+        }
         if token == "bob-token" {
-            caller_record["data"]["domainData"] = json!({});
+            caller_record["data"]["domainData"]
+                .as_object_mut()
+                .unwrap()
+                .remove("attachmentMetadata");
         }
         Mock::given(method("GET"))
             .and(path(format!("/v1/records/correction/{ID}")))
@@ -606,7 +662,7 @@ async fn caller_disclosure_never_reuses_reader_content_or_discloses_review_resul
             .mount(&server)
             .await;
     }
-    let source = adapter(&server.uri());
+    let source = adapter_with_context_projection(&server.uri());
     let first = source
         .read_for_caller(
             &subject(),
@@ -624,22 +680,46 @@ async fn caller_disclosure_never_reuses_reader_content_or_discloses_review_resul
         .await
         .unwrap();
     assert_eq!(
-        first.disclosed.get("proposal"),
-        Some(&json!({"review":{"authority":"casework-main","policyId":"registry-correction"}}))
+        first.disclosed.get("summary"),
+        Some(&json!("Caller-visible correction"))
     );
     assert_eq!(
-        second.disclosed.get("proposal"),
-        first.disclosed.get("proposal")
+        first.disclosed.get("attachmentMetadata"),
+        Some(&json!({"name":"evidence.pdf"}))
     );
-    assert!(!first.disclosed.contains_key("reasons"));
-    assert!(!second.disclosed.contains_key("reasons"));
+    assert!(!second.disclosed.contains_key("attachmentMetadata"));
+    let serialized = serde_json::to_string(&first).unwrap();
+    assert!(!serialized.contains("SOURCE-CONTENT-CANARY"));
+    assert!(!serialized.contains("PRIVATE-EVIDENCE-CANARY"));
+    assert!(!first.disclosed.contains_key("reason"));
+    assert!(!first.disclosed.contains_key("verifiedEvidence"));
+}
+
+#[tokio::test]
+async fn caller_context_projection_refuses_a_value_outside_the_imported_schema() {
+    let server = MockServer::start().await;
+    mount_metadata(&server, "alice-token", "reviewer").await;
+    let mut caller_record = record("submitted", None);
+    caller_record["data"]["domainData"] = json!({"summary":"x".repeat(33)});
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/records/correction/{ID}")))
+        .and(header("authorization", "Bearer alice-token"))
+        .respond_with(response(caller_record))
+        .expect(1)
+        .mount(&server)
+        .await;
+
     assert_eq!(
-        first.disclosed.get("readableFields"),
-        Some(&json!(["hidden"]))
+        adapter_with_context_projection(&server.uri())
+            .read_for_caller(
+                &subject(),
+                "reviewer",
+                EphemeralCredential::new("alice-token")
+            )
+            .await
+            .unwrap_err(),
+        SourceAdapterError::Invalid
     );
-    assert!(!serde_json::to_string(&first)
-        .unwrap()
-        .contains("SOURCE-CONTENT-CANARY"));
 }
 #[tokio::test]
 async fn source_outage_is_not_a_concealed_or_empty_result() {

@@ -559,7 +559,6 @@ impl MutationPlan {
                 operation,
                 query_kind: None,
                 revision_kind: None,
-                request_stage: None,
                 maximum_records: None,
                 access_profiles: vec![profile_id.to_owned()],
                 default_access_profile: Some(profile_id.to_owned()),

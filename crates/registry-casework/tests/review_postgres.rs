@@ -10,26 +10,29 @@ use std::{
 };
 
 use async_trait::async_trait;
+use axum::{extract::State, http::StatusCode, routing::post, Router};
 use chrono::{TimeDelta, Utc};
 use registry_casework::{
-    CaseworkService, DatabaseConfig, PostgresStore, ReviewResultRead, ReviewRuntimeError,
-    ReviewTaskDecisionRequest,
+    dispatch_review_completions_once_for_test, CaseworkService, DatabaseConfig, PostgresStore,
+    ReviewResultRead, ReviewRuntimeError, ReviewTaskDecisionRequest,
 };
 use registry_casework_core::{
     AccessProfile, ActiveSubjectsPage, ActorContext, AssignmentRequest, AuthoritativeObservation,
-    CallerSubjectView, CaseworkIdentity, CaseworkProject, CaseworkRole, ContentDigest,
-    DelegateRequest, DiscoveryCursor, EphemeralCredential, EventRequest, ExecutePreparedRequest,
-    HumanIdentity, InboxPolicy, IssuerPrincipal, PrepareActionRequest, PreparedSourceAttempt,
-    QueuePolicy, ReviewCompletionDestinationPolicy, ReviewContext, ReviewContextStrategy,
-    ReviewCreateRequest, ReviewHistoryAudience, ReviewKindPolicy, ReviewKindPurpose,
-    ReviewNoteRequest, ReviewOutcomePolicy, ReviewOutcomeSettlement, ReviewProducerPolicy,
-    ReviewRequestLifecycle, ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy,
-    ReviewTaskDraftInput, ReviewTransition, ReviewerDecisionKind, ReviewerTaskState, SourceAdapter,
-    SourceAdapterError, SourceBinding, SourceContextBinding, SourceReceipt, SubjectBinding,
-    SubjectRef, TransitionHint,
+    CallerSubjectView, CaseworkIdentity, CaseworkProject, CaseworkRole, ClockPolicy, ContentDigest,
+    DelegateRequest, DiscoveryCursor, ElapsedDuration, EphemeralCredential, EventRequest,
+    ExecutePreparedRequest, HumanIdentity, InboxPolicy, IssuerPrincipal, PrepareActionRequest,
+    PreparedSourceAttempt, QueuePolicy, ReviewClockState, ReviewCompletionDestinationPolicy,
+    ReviewContext, ReviewContextStrategy, ReviewCreateRequest, ReviewHistoryAudience,
+    ReviewKindPolicy, ReviewKindPurpose, ReviewNoteRequest, ReviewOutcomePolicy,
+    ReviewOutcomeSettlement, ReviewProducerPolicy, ReviewRequestLifecycle, ReviewResultStatus,
+    ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskDraftInput, ReviewTransition,
+    ReviewerDecisionKind, ReviewerTaskState, SourceAdapter, SourceAdapterError, SourceBinding,
+    SourceContextBinding, SourceReceipt, SubjectBinding, SubjectClockAnchor,
+    SubjectClockCompletion, SubjectClockPause, SubjectRef, TransitionHint,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
+use tokio::sync::Notify;
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
@@ -43,6 +46,7 @@ struct Fixture {
     reviewer_b: ActorContext,
     supervisor: ActorContext,
     source_revoked: Arc<AtomicBool>,
+    application_name: String,
 }
 
 #[derive(Clone)]
@@ -140,7 +144,6 @@ fn profile(id: &str, role: CaseworkRole) -> AccessProfile {
         principal_claim: "sub".to_owned(),
         required_scopes: vec![format!("casework:{id}")],
         role,
-        kinds: Vec::new(),
     }
 }
 
@@ -163,7 +166,6 @@ fn project(version: &str) -> CaseworkProject {
             label: "Review".to_owned(),
         }],
         sources: Vec::new(),
-        hosted_kinds: Vec::new(),
         review_kinds: vec![ReviewKindPolicy {
             id: "registry-correction".to_owned(),
             version: version.to_owned(),
@@ -187,7 +189,7 @@ fn project(version: &str) -> CaseworkProject {
                     exclude_previous_stage_reviewers: true,
                 },
             ],
-            clocks: Vec::new(),
+            clocks: vec!["review-deadline".to_owned()],
             retention: ReviewRetentionPolicy {
                 terminal_days: 90,
                 accountability_days: 365,
@@ -204,13 +206,22 @@ fn project(version: &str) -> CaseworkProject {
                 "required": ["correction"],
                 "properties": {"correction": {"type": "string", "maxLength": 160}}
             })),
-            outcomes: vec![ReviewOutcomePolicy {
-                id: "incorrect".to_owned(),
-                label: "Incorrect".to_owned(),
-                settlement: ReviewOutcomeSettlement::Rejected,
-                reason_required: true,
-                result_required: true,
-            }],
+            outcomes: vec![
+                ReviewOutcomePolicy {
+                    id: "incorrect".to_owned(),
+                    label: "Incorrect".to_owned(),
+                    settlement: ReviewOutcomeSettlement::Rejected,
+                    reason_required: true,
+                    result_required: true,
+                },
+                ReviewOutcomePolicy {
+                    id: "needs-correction".to_owned(),
+                    label: "Needs correction".to_owned(),
+                    settlement: ReviewOutcomeSettlement::ChangesRequested,
+                    reason_required: true,
+                    result_required: true,
+                },
+            ],
         }],
         review_producers: vec![ReviewProducerPolicy {
             id: "registry".to_owned(),
@@ -227,10 +238,38 @@ fn project(version: &str) -> CaseworkProject {
             }),
         }],
         calendars: Vec::new(),
-        clocks: Vec::new(),
+        clocks: vec![ClockPolicy::Subject {
+            id: "review-deadline".to_owned(),
+            anchor: SubjectClockAnchor::FirstSubmittedAt,
+            complete_on: SubjectClockCompletion::ReviewCompleted,
+            after: ElapsedDuration {
+                elapsed: "PT1H".to_owned(),
+            },
+            pause_while: vec![SubjectClockPause::AwaitingApplicant],
+        }],
         inbox: InboxPolicy::default(),
         task_templates: Vec::new(),
     }
+}
+
+fn answer_project(completion: bool) -> CaseworkProject {
+    let mut project = project("answer-1");
+    let kind = &mut project.review_kinds[0];
+    kind.id = "registry-answer".to_owned();
+    kind.purpose = ReviewKindPurpose::Answer;
+    kind.stages.truncate(1);
+    kind.outcomes = vec![ReviewOutcomePolicy {
+        id: "found".to_owned(),
+        label: "Found".to_owned(),
+        settlement: ReviewOutcomeSettlement::Answered,
+        reason_required: false,
+        result_required: true,
+    }];
+    project.review_producers[0].kinds = vec!["registry-answer".to_owned()];
+    if !completion {
+        project.review_producers[0].completion = None;
+    }
+    project
 }
 
 fn request(subject_id: &str, requester_reference: &str) -> ReviewCreateRequest {
@@ -259,8 +298,11 @@ async fn fixture() -> Fixture {
     let base = env::var("CASEWORK_REVIEW_TEST_DATABASE_URL")
         .expect("CASEWORK_REVIEW_TEST_DATABASE_URL is required for review PostgreSQL tests");
     let schema = format!("review_{}", Uuid::new_v4().simple());
+    let application_name = format!("casework-review-{}", Uuid::new_v4().simple());
     let separator = if base.contains('?') { '&' } else { '?' };
-    let scoped_url = format!("{base}{separator}options=-csearch_path%3D{schema}");
+    let scoped_url = format!(
+        "{base}{separator}options=-csearch_path%3D{schema}&application_name={application_name}"
+    );
     let (admin, admin_connection) = tokio_postgres::connect(&base, NoTls)
         .await
         .expect("connect dedicated review test database");
@@ -326,6 +368,7 @@ async fn fixture() -> Fixture {
         reviewer_b: actor("reviewer-b", CaseworkRole::Staff, "staff"),
         supervisor: actor("supervisor", CaseworkRole::Supervisor, "supervisor"),
         source_revoked,
+        application_name,
     }
 }
 
@@ -358,6 +401,75 @@ async fn count_for_request(fixture: &Fixture, table: &str, request_id: Uuid) -> 
         .await
         .expect("count review rows")
         .get(0)
+}
+
+async fn assert_terminal_atomic(fixture: &Fixture, request_id: Uuid, completion_events: i64) {
+    assert_eq!(
+        count_for_request(fixture, "casework_review_results", request_id).await,
+        1
+    );
+    assert_eq!(
+        count_for_request(fixture, "casework_review_terminal_events", request_id).await,
+        1
+    );
+    assert_eq!(
+        count_for_request(fixture, "casework_review_completion_outbox", request_id).await,
+        completion_events
+    );
+}
+
+async fn assert_store_sessions_hold_no_transaction_or_row_lock(fixture: &Fixture) {
+    let sessions = fixture
+        .database
+        .query_one(
+            "SELECT count(*),
+                    count(*) FILTER (WHERE xact_start IS NOT NULL),
+                    count(*) FILTER (WHERE state <> 'idle')
+             FROM pg_stat_activity
+             WHERE datname=current_database() AND application_name=$1
+               AND pid<>pg_backend_pid()",
+            &[&fixture.application_name],
+        )
+        .await
+        .expect("inspect completion dispatcher database sessions");
+    assert!(sessions.get::<_, i64>(0) > 0, "observe the dispatcher pool");
+    assert_eq!(
+        sessions.get::<_, i64>(1),
+        0,
+        "completion delivery must not retain an open database transaction"
+    );
+    assert_eq!(
+        sessions.get::<_, i64>(2),
+        0,
+        "completion delivery must leave its database sessions idle"
+    );
+
+    let row_locks: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*)
+             FROM pg_locks l
+             JOIN pg_stat_activity a ON a.pid=l.pid
+             WHERE a.datname=current_database() AND a.application_name=$1
+               AND a.pid<>pg_backend_pid() AND l.granted
+               AND l.locktype IN ('tuple','transactionid')",
+            &[&fixture.application_name],
+        )
+        .await
+        .expect("inspect completion dispatcher row locks")
+        .get(0);
+    assert_eq!(
+        row_locks, 0,
+        "completion delivery must not retain a row or transaction-id lock"
+    );
+}
+
+async fn block_completion_response(
+    State((received, release)): State<(Arc<Notify>, Arc<Notify>)>,
+) -> StatusCode {
+    received.notify_one();
+    release.notified().await;
+    StatusCode::NO_CONTENT
 }
 
 #[tokio::test]
@@ -537,6 +649,65 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         1
     );
 
+    let received = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let completion_receiver = Router::new()
+        .route("/completion", post(block_completion_response))
+        .with_state((Arc::clone(&received), Arc::clone(&release)));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind completion receiver");
+    let completion_url = format!(
+        "http://{}/completion",
+        listener.local_addr().expect("completion receiver address")
+    );
+    let receiver = tokio::spawn(async move {
+        axum::serve(listener, completion_receiver)
+            .await
+            .expect("serve completion receiver");
+    });
+    let dispatcher = tokio::spawn(dispatch_review_completions_once_for_test(
+        fixture.store.clone(),
+        "registry-completion",
+        completion_url,
+        "completion-secret",
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(5), received.notified())
+        .await
+        .expect("completion receiver observes the leased delivery");
+    assert_store_sessions_hold_no_transaction_or_row_lock(&fixture).await;
+    release.notify_one();
+    dispatcher
+        .await
+        .expect("completion dispatcher task")
+        .expect("completion dispatcher pass");
+    receiver.abort();
+    let delivered = fixture
+        .database
+        .query_one(
+            "SELECT state,attempt_count,lease_until FROM casework_review_completion_outbox
+             WHERE request_id=$1",
+            &[&first.accepted.request_id],
+        )
+        .await
+        .expect("delivered completion row");
+    assert_eq!(delivered.get::<_, String>(0), "delivered");
+    assert_eq!(delivered.get::<_, i32>(1), 1);
+    assert!(delivered
+        .get::<_, Option<chrono::DateTime<Utc>>>(2)
+        .is_none());
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET state='pending',attempt_count=0,next_attempt_at=now(),lease_until=NULL,
+                 delivered_at=NULL,last_failure_class=NULL
+             WHERE request_id=$1",
+            &[&first.accepted.request_id],
+        )
+        .await
+        .expect("reset delivery for lost-acknowledgement coverage");
+
     let first_lease = fixture
         .store
         .lease_review_completions_for_test(10, Utc::now() + TimeDelta::minutes(5))
@@ -682,6 +853,36 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
             .await,
         Ok(ReviewResultRead::Expired)
     ));
+    let retained_recovery = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            create.clone(),
+            "recover-after-result-expiry",
+        )
+        .await
+        .expect("recover retained creation after result expiry");
+    assert!(retained_recovery.recovered);
+    assert_eq!(
+        retained_recovery.accepted.request_id,
+        first.accepted.request_id
+    );
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_submission_reservations
+             SET recovery_deadline=$2 WHERE request_id=$1",
+            &[&first.accepted.request_id, &(now - TimeDelta::seconds(1))],
+        )
+        .await
+        .expect("expire only the creation recovery window");
+    assert!(matches!(
+        fixture
+            .service_v1
+            .create_review_request(&fixture.producer, create.clone(), "recover-after-deadline",)
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
     assert_eq!(
         count_for_request(
             &fixture,
@@ -691,6 +892,378 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         .await,
         0
     );
+    let redacted_context: serde_json::Value = fixture
+        .database
+        .query_one(
+            "SELECT context FROM casework_review_requests WHERE request_id=$1",
+            &[&first.accepted.request_id],
+        )
+        .await
+        .expect("retained accountability tombstone")
+        .get(0);
+    assert_eq!(redacted_context, json!({}));
+    assert!(
+        count_for_request(
+            &fixture,
+            "casework_review_accountability",
+            first.accepted.request_id,
+        )
+        .await
+            > 0
+    );
+
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests
+             SET accountability_retained_until=$2 WHERE request_id=$1",
+            &[&first.accepted.request_id, &(now - TimeDelta::seconds(1))],
+        )
+        .await
+        .expect("expire accountability tombstone");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_accountability
+             SET occurred_at=$2,retained_until=$3 WHERE request_id=$1",
+            &[
+                &first.accepted.request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire protected accountability");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_submission_reservations
+             SET retained_until=$2,recovery_deadline=$2 WHERE request_id=$1",
+            &[&first.accepted.request_id, &(now - TimeDelta::seconds(1))],
+        )
+        .await
+        .expect("expire submission tombstone");
+    fixture
+        .service_v1
+        .erase_expired_reviews()
+        .await
+        .expect("erase expired accountability state");
+    assert_eq!(
+        count_for_request(
+            &fixture,
+            "casework_review_clock_occurrences",
+            first.accepted.request_id,
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count_for_request(
+            &fixture,
+            "casework_review_requests",
+            first.accepted.request_id,
+        )
+        .await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn standalone_structured_answers_support_polling_and_completion_modes() {
+    let fixture = fixture().await;
+    for (completion, subject) in [(false, "answer-poll"), (true, "answer-completion")] {
+        let project = answer_project(completion);
+        project.check().expect("answer project");
+        let service = CaseworkService::new(
+            fixture.store.clone(),
+            project,
+            Vec::<Arc<dyn SourceAdapter>>::new(),
+        )
+        .expect("answer service");
+        let mut answer_request = request(subject, &format!("producer-ref-{subject}"));
+        answer_request.kind = "registry-answer".to_owned();
+        let created = service
+            .create_review_request(
+                &fixture.producer,
+                answer_request,
+                &format!("create-{subject}"),
+            )
+            .await
+            .expect("create standalone answer");
+        let task = task_id(&fixture, created.accepted.request_id, 0).await;
+        service
+            .claim_review_task(
+                &fixture.reviewer_a,
+                task,
+                None,
+                "",
+                1,
+                &format!("claim-{subject}"),
+            )
+            .await
+            .expect("claim standalone answer");
+        service
+            .decide_review_task(
+                &fixture.reviewer_a,
+                task,
+                ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Answer {
+                        outcome: "found".to_owned(),
+                        reason: None,
+                        result: Some(json!({"correction":format!("answer for {subject}")})),
+                    },
+                },
+                None,
+                "",
+                2,
+                &format!("answer-{subject}"),
+            )
+            .await
+            .expect("settle standalone answer");
+        let result = service
+            .review_result(&fixture.producer, created.accepted.request_id)
+            .await
+            .expect("poll standalone answer");
+        assert!(matches!(
+            result,
+            ReviewResultRead::Available(result)
+                if result.status == ReviewResultStatus::Answered
+                    && result.result == Some(json!({"correction":format!("answer for {subject}")}))
+        ));
+        assert_terminal_atomic(&fixture, created.accepted.request_id, i64::from(completion)).await;
+    }
+}
+
+#[tokio::test]
+async fn rejected_cancelled_and_superseded_results_commit_atomically() {
+    let fixture = fixture().await;
+
+    let rejected = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("terminal-rejected", "terminal-rejected"),
+            "create-terminal-rejected",
+        )
+        .await
+        .expect("create rejected review");
+    let rejected_task = task_id(&fixture, rejected.accepted.request_id, 0).await;
+    fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            rejected_task,
+            None,
+            "",
+            1,
+            "claim-terminal-rejected",
+        )
+        .await
+        .expect("claim rejected review");
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_a,
+            rejected_task,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Reject {
+                    outcome: "incorrect".to_owned(),
+                    reason: Some("Incorrect record".to_owned()),
+                    result: Some(json!({"correction":"Replace the record"})),
+                },
+            },
+            None,
+            "",
+            2,
+            "reject-terminal",
+        )
+        .await
+        .expect("settle rejected review");
+    assert_terminal_atomic(&fixture, rejected.accepted.request_id, 1).await;
+
+    let cancelled_request = request("terminal-cancelled", "terminal-cancelled");
+    let cancelled = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            cancelled_request.clone(),
+            "create-terminal-cancelled",
+        )
+        .await
+        .expect("create cancelled review");
+    fixture
+        .service_v1
+        .cancel_review_request(
+            &fixture.producer,
+            cancelled.accepted.request_id,
+            registry_casework_core::ReviewCancelRequest {
+                subject: cancelled_request.subject,
+                reason: "Requester withdrew".to_owned(),
+            },
+            "cancel-terminal",
+        )
+        .await
+        .expect("cancel review");
+    assert_terminal_atomic(&fixture, cancelled.accepted.request_id, 1).await;
+
+    let first_request = request("terminal-superseded", "terminal-superseded-v1");
+    let first = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            first_request,
+            "create-terminal-superseded-v1",
+        )
+        .await
+        .expect("create first supersession round");
+    let mut second_request = request("terminal-superseded", "terminal-superseded-v2");
+    second_request.subject.version = "2".to_owned();
+    second_request.subject.digest = ContentDigest::for_bytes(b"terminal-superseded-v2");
+    fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            second_request,
+            "create-terminal-superseded-v2",
+        )
+        .await
+        .expect("create superseding round");
+    let first_result = fixture
+        .service_v1
+        .review_result(&fixture.producer, first.accepted.request_id)
+        .await
+        .expect("read superseded result");
+    assert!(matches!(
+        first_result,
+        ReviewResultRead::Available(result) if result.status == ReviewResultStatus::Superseded
+    ));
+    assert_terminal_atomic(&fixture, first.accepted.request_id, 1).await;
+}
+
+#[tokio::test]
+async fn concurrent_round_creation_and_duplicate_vote_leave_one_current_state() {
+    let fixture = fixture().await;
+    let first_service = fixture.service_v1.clone();
+    let second_service = fixture.service_v1.clone();
+    let producer_a = fixture.producer.clone();
+    let producer_b = fixture.producer.clone();
+    let first_request = request("concurrent-round", "concurrent-round-v1");
+    let mut second_request = request("concurrent-round", "concurrent-round-v2");
+    second_request.subject.version = "2".to_owned();
+    second_request.subject.digest = ContentDigest::for_bytes(b"concurrent-round-v2");
+    let (first, second) = tokio::join!(
+        first_service.create_review_request(
+            &producer_a,
+            first_request,
+            "create-concurrent-round-v1",
+        ),
+        second_service.create_review_request(
+            &producer_b,
+            second_request,
+            "create-concurrent-round-v2",
+        )
+    );
+    let first = first.expect("create first concurrent round");
+    let second = second.expect("create second concurrent round");
+    assert_ne!(first.accepted.request_id, second.accepted.request_id);
+    let lifecycles = fixture
+        .database
+        .query(
+            "SELECT lifecycle,count(*)
+             FROM casework_review_requests
+             WHERE subject_id='concurrent-round'
+             GROUP BY lifecycle ORDER BY lifecycle",
+            &[],
+        )
+        .await
+        .expect("read serialized concurrent rounds");
+    assert_eq!(lifecycles.len(), 2);
+    assert!(lifecycles
+        .iter()
+        .any(|row| row.get::<_, String>(0) == "reviewing" && row.get::<_, i64>(1) == 1));
+    assert!(lifecycles
+        .iter()
+        .any(|row| row.get::<_, String>(0) == "superseded" && row.get::<_, i64>(1) == 1));
+
+    let answer_service = CaseworkService::new(
+        fixture.store.clone(),
+        answer_project(false),
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("answer service");
+    let mut answer_request = request("duplicate-vote", "duplicate-vote");
+    answer_request.kind = "registry-answer".to_owned();
+    let answer = answer_service
+        .create_review_request(&fixture.producer, answer_request, "create-duplicate-vote")
+        .await
+        .expect("create duplicate vote review");
+    let task = task_id(&fixture, answer.accepted.request_id, 0).await;
+    answer_service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-duplicate-vote",
+        )
+        .await
+        .expect("claim duplicate vote review");
+    let first_service = answer_service.clone();
+    let second_service = answer_service.clone();
+    let reviewer_a = fixture.reviewer_a.clone();
+    let reviewer_b = fixture.reviewer_a.clone();
+    let decision = || ReviewTaskDecisionRequest {
+        decision: ReviewerDecisionKind::Answer {
+            outcome: "found".to_owned(),
+            reason: None,
+            result: Some(json!({"correction":"single terminal answer"})),
+        },
+    };
+    let (first_vote, second_vote) = tokio::join!(
+        first_service.decide_review_task(
+            &reviewer_a,
+            task,
+            decision(),
+            None,
+            "",
+            2,
+            "duplicate-vote-a",
+        ),
+        second_service.decide_review_task(
+            &reviewer_b,
+            task,
+            decision(),
+            None,
+            "",
+            2,
+            "duplicate-vote-b",
+        )
+    );
+    assert_eq!(
+        usize::from(first_vote.is_ok()) + usize::from(second_vote.is_ok()),
+        1
+    );
+    let failure = first_vote
+        .err()
+        .or_else(|| second_vote.err())
+        .expect("one refusal");
+    assert!(matches!(
+        failure,
+        ReviewRuntimeError::NotFound
+            | ReviewRuntimeError::RevisionConflict
+            | ReviewRuntimeError::TaskNotHeld
+    ));
+    assert_eq!(
+        count_for_request(
+            &fixture,
+            "casework_review_decisions",
+            answer.accepted.request_id,
+        )
+        .await,
+        1
+    );
+    assert_terminal_atomic(&fixture, answer.accepted.request_id, 0).await;
 }
 
 #[tokio::test]
@@ -983,6 +1556,82 @@ async fn source_context_task_disclosure_requires_a_current_caller_source_read() 
 }
 
 #[tokio::test]
+async fn subject_clock_pauses_and_continues_across_review_rounds() {
+    let fixture = fixture().await;
+    let first = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("record-clock", "producer-ref-clock-1"),
+            "create-clock-1",
+        )
+        .await
+        .expect("create first clock round");
+    let initial = fixture
+        .service_v1
+        .review_clocks(&fixture.producer, first.accepted.request_id)
+        .await
+        .expect("read initial review clocks");
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].state, ReviewClockState::Running);
+    let occurrence_id = initial[0].clock_occurrence_id;
+    let anchor = initial[0].anchor_at;
+
+    let task = task_id(&fixture, first.accepted.request_id, 0).await;
+    fixture
+        .service_v1
+        .claim_review_task(&fixture.reviewer_a, task, None, "", 1, "claim-clock")
+        .await
+        .expect("claim first clock round");
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_a,
+            task,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::ChangesRequested {
+                    outcome: "needs-correction".to_owned(),
+                    reason: Some("Please correct the record".to_owned()),
+                    result: Some(json!({"correction":"Update the legal name"})),
+                },
+            },
+            None,
+            "",
+            2,
+            "changes-clock",
+        )
+        .await
+        .expect("request changes for first round");
+    let paused = fixture
+        .service_v1
+        .review_clocks(&fixture.producer, first.accepted.request_id)
+        .await
+        .expect("read paused subject clock");
+    assert_eq!(paused[0].state, ReviewClockState::Paused);
+    assert_eq!(paused[0].clock_occurrence_id, occurrence_id);
+    assert_terminal_atomic(&fixture, first.accepted.request_id, 1).await;
+
+    let mut next_request = request("record-clock", "producer-ref-clock-2");
+    next_request.subject.version = "2".to_owned();
+    next_request.subject.digest = ContentDigest::for_bytes(b"record-clock-v2");
+    let second = fixture
+        .service_v1
+        .create_review_request(&fixture.producer, next_request, "create-clock-2")
+        .await
+        .expect("create corrected clock round");
+    let resumed = fixture
+        .service_v1
+        .review_clocks(&fixture.producer, second.accepted.request_id)
+        .await
+        .expect("read resumed subject clock");
+    assert_eq!(resumed.len(), 1);
+    assert_eq!(resumed[0].state, ReviewClockState::Running);
+    assert_eq!(resumed[0].clock_occurrence_id, occurrence_id);
+    assert_eq!(resumed[0].anchor_at, anchor);
+    assert!(resumed[0].due_at >= initial[0].due_at);
+}
+
+#[tokio::test]
 async fn review_task_coordination_preserves_exclusions_drafts_history_and_absence_cover() {
     let fixture = fixture().await;
     let created = fixture
@@ -1010,6 +1659,20 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
             .task_id,
         task
     );
+    let context = fixture
+        .service_v1
+        .review_task_context(&fixture.reviewer_a, task, None, "")
+        .await
+        .expect("read frozen submitted task context");
+    assert_eq!(context.task_id, task);
+    assert_eq!(context.request_id, created.accepted.request_id);
+    assert_eq!(context.policy, created.accepted.policy);
+    assert_eq!(context.requester_reference, "producer-ref-coordination");
+    assert!(matches!(
+        context.context,
+        registry_casework_core::ReviewTaskContextData::Submitted { snapshot }
+            if snapshot == json!({"summary":"Review record-coordination"})
+    ));
 
     let initiator = IssuerPrincipal {
         issuer: "https://issuer.test".to_owned(),

@@ -354,49 +354,6 @@ enum ActionSource {
         record_ref: String,
         etag_ref: String,
     },
-    ApproveRequest {
-        stage: String,
-        record_ref: String,
-        etag_ref: String,
-        #[serde(default)]
-        proposal_version: Option<u32>,
-        #[serde(default)]
-        proposal_version_ref: Option<String>,
-        #[serde(default)]
-        effect_digest: Option<String>,
-        #[serde(default)]
-        effect_digest_ref: Option<String>,
-    },
-    RejectRequest {
-        stage: String,
-        record_ref: String,
-        etag_ref: String,
-        #[serde(default)]
-        proposal_version: Option<u32>,
-        #[serde(default)]
-        proposal_version_ref: Option<String>,
-        #[serde(default)]
-        effect_digest: Option<String>,
-        #[serde(default)]
-        effect_digest_ref: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_review_reason")]
-        reason: Option<String>,
-    },
-    RequestRevision {
-        stage: String,
-        record_ref: String,
-        etag_ref: String,
-        #[serde(default)]
-        proposal_version: Option<u32>,
-        #[serde(default)]
-        proposal_version_ref: Option<String>,
-        #[serde(default)]
-        effect_digest: Option<String>,
-        #[serde(default)]
-        effect_digest_ref: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_review_reason")]
-        reason: Option<String>,
-    },
     ReviseRequest {
         record_ref: String,
         etag_ref: String,
@@ -431,9 +388,6 @@ impl ActionSource {
             Self::Batch { .. } => Operation::Batch,
             Self::TargetConditions { .. } | Self::Invoke { .. } => Operation::Invoke,
             Self::SubmitRequest { .. } => Operation::SubmitRequest,
-            Self::ApproveRequest { .. } => Operation::ApproveRequest,
-            Self::RejectRequest { .. } => Operation::RejectRequest,
-            Self::RequestRevision { .. } => Operation::RequestRevision,
             Self::ReviseRequest { .. } => Operation::ReviseRequest,
             Self::CancelRequest { .. } => Operation::CancelRequest,
             Self::ApplyRequest { .. } => Operation::ApplyRequest,
@@ -452,11 +406,6 @@ impl ActionSource {
             Self::TargetConditions { .. } => "target_conditions".to_owned(),
             Self::Invoke { .. } => "invoke".to_owned(),
             Self::SubmitRequest { .. } => "request.submit".to_owned(),
-            Self::ApproveRequest { stage, .. } => format!("request.stages.{stage}.approve"),
-            Self::RejectRequest { stage, .. } => format!("request.stages.{stage}.reject"),
-            Self::RequestRevision { stage, .. } => {
-                format!("request.stages.{stage}.request_revision")
-            }
             Self::ReviseRequest { .. } => "request.revise".to_owned(),
             Self::CancelRequest { .. } => "request.cancel".to_owned(),
             Self::ApplyRequest { .. } => "request.apply".to_owned(),
@@ -550,21 +499,6 @@ impl DirectClaimSource {
 enum ExpectedOutcome {
     Success,
     Refusal,
-}
-
-fn deserialize_review_reason<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let reason = String::deserialize(deserializer)?;
-    if reason.chars().count() > crate::request_workflow::MAX_REVIEW_REASON_CHARS
-        || reason.contains('\0')
-    {
-        return Err(serde::de::Error::custom(
-            "review reason exceeds its text bounds",
-        ));
-    }
-    Ok(Some(reason))
 }
 
 #[derive(Clone, Deserialize)]
@@ -1040,21 +974,6 @@ fn validate_action_references(
             etag_ref,
             ..
         } => &[record_ref, etag_ref],
-        ActionSource::ApproveRequest {
-            record_ref,
-            etag_ref,
-            ..
-        }
-        | ActionSource::RejectRequest {
-            record_ref,
-            etag_ref,
-            ..
-        }
-        | ActionSource::RequestRevision {
-            record_ref,
-            etag_ref,
-            ..
-        } => &[record_ref, etag_ref],
         ActionSource::Create { .. }
         | ActionSource::List { .. }
         | ActionSource::Query { .. }
@@ -1136,10 +1055,7 @@ fn etag_references(action: &ActionSource) -> Vec<&str> {
         | ActionSource::SubmitRequest { etag_ref, .. }
         | ActionSource::ReviseRequest { etag_ref, .. }
         | ActionSource::CancelRequest { etag_ref, .. }
-        | ActionSource::ApplyRequest { etag_ref, .. }
-        | ActionSource::ApproveRequest { etag_ref, .. }
-        | ActionSource::RejectRequest { etag_ref, .. }
-        | ActionSource::RequestRevision { etag_ref, .. } => vec![etag_ref],
+        | ActionSource::ApplyRequest { etag_ref, .. } => vec![etag_ref],
         _ => Vec::new(),
     }
 }
@@ -1176,9 +1092,6 @@ fn collect_action_value_record_refs<'a>(
         | ActionSource::Query { .. }
         | ActionSource::ReadPath { .. }
         | ActionSource::SubmitRequest { .. }
-        | ActionSource::ApproveRequest { .. }
-        | ActionSource::RejectRequest { .. }
-        | ActionSource::RequestRevision { .. }
         | ActionSource::ReviseRequest { .. }
         | ActionSource::CancelRequest { .. }
         | ActionSource::ApplyRequest { .. } => Ok(()),
@@ -1230,22 +1143,7 @@ fn collect_value_record_refs<'a>(
 
 fn request_action_proposal_refs(action: &ActionSource) -> Vec<&str> {
     match action {
-        ActionSource::ApproveRequest {
-            proposal_version_ref,
-            effect_digest_ref,
-            ..
-        }
-        | ActionSource::RejectRequest {
-            proposal_version_ref,
-            effect_digest_ref,
-            ..
-        }
-        | ActionSource::RequestRevision {
-            proposal_version_ref,
-            effect_digest_ref,
-            ..
-        }
-        | ActionSource::ApplyRequest {
+        ActionSource::ApplyRequest {
             proposal_version_ref,
             effect_digest_ref,
             ..
@@ -1358,7 +1256,6 @@ fn action_profile_from_grant(grant: &CompiledActionPermission) -> AccessProfileS
         request_visibility: None,
         lookups: Vec::new(),
         read_paths: Vec::new(),
-        review_stages: Vec::new(),
         apply_targets: Vec::new(),
         submitter_targets: BTreeSet::new(),
         request_presence: Vec::new(),
@@ -1743,10 +1640,7 @@ fn validate_action_fields(
             }
             Ok(())
         }
-        ActionSource::ApproveRequest { .. }
-        | ActionSource::RejectRequest { .. }
-        | ActionSource::RequestRevision { .. }
-        | ActionSource::ApplyRequest { .. } => {
+        ActionSource::ApplyRequest { .. } => {
             validate_request_action_plan(action, entity)?;
             validate_request_action_proposal_binding(action)?;
             Ok(())
@@ -1766,29 +1660,14 @@ fn validate_request_action_plan(
         .as_ref()
         .ok_or(FixtureError::LogicalReferenceRefused)?;
     let operation = action.operation();
-    let stage = request_action_stage(action)?;
-    if request.actions.iter().any(|candidate| {
-        candidate.operation.access_operation() == operation
-            && candidate.review_stage.as_deref() == stage
-    }) {
+    if request
+        .actions
+        .iter()
+        .any(|candidate| candidate.operation.access_operation() == operation)
+    {
         Ok(())
     } else {
         Err(FixtureError::LogicalReferenceRefused)
-    }
-}
-
-fn request_action_stage(action: &ActionSource) -> Result<Option<&str>, FixtureError> {
-    match action {
-        ActionSource::ApproveRequest { stage, .. }
-        | ActionSource::RejectRequest { stage, .. }
-        | ActionSource::RequestRevision { stage, .. } => {
-            if valid_stable_id(stage) {
-                Ok(Some(stage.as_str()))
-            } else {
-                Err(FixtureError::LogicalReferenceRefused)
-            }
-        }
-        _ => Ok(None),
     }
 }
 
@@ -1815,28 +1694,7 @@ struct RequestActionBinding<'a> {
 
 fn request_action_binding(action: &ActionSource) -> Result<RequestActionBinding<'_>, FixtureError> {
     match action {
-        ActionSource::ApproveRequest {
-            proposal_version,
-            proposal_version_ref,
-            effect_digest,
-            effect_digest_ref,
-            ..
-        }
-        | ActionSource::RejectRequest {
-            proposal_version,
-            proposal_version_ref,
-            effect_digest,
-            effect_digest_ref,
-            ..
-        }
-        | ActionSource::RequestRevision {
-            proposal_version,
-            proposal_version_ref,
-            effect_digest,
-            effect_digest_ref,
-            ..
-        }
-        | ActionSource::ApplyRequest {
+        ActionSource::ApplyRequest {
             proposal_version,
             proposal_version_ref,
             effect_digest,
@@ -2151,61 +2009,6 @@ fn internalize_entity_action(
             record_ref: record_ref.clone(),
             etag_ref: etag_ref.clone(),
         },
-        ActionSource::ApproveRequest {
-            stage,
-            record_ref,
-            etag_ref,
-            proposal_version,
-            proposal_version_ref,
-            effect_digest,
-            effect_digest_ref,
-        } => ActionSource::ApproveRequest {
-            stage: stage.clone(),
-            record_ref: record_ref.clone(),
-            etag_ref: etag_ref.clone(),
-            proposal_version: *proposal_version,
-            proposal_version_ref: proposal_version_ref.clone(),
-            effect_digest: effect_digest.clone(),
-            effect_digest_ref: effect_digest_ref.clone(),
-        },
-        ActionSource::RejectRequest {
-            stage,
-            record_ref,
-            etag_ref,
-            proposal_version,
-            proposal_version_ref,
-            effect_digest,
-            effect_digest_ref,
-            reason,
-        } => ActionSource::RejectRequest {
-            stage: stage.clone(),
-            record_ref: record_ref.clone(),
-            etag_ref: etag_ref.clone(),
-            proposal_version: *proposal_version,
-            proposal_version_ref: proposal_version_ref.clone(),
-            effect_digest: effect_digest.clone(),
-            effect_digest_ref: effect_digest_ref.clone(),
-            reason: reason.clone(),
-        },
-        ActionSource::RequestRevision {
-            stage,
-            record_ref,
-            etag_ref,
-            proposal_version,
-            proposal_version_ref,
-            effect_digest,
-            effect_digest_ref,
-            reason,
-        } => ActionSource::RequestRevision {
-            stage: stage.clone(),
-            record_ref: record_ref.clone(),
-            etag_ref: etag_ref.clone(),
-            proposal_version: *proposal_version,
-            proposal_version_ref: proposal_version_ref.clone(),
-            effect_digest: effect_digest.clone(),
-            effect_digest_ref: effect_digest_ref.clone(),
-            reason: reason.clone(),
-        },
         ActionSource::ReviseRequest {
             record_ref,
             etag_ref,
@@ -2401,61 +2204,6 @@ fn externalize_action(
             record_ref: record_ref.clone(),
             etag_ref: etag_ref.clone(),
         },
-        ActionSource::ApproveRequest {
-            stage,
-            record_ref,
-            etag_ref,
-            proposal_version,
-            proposal_version_ref,
-            effect_digest,
-            effect_digest_ref,
-        } => ActionSource::ApproveRequest {
-            stage: stage.clone(),
-            record_ref: record_ref.clone(),
-            etag_ref: etag_ref.clone(),
-            proposal_version: *proposal_version,
-            proposal_version_ref: proposal_version_ref.clone(),
-            effect_digest: effect_digest.clone(),
-            effect_digest_ref: effect_digest_ref.clone(),
-        },
-        ActionSource::RejectRequest {
-            stage,
-            record_ref,
-            etag_ref,
-            proposal_version,
-            proposal_version_ref,
-            effect_digest,
-            effect_digest_ref,
-            reason,
-        } => ActionSource::RejectRequest {
-            stage: stage.clone(),
-            record_ref: record_ref.clone(),
-            etag_ref: etag_ref.clone(),
-            proposal_version: *proposal_version,
-            proposal_version_ref: proposal_version_ref.clone(),
-            effect_digest: effect_digest.clone(),
-            effect_digest_ref: effect_digest_ref.clone(),
-            reason: reason.clone(),
-        },
-        ActionSource::RequestRevision {
-            stage,
-            record_ref,
-            etag_ref,
-            proposal_version,
-            proposal_version_ref,
-            effect_digest,
-            effect_digest_ref,
-            reason,
-        } => ActionSource::RequestRevision {
-            stage: stage.clone(),
-            record_ref: record_ref.clone(),
-            etag_ref: etag_ref.clone(),
-            proposal_version: *proposal_version,
-            proposal_version_ref: proposal_version_ref.clone(),
-            effect_digest: effect_digest.clone(),
-            effect_digest_ref: effect_digest_ref.clone(),
-            reason: reason.clone(),
-        },
         ActionSource::ReviseRequest {
             record_ref,
             etag_ref,
@@ -2553,9 +2301,6 @@ fn validate_expectation(
                 | Operation::Invoke
                 | Operation::Snapshot => 200,
                 Operation::SubmitRequest
-                | Operation::ApproveRequest
-                | Operation::RejectRequest
-                | Operation::RequestRevision
                 | Operation::ReviseRequest
                 | Operation::CancelRequest
                 | Operation::ApplyRequest => 200,
@@ -3649,21 +3394,6 @@ fn fixture_request(
             record_ref,
             etag_ref,
         }
-        | ActionSource::ApproveRequest {
-            record_ref,
-            etag_ref,
-            ..
-        }
-        | ActionSource::RejectRequest {
-            record_ref,
-            etag_ref,
-            ..
-        }
-        | ActionSource::RequestRevision {
-            record_ref,
-            etag_ref,
-            ..
-        }
         | ActionSource::ApplyRequest {
             record_ref,
             etag_ref,
@@ -3738,9 +3468,6 @@ fn fixture_request(
             | ActionSource::Batch { .. }
             | ActionSource::Invoke { .. }
             | ActionSource::SubmitRequest { .. }
-            | ActionSource::ApproveRequest { .. }
-            | ActionSource::RejectRequest { .. }
-            | ActionSource::RequestRevision { .. }
             | ActionSource::ReviseRequest { .. }
             | ActionSource::CancelRequest { .. }
             | ActionSource::ApplyRequest { .. }
@@ -3882,10 +3609,7 @@ fn request_action_body(
     match action {
         ActionSource::SubmitRequest { .. } | ActionSource::CancelRequest { .. } => Ok(json!({})),
         ActionSource::ReviseRequest { rebase, .. } => Ok(json!({"rebase": *rebase})),
-        ActionSource::ApproveRequest { .. }
-        | ActionSource::RejectRequest { .. }
-        | ActionSource::RequestRevision { .. }
-        | ActionSource::ApplyRequest { .. } => {
+        ActionSource::ApplyRequest { .. } => {
             let binding = request_action_binding(action)?;
             let version = match (binding.proposal_version, binding.proposal_version_ref) {
                 (Some(version), None) => version,
@@ -3898,22 +3622,10 @@ fn request_action_body(
                 _ => return Err(FixtureError::RequestConstructionRefused),
             };
             validate_digest(&digest)?;
-            let mut body = json!({
+            Ok(json!({
                 "proposalVersion": version,
                 "effectDigest": digest,
-            });
-            if let ActionSource::RejectRequest {
-                reason: Some(reason),
-                ..
-            }
-            | ActionSource::RequestRevision {
-                reason: Some(reason),
-                ..
-            } = action
-            {
-                body["reason"] = json!(reason);
-            }
-            Ok(body)
+            }))
         }
         _ => Err(FixtureError::RequestConstructionRefused),
     }
@@ -3959,18 +3671,11 @@ fn captured_request_action_if_match(
         .and_then(Value::as_array)
         .ok_or(FixtureError::RequestConstructionRefused)?;
     let expected_operation = request_action_name(action)?;
-    let expected_stage = request_action_stage(action)?;
     let mut matches = actions.iter().filter(|candidate| {
         candidate
             .get("operation")
             .and_then(Value::as_str)
             .is_some_and(|operation| operation == expected_operation)
-            && match (expected_stage, candidate.get("stage")) {
-                (Some(expected), Some(value)) => value.as_str() == Some(expected),
-                (None, Some(value)) => value.is_null(),
-                (None, None) => true,
-                (Some(_), None) => false,
-            }
     });
     let entry = matches
         .next()
@@ -3992,9 +3697,6 @@ fn captured_request_action_if_match(
 fn request_action_name(action: &ActionSource) -> Result<&'static str, FixtureError> {
     match action {
         ActionSource::SubmitRequest { .. } => Ok("submit_request"),
-        ActionSource::ApproveRequest { .. } => Ok("approve_request"),
-        ActionSource::RejectRequest { .. } => Ok("reject_request"),
-        ActionSource::RequestRevision { .. } => Ok("request_revision"),
         ActionSource::ReviseRequest { .. } => Ok("revise_request"),
         ActionSource::CancelRequest { .. } => Ok("cancel_request"),
         ActionSource::ApplyRequest { .. } => Ok("apply_request"),
@@ -4492,9 +4194,6 @@ fn assert_response(
                 )?;
             }
             ActionSource::SubmitRequest { .. }
-            | ActionSource::ApproveRequest { .. }
-            | ActionSource::RejectRequest { .. }
-            | ActionSource::RequestRevision { .. }
             | ActionSource::ReviseRequest { .. }
             | ActionSource::CancelRequest { .. }
             | ActionSource::ApplyRequest { .. } => {
@@ -4654,49 +4353,32 @@ fn assert_request_proposal_shape(value: &Value) -> Result<(), FixtureError> {
     if value.is_null() {
         return Ok(());
     }
-    let proposal = value
-        .as_object()
+    let proposal = exact_object(value, &["review"])?;
+    let review = proposal
+        .get("review")
+        .and_then(Value::as_object)
         .ok_or(FixtureError::ResponseShapeRefused)?;
-    if proposal.keys().any(|key| {
-        !matches!(
-            key.as_str(),
-            "reviewMode" | "applicationDisposition" | "queueReason"
-        )
-    }) || !["reviewMode", "applicationDisposition"]
-        .iter()
-        .all(|key| proposal.contains_key(*key))
-        || !matches!(
-            proposal.get("reviewMode").and_then(Value::as_str),
-            Some("none" | "staged")
-        )
-    {
+    if review.get("mode").and_then(Value::as_str) == Some("none") {
+        if review.len() == 1 {
+            return Ok(());
+        }
         return Err(FixtureError::ResponseShapeRefused);
     }
-    match proposal
-        .get("applicationDisposition")
-        .and_then(Value::as_str)
-    {
-        Some("apply") if !proposal.contains_key("queueReason") => Ok(()),
-        Some("queue") => {
-            let Some(reason) = proposal.get("queueReason") else {
-                return Ok(());
-            };
-            let reason = exact_object(reason, &["code", "label"])?;
-            let code = reason
-                .get("code")
-                .and_then(Value::as_str)
-                .ok_or(FixtureError::ResponseShapeRefused)?;
-            let label = reason
-                .get("label")
-                .and_then(Value::as_str)
-                .ok_or(FixtureError::ResponseShapeRefused)?;
-            if code.len() > 128 || label.is_empty() || label.len() > 160 {
-                return Err(FixtureError::ResponseShapeRefused);
-            }
-            Ok(())
-        }
-        _ => Err(FixtureError::ResponseShapeRefused),
+    if review.len() != 2 {
+        return Err(FixtureError::ResponseShapeRefused);
     }
+    let authority = review
+        .get("authority")
+        .and_then(Value::as_str)
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    let policy_id = review
+        .get("policyId")
+        .and_then(Value::as_str)
+        .ok_or(FixtureError::ResponseShapeRefused)?;
+    if !valid_stable_id(authority) || !valid_stable_id(policy_id) {
+        return Err(FixtureError::ResponseShapeRefused);
+    }
+    Ok(())
 }
 
 fn exact_object<'a>(
@@ -4861,9 +4543,7 @@ fn assert_request_record_metadata_shape(value: &Value) -> Result<(), FixtureErro
                 | "actions"
                 | "history"
                 | "application"
-                | "decisions"
                 | "review"
-                | "reviewTiming"
                 | "detailErased"
                 | "submitterReference"
                 | "applierReference"
@@ -4903,17 +4583,11 @@ fn assert_request_record_metadata_shape(value: &Value) -> Result<(), FixtureErro
     if let Some(history) = request.get("history") {
         assert_request_history_shape(history)?;
     }
-    if let Some(decisions) = request.get("decisions") {
-        assert_request_decisions_shape(decisions)?;
-    }
     if let Some(application) = request.get("application") {
         assert_request_application_shape(application)?;
     }
     if let Some(review) = request.get("review") {
         assert_request_review_shape(review)?;
-    }
-    if let Some(timing) = request.get("reviewTiming") {
-        assert_request_review_timing_shape(timing)?;
     }
     Ok(())
 }
@@ -4921,83 +4595,185 @@ fn assert_request_record_metadata_shape(value: &Value) -> Result<(), FixtureErro
 fn assert_request_review_shape(value: &Value) -> Result<(), FixtureError> {
     let review = exact_object(
         value,
-        &["stages", "submittedAt", "pendingStage", "stageEnteredAt"],
+        &[
+            "submission",
+            "result",
+            "delivery",
+            "application",
+            "recovery",
+        ],
     )?;
-    let stages = review
-        .get("stages")
-        .and_then(Value::as_array)
-        .filter(|stages| stages.len() <= 32)
+    assert_review_submission(&review["submission"])?;
+    assert_review_result(&review["result"])?;
+    assert_review_delivery(&review["delivery"])?;
+    assert_review_application(&review["application"])?;
+    assert_review_recovery(&review["recovery"])?;
+    Ok(())
+}
+
+fn closed_review_object<'a>(
+    value: &'a Value,
+    allowed: &[&str],
+    required: &[&str],
+) -> Result<&'a Map<String, Value>, FixtureError> {
+    let object = value
+        .as_object()
         .ok_or(FixtureError::ResponseShapeRefused)?;
-    for stage in stages {
-        let stage = stage
-            .as_object()
-            .ok_or(FixtureError::ResponseShapeRefused)?;
-        if stage.keys().any(|key| {
-            !matches!(
-                key.as_str(),
-                "id" | "approvals" | "excludeSubmitter" | "excludePreviousReviewers"
-            )
-        }) || !["id", "approvals", "excludeSubmitter"]
+    if object.keys().any(|key| !allowed.contains(&key.as_str()))
+        || required.iter().any(|key| !object.contains_key(*key))
+    {
+        return Err(FixtureError::ResponseShapeRefused);
+    }
+    Ok(object)
+}
+
+fn bounded_review_text(value: Option<&Value>) -> Result<&str, FixtureError> {
+    value
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty() && text.len() <= 128 && !text.chars().any(char::is_control))
+        .ok_or(FixtureError::ResponseShapeRefused)
+}
+
+fn review_uuid(value: Option<&Value>) -> Result<(), FixtureError> {
+    let value = bounded_review_text(value)?;
+    if uuid::Uuid::parse_str(value).is_ok_and(|parsed| parsed.to_string() == value) {
+        Ok(())
+    } else {
+        Err(FixtureError::ResponseShapeRefused)
+    }
+}
+
+fn assert_review_submission(value: &Value) -> Result<(), FixtureError> {
+    let submission = closed_review_object(
+        value,
+        &[
+            "state",
+            "authority",
+            "requestId",
+            "submissionDigest",
+            "policy",
+        ],
+        &["state", "authority"],
+    )?;
+    let state = bounded_review_text(submission.get("state"))?;
+    if !matches!(
+        state,
+        "pending" | "accepted" | "uncertain" | "cancelling" | "cancelled" | "failed"
+    ) {
+        return Err(FixtureError::ResponseShapeRefused);
+    }
+    bounded_review_text(submission.get("authority"))?;
+    let accepted_fields = ["requestId", "submissionDigest", "policy"];
+    if state == "accepted" || submission.contains_key("requestId") {
+        if accepted_fields
             .iter()
-            .all(|key| stage.contains_key(*key))
-            || stage
-                .get("id")
-                .and_then(Value::as_str)
-                .is_none_or(|id| !valid_review_stage_id(id))
-            || stage
-                .get("approvals")
-                .and_then(Value::as_u64)
-                .is_none_or(|approvals| !(1..=32).contains(&approvals))
-            || stage
-                .get("excludeSubmitter")
-                .and_then(Value::as_bool)
-                .is_none()
-            || stage
-                .get("excludePreviousReviewers")
-                .is_some_and(|value| !value.is_boolean())
+            .any(|field| !submission.contains_key(*field))
         {
             return Err(FixtureError::ResponseShapeRefused);
         }
+        review_uuid(submission.get("requestId"))?;
+        validate_digest(bounded_review_text(submission.get("submissionDigest"))?)?;
+        let policy = exact_object(&submission["policy"], &["id", "version", "digest"])?;
+        bounded_review_text(policy.get("id"))?;
+        bounded_review_text(policy.get("version"))?;
+        validate_digest(bounded_review_text(policy.get("digest"))?)?;
+    } else if accepted_fields
+        .iter()
+        .any(|field| submission.contains_key(*field))
+    {
+        return Err(FixtureError::ResponseShapeRefused);
     }
-    assert_response_timestamp(review.get("submittedAt"), false)?;
-    assert_optional_review_stage(review.get("pendingStage"))?;
-    assert_response_timestamp(review.get("stageEnteredAt"), true)?;
     Ok(())
 }
 
-fn assert_request_review_timing_shape(value: &Value) -> Result<(), FixtureError> {
-    let timing = exact_object(
+fn assert_review_result(value: &Value) -> Result<(), FixtureError> {
+    let result = closed_review_object(
         value,
-        &[
-            "firstSubmittedAt",
-            "pausedMilliseconds",
-            "pauseStartedAt",
-            "completedAt",
-        ],
+        &["state", "resultId", "completedAt", "availableUntil"],
+        &["state"],
     )?;
-    assert_response_timestamp(timing.get("firstSubmittedAt"), false)?;
-    if timing
-        .get("pausedMilliseconds")
-        .and_then(Value::as_u64)
-        .is_none_or(|milliseconds| milliseconds > 9_007_199_254_740_991)
-    {
+    let state = bounded_review_text(result.get("state"))?;
+    if !matches!(
+        state,
+        "pending"
+            | "approved"
+            | "rejected"
+            | "changesRequested"
+            | "answered"
+            | "cancelled"
+            | "superseded"
+    ) {
         return Err(FixtureError::ResponseShapeRefused);
     }
-    assert_response_timestamp(timing.get("pauseStartedAt"), true)?;
-    assert_response_timestamp(timing.get("completedAt"), true)?;
+    let terminal = ["resultId", "completedAt", "availableUntil"];
+    if state == "pending" {
+        if terminal.iter().any(|field| result.contains_key(*field)) {
+            return Err(FixtureError::ResponseShapeRefused);
+        }
+    } else {
+        if terminal.iter().any(|field| !result.contains_key(*field)) {
+            return Err(FixtureError::ResponseShapeRefused);
+        }
+        review_uuid(result.get("resultId"))?;
+        assert_response_timestamp(result.get("completedAt"), false)?;
+        assert_response_timestamp(result.get("availableUntil"), false)?;
+    }
     Ok(())
 }
 
-fn assert_optional_review_stage(value: Option<&Value>) -> Result<(), FixtureError> {
-    let value = value.ok_or(FixtureError::ResponseShapeRefused)?;
-    if !value.is_null()
-        && value
-            .as_str()
-            .is_none_or(|stage| !valid_review_stage_id(stage))
+fn assert_review_delivery(value: &Value) -> Result<(), FixtureError> {
+    let delivery = closed_review_object(value, &["state", "eventId", "receivedAt"], &["state"])?;
+    let state = bounded_review_text(delivery.get("state"))?;
+    if !matches!(
+        state,
+        "polling" | "received" | "reconciled" | "unmatched" | "exhausted"
+    ) {
+        return Err(FixtureError::ResponseShapeRefused);
+    }
+    if delivery.contains_key("eventId") != delivery.contains_key("receivedAt") {
+        return Err(FixtureError::ResponseShapeRefused);
+    }
+    if delivery.contains_key("eventId") {
+        review_uuid(delivery.get("eventId"))?;
+        assert_response_timestamp(delivery.get("receivedAt"), false)?;
+    }
+    Ok(())
+}
+
+fn assert_review_application(value: &Value) -> Result<(), FixtureError> {
+    let application = closed_review_object(
+        value,
+        &["mode", "state", "executor", "applicationId"],
+        &["mode", "state"],
+    )?;
+    let mode = bounded_review_text(application.get("mode"))?;
+    let state = bounded_review_text(application.get("state"))?;
+    if !matches!(mode, "manual" | "automatic")
+        || !matches!(
+            state,
+            "awaitingReview" | "ready" | "queued" | "applying" | "applied" | "blocked"
+        )
+        || (mode == "manual" && application.contains_key("executor"))
+        || (mode == "automatic" && !application.contains_key("executor"))
     {
         return Err(FixtureError::ResponseShapeRefused);
     }
+    if let Some(executor) = application.get("executor") {
+        bounded_review_text(Some(executor))?;
+    }
+    if application.contains_key("applicationId") {
+        review_uuid(application.get("applicationId"))?;
+    }
     Ok(())
+}
+
+fn assert_review_recovery(value: &Value) -> Result<(), FixtureError> {
+    let recovery = closed_review_object(value, &["state", "code"], &["state"])?;
+    match bounded_review_text(recovery.get("state"))? {
+        "none" if !recovery.contains_key("code") => Ok(()),
+        "operatorAttention" => bounded_review_text(recovery.get("code")).map(|_| ()),
+        _ => Err(FixtureError::ResponseShapeRefused),
+    }
 }
 
 fn assert_response_timestamp(value: Option<&Value>, nullable: bool) -> Result<(), FixtureError> {
@@ -5014,26 +4790,9 @@ fn assert_response_timestamp(value: Option<&Value>, nullable: bool) -> Result<()
         .map_err(|_| FixtureError::ResponseShapeRefused)
 }
 
-fn valid_review_stage_id(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    !bytes.is_empty()
-        && bytes.len() <= MAX_IDENTIFIER_BYTES
-        && bytes[0].is_ascii_lowercase()
-        && bytes.iter().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(*byte, b'-' | b'_')
-        })
-}
-
 fn assert_request_state(request: &Map<String, Value>) -> Result<(), FixtureError> {
-    let allowed_states = BTreeSet::from([
-        "draft",
-        "submitted",
-        "approved",
-        "needs_changes",
-        "rejected",
-        "canceled",
-        "applied",
-    ]);
+    let allowed_states =
+        BTreeSet::from(["draft", "submitted", "cancelled", "applied", "superseded"]);
     if request
         .get("bregState")
         .and_then(Value::as_str)
@@ -5074,12 +4833,9 @@ fn assert_request_action_link_shape(value: &Value) -> Result<(), FixtureError> {
                 | "method"
                 | "href"
                 | "ifMatch"
-                | "stage"
                 | "rebase"
                 | "proposalVersion"
                 | "effectDigest"
-                | "decision"
-                | "review"
         )
     }) || !["operation", "method", "href", "ifMatch"]
         .iter()
@@ -5108,11 +4864,6 @@ fn assert_request_action_link_shape(value: &Value) -> Result<(), FixtureError> {
     {
         return Err(FixtureError::ResponseShapeRefused);
     }
-    if let Some(stage) = action.get("stage") {
-        if stage.as_str().is_none_or(|stage| !valid_stable_id(stage)) {
-            return Err(FixtureError::ResponseShapeRefused);
-        }
-    }
     if let Some(rebase) = action.get("rebase") {
         if !rebase.is_boolean() {
             return Err(FixtureError::ResponseShapeRefused);
@@ -5123,49 +4874,6 @@ fn assert_request_action_link_shape(value: &Value) -> Result<(), FixtureError> {
     }
     if let Some(digest) = action.get("effectDigest") {
         assert_optional_effect_digest(digest)?;
-    }
-    Ok(())
-}
-
-fn assert_request_decisions_shape(value: &Value) -> Result<(), FixtureError> {
-    let decisions = value.as_array().ok_or(FixtureError::ResponseShapeRefused)?;
-    for decision in decisions {
-        let decision = decision
-            .as_object()
-            .ok_or(FixtureError::ResponseShapeRefused)?;
-        if decision.keys().any(|key| {
-            !matches!(
-                key.as_str(),
-                "stageId" | "kind" | "decidedAt" | "reasonPresent" | "actorReference" | "reason"
-            )
-        }) || decision
-            .get("stageId")
-            .and_then(Value::as_str)
-            .is_none_or(|stage| !valid_stable_id(stage))
-            || !matches!(
-                decision.get("kind").and_then(Value::as_str),
-                Some("approve" | "reject" | "request_revision")
-            )
-            || decision.get("decidedAt").and_then(Value::as_str).is_none()
-            || decision
-                .get("reasonPresent")
-                .and_then(Value::as_bool)
-                .is_none()
-        {
-            return Err(FixtureError::ResponseShapeRefused);
-        }
-        if let Some(actor_reference) = decision.get("actorReference") {
-            assert_actor_reference(actor_reference)?;
-        }
-        if let Some(reason) = decision.get("reason") {
-            let reason = reason.as_str().ok_or(FixtureError::ResponseShapeRefused)?;
-            if decision.get("reasonPresent") != Some(&json!(true))
-                || reason.chars().count() > crate::request_workflow::MAX_REVIEW_REASON_CHARS
-                || reason.contains('\0')
-            {
-                return Err(FixtureError::ResponseShapeRefused);
-            }
-        }
     }
     Ok(())
 }
@@ -5190,9 +4898,6 @@ fn assert_request_history_shape(value: &Value) -> Result<(), FixtureError> {
         let proposal = proposal
             .as_object()
             .ok_or(FixtureError::ResponseShapeRefused)?;
-        if let Some(decisions) = proposal.get("decisions") {
-            assert_request_decisions_shape(decisions)?;
-        }
         if !proposal.contains_key("proposalVersion")
             || !proposal.contains_key("bregState")
             || proposal
@@ -6340,9 +6045,6 @@ fn operation_method(operation: Operation) -> HttpMethod {
         Operation::Patch => HttpMethod::Patch,
         Operation::Tombstone => HttpMethod::Delete,
         Operation::SubmitRequest
-        | Operation::ApproveRequest
-        | Operation::RejectRequest
-        | Operation::RequestRevision
         | Operation::ReviseRequest
         | Operation::CancelRequest
         | Operation::ApplyRequest => HttpMethod::Post,
@@ -6353,9 +6055,6 @@ fn is_request_action(operation: Operation) -> bool {
     matches!(
         operation,
         Operation::SubmitRequest
-            | Operation::ApproveRequest
-            | Operation::RejectRequest
-            | Operation::RequestRevision
             | Operation::ReviseRequest
             | Operation::CancelRequest
             | Operation::ApplyRequest
@@ -6389,67 +6088,21 @@ mod tests {
     };
 
     #[test]
-    fn review_reason_fixture_parsing_and_wire_forwarding_are_exact() {
-        for operation in ["reject_request", "request_revision"] {
-            let mut source = json!({"operation":operation, "stage":"review", "recordRef":"record", "etagRef":"record", "proposalVersion":1, "effectDigest":format!("sha256:{}", "a".repeat(64))});
-            let action: ActionSource = serde_json::from_value(source.clone()).unwrap();
-            assert!(request_action_body(&action, &BTreeMap::new())
-                .unwrap()
-                .get("reason")
-                .is_none());
-            for reason in [
-                "".to_owned(),
-                "  Please clarify.\nสาเหตุ 🙂  ".to_owned(),
-                "🙂".repeat(4096),
-            ] {
-                source["reason"] = json!(reason);
-                let action: ActionSource = serde_json::from_value(source.clone()).unwrap();
-                assert_eq!(
-                    request_action_body(&action, &BTreeMap::new()).unwrap()["reason"],
-                    json!(reason)
-                );
-            }
-            for reason in [
-                Value::Null,
-                json!(1),
-                json!(false),
-                json!([]),
-                json!({}),
-                json!("🙂".repeat(4097)),
-                json!("a\0b"),
-            ] {
-                source["reason"] = reason;
-                assert!(serde_json::from_value::<ActionSource>(source.clone()).is_err());
-            }
-            source["reason"] = json!("clarify");
-            source["operation"] = json!("approve_request");
-            assert!(serde_json::from_value::<ActionSource>(source.clone()).is_err());
-            source["operation"] = json!("apply_request");
-            source.as_object_mut().unwrap().remove("stage");
+    fn fixture_request_actions_expose_only_source_owned_lifecycle_operations() {
+        for operation in ["approve_request", "reject_request", "request_revision"] {
+            let source = json!({"operation":operation, "stage":"review", "recordRef":"record", "etagRef":"record", "proposalVersion":1, "effectDigest":format!("sha256:{}", "a".repeat(64))});
             assert!(serde_json::from_value::<ActionSource>(source).is_err());
         }
-    }
-
-    #[test]
-    fn fixture_decisions_allow_redacted_presence_and_refuse_private_fields() {
-        let mut decisions = json!([{"stageId":"review", "kind":"request_revision", "decidedAt":"2026-09-09T00:00:00Z", "reasonPresent":true}]);
-        assert!(assert_request_decisions_shape(&decisions).is_ok());
-        decisions[0]["actorReference"] = json!("reviewer-reference");
-        assert!(assert_request_decisions_shape(&decisions).is_ok());
-        decisions[0]["actorReference"] = json!("x".repeat(512));
-        assert!(assert_request_decisions_shape(&decisions).is_ok());
-        for invalid in [Value::Null, json!(""), json!("x".repeat(513)), json!(false)] {
-            decisions[0]["actorReference"] = invalid;
-            assert!(assert_request_decisions_shape(&decisions).is_err());
-        }
-        decisions[0]["actorReference"] = json!("reviewer-reference");
-        decisions[0]["reason"] = json!(" สาเหตุ ");
-        assert!(assert_request_decisions_shape(&decisions).is_ok());
-        decisions[0]["actor"] = json!("private");
-        assert!(assert_request_decisions_shape(&decisions).is_err());
-        decisions[0].as_object_mut().unwrap().remove("actor");
-        decisions[0]["reasonPresent"] = json!(false);
-        assert!(assert_request_decisions_shape(&decisions).is_err());
+        let action: ActionSource = serde_json::from_value(json!({
+            "operation":"apply_request", "recordRef":"record", "etagRef":"record",
+            "proposalVersion":1,
+            "effectDigest":format!("sha256:{}", "a".repeat(64))
+        }))
+        .unwrap();
+        assert_eq!(
+            request_action_body(&action, &BTreeMap::new()).unwrap(),
+            json!({"proposalVersion":1,"effectDigest":format!("sha256:{}", "a".repeat(64))})
+        );
     }
 
     #[test]
@@ -6458,23 +6111,12 @@ mod tests {
             "bregState": "submitted",
             "proposalVersion": 1,
             "review": {
-                "stages": [{
-                    "id": "review",
-                    "approvals": 1,
-                    "excludeSubmitter": true,
-                    "excludePreviousReviewers": false
-                }],
-                "submittedAt": "2026-09-11T12:00:00Z",
-                "pendingStage": "review",
-                "stageEnteredAt": "2026-09-11T12:00:00Z"
+                "submission": {"state":"accepted","authority":"casework-a","requestId":"00000000-0000-4000-8000-000000000001","submissionDigest":format!("sha256:{}", "a".repeat(64)),"policy":{"id":"registry-correction","version":"1","digest":format!("sha256:{}", "b".repeat(64))}},
+                "result": {"state":"approved","resultId":"00000000-0000-4000-8000-000000000002","completedAt":"2026-09-11T12:00:00Z","availableUntil":"2026-10-11T12:00:00Z"},
+                "delivery": {"state":"reconciled","eventId":"00000000-0000-4000-8000-000000000003","receivedAt":"2026-09-11T12:00:01Z"},
+                "application": {"mode":"manual","state":"ready"},
+                "recovery": {"state":"none"}
             },
-            "reviewTiming": {
-                "firstSubmittedAt": "2026-09-11T12:00:00.000000Z",
-                "pausedMilliseconds": 0,
-                "pauseStartedAt": null,
-                "completedAt": null
-            },
-            "decisions": [],
             "editable": false,
             "actions": []
         });
@@ -6495,14 +6137,6 @@ mod tests {
             }
             request[key] = json!(format!("{key}-value"));
         }
-        request["review"]["pendingStage"] = Value::Null;
-        request["review"]["stageEnteredAt"] = Value::Null;
-        request["reviewTiming"]["completedAt"] = json!("2026-09-11T12:05:00Z");
-        assert_eq!(assert_request_record_metadata_shape(&request), Ok(()));
-        request["review"]["pendingStage"] = json!("review");
-        request["review"]["stageEnteredAt"] = json!("2026-09-11T12:00:00Z");
-        request["reviewTiming"]["completedAt"] = Value::Null;
-
         request["review"]["privateReviewer"] = json!("must-not-pass");
         assert_eq!(
             assert_request_record_metadata_shape(&request),
@@ -6512,37 +6146,23 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("privateReviewer");
-        request["review"]["stages"][0]["privateStageData"] = json!(true);
+        request["review"]["application"]["executor"] = json!("must-not-pass-for-manual");
         assert_eq!(
             assert_request_record_metadata_shape(&request),
             Err(FixtureError::ResponseShapeRefused)
         );
-        request["review"]["stages"][0]
+        request["review"]["application"]
             .as_object_mut()
             .unwrap()
-            .remove("privateStageData");
-        request["reviewTiming"]["privateTimingData"] = json!(true);
+            .remove("executor");
+        request["review"]["result"]["state"] = json!("changesrequested");
         assert_eq!(
             assert_request_record_metadata_shape(&request),
             Err(FixtureError::ResponseShapeRefused)
         );
-        request["reviewTiming"]
-            .as_object_mut()
-            .unwrap()
-            .remove("privateTimingData");
-        request["review"]["stages"][0]["approvals"] = json!(0);
-        assert_eq!(
-            assert_request_record_metadata_shape(&request),
-            Err(FixtureError::ResponseShapeRefused)
-        );
-        request["review"]["stages"][0]["approvals"] = json!(1);
-        request["reviewTiming"]["pausedMilliseconds"] = json!(-1);
-        assert_eq!(
-            assert_request_record_metadata_shape(&request),
-            Err(FixtureError::ResponseShapeRefused)
-        );
-        request["reviewTiming"]["pausedMilliseconds"] = json!(0);
-        request["reviewTiming"]["firstSubmittedAt"] = json!("not-a-timestamp");
+        request["review"]["result"]["state"] = json!("changesRequested");
+        request["review"]["submission"]["submissionDigest"] =
+            json!(format!("sha256:{}", "c".repeat(63)));
         assert_eq!(
             assert_request_record_metadata_shape(&request),
             Err(FixtureError::ResponseShapeRefused)
@@ -7834,7 +7454,6 @@ journeys:
             operation: Operation::SubmitRequest,
             query_kind: None,
             revision_kind: None,
-            request_stage: None,
             maximum_records: Some(1),
             access_profiles: vec!["submitter".to_owned()],
             default_access_profile: Some("submitter".to_owned()),
@@ -7891,7 +7510,6 @@ journeys:
                             "effectDigest": null,
                             "actions": [{
                                 "operation": "submit_request",
-                                "stage": null,
                                 "href": "/v1/records/requests/123e4567-e89b-12d3-a456-426614174000/actions/submit",
                                 "ifMatch": "\"breg-action-submit\""
                             }]
@@ -8034,7 +7652,6 @@ journeys:
             operation: Operation::SubmitRequest,
             query_kind: None,
             revision_kind: None,
-            request_stage: None,
             maximum_records: Some(1),
             access_profiles: vec!["submitter".to_owned()],
             default_access_profile: Some("submitter".to_owned()),

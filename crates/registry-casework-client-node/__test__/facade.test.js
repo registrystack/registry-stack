@@ -10,6 +10,58 @@ test('facade exports the maintained client and mapped error', () => {
   assert.equal(typeof client.CaseworkClientError, 'function');
 });
 
+test('review task context uses the exact route and forwards the optional source profile', async (context) => {
+  let observed;
+  const server = http.createServer((request, response) => {
+    observed = { path: request.url, headers: request.headers };
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end(JSON.stringify({
+        taskId: '00000000-0000-0000-0000-000000000000',
+        requestId: '10000000-0000-4000-8000-000000000001',
+        subject: {
+          source: 'professional-licences', type: 'change-request', id: 'correction-42', version: '1',
+          digest: `sha256:${'a'.repeat(64)}`,
+        },
+        requesterReference: 'correction-42',
+        policy: { id: 'registry-correction', version: '1', digest: `sha256:${'b'.repeat(64)}` },
+        context: {
+          strategy: 'source', reference: 'correction-42', bindingStatus: 'current',
+          projection: {
+            binding: { sourceRevision: 'revision-42', version: '1', generation: 'generation-42' },
+            displayReference: 'Correction 42', display: { record: 'licence-42' },
+          },
+        },
+      }));
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { port } = server.address();
+  const { CaseworkClient } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${port}/` });
+  const result = await client.reviewTaskContext(
+    'one-call-secret',
+    'staff',
+    '00000000-0000-0000-0000-000000000000',
+    'reviewer',
+  );
+
+  assert.equal(result.value.context.projection.displayReference, 'Correction 42');
+  assert.equal(observed.path, '/v1/review-tasks/00000000-0000-0000-0000-000000000000/context');
+  assert.equal(observed.headers.authorization, 'Bearer one-call-secret');
+  assert.equal(observed.headers['registry-casework-profile'], 'staff');
+  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
+});
+
 test('decision forwards the selected source profile with mutation headers', async (context) => {
   let observed;
   const server = http.createServer((request, response) => {
@@ -543,28 +595,7 @@ test('native client refuses nested unsafe integers before HTTP and preserves saf
   );
   assert.equal(requests.length, 0);
 
-  for (const unsafeInteger of [1e20, -1e20]) {
-    await assert.rejects(
-      client.createHostedItem('synthetic-token', 'administrator', 'unsafe-display', {
-        kind: 'review', requesterReference: 'requester', display: { nested: unsafeInteger },
-      }),
-      (error) => JSON.parse(error.message).kind === 'invalid_request',
-    );
-  }
   assert.equal(requests.length, 0);
-
-  const display = {
-    positiveBoundary: Number.MAX_SAFE_INTEGER,
-    negativeBoundary: Number.MIN_SAFE_INTEGER,
-    fraction: 1.25,
-  };
-  const outcome = await client.createHostedItem('synthetic-token', 'administrator', 'safe-display', {
-    kind: 'review', requesterReference: 'requester', display,
-  });
-  assert.deepEqual(outcome.value.display, display);
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].path, '/v1/hosted-items');
-  assert.deepEqual(requests[0].body.display, display);
 });
 
 function listen(server) {

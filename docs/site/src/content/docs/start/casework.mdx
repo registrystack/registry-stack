@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-11"
+last_reviewed: "2026-09-20"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -40,28 +40,27 @@ sequenceDiagram
     participant S as Staff
     participant V as Supervisor
 
-    R->>C: Submit one decision under a declared kind
-    C->>C: Pin the kind's display, outcomes, and retention
-    S->>C: Claim the item from a queue the team serves
+    R->>C: Create one request under an admitted review kind
+    C->>C: Pin policy identity and submission digest
+    S->>C: Claim the first review task
     S->>C: Record one declared outcome with a reason
-    R->>C: Poll the terminal feed
-    C-->>R: Return the outcome and an opaque actor reference
-    V->>C: Resolve the deciding person for one outcome
-    Note over C: Casework sends nothing outward. The requester polls
+    R->>C: Poll the result or result feed
+    C-->>R: Return the terminal result without reviewer identity
+    V->>C: Resolve one protected accountability event
+    Note over C: Polling-only producers configure no completion destination
 ```
 
-A [hosted item](../../reference/glossary/#hosted-item) lives in Casework alone, and the policy
-pinned at acceptance fixes what it can become, so publishing a changed policy later shapes new
-items and leaves this one as it was accepted. The Requester reads its own outcomes from the
-[terminal feed](../../reference/glossary/#terminal-feed) and sees an opaque actor reference; a
-Supervisor who leads a serving team resolves the deciding person through a separate audited route.
+A submitted-context review request lives in Casework, and the policy pinned at acceptance fixes what
+it can become. Publishing a changed policy later shapes new requests and leaves the accepted request
+unchanged. The producer reads its own results from polling or the result feed; a Supervisor who leads
+a serving team resolves protected accountability through a separate audited route.
 A source-backed item follows the same path with the registry in the loop: every field a caller sees
 comes from a read made for that caller, and the decision reaches the registry as an
 [attempt](../../reference/glossary/#attempt) made with the person's own token and selected source
 profile.
 
-{/* Evidence: crates/registry-casework/src/http.rs, create_hosted_item, decide_hosted_item, and
-    hosted_terminal_items; crates/registry-casework/src/hosted.rs, hosted_accountability;
+{/* Evidence: crates/registry-casework/src/http.rs, create_review_request, decide_review_task, and
+    review_result_feed; crates/registry-casework/src/review.rs, review_accountability;
     crates/registry-casework-core/src/adapter.rs, prepare_action and execute_prepared. */}
 
 ## Make your first request
@@ -76,14 +75,13 @@ caseworkctl dev tutorial-work/casework
 
 The installer verifies the release `SHA256SUMS` before it installs `casework` and `caseworkctl`
 into `~/.local/bin`. The `standalone-decision` template writes a project that declares one
-decision kind and needs no registry behind it. `caseworkctl dev` starts PostgreSQL in a container,
+review kind and admitted producer and needs no registry behind it. `caseworkctl dev` starts PostgreSQL in a container,
 starts the maintained stock identity provider and `casework`, seeds the directory, and prints a
 report carrying a ready status, the service URL, the token endpoint, and one credential directory
 per local client.
 
 [Decide your first work item](../../tutorials/first-casework/) takes it from there: submit one
-decision as a Requester, claim and decide it as Staff, and read the outcome back from the terminal
-feed.
+review as a producer, claim and decide its task as Staff, and read the result back.
 
 {/* Evidence: crates/registry-casework/install.sh; crates/registry-caseworkctl/src/project.rs, init;
     crates/registry-caseworkctl/src/dev/mod.rs, start and report. */}
@@ -92,7 +90,7 @@ feed.
 
 | What you want to do | Where to start |
 | --- | --- |
-| Author a policy: hosted kinds, sources, routing rules, and clocks | [Author a Casework policy](../../configure/casework/) |
+| Author a policy: review kinds, producers, sources, routing rules, and clocks | [Author a Casework policy](../../configure/casework/) |
 | Run a deployment: database, runtime file, directory, and recovery | [Deploy Registry Casework](../../operate/casework/) |
 | Understand the model behind an item | [How Registry Casework works](../../explanation/how-casework-works/) |
 | Integrate a Requester service | [Registry Stack client API reference](../../reference/client-api/) and the [Registry Casework API](../../reference/apis/registry-casework/) |

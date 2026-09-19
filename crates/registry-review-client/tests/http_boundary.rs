@@ -112,9 +112,10 @@ async fn serve(app: Router) -> (ReviewClient, tokio::task::JoinHandle<()>) {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = ReviewClient::new(ReviewClientConfig::new(
-        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
-    ))
+    let client = ReviewClient::new(
+        ReviewClientConfig::new(Url::parse(&format!("http://{address}/")).expect("fixture URL"))
+            .with_profile("producer"),
+    )
     .expect("client");
     (client, server)
 }
@@ -145,6 +146,7 @@ async fn create_posts_once_with_caller_auth_and_stable_idempotency_key() {
     assert_eq!(method, Method::POST);
     assert_eq!(path, "/v1/review-requests");
     assert_eq!(headers["authorization"], "Bearer one-call-secret");
+    assert_eq!(headers["registry-casework-profile"], "producer");
     assert_eq!(headers["idempotency-key"], "submission-7");
     assert_eq!(headers["accept"], "application/json");
     assert_eq!(headers["content-type"], "application/json");
@@ -274,6 +276,9 @@ async fn request_feed_and_cancel_use_the_product_neutral_routes() {
 
     let observations = observations.lock().expect("observations");
     assert_eq!(observations.len(), 3);
+    for (_, _, headers) in observations.iter() {
+        assert_eq!(headers["registry-casework-profile"], "producer");
+    }
     assert_eq!(observations[0].0, Method::GET);
     assert_eq!(
         observations[0].1,
@@ -507,9 +512,12 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
         ("media", ReviewProtocolFailure::MediaType),
         ("problem", ReviewProtocolFailure::Problem),
     ] {
-        let client = ReviewClient::new(ReviewClientConfig::new(
-            Url::parse(&format!("http://{address}/{prefix}/")).expect("fixture URL"),
-        ))
+        let client = ReviewClient::new(
+            ReviewClientConfig::new(
+                Url::parse(&format!("http://{address}/{prefix}/")).expect("fixture URL"),
+            )
+            .with_profile("producer"),
+        )
         .expect("client");
         let error = client
             .request(&token, Uuid::nil())
@@ -521,9 +529,12 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
         ));
     }
 
-    let client = ReviewClient::new(ReviewClientConfig::new(
-        Url::parse(&format!("http://{address}/valid-problem/")).expect("fixture URL"),
-    ))
+    let client = ReviewClient::new(
+        ReviewClientConfig::new(
+            Url::parse(&format!("http://{address}/valid-problem/")).expect("fixture URL"),
+        )
+        .with_profile("producer"),
+    )
     .expect("client");
     let error = client
         .request(&token, Uuid::nil())
@@ -538,6 +549,7 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
         ReviewClientConfig::new(
             Url::parse(&format!("http://{address}/oversize/")).expect("fixture URL"),
         )
+        .with_profile("producer")
         .with_max_response_bytes(32),
     )
     .expect("client");
@@ -547,9 +559,12 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
         .expect_err("oversize response");
     assert!(matches!(error, ReviewClientError::Transport { .. }));
 
-    let client = ReviewClient::new(ReviewClientConfig::new(
-        Url::parse(&format!("http://{address}/headers/")).expect("fixture URL"),
-    ))
+    let client = ReviewClient::new(
+        ReviewClientConfig::new(
+            Url::parse(&format!("http://{address}/headers/")).expect("fixture URL"),
+        )
+        .with_profile("producer"),
+    )
     .expect("client");
     let error = client
         .request(&token, Uuid::nil())

@@ -73,7 +73,7 @@ function lifecycleOperation() {
         properties:{
           proposalVersion:{type:'integer',format:'int64',minimum:1,maximum:4294967295},
           effectDigest:{type:'string',pattern:'^sha256:[0-9a-f]{64}$',description:'Digest of the immutable proposal effects displayed to the actor.'},
-          reason:{type:'string',maxLength:4096,pattern:'^[^\\u0000]*$',description:'Optional reviewer explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused.'},
+          reason:{type:'string',maxLength:4096,pattern:'^[^\\u0000]*$',description:'Optional application explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused.'},
         },
       },
     },
@@ -103,10 +103,8 @@ function otherCreateOperation() {
 const metadata = {id:'test-registry',version:'1',revision:`sha256:${'a'.repeat(64)}`,metadataVersion:'1',
   entities:[{id:'item',datasetIdentifier:'items',route:'items',schema:'/v1/schemas/item',
     operations:['create','patch','list','lookup','apply_request','tombstone','batch'].map(operation=>({operation,accessProfile:profile})),readableFields:fields.map(f=>f.id),
-    changeRequest:{planner:{kind:'declarative'},reviewMode:'staged',stages:[
-      {id:'legal-review',approvals:2,excludeSubmitter:true,excludePreviousReviewers:true},
-      {id:'operations',approvals:1,excludeSubmitter:false},
-    ],application:{mode:'automatic',allowedDispositions:['apply'],queueReasons:[]}}},
+    changeRequest:{planner:{kind:'declarative'},review:{authority:'casework',policyId:'address-review'},
+      onApproved:{mode:'automatic',executor:'breg-worker'},application:{preconditions:{request:[]}}}},
     {id:'other',datasetIdentifier:'other-items',route:'others',schema:'/v1/schemas/other',
       operations:[{operation:'create',accessProfile:profile}],readableFields:fields.map(f=>f.id)}],
   operations:[...['create','patch','list'].map(operation), lookupOperation(), lifecycleOperation(), tombstoneOperation(), batchOperation(), otherCreateOperation()],
@@ -122,9 +120,14 @@ const lifecycleRecord = JSON.stringify({
     request: {
       bregState: 'submitted', proposalVersion, editable: false, effectDigest: digest,
       submitterReference: 'opaque-submitter',
-      review: {stages:[{id:'legal-review',approvals:2,excludeSubmitter:true}],submittedAt:'2026-09-01T10:00:00Z',pendingStage:null,stageEnteredAt:null},
-      reviewTiming: {firstSubmittedAt:'2026-09-01T10:00:00Z',pausedMilliseconds:0,pauseStartedAt:null,completedAt:null},
-      decisions: [{stageId:'legal-review',kind:'approve',decidedAt:'2026-09-01T11:00:00Z',reasonPresent:false,actorReference:'opaque-reviewer'}],
+      proposal: {review:{authority:'casework',policyId:'address-review'}},
+      review: {
+        submission:{state:'accepted',authority:'casework',requestId:id,submissionDigest:digest,policy:{id:'address-review',version:'1',digest}},
+        result:{state:'approved',resultId:applicationId,completedAt:'2026-09-01T11:00:00Z',availableUntil:'2026-10-01T11:00:00Z'},
+        delivery:{state:'received',eventId:lifecycleRecordId,receivedAt:'2026-09-01T11:00:01Z'},
+        application:{mode:'automatic',state:'ready',executor:'breg-worker'},
+        recovery:{state:'none'},
+      },
       actions: [{operation:'apply_request', method:'POST', href:lifecycleActionHref, ifMatch:actionIfMatch, proposalVersion, effectDigest:digest}],
     },
   },
@@ -187,11 +190,9 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     const lookupDescriptor = contract.operations.find(op=>op.kind === 'lookup');
     assert.equal(lookupDescriptor.selectors[0].requestFields[0],'wide');
     assert.equal(lookupDescriptor.readPath.id,'related-items');
-    assert.equal(contract.changeRequestCapability('item').application.mode,'automatic');
-    assert.deepEqual(contract.changeRequestCapability('item').stages,[
-      {id:'legal-review',approvals:2,excludeSubmitter:true,excludePreviousReviewers:true},
-      {id:'operations',approvals:1,excludeSubmitter:false,excludePreviousReviewers:false},
-    ]);
+    assert.equal(contract.changeRequestCapability('item').review.policyId,'address-review');
+    assert.equal(contract.changeRequestCapability('item').onApproved.executor,'breg-worker');
+    assert.deepEqual(contract.changeRequestCapability('item').application.preconditions,{request:[]});
     list.id = 'forged';
     assert.equal(contract.operations.find(op=>op.kind === 'list').id,'records.item.list');
     const binding = contract.selectCreate('records.item.create',profile);
@@ -282,10 +283,9 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     const actions = client.lifecycleActionsJson(authority,lifecycleRecord);
     assert.equal(actions.length,1);
     assert.equal(actions[0].operation,'apply_request');
-    assert.equal(actions[0].stage,null);
     assert.equal(actions[0].href,lifecycleActionHref);
     const malformedLifecycleRecord = JSON.parse(lifecycleRecord);
-    malformedLifecycleRecord.data.request.review.stages[0].excludePreviousReviewers = null;
+    malformedLifecycleRecord.data.request.review.submission.submissionDigest = 'sha256:UPPERCASE';
     assert.throws(
       () => client.lifecycleActions(authority,malformedLifecycleRecord),
       error => error.kind === 'lifecycle_promotion' && error.code === 'binding',

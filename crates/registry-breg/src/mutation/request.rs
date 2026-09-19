@@ -93,7 +93,7 @@ fn request_action_etag_for_revisions(
     }
     let binding = json!({
         "authority": crate::idempotency::canonical_claim_context(profile, claims, package_revision)?,
-        "operationId": route.id, "stage": route.request_stage,
+        "operationId": route.id,
         "recordId": record_id, "recordRevision": record_revision,
         "workflowRevision": workflow_revision,
         "proposalVersion": workflow.current_version().get(),
@@ -1385,19 +1385,24 @@ impl MutationCoordinator {
         }
         if matches!(input.action, RequestActionBody::Submit) {
             let proposal = next.current_proposal().ok_or(MutationError::Unavailable)?;
-            crate::review_store::enqueue_submission(
-                transaction.transaction(),
-                registry,
-                &entity.id,
-                record_uuid,
-                proposal,
-                &actor_reference,
-                claims.human_identity(),
-                self.review_authorities
-                    .as_deref()
-                    .ok_or(MutationError::Unavailable)?,
-            )
-            .await?;
+            if matches!(
+                proposal.review_requirement(),
+                crate::model::CompiledChangeRequestReview::Required(_)
+            ) {
+                crate::review_store::enqueue_submission(
+                    transaction.transaction(),
+                    registry,
+                    &entity.id,
+                    record_uuid,
+                    proposal,
+                    &actor_reference,
+                    claims.human_identity(),
+                    self.review_authorities
+                        .as_deref()
+                        .ok_or(MutationError::Unavailable)?,
+                )
+                .await?;
+            }
             if let Some(grant) = claims.task_grant() {
                 crate::request_store::save_task_authority(
                     transaction.transaction(),

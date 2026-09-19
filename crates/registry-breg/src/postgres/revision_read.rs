@@ -1141,11 +1141,7 @@ fn valid_request_journal_operation(entity_id: &str, operation_id: &str) -> bool 
     let Some(action) = operation_id.strip_prefix(&prefix) else {
         return false;
     };
-    if matches!(action, "submit" | "revise" | "cancel" | "apply") {
-        return true;
-    }
-    let parts = action.split('.').collect::<Vec<_>>();
-    matches!(parts.as_slice(), ["stages", stage, "approve" | "reject" | "request_revision"] if !stage.is_empty())
+    matches!(action, "submit" | "revise" | "cancel" | "apply")
 }
 
 fn bounded_text(row: &tokio_postgres::Row, index: usize) -> Result<String, ReadServiceError> {

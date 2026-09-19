@@ -201,7 +201,6 @@ impl BRegRetainedRequestProposal {
     pub fn effect_digest(&self) -> Option<&BRegEffectDigest> {
         self.effect_digest.as_ref()
     }
-
 }
 
 impl fmt::Debug for BRegRetainedRequestProposal {

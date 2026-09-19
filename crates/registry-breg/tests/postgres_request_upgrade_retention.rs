@@ -83,7 +83,7 @@ async fn active_request_upgrade_guard_allows_unrelated_changes_and_refuses_relev
     assert_eq!(
         guard_successor_activation(&migration, &changed_pattern).await,
         Err(RequestRetentionError::ActiveProposalRequiresRebase),
-        "a changed native pattern cannot silently apply an approved frozen proposal"
+        "a changed native pattern cannot silently reinterpret a submitted frozen proposal"
     );
 
     migration_task.abort();
@@ -100,10 +100,7 @@ async fn active_current_request_details_are_pinned_before_terminal_state() {
         .await
         .expect("compiled schema installs");
 
-    for (index, state) in ["draft", "needs_changes", "submitted", "approved"]
-        .into_iter()
-        .enumerate()
-    {
+    for (index, state) in ["draft", "submitted"].into_iter().enumerate() {
         let request_id = Uuid::from_u128(0x0000000000000000000000000000d000 + index as u128);
         migration
             .execute(
@@ -948,7 +945,6 @@ async fn exact_request_retention_erases_all_bound_payload_copies_and_keeps_prove
             request_id: Uuid::parse_str(REQUEST_ID).unwrap(),
             after_proposal_version: None,
             limit: 1,
-            include_decision_reasons: false,
             authorized_target_entities: &authorized_targets,
         },
     )
@@ -976,7 +972,6 @@ async fn exact_request_retention_erases_all_bound_payload_copies_and_keeps_prove
             request_id: Uuid::parse_str(REQUEST_ID).unwrap(),
             after_proposal_version: None,
             limit: 1,
-            include_decision_reasons: false,
             authorized_target_entities: &BTreeSet::new(),
         },
     )
@@ -1114,19 +1109,15 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
         .expect("separate proposal version fixture inserts");
     migration
         .execute(
-            "INSERT INTO registry_internal.registry_request_decisions
-             (request_entity_id, request_id, proposal_version, decision_index, stage_id,
-              actor_reference, decision, effect_digest, decided_at, reason, reason_present)
-         SELECT request_entity_id, request_id, proposal_version, 0, 'review',
-                'reviewer-ref', 'request_revision', effect_digest, transaction_timestamp(), $3, true
-           FROM registry_internal.registry_request_proposals
-          WHERE request_entity_id = $1 AND request_id = $2",
+            "UPDATE registry_internal.registry_request_applications
+                SET reason = $3, reason_present = true
+              WHERE request_entity_id = $1 AND request_id = $2 AND proposal_version = 1",
             &[&REQUEST_ENTITY, &request_id, &reason_canary],
         )
         .await
-        .expect("decision reasons for both proposal versions insert");
+        .expect("application reason fixture updates");
     let event_payload = serde_json::to_vec(&json!({
-        "review": {"stageId": "review", "decision": "request_revision", "reason": reason_canary}
+        "application": {"reason": reason_canary}
     }))
     .expect("review event fixture serializes");
     let event_rows = migration
@@ -1164,32 +1155,10 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
     assert_eq!(planned.erasure.request_revision_snapshots, 4);
     assert_eq!(planned.erasure.outbox_payloads, 4);
     assert_eq!(planned.erasure.current_intake_rows, 1);
-    assert_eq!(planned.erasure.decision_reasons, 1);
+    assert_eq!(planned.erasure.application_reasons, 1);
     assert!(!serde_json::to_string(&planned)
         .unwrap()
         .contains(reason_canary));
-    let hidden_decisions = registry_breg::request_retention::load_retained_decisions(
-        &migration,
-        REQUEST_ENTITY,
-        request_id,
-        1,
-        false,
-    )
-    .await
-    .expect("decision facts read without reasons");
-    assert!(hidden_decisions[0].reason_present);
-    assert!(hidden_decisions[0].reason.is_none());
-    let visible_decisions = registry_breg::request_retention::load_retained_decisions(
-        &migration,
-        REQUEST_ENTITY,
-        request_id,
-        1,
-        true,
-    )
-    .await
-    .expect("authorized reason reads");
-    assert_eq!(visible_decisions[0].reason.as_deref(), Some(reason_canary));
-
     let before_history = history_commit_counts(&migration).await;
     let erased = service
         .erase(scope)
@@ -1199,20 +1168,6 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
     assert!(!serde_json::to_string(&erased)
         .unwrap()
         .contains(reason_canary));
-    let retained_decisions = registry_breg::request_retention::load_retained_decisions(
-        &migration,
-        REQUEST_ENTITY,
-        request_id,
-        1,
-        true,
-    )
-    .await
-    .expect("erased decision facts remain readable");
-    assert_eq!(retained_decisions.len(), 1);
-    assert_eq!(retained_decisions[0].stage_id, "review");
-    assert_eq!(retained_decisions[0].kind, "request_revision");
-    assert!(retained_decisions[0].reason_present);
-    assert!(retained_decisions[0].reason.is_none());
     let erased_event = migration
         .query_one(
             "SELECT payload IS NULL FROM registry_internal.registry_outbox
@@ -1226,16 +1181,6 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
         erased_event,
         "the selected proposal's reviewer reason event is erased"
     );
-    let other_version = registry_breg::request_retention::load_retained_decisions(
-        &migration,
-        REQUEST_ENTITY,
-        request_id,
-        2,
-        true,
-    )
-    .await
-    .expect("other proposal version remains retained");
-    assert_eq!(other_version[0].reason.as_deref(), Some(reason_canary));
     let after_history = history_commit_counts(&migration).await;
     assert_eq!(
         after_history.commits - before_history.commits,
@@ -2072,16 +2017,16 @@ fn change_request_project(
                 "set":{{"site":{{"fromField":"proposed-site"}}}},
                 "clear":["label"]
               }}],
-              "review":{{"stages":[{{"id":"review","approvals":1,"excludeSubmitter":true}}]}}
+              "review":{{"authority":"casework-main","policyId":"placement-correction"}},
+              "onApproved":{{"mode":"manual"}}
             }}
           }}{extra_entity}],
           "accessProfiles":[{{
             "id":"request-reviewer","default":true,"principalClaim":"principal","permissions":[{{
               "entity":"placement-correction-request",
-              "operations":["get","list","submit_request","approve_request","reject_request","request_revision"],
+              "operations":["get","list","submit_request"],
               "readableFields":["tenant","placement","proposed-site","reason"],
-              "rowBoundaries":[{{"field":"tenant","claim":"tenant","operator":"equals"}}],
-              "reviewStages":[{{"stage":"review","targets":[{{"rowBoundaries": [], "entity":"placement","readableFields":["site","label"]}}]}}]
+              "rowBoundaries":[{{"field":"tenant","claim":"tenant","operator":"equals"}}]
             }}]
           }},{{
             "id":"request-applier","principalClaim":"principal","permissions":[{{

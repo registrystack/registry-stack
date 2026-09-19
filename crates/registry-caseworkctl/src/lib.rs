@@ -609,15 +609,20 @@ fn semantic_diagnostic_location(error: &ConfigError) -> (&'static str, String, &
             "casework.yaml:/accessProfiles",
             "Correct the access profile roles, claims, and distinct scopes.",
         ),
-        ConfigError::HostedKinds => (
+        ConfigError::ReviewKinds => (
             "casework_project",
-            "casework.yaml:/hostedKinds",
-            "Correct the hosted kind or its access-profile references.",
+            "casework.yaml:/reviewKinds",
+            "Correct the unified review kind, stage, schema, outcome, retention, clock, or access-profile reference.",
+        ),
+        ConfigError::ReviewProducers => (
+            "casework_project",
+            "casework.yaml:/reviewProducers",
+            "Correct the producer identity, requester profile, source namespace, kind grant, recovery, or completion binding.",
         ),
         ConfigError::NoConfiguredWork => (
             "casework_project",
             "casework.yaml:/sources",
-            "Declare a source or hosted kind.",
+            "Declare a source or unified review kind.",
         ),
         ConfigError::Routing => (
             "casework_project",
@@ -994,6 +999,47 @@ mod tests {
         assert!(stdout.is_empty());
         assert!(String::from_utf8_lossy(&stderr)
             .starts_with("finding[casework.source-description.missing]"));
+    }
+
+    #[test]
+    fn review_connection_retention_diagnostic_names_the_incompatible_pair() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        project::init(&project, "standalone-decision").unwrap();
+        let policy_path = project.join("casework.yaml");
+        let mut policy: Value =
+            serde_norway::from_slice(&std::fs::read(&policy_path).unwrap()).unwrap();
+        policy["reviewProducers"][0]["recoveryDays"] = json!(91);
+        std::fs::write(&policy_path, serde_norway::to_string(&policy).unwrap()).unwrap();
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = main_entry_from(
+            [
+                OsString::from("caseworkctl"),
+                OsString::from("--format=json"),
+                OsString::from("check"),
+                project.into_os_string(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, ExitCode::from(1));
+        assert!(stderr.is_empty());
+        let report: Value = serde_json::from_slice(&stdout).unwrap();
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["code"], "casework.project.invalid");
+        assert_eq!(
+            diagnostic["path"],
+            "casework.yaml:/reviewProducers[0].recoveryDays"
+        );
+        assert!(diagnostic["message"].as_str().is_some_and(
+            |message| message.contains("recovery window no longer than result retention")
+        ));
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "Correct the named Casework project member, then retry."
+        );
     }
 
     #[test]

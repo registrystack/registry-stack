@@ -142,15 +142,11 @@ record.meta.entityTypeIdentifier.toUpperCase()
 continuation.registryIdentifier.toUpperCase()
 continuation.datasetIdentifier.toUpperCase()
 continuation.entityTypeIdentifier.toUpperCase()
-if (action.stage !== null) action.stage.toUpperCase()
-if (action.review !== null) action.review.targets.map((target) => target.operation)
 if (metadata.etag !== null) metadata.etag.toUpperCase()
-metadata.changeRequestCapability('person')?.stages?.map((stage) => stage.excludePreviousReviewers)
-record.data.request?.review?.stages.map((stage) => stage.approvals)
-record.data.request?.reviewTiming?.pausedMilliseconds.toFixed()
+const reviewRequirement = metadata.changeRequestCapability('person')?.review
+if (reviewRequirement && 'authority' in reviewRequirement) reviewRequirement.policyId.toUpperCase()
+record.data.request?.review?.submission.authority.toUpperCase()
 record.data.request?.submitterReference?.toUpperCase()
-record.data.request?.decisions?.map((decision) => decision.actorReference?.toUpperCase())
-record.data.request?.history?.proposals.flatMap((proposal) => proposal.decisions ?? []).map((decision) => decision.actorReference?.toUpperCase())
 client.executeLifecycleAction(action, 'actor-receipt').then((outcome) => outcome.value.actorReference?.toUpperCase())
 
 // @ts-expect-error Direct writes require metadata-selected opaque authority.
@@ -180,17 +176,14 @@ client.lookupRecordJson('people', 'identifier', '{"name":"Ada"}')
 client.lifecycleActionsJson(authority, '{}')
 client.executeLifecycleActionJson(action, 'exact-action')
 action.bodyJson.toUpperCase()
-action.reviewJson?.toUpperCase()
 metadata.operations.map(operation => operation.query?.filterableFields.map(field => field.apiName))
 metadata.operations.flatMap(operation => operation.readableRequestFields)
 metadata.operations.map(operation => operation.request.allowCreate === false)
 // @ts-expect-error Exact JSON methods require text, not already coerced JavaScript values.
 client.createRecordJson(create, { wide: 9007199254740992 }, 'exact-create')
 
-const reasonAction: BRegLifecycleAction = action.withReason("Please revise the submitted values.")
-client.executeLifecycleAction(reasonAction, "request-revision-1")
-// @ts-expect-error review reasons must be strings
-action.withReason(null)
+const reasonAction: BRegLifecycleAction = action.withReason("Applied after external approval.")
+client.executeLifecycleAction(reasonAction, "apply-1")
 
 metadata.selectAttachments('company', 'company-writer').map((value) => value.slotIdentifier)
 slot.prepareUpload('application/pdf', Buffer.from('%PDF-1.7'))

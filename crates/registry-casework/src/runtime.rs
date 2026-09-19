@@ -97,6 +97,34 @@ impl ReviewCompletionDispatcher {
     }
 }
 
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn dispatch_review_completions_once_for_test(
+    store: PostgresStore,
+    destination_id: &str,
+    url: String,
+    bearer_token: &str,
+) -> Result<(), crate::ReviewRuntimeError> {
+    let dispatcher = ReviewCompletionDispatcher {
+        store,
+        client: reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("build test review completion client"),
+        targets: BTreeMap::from([(
+            destination_id.to_owned(),
+            Arc::new(ReviewCompletionTarget {
+                url,
+                bearer_token: zeroize::Zeroizing::new(bearer_token.to_owned()),
+                timeout: Duration::from_secs(30),
+                maximum_attempts: 3,
+                retry: Duration::from_secs(1),
+            }),
+        )]),
+    };
+    dispatcher.pass().await
+}
+
 async fn deliver_review_completion(
     client: &reqwest::Client,
     target: &ReviewCompletionTarget,
@@ -257,9 +285,6 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             }
             retention_ticks = (retention_ticks + 1) % 30;
             if retention_ticks == 0 {
-                if let Err(error) = worker_service.erase_expired_hosted().await {
-                    tracing::warn!(error = %error, "Casework hosted retention pass did not complete");
-                }
                 if let Err(error) = worker_service.erase_expired_reviews().await {
                     tracing::warn!(error = %error, "Casework review retention pass did not complete");
                 }
@@ -665,7 +690,7 @@ mod tests {
     use crate::service::AuditPublisherHealth;
 
     #[tokio::test]
-    async fn review_completion_delivery_is_minimal_authenticated_and_stable_across_retries() {
+    async fn review_completion_delivery_is_minimal_authenticated_and_stable_after_lost_ack() {
         let server = MockServer::start().await;
         let event = registry_casework_core::ReviewCompletion {
             event_type: registry_casework_core::ReviewCompletionType::ReviewCompleted,
@@ -687,8 +712,24 @@ mod tests {
             ))
             .and(header("registry-recipient-binding", "registry-service"))
             .and(body_json(&event))
+            .respond_with(ResponseTemplate::new(503))
+            .with_priority(1)
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/completion"))
+            .and(header("authorization", "Bearer dispatch-secret"))
+            .and(header(
+                "idempotency-key",
+                "11111111-1111-4111-8111-111111111111",
+            ))
+            .and(header("registry-recipient-binding", "registry-service"))
+            .and(body_json(&event))
             .respond_with(ResponseTemplate::new(204))
-            .expect(2)
+            .with_priority(2)
+            .expect(1)
             .mount(&server)
             .await;
         let client = reqwest::Client::builder()
@@ -708,7 +749,7 @@ mod tests {
             recipient_binding: "registry-service".to_owned(),
         };
 
-        assert!(deliver_review_completion(&client, &target, &delivery).await);
+        assert!(!deliver_review_completion(&client, &target, &delivery).await);
         assert!(deliver_review_completion(&client, &target, &delivery).await);
     }
 

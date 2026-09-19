@@ -213,7 +213,6 @@ fn lifecycle_condition_matches(
     let EventConditionSource::RequestLifecycle {
         transitions,
         to_states,
-        stages,
     } = condition
     else {
         return Err(OutboxError::InvalidProjection);
@@ -223,9 +222,6 @@ fn lifecycle_condition_matches(
     }
     if !to_states.is_empty() && !to_states.contains(event.to_state) {
         return Ok(false);
-    }
-    if !stages.is_empty() {
-        return Err(OutboxError::InvalidProjection);
     }
     Ok(true)
 }

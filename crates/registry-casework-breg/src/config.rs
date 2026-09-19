@@ -39,6 +39,7 @@ type ValidatedDescription = (
     String,
     String,
     RoutingSourceMetadata,
+    Vec<RoutingFieldDescriptor>,
     Option<RoutingFieldDescriptor>,
     String,
 );
@@ -126,8 +127,14 @@ pub fn build_adapter(
         return Err(SourceAdapterError::Invalid);
     }
     let description_bytes = read_description(project_root, &source.description)?;
-    let (entity, route, routing_metadata, display_reference, expected_registry_revision) =
-        validate_description(source, &description_bytes)?;
+    let (
+        entity,
+        route,
+        routing_metadata,
+        context_projection,
+        display_reference,
+        expected_registry_revision,
+    ) = validate_description(source, &description_bytes)?;
 
     let client_id_secret = resolve_secret(secrets, &binding.client_id_ref)?;
     let client_id = std::str::from_utf8(client_id_secret.expose_secret())
@@ -170,6 +177,7 @@ pub fn build_adapter(
             entity,
             route,
             routing_metadata,
+            context_projection,
             display_reference,
             expected_registry_revision,
             binding_generation: generation,
@@ -354,6 +362,16 @@ fn validate_description(
         .ok_or(SourceAdapterError::Invalid)?;
     let (routing_metadata, fields_by_name) =
         routing_metadata(request, &source.requests[0].projection)?;
+    let context_projection = source.requests[0]
+        .context_projection
+        .iter()
+        .map(|field| {
+            fields_by_name
+                .get(field)
+                .cloned()
+                .ok_or(SourceAdapterError::Invalid)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let display_reference = source.requests[0]
         .display_reference
         .as_ref()
@@ -376,6 +394,7 @@ fn validate_description(
         entity.to_owned(),
         route.to_owned(),
         routing_metadata,
+        context_projection,
         display_reference,
         expected_registry_revision,
     ))
@@ -387,7 +406,7 @@ pub fn validate_description_input(
     source: &SourcePolicy,
     bytes: &[u8],
 ) -> Result<RoutingSourceMetadata, SourceAdapterError> {
-    let (_, _, routing_metadata, _, _) = validate_description(source, bytes)?;
+    let (_, _, routing_metadata, _, _, _) = validate_description(source, bytes)?;
     Ok(routing_metadata)
 }
 
@@ -528,6 +547,11 @@ fn binding_generation(
     {
         identity["displayReference"] =
             serde_json::to_value(display_reference).map_err(|_| SourceAdapterError::Invalid)?;
+    }
+    if let Some(request) = source.requests.first() {
+        if !request.context_projection.is_empty() {
+            identity["contextProjection"] = json!(request.context_projection);
+        }
     }
     let identity = serde_json::to_vec(&identity).map_err(|_| SourceAdapterError::Invalid)?;
     Ok(sha256_uri(&identity))
@@ -715,7 +739,7 @@ mod tests {
     fn imported_description_maps_only_the_configured_routing_projection() {
         let mut source = source();
         source.requests[0].projection = vec!["region".to_owned()];
-        let (_, _, metadata, _, _) =
+        let (_, _, metadata, _, _, _) =
             validate_description(&source, &description("correction")).unwrap();
         assert!(metadata.stages.is_empty());
         assert_eq!(metadata.fields.len(), 1);
@@ -745,13 +769,27 @@ mod tests {
             Some(registry_casework_core::DisplayReferencePolicy {
                 field: "region".to_owned(),
             });
-        let (_, _, _, reference, _) =
+        let (_, _, _, _, reference, _) =
             validate_description(&source, &description("correction")).unwrap();
         let reference = reference.expect("configured reference");
         assert_eq!(reference.field, "region");
         assert_eq!(reference.api_name, "serviceRegion");
 
         source.requests[0].display_reference.as_mut().unwrap().field = "missing".to_owned();
+        assert!(validate_description(&source, &description("correction")).is_err());
+    }
+
+    #[test]
+    fn context_projection_is_an_explicit_imported_allowlist() {
+        let mut source = source();
+        source.requests[0].context_projection = vec!["region".to_owned()];
+        let (_, _, _, context, _, _) =
+            validate_description(&source, &description("correction")).unwrap();
+        assert_eq!(context.len(), 1);
+        assert_eq!(context[0].field, "region");
+        assert_eq!(context[0].api_name, "serviceRegion");
+
+        source.requests[0].context_projection = vec!["not-imported".to_owned()];
         assert!(validate_description(&source, &description("correction")).is_err());
     }
 

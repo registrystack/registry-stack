@@ -216,39 +216,46 @@ export interface RegistryRecord {
   readonly [member: string]: JsonValue | undefined
 }
 
-export type BRegRequestReviewStage = JsonObject & {
-  readonly id: string
-  readonly approvals: SafeInteger
-  readonly excludeSubmitter: boolean
-  readonly excludePreviousReviewers?: boolean
-}
-export type BRegRequestReviewState = JsonObject & {
-  readonly stages: ReadonlyArray<BRegRequestReviewStage>
-  readonly submittedAt: string
-  readonly pendingStage: string | null
-  readonly stageEnteredAt: string | null
-}
-export type BRegRequestReviewTiming = JsonObject & {
-  readonly firstSubmittedAt: string
-  readonly pausedMilliseconds: SafeInteger
-  readonly pauseStartedAt: string | null
-  readonly completedAt: string | null
-}
-export type BRegRequestDecision = JsonObject & {
-  readonly stageId: string
-  readonly kind: 'approve' | 'reject' | 'request_revision'
-  readonly decidedAt: string
-  readonly reasonPresent: boolean
-  readonly reason?: string
-  readonly actorReference?: string
-}
-export type BRegRequestState = 'draft' | 'submitted' | 'approved' | 'needs_changes' | 'rejected' | 'canceled' | 'applied'
 export type BRegRequestResultReferenceData = JsonObject & {
   readonly targetEntityId: string
   readonly targetRecordId: string
   /** Revision written by the application, not a current ETag or precondition. */
   readonly targetRevision: SafeInteger
 }
+export type BRegRequestState = 'draft' | 'submitted' | 'cancelled' | 'applied' | 'superseded'
+export type BRegRequestReviewRequirement =
+  | Readonly<{ mode: 'none' }>
+  | Readonly<{ authority: string; policyId: string }>
+export type BRegExternalReviewStatus = Readonly<{
+  submission: Readonly<{
+    state: 'pending' | 'accepted' | 'uncertain' | 'cancelling' | 'cancelled' | 'failed'
+    authority: string
+    requestId?: string
+    submissionDigest?: string
+    policy?: Readonly<{ id: string; version: string; digest: string }>
+  }>
+  result: Readonly<{
+    state: 'pending' | 'approved' | 'rejected' | 'changesRequested' | 'answered' | 'cancelled' | 'superseded' | 'unavailable'
+    resultId?: string
+    completedAt?: string
+    availableUntil?: string
+  }>
+  delivery: Readonly<{
+    state: 'polling' | 'received' | 'reconciled' | 'unmatched' | 'exhausted'
+    eventId?: string
+    receivedAt?: string
+  }>
+  application: Readonly<{
+    mode: 'manual' | 'automatic'
+    state: 'awaitingReview' | 'ready' | 'queued' | 'applying' | 'applied' | 'blocked'
+    executor?: string
+    applicationId?: string
+  }>
+  recovery: Readonly<{
+    state: 'none' | 'submissionUnknown' | 'receiptPending' | 'receiptRecovered' | 'operatorAttention'
+    code?: string
+  }>
+}>
 export type BRegRetainedRequestProposal = JsonObject & {
   readonly requestEntityId: string
   readonly requestId: string
@@ -261,7 +268,7 @@ export type BRegRetainedRequestProposal = JsonObject & {
   readonly resultLinkCount: SafeInteger
   readonly resultLinks: ReadonlyArray<BRegRequestResultReferenceData>
   readonly effectDigest?: string
-  readonly decisions?: ReadonlyArray<BRegRequestDecision>
+  readonly proposal?: Readonly<{ review: BRegRequestReviewRequirement }>
 }
 export type BRegRetainedRequestHistory = JsonObject & {
   readonly proposals: ReadonlyArray<BRegRetainedRequestProposal>
@@ -271,17 +278,15 @@ export type BRegRequestMetadata = JsonObject & {
   readonly bregState: BRegRequestState
   readonly proposalVersion: SafeInteger
   readonly effectDigest?: string | null
-  readonly proposal?: JsonObject | null
+  readonly proposal?: Readonly<{ review: BRegRequestReviewRequirement }> | null
   readonly editable: boolean
   readonly detailErased?: true
   readonly actions?: ReadonlyArray<JsonObject>
   readonly application?: JsonObject | null
   readonly history?: BRegRetainedRequestHistory | null
-  readonly review?: BRegRequestReviewState
-  readonly reviewTiming?: BRegRequestReviewTiming
+  readonly review?: BRegExternalReviewStatus
   readonly submitterReference?: string
   readonly applierReference?: string
-  readonly decisions?: ReadonlyArray<BRegRequestDecision>
 }
 
 export interface RecordMetadata {
@@ -348,17 +353,6 @@ export interface RemovePatchOperation {
   op: 'remove'
   field: string
 }
-
-export interface LifecycleReviewTarget {
-  entityIdentifier: string
-  recordIdentifier: string
-  operation: 'create' | 'patch'
-  baseRevision?: SafeInteger
-  before?: Readonly<Record<string, JsonValue>>
-  after: Readonly<Record<string, JsonValue>>
-}
-
-export interface LifecycleReview { targets: ReadonlyArray<LifecycleReviewTarget> }
 
 export type LifecycleReceipt = JsonObject & {
   readonly id: string
@@ -618,17 +612,13 @@ export interface BRegChangeRequestCapability {
     readonly possibleWriteCount: SafeInteger | null
     readonly possibleWriteOperations: ReadonlyArray<string>
   }
-  readonly reviewMode: 'none' | 'staged'
-  readonly stages: ReadonlyArray<{
-    readonly id: string
-    readonly approvals: SafeInteger
-    readonly excludeSubmitter: boolean
-    readonly excludePreviousReviewers: boolean
-  }> | null
+  readonly review: BRegRequestReviewRequirement
+  readonly onApproved: {
+    readonly mode: 'manual' | 'automatic'
+    readonly executor: string | null
+  }
   readonly application: {
-    readonly mode: 'manual' | 'automatic' | 'planner'
-    readonly allowedDispositions: ReadonlyArray<'apply' | 'queue'>
-    readonly queueReasons: ReadonlyArray<{ readonly code: string; readonly label: string }>
+    readonly preconditions: JsonValue | null
   }
 }
 
@@ -766,12 +756,9 @@ export declare class BRegLifecycleAction {
   private constructor()
   private readonly __opaque: void
   readonly operation: string
-  readonly stage: string | null
   readonly href: string
   readonly bodyJson: string
-  readonly reviewJson: string | null
   readonly body: JsonObject
-  readonly review: LifecycleReview | null
 }
 
 /** Inert bounded Create evidence. Persist these bytes with owner-only access. */

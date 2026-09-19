@@ -29,7 +29,6 @@ const MAXIMUM_REASON_BYTES: usize = 2_000;
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AssignmentOrigin {
     Source,
-    Hosted,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -730,13 +729,16 @@ impl PostgresStore {
         item_id: Uuid,
     ) -> Result<AssignmentOrigin, StoreError> {
         let client = self.client().await?;
-        let row=client.query_one("SELECT EXISTS(SELECT 1 FROM casework_items WHERE item_id=$1 AND erased_at IS NULL),EXISTS(SELECT 1 FROM casework_hosted_items WHERE item_id=$1)",&[&item_id]).await?;
-        match (row.get(0), row.get(1)) {
-            (true, false) => Ok(AssignmentOrigin::Source),
-            (false, true) => Ok(AssignmentOrigin::Hosted),
-            (false, false) => Err(StoreError::NotFound),
-            _ => Err(StoreError::Corrupt),
-        }
+        let exists: bool = client
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM casework_items WHERE item_id=$1 AND erased_at IS NULL)",
+                &[&item_id],
+            )
+            .await?
+            .get(0);
+        exists
+            .then_some(AssignmentOrigin::Source)
+            .ok_or(StoreError::NotFound)
     }
 
     pub(crate) async fn caseload_candidates(
@@ -773,7 +775,7 @@ impl PostgresStore {
         let desired = limit.clamp(1, 100);
         let query_limit = i64::try_from(desired + 1).map_err(|_| StoreError::Invalid)?;
         let rows=transaction.query(
-            "SELECT origin,item_id FROM (SELECT 'source'::text origin,i.item_id,i.queue_id FROM casework_items i WHERE i.erased_at IS NULL AND i.holder_issuer=$1 AND i.holder_subject=$2 AND i.state NOT IN ('completed','superseded','cancelled') UNION ALL SELECT 'hosted'::text origin,i.item_id,i.queue_id FROM casework_hosted_items i WHERE i.holder_issuer=$1 AND i.holder_subject=$2 AND i.state IN ('open','claimed')) candidates WHERE ($3::text IS NULL OR queue_id=$3) AND item_id>$4 AND EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=candidates.queue_id AND m.issuer=$5 AND m.subject=$6 AND m.membership_kind='supervisor') ORDER BY item_id LIMIT $7",
+            "SELECT 'source'::text origin,i.item_id FROM casework_items i WHERE i.erased_at IS NULL AND i.holder_issuer=$1 AND i.holder_subject=$2 AND i.state NOT IN ('completed','superseded','cancelled') AND ($3::text IS NULL OR i.queue_id=$3) AND i.item_id>$4 AND EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=i.queue_id AND m.issuer=$5 AND m.subject=$6 AND m.membership_kind='supervisor') ORDER BY i.item_id LIMIT $7",
             &[&movement.from.issuer,&movement.from.subject,&movement.queue_id,&after,&actor.principal.issuer,&actor.principal.subject,&query_limit],
         ).await?;
         let more = rows.len() > desired;
@@ -784,7 +786,6 @@ impl PostgresStore {
                 Ok(AssignmentCandidate {
                     origin: match row.get::<_, String>(0).as_str() {
                         "source" => AssignmentOrigin::Source,
-                        "hosted" => AssignmentOrigin::Hosted,
                         _ => return Err(StoreError::Corrupt),
                     },
                     item_id: row.get(1),
@@ -843,7 +844,7 @@ impl PostgresStore {
         let limit = i64::try_from(limit.clamp(1, 100)).map_err(|_| StoreError::Invalid)?;
         let rows = client
             .query(
-                "SELECT origin,item_id FROM (SELECT 'source'::text AS origin,i.item_id FROM casework_items i WHERE i.erased_at IS NULL AND i.state='claimed' AND i.holder_issuer IS NOT NULL AND NOT EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=i.queue_id AND m.issuer=i.holder_issuer AND m.subject=i.holder_subject AND m.membership_kind='staff') AND NOT EXISTS(SELECT 1 FROM casework_attempts a WHERE a.item_id=i.item_id AND a.state IN ('pending','uncertain')) UNION ALL SELECT 'hosted'::text AS origin,i.item_id FROM casework_hosted_items i WHERE i.state='claimed' AND i.holder_issuer IS NOT NULL AND NOT EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=i.queue_id AND m.issuer=i.holder_issuer AND m.subject=i.holder_subject AND m.membership_kind='staff')) candidates ORDER BY item_id LIMIT $1",
+                "SELECT 'source'::text AS origin,i.item_id FROM casework_items i WHERE i.erased_at IS NULL AND i.state='claimed' AND i.holder_issuer IS NOT NULL AND NOT EXISTS(SELECT 1 FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id WHERE q.queue_id=i.queue_id AND m.issuer=i.holder_issuer AND m.subject=i.holder_subject AND m.membership_kind='staff') AND NOT EXISTS(SELECT 1 FROM casework_attempts a WHERE a.item_id=i.item_id AND a.state IN ('pending','uncertain')) ORDER BY i.item_id LIMIT $1",
                 &[&limit],
             )
             .await?;
@@ -851,7 +852,6 @@ impl PostgresStore {
         for row in rows {
             let origin = match row.get::<_, String>(0).as_str() {
                 "source" => AssignmentOrigin::Source,
-                "hosted" => AssignmentOrigin::Hosted,
                 _ => return Err(StoreError::Corrupt),
             };
             if self
@@ -866,19 +866,13 @@ impl PostgresStore {
 
     async fn release_ineligible_assignment(
         &self,
-        origin: AssignmentOrigin,
+        _origin: AssignmentOrigin,
         item_id: Uuid,
     ) -> Result<bool, StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        let table = match origin {
-            AssignmentOrigin::Source => "casework_items",
-            AssignmentOrigin::Hosted => "casework_hosted_items",
-        };
-        let visible = match origin {
-            AssignmentOrigin::Source => " AND erased_at IS NULL",
-            AssignmentOrigin::Hosted => "",
-        };
+        let table = "casework_items";
+        let visible = " AND erased_at IS NULL";
         let row = transaction
             .query_opt(
                 &format!(
@@ -905,15 +899,13 @@ impl PostgresStore {
             transaction.commit().await?;
             return Ok(false);
         }
-        if origin == AssignmentOrigin::Source {
-            match ensure_no_source_attempt(&transaction, item_id).await {
-                Ok(()) => {}
-                Err(StoreError::AttemptPending) => {
-                    transaction.commit().await?;
-                    return Ok(false);
-                }
-                Err(error) => return Err(error),
+        match ensure_no_source_attempt(&transaction, item_id).await {
+            Ok(()) => {}
+            Err(StoreError::AttemptPending) => {
+                transaction.commit().await?;
+                return Ok(false);
             }
+            Err(error) => return Err(error),
         }
         let revision = row
             .get::<_, i64>(4)
@@ -941,33 +933,18 @@ impl PostgresStore {
             "reason": "directory_membership_changed",
             "directoryRevision": directory_revision,
         });
-        match origin {
-            AssignmentOrigin::Source => {
-                let updated = transaction
-                    .query_one("SELECT * FROM casework_items WHERE item_id=$1", &[&item_id])
-                    .await?;
-                crate::store::append_item_event(
-                    &transaction,
-                    &crate::store::row_to_item(&updated)?,
-                    HistoryKind::Released,
-                    Some(&system_actor),
-                    &system_actor.profile_id,
-                    detail,
-                )
-                .await?;
-            }
-            AssignmentOrigin::Hosted => {
-                crate::hosted::append_hosted_history(
-                    &transaction,
-                    item_id,
-                    revision,
-                    "released",
-                    &system_actor,
-                    detail,
-                )
-                .await?;
-            }
-        }
+        let updated = transaction
+            .query_one("SELECT * FROM casework_items WHERE item_id=$1", &[&item_id])
+            .await?;
+        crate::store::append_item_event(
+            &transaction,
+            &crate::store::row_to_item(&updated)?,
+            HistoryKind::Released,
+            Some(&system_actor),
+            &system_actor.profile_id,
+            detail,
+        )
+        .await?;
         transaction.commit().await?;
         Ok(true)
     }
@@ -1085,14 +1062,8 @@ impl PostgresStore {
             &request_hash,
         )
         .await?;
-        let table = match origin {
-            AssignmentOrigin::Source => "casework_items",
-            AssignmentOrigin::Hosted => "casework_hosted_items",
-        };
-        let visible = match origin {
-            AssignmentOrigin::Source => " AND erased_at IS NULL",
-            AssignmentOrigin::Hosted => "",
-        };
+        let table = "casework_items";
+        let visible = " AND erased_at IS NULL";
         let sql=format!("SELECT queue_id,state,holder_issuer,holder_subject,assignment_owner_issuer,assignment_owner_subject,revision FROM {table} WHERE item_id=$1{visible} FOR UPDATE");
         let row = transaction
             .query_opt(&sql, &[&item_id])
@@ -1197,40 +1168,25 @@ impl PostgresStore {
             staffing_diagnostic: (!eligible).then_some(StaffingDiagnostic::NoCoverAvailable),
         };
         let detail = json!({"previousHolder":holder,"assignment":assignment,"reason":reason});
-        match origin {
-            AssignmentOrigin::Source => {
-                let updated = transaction
-                    .query_one("SELECT * FROM casework_items WHERE item_id=$1", &[&item_id])
-                    .await?;
-                let item = crate::store::row_to_item(&updated)?;
-                let history_kind = match kind {
-                    "assigned" => HistoryKind::Assigned,
-                    "delegated" => HistoryKind::Delegated,
-                    "caseload_moved" => HistoryKind::CaseloadMoved,
-                    _ => return Err(StoreError::Corrupt),
-                };
-                crate::store::append_item_event(
-                    &transaction,
-                    &item,
-                    history_kind,
-                    Some(actor),
-                    &actor.profile_id,
-                    detail,
-                )
-                .await?;
-            }
-            AssignmentOrigin::Hosted => {
-                crate::hosted::append_hosted_history(
-                    &transaction,
-                    item_id,
-                    next,
-                    kind,
-                    actor,
-                    detail,
-                )
-                .await?;
-            }
-        }
+        let updated = transaction
+            .query_one("SELECT * FROM casework_items WHERE item_id=$1", &[&item_id])
+            .await?;
+        let item = crate::store::row_to_item(&updated)?;
+        let history_kind = match kind {
+            "assigned" => HistoryKind::Assigned,
+            "delegated" => HistoryKind::Delegated,
+            "caseload_moved" => HistoryKind::CaseloadMoved,
+            _ => return Err(StoreError::Corrupt),
+        };
+        crate::store::append_item_event(
+            &transaction,
+            &item,
+            history_kind,
+            Some(actor),
+            &actor.profile_id,
+            detail,
+        )
+        .await?;
         let result = AssignmentMutation {
             origin,
             item_id,
@@ -1753,20 +1709,16 @@ impl CaseworkService {
         source_profile_id: Option<&str>,
         token: &str,
         item_id: Uuid,
-        origin: AssignmentOrigin,
+        _origin: AssignmentOrigin,
     ) -> Result<WorkItem, ServiceError> {
-        match origin {
-            AssignmentOrigin::Source => self
-                .caller_item(
-                    actor,
-                    item_id,
-                    source_profile_id.ok_or(ServiceError::NotFound)?,
-                    token,
-                )
-                .await
-                .map(|value| value.0),
-            AssignmentOrigin::Hosted => self.hosted_work_item(actor, item_id).await,
-        }
+        self.caller_item(
+            actor,
+            item_id,
+            source_profile_id.ok_or(ServiceError::NotFound)?,
+            token,
+        )
+        .await
+        .map(|value| value.0)
     }
 
     pub async fn erase_expired_assignment_cursors(&self) -> Result<usize, ServiceError> {

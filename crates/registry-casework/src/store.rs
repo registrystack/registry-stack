@@ -656,7 +656,6 @@ impl PostgresStore {
                     first_observed_at: now,
                     passive_due_at: due,
                     updated_at: now,
-                    hosted: None,
                     routing: None,
                     clock_occurrences: Vec::new(),
                     actions: Vec::new(),
@@ -3274,7 +3273,6 @@ pub(crate) fn row_to_item(row: &Row) -> Result<WorkItem, StoreError> {
         first_observed_at: row.get("first_observed_at"),
         passive_due_at: row.get("passive_due_at"),
         updated_at: row.get("updated_at"),
-        hosted: None,
         routing: None,
         clock_occurrences: Vec::new(),
         actions: Vec::new(),
@@ -3426,7 +3424,6 @@ fn occurrence_kind_name(value: OccurrenceKind) -> &'static str {
     match value {
         OccurrenceKind::Review => "review",
         OccurrenceKind::Application => "application",
-        OccurrenceKind::Hosted => "hosted",
     }
 }
 fn parse_occurrence(value: &str) -> Result<OccurrenceKind, StoreError> {
@@ -3615,7 +3612,7 @@ pub enum StoreError {
     #[error("the request is invalid")]
     Invalid,
     #[error(transparent)]
-    HostedValidation(#[from] registry_casework_core::HostedValidationError),
+    ReviewValidation(#[from] registry_casework_core::ReviewValidationError),
     #[error("the pagination cursor is invalid")]
     CursorInvalid,
     #[error("the pagination cursor has expired")]

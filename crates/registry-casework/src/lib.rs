@@ -4,7 +4,6 @@ mod assignment;
 mod auth;
 mod clocks;
 mod config;
-mod hosted;
 mod http;
 pub mod problem;
 mod review;
@@ -20,7 +19,6 @@ pub(crate) use clocks::{reconcile_clock_observation, ResolvedClockPolicy};
 
 pub use auth::*;
 pub use config::*;
-pub use hosted::*;
 pub use http::*;
 pub use review::*;
 pub use runtime::*;

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-13"
+last_reviewed: "2026-09-20"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -1088,7 +1088,7 @@ attributes are `kind`, `code`, `plan_refusal`, `refusal_code`, `status`, `trace_
     crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi,
     crates/registry-breg-client-py/src/lib.rs, crates/registry-breg-client-node/src/lib.rs,
     crates/registry-breg-client-node/client.js, crates/registry-breg-client/src/error.rs,
-    crates/registry-breg-client-node/client.d.ts, JsonOutcome, valueJson, bodyJson, reviewJson,
+    crates/registry-breg-client-node/client.d.ts, JsonOutcome, valueJson, bodyJson,
     crates/registry-breg-client-node/README.md,
     crates/registry-breg-client-node/__test__/exact-json.test.js,
     crates/registry-breg-client/tests/exact_json.rs, crates/registry-breg-client/src/lib.rs,
@@ -1097,7 +1097,7 @@ attributes are `kind`, `code`, `plan_refusal`, `refusal_code`, `status`, `trace_
 
 ## Registry Casework
 
-The Casework client owns Casework routes, its work item, hosted item, and directory types, its closed
+The Casework client owns source work-item, unified review, and directory routes and types, its closed
 problem catalogue, and its attempt recovery contract. It carries no Base Registry Engine routes or
 protocol types, even where the deployment it calls reads source-backed work from a registry.
 
@@ -1116,7 +1116,7 @@ let client = CaseworkClient::new(CaseworkClientConfig::new(
 from registry_client import casework
 
 client = casework.CaseworkClient("https://casework.example.invalid/")
-page = client.list_hosted_work_items(token, "staff", {"view": "mine", "limit": 25})
+page = client.review_tasks(token, "staff", {"limit": 25})
 ```
 
 ```js
@@ -1144,8 +1144,8 @@ certificates.
 
 In Python and Node, every method takes the request's bearer token and the selected Casework profile
 as its first two arguments, and a source-scoped method takes the selected source profile as its
-third. `assignWorkItem`, `delegateWorkItem`, `previewCaseloadMove`, and `applyCaseloadMove` take the
-source profile as a trailing optional argument, so omitting it addresses hosted work. In Rust the
+third. Unified review task reads take a source profile only when the pinned context strategy is
+`source`; submitted-context tasks need none. In Rust the
 same three values travel together as `CaseworkAuth`, built with `CaseworkAuth::new(token, profile)`
 and extended with `with_source_profile`.
 
@@ -1163,20 +1163,19 @@ browser sends the host's session cookie and never a Casework token.
 
 Method names are given in the Rust and Python form. Node uses the camel case form of the same name.
 
-- __Service description.__ `description` returns the queues, sources, calendars, clocks, and hosted
-  kinds the selected profile may see.
-- __Requester.__ `create_hosted_item`, `get_hosted_item`, `add_hosted_note`,
-  `requester_hosted_notes`, `cancel_hosted_item`, and `hosted_terminal_items` cover the hosted items
-  one Requester owns.
-- __Staff on hosted work.__ `list_hosted_work_items`, `get_hosted_work_item`,
-  `hosted_work_item_history`, `claim_hosted_work_item`, `release_hosted_work_item`, and
-  `decide_hosted_work_item` work the hosted inbox without a source profile.
+- __Service and review descriptions.__ `description`, `review_kinds`, and `review_kind` return the
+  source-neutral configuration the selected profile may read.
+- __Producer.__ `create_or_recover_review_request`, `review_request`, `review_result`,
+  `review_results`, and `cancel_review_request` cover requests inside the producer's exact binding.
+- __Human reviewer.__ `review_tasks`, `review_task`, `review_task_context`, `claim_review_task`,
+  `assign_review_task`, `delegate_review_task`, `release_review_task`, review-task draft methods,
+  `decide_review_task`, `review_history`, and review-note methods cover unified tasks.
 - __Staff on source-backed work.__ `list_work_items`, `next_work_item`, `get_work_item`,
   `claim_work_item`, `release_work_item`, `get_draft`, `save_draft`, `delete_draft`,
   `decide_work_item`, `work_item_history`, and `work_item_clocks`, each under the selected source
   profile, with `recover_decision` and `recover_decision_by_key` for a lost decision response.
 - __Supervisor.__ `holdings`, `assign_work_item`, `delegate_work_item`, `preview_caseload_move`,
-  `apply_caseload_move`, and `hosted_accountability_record` for a retained accountability record.
+  `apply_caseload_move`, and `review_accountability` for a retained protected record.
 - __Administrator.__ `directory`, `directory_targets`, `bootstrap_directory`,
   `update_directory_team`, `create_absence`, `update_absence`, `delete_absence`, `holiday_revision`,
   `create_holiday_revision`, `preview_clock_recompute`, and `apply_clock_recompute`.
@@ -1229,7 +1228,7 @@ answers; pass the cursor back through the same method to continue.
 `CaseworkClientError` is distinct from every other namespace's error type. Rust answers with
 `Configuration`, `InvalidRequest`, `Transport`, `Problem`, or `Protocol`. A `Problem` carries the
 status, a `CaseworkProblemCode`, the fixed detail, the validated trace identifier, the original
-attempt identifier when the refusal named one, and the hosted validation detail when the service
+attempt identifier when the refusal named one, and the review validation detail when the service
 refused a submitted field. A `Protocol` carries a `CaseworkProtocolFailure` of `HeaderBounds`,
 `TraceContext`, `MediaType`, `Body`, `Problem`, or `Status`.
 
@@ -1251,7 +1250,7 @@ Python raises `casework.CaseworkClientError`, an `Exception` whose attributes ar
 | `configuration` | The construction inputs were refused | none |
 | `invalid_request` | An input was refused before any exchange | none |
 | `transport` | The exchange failed below HTTP | `transport_kind` |
-| `problem` | Casework answered with an accepted problem | `status`, `code`, `detail`, `trace_id`, plus `original_attempt_id` on a recoverable attempt and `validation` on a refused hosted submission |
+| `problem` | Casework answered with an accepted problem | `status`, `code`, `detail`, `trace_id`, plus `original_attempt_id` on a recoverable attempt and `validation` on a refused review submission |
 | `protocol` | The response violated the contract | `status`, `protocol_failure`, and `trace_id` when one was validated |
 
 A validation member carries the bounded `path` of the refused field and one `reason` from a closed
@@ -1260,8 +1259,8 @@ set: `kind_not_allowed`, `reference_invalid`, `object_required`, `maximum_bytes_
 `text_invalid`, `result_not_declared`, `result_required`, `field_not_declared`,
 `constraint_invalid`, and `constraint_violated`. Neither member repeats a submitted value.
 
-The five result reasons govern a hosted item's structured result. `result_not_declared` refuses a
-result or a result constraint when the item's kind declares no `resultSchema`. `result_required`
+The five result reasons govern a review request's structured result. `result_not_declared` refuses a
+result or a result constraint when the review kind declares no `resultSchema`. `result_required`
 refuses a decision for an outcome whose `resultRequired` is set when the body carries none.
 `field_not_declared` refuses a result constraint that names a property the kind's schema does not
 declare. `constraint_invalid` refuses a constraint that is not a narrowing of the schema: an

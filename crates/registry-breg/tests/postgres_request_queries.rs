@@ -643,7 +643,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                   "operation":"patch",
                   "set":{"site":{"fromField":"proposed-site"}}
                 }],
-                "review":{"stages":[{"id":"review","approvals":1,"excludeSubmitter":true}]}
+                "review":{"authority":"casework-main","policyId":"correction-review"},
+                "onApproved":{"mode":"manual"}
               }
             }
           ],
@@ -682,15 +683,10 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],
               "permissions":[{
                 "entity":"correction-request",
-                "operations":["get","list","approve_request","reject_request","request_revision"],
+                "operations":["get","list"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-                "allowCount":true,
-                "reviewStages":[{"stage":"review","targets":[{
-                  "entity":"asset-placement",
-                  "readableFields":["site"],
-                  "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-                }]}]
+                "allowCount":true
               }]
             },
             {

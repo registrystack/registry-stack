@@ -8,12 +8,12 @@ use registry_casework_core::{
     ClockRecomputeApplyRequest, ClockRecomputePreview, ClockRecomputeRequest, ClockRecomputeResult,
     DecideRequest, DelegateRequest, Description, DirectoryResponse, DirectoryTargetPage,
     DirectoryTargetsQuery, DraftResponse, HistoryPage, HoldingsPage, HoldingsQuery,
-    HolidaySetDocument, HolidaySetRevisionInput, HostedPageQuery, HostedValidationError,
-    HostedValidationReason, ListWorkItemsQuery, MutationResponse, NextWorkItemQuery,
-    RecoverAttemptRequest, ReleaseRequest, ReviewAccountabilityRecord, ReviewCancelRequest,
-    ReviewCancelResponse, ReviewCreateRequest, ReviewHistoryEntry, ReviewHistoryPage,
-    ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewRequestAccepted, ReviewRequestView,
-    ReviewResult, ReviewResultFeedPage, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage,
+    HolidaySetDocument, HolidaySetRevisionInput, ListWorkItemsQuery, MutationResponse,
+    NextWorkItemQuery, RecoverAttemptRequest, ReleaseRequest, ReviewAccountabilityRecord,
+    ReviewCancelRequest, ReviewCancelResponse, ReviewCreateRequest, ReviewHistoryEntry,
+    ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewRequestAccepted,
+    ReviewRequestView, ReviewResult, ReviewResultFeedPage, ReviewTaskContext, ReviewTaskDraft,
+    ReviewTaskDraftInput, ReviewTaskPage, ReviewValidationError, ReviewValidationReason,
     ReviewerTask, SaveDraftRequest, WorkItem, WorkItemPage, CASEWORK_PROBLEM_TYPE_BASE,
     CASEWORK_PROFILE_HEADER, DIRECTORY_TARGETS_PATH, HOLDINGS_PATH, IDEMPOTENCY_KEY_HEADER,
     MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES, NEXT_WORK_ITEM_PATH,
@@ -35,7 +35,7 @@ use uuid::Uuid;
 use crate::{
     CaseworkAuth, CaseworkClientConfig, CaseworkClientError, CaseworkComplete, CaseworkProblemCode,
     CaseworkProtocolFailure, ReviewPageQuery, ReviewResultResponse, ReviewTaskDecisionRequest,
-    ReviewTaskQuery,
+    ReviewTaskQuery, WorkItemHistoryQuery,
 };
 
 const JSON_MEDIA_TYPE: &str = "application/json";
@@ -307,6 +307,28 @@ impl CaseworkClient {
             .await
     }
 
+    pub async fn review_task_context(
+        &self,
+        auth: CaseworkAuth<'_>,
+        task_id: Uuid,
+    ) -> Result<CaseworkComplete<ReviewTaskContext>, CaseworkClientError> {
+        let complete: CaseworkComplete<ReviewTaskContext> = self
+            .get_json(
+                &auth,
+                &["v1", "review-tasks", &task_id.to_string(), "context"],
+                &[],
+            )
+            .await?;
+        if complete.value.task_id != task_id {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete)
+    }
+
     pub async fn claim_review_task(
         &self,
         auth: CaseworkAuth<'_>,
@@ -386,14 +408,51 @@ impl CaseworkClient {
         &self,
         auth: CaseworkAuth<'_>,
         task_id: Uuid,
-    ) -> Result<CaseworkComplete<ReviewTaskDraft>, CaseworkClientError> {
+    ) -> Result<CaseworkComplete<Option<ReviewTaskDraft>>, CaseworkClientError> {
         reject_source_profile(&auth)?;
-        self.get_json(
+        let request = self.authorized(
+            self.http
+                .get(self.url(&["v1", "review-tasks", &task_id.to_string(), "draft"])?),
             &auth,
-            &["v1", "review-tasks", &task_id.to_string(), "draft"],
-            &[],
-        )
-        .await
+        )?;
+        let response = self.send(request).await?;
+        let status = response.status();
+        let trace_id = response_trace(status, response.headers())?;
+        match status {
+            StatusCode::OK => {
+                if !exact_media_type(response.headers(), JSON_MEDIA_TYPE) {
+                    return Err(protocol(
+                        status,
+                        CaseworkProtocolFailure::MediaType,
+                        Some(trace_id),
+                    ));
+                }
+                let body = read_bounded(response, self.max_response_bytes)
+                    .await
+                    .map_err(|error| CaseworkClientError::Transport {
+                        kind: read_failure_kind(&error),
+                    })?;
+                let value = serde_json::from_slice(&body).map_err(|_| {
+                    protocol(
+                        status,
+                        CaseworkProtocolFailure::Body,
+                        Some(trace_id.clone()),
+                    )
+                })?;
+                Ok(CaseworkComplete {
+                    value: Some(value),
+                    trace_id,
+                })
+            }
+            StatusCode::NOT_FOUND => {
+                require_empty_response(response, status, &trace_id).await?;
+                Ok(CaseworkComplete {
+                    value: None,
+                    trace_id,
+                })
+            }
+            _ => Err(self.problem_or_status(response).await),
+        }
     }
 
     pub async fn save_review_task_draft(
@@ -702,8 +761,15 @@ impl CaseworkClient {
         idempotency_key: &str,
     ) -> Result<CaseworkComplete<MutationResponse>, CaseworkClientError> {
         require_source_profile(&auth)?;
-        self.mutate_action(&auth, action, "claim", idempotency_key, &ClaimRequest {})
-            .await
+        self.mutate_action(
+            &auth,
+            action,
+            "claim",
+            "claim",
+            idempotency_key,
+            &ClaimRequest {},
+        )
+        .await
     }
 
     pub async fn release_work_item(
@@ -716,6 +782,7 @@ impl CaseworkClient {
         self.mutate_action(
             &auth,
             action,
+            "release",
             "release",
             idempotency_key,
             &ReleaseRequest {},
@@ -788,8 +855,15 @@ impl CaseworkClient {
                 "the offered action does not match the decision",
             ));
         }
-        self.mutate_action(&auth, action, "decisions", idempotency_key, decision)
-            .await
+        self.mutate_action(
+            &auth,
+            action,
+            decision.operation.as_str(),
+            "decisions",
+            idempotency_key,
+            decision,
+        )
+        .await
     }
 
     pub async fn recover_decision(
@@ -848,7 +922,7 @@ impl CaseworkClient {
         &self,
         auth: CaseworkAuth<'_>,
         item_id: Uuid,
-        query: &HostedPageQuery,
+        query: &WorkItemHistoryQuery,
     ) -> Result<CaseworkComplete<HistoryPage>, CaseworkClientError> {
         require_source_profile(&auth)?;
         validate_page(query.cursor.as_deref(), query.limit)?;
@@ -1227,19 +1301,18 @@ impl CaseworkClient {
         auth: &CaseworkAuth<'_>,
         action: &CaseworkAction,
         expected_operation: &str,
+        path_suffix: &str,
         idempotency_key: &str,
         body: &B,
     ) -> Result<CaseworkComplete<T>, CaseworkClientError> {
-        if !matches!(expected_operation, "decisions" | "hosted-decisions")
-            && action.operation != expected_operation
-        {
+        if action.operation != expected_operation {
             return Err(CaseworkClientError::invalid_request(
                 "the offered Casework action has the wrong operation",
             ));
         }
         validate_idempotency_key(idempotency_key)?;
         validate_if_match(&action.if_match)?;
-        let segments = action_segments(&action.href, expected_operation)?;
+        let segments = action_segments(&action.href, path_suffix)?;
         let request = self.http.post(self.url(&segments)?).json(body);
         let request = self.mutation_headers_value(
             self.authorized(request, auth)?,
@@ -1498,10 +1571,10 @@ impl CaseworkClient {
                 if path.is_empty() || path.len() > 256 {
                     return protocol(status, CaseworkProtocolFailure::Problem, trace_id);
                 }
-                let Some(reason) = hosted_validation_reason(reason) else {
+                let Some(reason) = review_validation_reason(reason) else {
                     return protocol(status, CaseworkProtocolFailure::Problem, trace_id);
                 };
-                Some(HostedValidationError {
+                Some(ReviewValidationError {
                     path: path.to_owned(),
                     reason,
                 })
@@ -1519,22 +1592,22 @@ impl CaseworkClient {
     }
 }
 
-fn hosted_validation_reason(value: &str) -> Option<HostedValidationReason> {
+fn review_validation_reason(value: &str) -> Option<ReviewValidationReason> {
     Some(match value {
-        "kind_not_allowed" => HostedValidationReason::KindNotAllowed,
-        "reference_invalid" => HostedValidationReason::ReferenceInvalid,
-        "object_required" => HostedValidationReason::ObjectRequired,
-        "maximum_bytes_exceeded" => HostedValidationReason::MaximumBytesExceeded,
-        "maximum_depth_exceeded" => HostedValidationReason::MaximumDepthExceeded,
-        "schema_mismatch" => HostedValidationReason::SchemaMismatch,
-        "outcome_not_declared" => HostedValidationReason::OutcomeNotDeclared,
-        "reason_required" => HostedValidationReason::ReasonRequired,
-        "text_invalid" => HostedValidationReason::TextInvalid,
-        "result_not_declared" => HostedValidationReason::ResultNotDeclared,
-        "result_required" => HostedValidationReason::ResultRequired,
-        "field_not_declared" => HostedValidationReason::FieldNotDeclared,
-        "constraint_invalid" => HostedValidationReason::ConstraintInvalid,
-        "constraint_violated" => HostedValidationReason::ConstraintViolated,
+        "kind_not_allowed" => ReviewValidationReason::KindNotAllowed,
+        "reference_invalid" => ReviewValidationReason::ReferenceInvalid,
+        "object_required" => ReviewValidationReason::ObjectRequired,
+        "maximum_bytes_exceeded" => ReviewValidationReason::MaximumBytesExceeded,
+        "maximum_depth_exceeded" => ReviewValidationReason::MaximumDepthExceeded,
+        "schema_mismatch" => ReviewValidationReason::SchemaMismatch,
+        "outcome_not_declared" => ReviewValidationReason::OutcomeNotDeclared,
+        "reason_required" => ReviewValidationReason::ReasonRequired,
+        "text_invalid" => ReviewValidationReason::TextInvalid,
+        "result_not_declared" => ReviewValidationReason::ResultNotDeclared,
+        "result_required" => ReviewValidationReason::ResultRequired,
+        "field_not_declared" => ReviewValidationReason::FieldNotDeclared,
+        "constraint_invalid" => ReviewValidationReason::ConstraintInvalid,
+        "constraint_violated" => ReviewValidationReason::ConstraintViolated,
         _ => return None,
     })
 }
@@ -1589,7 +1662,7 @@ fn require_source_profile(auth: &CaseworkAuth<'_>) -> Result<(), CaseworkClientE
 fn reject_source_profile(auth: &CaseworkAuth<'_>) -> Result<(), CaseworkClientError> {
     if auth.source_profile.is_some() {
         return Err(CaseworkClientError::invalid_request(
-            "hosted operations do not accept a source profile",
+            "this operation does not accept a source profile",
         ));
     }
     Ok(())

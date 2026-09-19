@@ -38,20 +38,22 @@ test('the documented local Casework callers form a complete valid directory seed
   }
 });
 
-test('the documented hosted kind parses as a complete policy with its result schema', () => {
-  const kind = fencedYamlUnder('### Hosted kinds', '').hostedKinds[0];
+test('the documented review kind and producer parse as a complete policy', () => {
+  const example = fencedYamlUnder('### Review kinds and producers', '');
+  const kind = example.reviewKinds[0];
 
   for (const key of [
     'id',
     'version',
-    'queue',
-    'decidingProfiles',
+    'purpose',
+    'contextStrategy',
+    'stages',
     'retention',
     'displaySchema',
     'resultSchema',
     'outcomes',
   ]) {
-    assert.ok(Object.hasOwn(kind, key), `hosted kind is missing ${key}`);
+    assert.ok(Object.hasOwn(kind, key), `review kind is missing ${key}`);
   }
   assert.equal(kind.retention.terminalDays, 90);
   assert.equal(kind.retention.accountabilityDays, 365);
@@ -65,9 +67,16 @@ test('the documented hosted kind parses as a complete policy with its result sch
   }
   assert.deepEqual(
     new Set(kind.outcomes.flatMap((outcome) => Object.keys(outcome))),
-    new Set(['id', 'label', 'reasonRequired', 'resultRequired']),
+    new Set(['id', 'label', 'settlement', 'reasonRequired', 'resultRequired']),
     'outcome keys stay within the policy grammar',
   );
   const confirmed = kind.outcomes.find((outcome) => outcome.id === 'confirmed');
   assert.equal(confirmed.resultRequired, true);
+  assert.equal(confirmed.settlement, 'answered');
+  assert.equal(kind.stages[0].requiredApprovals, 1);
+
+  const producer = example.reviewProducers[0];
+  assert.equal(producer.profile, 'requester');
+  assert.deepEqual(producer.kinds, ['decision']);
+  assert.deepEqual(producer.sourceNamespaces, ['standalone']);
 });

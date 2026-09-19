@@ -4206,9 +4206,8 @@ fn validate_event_condition(
         Some(EventConditionSource::RequestLifecycle {
             transitions,
             to_states,
-            stages,
         }) => {
-            if transitions.is_empty() && to_states.is_empty() && stages.is_empty() {
+            if transitions.is_empty() && to_states.is_empty() {
                 errors.push(Diagnostic::error(
                     "event.when.empty",
                     "entities[].hooks[].when",
@@ -4245,9 +4244,6 @@ fn validate_event_condition(
                         ),
                     ));
                 }
-            }
-            for stage in stages {
-                validate_id(stage, "entities[].hooks[].when.stages", errors);
             }
         }
         None => {}
@@ -4638,7 +4634,7 @@ fn maximum_field_json_bytes(field_type: &FieldTypeSource) -> Option<u64> {
     Some(bytes)
 }
 
-/// A lifecycle event can disclose reviewer text only on these two transitions.
+/// A lifecycle event can disclose application reason text only on apply.
 /// Empty condition sets are unrestricted, as in runtime condition evaluation.
 fn request_event_may_include_reason(event: &crate::contract::HookSource) -> bool {
     if event.trigger != EventTrigger::RequestLifecycle {
@@ -5285,7 +5281,6 @@ fn compile_routes_and_access(
                     None
                 },
                 revision_kind: None,
-                request_stage: None,
                 maximum_records: None,
                 access_profiles: profile_ids.iter().cloned().collect(),
                 default_access_profile: default.map(|profile| profile.id.clone()),
@@ -5317,7 +5312,6 @@ fn compile_routes_and_access(
                         operation,
                         query_kind: Some(kind),
                         revision_kind: None,
-                        request_stage: None,
                         maximum_records: None,
                         access_profiles: profile_ids.iter().cloned().collect(),
                         default_access_profile: default.map(|profile| profile.id.clone()),
@@ -5370,7 +5364,6 @@ fn compile_routes_and_access(
                 operation: Operation::List,
                 query_kind: Some(CompiledQueryKind::List),
                 revision_kind: None,
-                request_stage: None,
                 maximum_records: None,
                 access_profiles: profile_ids.iter().cloned().collect(),
                 default_access_profile: default.map(|profile| profile.id.clone()),
@@ -5429,7 +5422,6 @@ fn compile_change_request_routes_and_access(
             operation,
             query_kind: None,
             revision_kind: None,
-            request_stage: None,
             maximum_records: Some(1),
             access_profiles: profile_ids.iter().cloned().collect(),
             default_access_profile: default.map(|profile| profile.id.clone()),

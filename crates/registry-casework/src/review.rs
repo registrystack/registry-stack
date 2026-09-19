@@ -1,15 +1,17 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use registry_casework_core::{
     record_review_decision, resolve_absence_cover, submission_digest, AbsenceRecord, ActorContext,
-    AssignmentRequest, CaseworkRole, ContentDigest, DelegateRequest, EphemeralCredential,
-    IssuerPrincipal, PolicyBinding, ReviewAccountabilityRecord, ReviewCancelRequest,
-    ReviewCancelResponse, ReviewCreateRequest, ReviewHistoryAudience, ReviewHistoryEntry,
-    ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewProgress,
-    ReviewRequestAccepted, ReviewRequestLifecycle, ReviewRequestView, ReviewResult,
+    AssignmentRequest, CalendarPolicy, CaseworkRole, ClockPolicy, ContentDigest, DelegateRequest,
+    EphemeralCredential, HolidaySetDocument, IssuerPrincipal, PolicyBinding,
+    ReviewAccountabilityRecord, ReviewCancelRequest, ReviewCancelResponse, ReviewClockCorrelation,
+    ReviewClockOccurrence, ReviewClockState, ReviewCreateRequest, ReviewHistoryAudience,
+    ReviewHistoryEntry, ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest,
+    ReviewProgress, ReviewRequestAccepted, ReviewRequestLifecycle, ReviewRequestView, ReviewResult,
     ReviewResultFeedEntry, ReviewResultFeedPage, ReviewResultStatus, ReviewSettlement,
-    ReviewStagePolicy, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage, ReviewTransition,
+    ReviewSourceBindingStatus, ReviewSourceProjection, ReviewStagePolicy, ReviewTaskContext,
+    ReviewTaskContextData, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage, ReviewTransition,
     ReviewerDecision, ReviewerDecisionKind, ReviewerTask, ReviewerTaskState, SourceAdapterError,
-    SubjectBinding, SubjectRef,
+    SourceContextBinding, SubjectBinding, SubjectRef,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -114,6 +116,7 @@ struct ReviewRequestRecord {
     result_available_until: Option<DateTime<Utc>>,
     initiator: Option<IssuerPrincipal>,
     result_constraints: Option<Value>,
+    context: registry_casework_core::ReviewContext,
 }
 
 impl CaseworkService {
@@ -182,6 +185,31 @@ impl CaseworkService {
             issuer: person.issuer.clone(),
             subject: person.subject.clone(),
         });
+        let clocks = snapshot
+            .clocks
+            .iter()
+            .map(|clock_id| {
+                let clock = self
+                    .project
+                    .clocks
+                    .iter()
+                    .find(|clock| clock.id() == clock_id)
+                    .cloned()
+                    .ok_or(ReviewRuntimeError::Corrupt)?;
+                let calendar = match &clock {
+                    ClockPolicy::Subject { .. } => None,
+                    ClockPolicy::Activity { calendar, .. } => Some(
+                        self.project
+                            .calendars
+                            .iter()
+                            .find(|candidate| candidate.id == *calendar)
+                            .cloned()
+                            .ok_or(ReviewRuntimeError::Corrupt)?,
+                    ),
+                };
+                Ok::<_, ReviewRuntimeError>((clock, calendar))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         self.store
             .create_review(
                 &admission.producer,
@@ -189,6 +217,7 @@ impl CaseworkService {
                 request,
                 initiator,
                 snapshot,
+                clocks,
                 digest,
                 idempotency_key,
             )
@@ -308,6 +337,85 @@ impl CaseworkService {
             .await
             .map_err(|_| ReviewRuntimeError::NotFound)?;
         self.store.review_task(actor, task_id).await
+    }
+
+    pub async fn review_task_context(
+        &self,
+        actor: &ActorContext,
+        task_id: Uuid,
+        source_profile_id: Option<&str>,
+        token: &str,
+    ) -> Result<ReviewTaskContext, ReviewRuntimeError> {
+        require_human_reviewer(actor)?;
+        self.store.review_task(actor, task_id).await?;
+        let record = self.store.review_request_for_task(task_id).await?;
+        let context = match &record.context {
+            registry_casework_core::ReviewContext::Submitted { snapshot } => {
+                if source_profile_id.is_some() {
+                    return Err(ReviewRuntimeError::SourceProfileNotApplicable);
+                }
+                ReviewTaskContextData::Submitted {
+                    snapshot: snapshot.clone(),
+                }
+            }
+            registry_casework_core::ReviewContext::Source { binding } => {
+                let source_profile_id =
+                    source_profile_id.ok_or(ReviewRuntimeError::SourceProfileRequired)?;
+                let subject = SubjectRef {
+                    source_id: record.subject.source.clone(),
+                    kind: record.subject.subject_type.clone(),
+                    id: record.subject.id.clone(),
+                };
+                let adapter = self
+                    .adapters
+                    .get(&subject.source_id)
+                    .ok_or(ReviewRuntimeError::SourceInvalid)?;
+                let view = adapter
+                    .read_for_caller(&subject, source_profile_id, EphemeralCredential::new(token))
+                    .await
+                    .map_err(map_review_context_source_error)?;
+                if view.subject != subject {
+                    return Err(ReviewRuntimeError::SourceInvalid);
+                }
+                let current = view.binding.version == record.subject.version
+                    && view.binding.integrity.as_deref() == Some(record.subject.digest.as_str());
+                if current {
+                    record
+                        .policy
+                        .validate_display(
+                            &serde_json::to_value(&view.disclosed)
+                                .map_err(|_| ReviewRuntimeError::SourceInvalid)?,
+                        )
+                        .map_err(|_| ReviewRuntimeError::SourceInvalid)?;
+                }
+                ReviewTaskContextData::Source {
+                    reference: binding.reference.clone(),
+                    binding_status: if current {
+                        ReviewSourceBindingStatus::Current
+                    } else {
+                        ReviewSourceBindingStatus::BindingChanged
+                    },
+                    projection: current.then_some(ReviewSourceProjection {
+                        binding: view.binding,
+                        display_reference: view.display_reference,
+                        display: view.disclosed,
+                    }),
+                }
+            }
+        };
+        // A current team membership is required both before and after source I/O. This avoids
+        // holding a database transaction across the remote read without releasing context after
+        // authority was revoked while that read was in flight.
+        self.store.review_task(actor, task_id).await?;
+        Ok(ReviewTaskContext {
+            task_id,
+            request_id: record.request_id,
+            subject: record.subject,
+            requester_reference: record.requester_reference,
+            policy: policy_binding(&record.policy),
+            result_constraints: record.result_constraints,
+            context,
+        })
     }
 
     pub async fn review_result(
@@ -498,6 +606,22 @@ impl CaseworkService {
         }
         self.store
             .review_history(actor, request_id, requester, cursor, limit)
+            .await
+    }
+
+    pub async fn review_clocks(
+        &self,
+        actor: &ActorContext,
+        request_id: Uuid,
+    ) -> Result<Vec<ReviewClockOccurrence>, ReviewRuntimeError> {
+        let producer_id = if actor.role == CaseworkRole::Requester {
+            Some(self.producer_for_actor(actor)?.producer.id)
+        } else {
+            require_human_reviewer(actor)?;
+            None
+        };
+        self.store
+            .review_clocks(actor, request_id, producer_id.as_deref())
             .await
     }
 
@@ -1092,6 +1216,16 @@ impl PostgresStore {
                 &[&now],
             )
             .await?;
+        // Subject clocks intentionally span review rounds by moving their request binding to the
+        // latest round. Delete only occurrences still bound to an expired accountability record;
+        // a continued subject clock is therefore retained with its active round.
+        transaction
+            .execute(
+                "DELETE FROM casework_review_clock_occurrences c USING casework_review_requests r
+                 WHERE c.request_id=r.request_id AND r.accountability_retained_until<=$1",
+                &[&now],
+            )
+            .await?;
         let erased = transaction
             .execute(
                 "DELETE FROM casework_review_requests WHERE accountability_retained_until<=$1",
@@ -1209,6 +1343,7 @@ impl PostgresStore {
         request: ReviewCreateRequest,
         initiator: Option<IssuerPrincipal>,
         policy: ReviewKindPolicySnapshot,
+        clocks: Vec<(ClockPolicy, Option<CalendarPolicy>)>,
         digest: ContentDigest,
         idempotency_key: &str,
     ) -> Result<ReviewCreateOutcome, ReviewRuntimeError> {
@@ -1223,6 +1358,20 @@ impl PostgresStore {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let resource = format!("review-producer:{}", producer.id);
+        let subject_lock = format!(
+            "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+            producer.id,
+            request.subject.source,
+            request.subject.subject_type,
+            request.subject.id,
+            request.kind
+        );
+        transaction
+            .query_one(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+                &[&subject_lock],
+            )
+            .await?;
         if let Some(response) = review_idempotent_response(
             &transaction,
             actor,
@@ -1307,6 +1456,43 @@ impl PostgresStore {
             });
         }
 
+        let superseded = transaction
+            .query(
+                "SELECT request_id FROM casework_review_requests
+                 WHERE producer_id=$1 AND subject_source=$2 AND subject_type=$3
+                   AND subject_id=$4 AND policy_id=$5 AND lifecycle='reviewing'
+                 ORDER BY request_id FOR UPDATE",
+                &[
+                    &producer.id,
+                    &request.subject.source,
+                    &request.subject.subject_type,
+                    &request.subject.id,
+                    &request.kind,
+                ],
+            )
+            .await?;
+        for row in superseded {
+            let prior_id: Uuid = row.get(0);
+            let prior = load_request(&transaction, &producer.id, prior_id, true).await?;
+            settle_review(
+                &transaction,
+                &prior,
+                ReviewResultStatus::Superseded,
+                None,
+                None,
+                now,
+            )
+            .await?;
+            transaction
+                .execute(
+                    "INSERT INTO casework_review_history(
+                        event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
+                     VALUES($1,$2,NULL,'review_superseded',NULL,'{}'::jsonb,$3)",
+                    &[&Uuid::new_v4(), &prior_id, &now],
+                )
+                .await?;
+        }
+
         let request_id = Uuid::new_v4();
         let policy_json = serde_json::to_value(&policy)?;
         let (context_strategy, context) = match &request.context {
@@ -1385,7 +1571,16 @@ impl PostgresStore {
                 ],
             )
             .await?;
-        insert_stage_tasks(&transaction, request_id, &policy, 0, now).await?;
+        let tasks = insert_stage_tasks(&transaction, request_id, &policy, 0, now).await?;
+        insert_initial_review_clocks(
+            &transaction,
+            request_id,
+            &request.subject,
+            &clocks,
+            &tasks,
+            now,
+        )
+        .await?;
         let completion = producer.completion.as_ref().map(|completion| {
             json!({
                 "destinationId": completion.destination_id,
@@ -2285,6 +2480,69 @@ impl PostgresStore {
         Ok(ReviewHistoryPage { items, next_cursor })
     }
 
+    async fn review_clocks(
+        &self,
+        actor: &ActorContext,
+        request_id: Uuid,
+        producer_id: Option<&str>,
+    ) -> Result<Vec<ReviewClockOccurrence>, ReviewRuntimeError> {
+        let client = self.client().await?;
+        if let Some(producer_id) = producer_id {
+            if client
+                .query_opt(
+                    "SELECT 1 FROM casework_review_requests
+                     WHERE request_id=$1 AND producer_id=$2",
+                    &[&request_id, &producer_id],
+                )
+                .await?
+                .is_none()
+            {
+                return Err(ReviewRuntimeError::NotFound);
+            }
+        } else {
+            let membership = match actor.role {
+                CaseworkRole::Staff => "staff",
+                CaseworkRole::Supervisor => "supervisor",
+                CaseworkRole::Administrator | CaseworkRole::Requester => {
+                    return Err(ReviewRuntimeError::Forbidden)
+                }
+            };
+            if client
+                .query_opt(
+                    "SELECT 1 FROM casework_review_tasks t
+                     JOIN casework_queue_service q ON q.queue_id=t.queue_id
+                     JOIN casework_memberships m ON m.team_id=q.team_id
+                     WHERE t.request_id=$1 AND m.issuer=$2 AND m.subject=$3
+                       AND m.membership_kind=$4 LIMIT 1",
+                    &[
+                        &request_id,
+                        &actor.principal.issuer,
+                        &actor.principal.subject,
+                        &membership,
+                    ],
+                )
+                .await?
+                .is_none()
+            {
+                return Err(ReviewRuntimeError::NotFound);
+            }
+        }
+        client
+            .query(
+                "SELECT o.clock_occurrence_id,o.clock_id,o.scope,o.subject_source,
+                        o.subject_type,o.subject_id,o.task_id,t.stage_id,o.state,
+                        o.policy_digest,o.anchor_at,o.due_at,o.at_risk_at,o.completed_at
+                 FROM casework_review_clock_occurrences o
+                 LEFT JOIN casework_review_tasks t ON t.task_id=o.task_id
+                 WHERE o.request_id=$1 ORDER BY o.clock_id,o.scope,o.clock_occurrence_id",
+                &[&request_id],
+            )
+            .await?
+            .into_iter()
+            .map(|row| review_clock_from_row(&row))
+            .collect()
+    }
+
     async fn review_accountability(
         &self,
         actor: &ActorContext,
@@ -2726,8 +2984,18 @@ impl PostgresStore {
                     )
                     .await?;
                 let next_stage = progress.active_stage;
-                insert_stage_tasks(&transaction, request_id, &record.policy, next_stage, now)
-                    .await?;
+                let tasks =
+                    insert_stage_tasks(&transaction, request_id, &record.policy, next_stage, now)
+                        .await?;
+                insert_advanced_review_activity_clocks(
+                    &transaction,
+                    request_id,
+                    &record.subject,
+                    &record.policy.clocks,
+                    &tasks,
+                    now,
+                )
+                .await?;
                 transaction
                     .execute(
                         "UPDATE casework_review_requests
@@ -2781,12 +3049,14 @@ async fn insert_stage_tasks(
     policy: &ReviewKindPolicySnapshot,
     stage_index: u16,
     now: DateTime<Utc>,
-) -> Result<(), ReviewRuntimeError> {
+) -> Result<Vec<(Uuid, String)>, ReviewRuntimeError> {
     let stage = policy
         .stages
         .get(usize::from(stage_index))
         .ok_or(ReviewRuntimeError::Corrupt)?;
+    let mut tasks = Vec::with_capacity(usize::from(stage.required_approvals));
     for slot in 0..stage.required_approvals {
+        let task_id = Uuid::new_v4();
         transaction
             .execute(
                 "INSERT INTO casework_review_tasks(
@@ -2794,7 +3064,7 @@ async fn insert_stage_tasks(
                     created_at,updated_at)
                  VALUES($1,$2,$3,$4,$5,$6,'open',1,$7,$7)",
                 &[
-                    &Uuid::new_v4(),
+                    &task_id,
                     &request_id,
                     &i32::from(stage_index),
                     &stage.id,
@@ -2804,7 +3074,222 @@ async fn insert_stage_tasks(
                 ],
             )
             .await?;
+        tasks.push((task_id, stage.id.clone()));
     }
+    Ok(tasks)
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReviewClockDefinition {
+    clock: ClockPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    calendar: Option<CalendarPolicy>,
+}
+
+async fn insert_initial_review_clocks(
+    transaction: &Transaction<'_>,
+    request_id: Uuid,
+    subject: &SubjectBinding,
+    clocks: &[(ClockPolicy, Option<CalendarPolicy>)],
+    tasks: &[(Uuid, String)],
+    now: DateTime<Utc>,
+) -> Result<(), ReviewRuntimeError> {
+    for (clock, calendar) in clocks {
+        let definition = ReviewClockDefinition {
+            clock: clock.clone(),
+            calendar: calendar.clone(),
+        };
+        match clock {
+            ClockPolicy::Subject { after, .. } => {
+                let seconds = registry_casework_core::parse_elapsed_seconds(&after.elapsed)
+                    .ok_or(ReviewRuntimeError::Corrupt)?;
+                let document = serde_json::to_value(&definition)?;
+                let digest = review_request_hash(&document)?;
+                let due_at = now + TimeDelta::seconds(seconds);
+                let existing = transaction
+                    .query_opt(
+                        "SELECT clock_occurrence_id,state,paused_at FROM casework_review_clock_occurrences
+                         WHERE subject_source=$1 AND subject_type=$2 AND subject_id=$3
+                           AND clock_id=$4 AND scope='subject' AND correlation_key='subject'
+                         FOR UPDATE",
+                        &[&subject.source, &subject.subject_type, &subject.id, &clock.id()],
+                    )
+                    .await?;
+                if let Some(existing) = existing {
+                    let id: Uuid = existing.get(0);
+                    let state: String = existing.get(1);
+                    if state == "paused" {
+                        transaction
+                            .execute(
+                                "UPDATE casework_review_clock_occurrences
+                                 SET request_id=$2,state='running',
+                                     due_at=due_at+($3-paused_at),
+                                     paused_seconds=paused_seconds+GREATEST(0,EXTRACT(EPOCH FROM ($3-paused_at))::bigint),
+                                     paused_at=NULL,updated_at=$3
+                                 WHERE clock_occurrence_id=$1",
+                                &[&id, &request_id, &now],
+                            )
+                            .await?;
+                    } else if state == "running" {
+                        transaction
+                            .execute(
+                                "UPDATE casework_review_clock_occurrences
+                                 SET request_id=$2,updated_at=$3 WHERE clock_occurrence_id=$1",
+                                &[&id, &request_id, &now],
+                            )
+                            .await?;
+                    }
+                } else {
+                    transaction
+                        .execute(
+                            "INSERT INTO casework_review_clock_occurrences(
+                                clock_occurrence_id,clock_id,scope,correlation_key,
+                                subject_source,subject_type,subject_id,request_id,policy_digest,
+                                policy,state,anchor_at,due_at,created_at,updated_at)
+                             VALUES($1,$2,'subject','subject',$3,$4,$5,$6,$7,$8,'running',$9,$10,$9,$9)",
+                            &[
+                                &Uuid::new_v4(),
+                                &clock.id(),
+                                &subject.source,
+                                &subject.subject_type,
+                                &subject.id,
+                                &request_id,
+                                &digest,
+                                &document,
+                                &now,
+                                &due_at,
+                            ],
+                        )
+                        .await?;
+                }
+            }
+            ClockPolicy::Activity { .. } => {
+                for (task_id, stage_id) in tasks {
+                    insert_review_activity_clock(
+                        transaction,
+                        request_id,
+                        subject,
+                        task_id,
+                        stage_id,
+                        &definition,
+                        now,
+                    )
+                    .await?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn insert_advanced_review_activity_clocks(
+    transaction: &Transaction<'_>,
+    request_id: Uuid,
+    subject: &SubjectBinding,
+    clock_ids: &[String],
+    tasks: &[(Uuid, String)],
+    now: DateTime<Utc>,
+) -> Result<(), ReviewRuntimeError> {
+    for clock_id in clock_ids {
+        let Some(row) = transaction
+            .query_opt(
+                "SELECT policy FROM casework_review_clock_occurrences
+                 WHERE subject_source=$1 AND subject_type=$2 AND subject_id=$3 AND clock_id=$4
+                 ORDER BY created_at LIMIT 1",
+                &[
+                    &subject.source,
+                    &subject.subject_type,
+                    &subject.id,
+                    &clock_id,
+                ],
+            )
+            .await?
+        else {
+            continue;
+        };
+        let definition: ReviewClockDefinition = serde_json::from_value(row.get(0))?;
+        if !matches!(definition.clock, ClockPolicy::Activity { .. }) {
+            continue;
+        }
+        for (task_id, stage_id) in tasks {
+            insert_review_activity_clock(
+                transaction,
+                request_id,
+                subject,
+                task_id,
+                stage_id,
+                &definition,
+                now,
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn insert_review_activity_clock(
+    transaction: &Transaction<'_>,
+    request_id: Uuid,
+    subject: &SubjectBinding,
+    task_id: &Uuid,
+    stage_id: &str,
+    definition: &ReviewClockDefinition,
+    now: DateTime<Utc>,
+) -> Result<(), ReviewRuntimeError> {
+    let document = serde_json::to_value(definition)?;
+    let digest = review_request_hash(&document)?;
+    let correlation = format!("{task_id}:{stage_id}");
+    let (state, due_at, at_risk_at) = if let Some(calendar) = definition.calendar.as_ref() {
+        let holiday = transaction
+            .query_opt(
+                "SELECT document FROM casework_holiday_sets WHERE holiday_set=$1
+                 ORDER BY revision DESC LIMIT 1",
+                &[&calendar.holiday_set],
+            )
+            .await?;
+        if let Some(holiday) = holiday {
+            let holiday: HolidaySetDocument = serde_json::from_value(holiday.get(0))?;
+            let evaluated = registry_casework_core::evaluate_activity_clock(
+                &definition.clock,
+                calendar,
+                &holiday,
+                now,
+            )
+            .map_err(|_| ReviewRuntimeError::Corrupt)?;
+            ("running", Some(evaluated.due_at), evaluated.at_risk_at)
+        } else {
+            ("source_facts_missing", None, None)
+        }
+    } else {
+        return Err(ReviewRuntimeError::Corrupt);
+    };
+    transaction
+        .execute(
+            "INSERT INTO casework_review_clock_occurrences(
+                clock_occurrence_id,clock_id,scope,correlation_key,subject_source,
+                subject_type,subject_id,request_id,task_id,policy_digest,policy,state,
+                anchor_at,due_at,at_risk_at,created_at,updated_at)
+             VALUES($1,$2,'activity',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$12,$12)
+             ON CONFLICT DO NOTHING",
+            &[
+                &Uuid::new_v4(),
+                &definition.clock.id(),
+                &correlation,
+                &subject.source,
+                &subject.subject_type,
+                &subject.id,
+                &request_id,
+                &task_id,
+                &digest,
+                &document,
+                &state,
+                &now,
+                &due_at,
+                &at_risk_at,
+            ],
+        )
+        .await?;
     Ok(())
 }
 
@@ -2910,6 +3395,60 @@ async fn settle_review(
             ],
         )
         .await?;
+    match status {
+        ReviewResultStatus::ChangesRequested => {
+            transaction
+                .execute(
+                    "UPDATE casework_review_clock_occurrences
+                     SET state='paused',paused_at=$2,updated_at=$2
+                     WHERE request_id=$1 AND scope='subject' AND state='running'",
+                    &[&record.request_id, &now],
+                )
+                .await?;
+            transaction
+                .execute(
+                    "UPDATE casework_review_clock_occurrences
+                     SET state='completed',completed_at=$2,updated_at=$2
+                     WHERE request_id=$1 AND scope='activity'
+                       AND state NOT IN ('completed','cancelled')",
+                    &[&record.request_id, &now],
+                )
+                .await?;
+        }
+        ReviewResultStatus::Approved
+        | ReviewResultStatus::Rejected
+        | ReviewResultStatus::Answered => {
+            transaction
+                .execute(
+                    "UPDATE casework_review_clock_occurrences
+                     SET state='completed',completed_at=$2,paused_at=NULL,updated_at=$2
+                     WHERE request_id=$1 AND state NOT IN ('completed','cancelled')",
+                    &[&record.request_id, &now],
+                )
+                .await?;
+        }
+        ReviewResultStatus::Superseded => {
+            transaction
+                .execute(
+                    "UPDATE casework_review_clock_occurrences
+                     SET state='cancelled',paused_at=NULL,updated_at=$2
+                     WHERE request_id=$1 AND scope='activity'
+                       AND state NOT IN ('completed','cancelled')",
+                    &[&record.request_id, &now],
+                )
+                .await?;
+        }
+        ReviewResultStatus::Cancelled => {
+            transaction
+                .execute(
+                    "UPDATE casework_review_clock_occurrences
+                     SET state='cancelled',paused_at=NULL,updated_at=$2
+                     WHERE request_id=$1 AND state NOT IN ('completed','cancelled')",
+                    &[&record.request_id, &now],
+                )
+                .await?;
+        }
+    }
     let response = ReviewResult {
         result_id,
         request_id: record.request_id,
@@ -2979,7 +3518,7 @@ fn request_query(predicate: &str) -> String {
         "SELECT request_id,producer_id,subject_source,subject_type,subject_id,subject_version,
                 subject_digest,requester_reference,policy_snapshot,submission_digest,lifecycle,
                 active_stage_index,created_at,updated_at,result_available_until,
-                initiator_issuer,initiator_subject,result_constraints
+                initiator_issuer,initiator_subject,result_constraints,context_strategy,context
          FROM casework_review_requests WHERE {predicate}"
     )
 }
@@ -3021,6 +3560,15 @@ fn request_from_row(row: &Row) -> Result<ReviewRequestRecord, ReviewRuntimeError
             _ => return Err(ReviewRuntimeError::Corrupt),
         },
         result_constraints: row.get(17),
+        context: match row.get::<_, String>(18).as_str() {
+            "submitted" => registry_casework_core::ReviewContext::Submitted {
+                snapshot: row.get(19),
+            },
+            "source" => registry_casework_core::ReviewContext::Source {
+                binding: serde_json::from_value::<SourceContextBinding>(row.get(19))?,
+            },
+            _ => return Err(ReviewRuntimeError::Corrupt),
+        },
     })
 }
 
@@ -3451,6 +3999,45 @@ fn require_human_reviewer(actor: &ActorContext) -> Result<(), ReviewRuntimeError
     .ok_or(ReviewRuntimeError::Forbidden)
 }
 
+fn review_clock_from_row(row: &Row) -> Result<ReviewClockOccurrence, ReviewRuntimeError> {
+    let correlation = match row.get::<_, String>(2).as_str() {
+        "subject" => ReviewClockCorrelation::Subject {
+            source: row.get(3),
+            subject_type: row.get(4),
+            id: row.get(5),
+        },
+        "activity" => ReviewClockCorrelation::Activity {
+            task_id: row
+                .get::<_, Option<Uuid>>(6)
+                .ok_or(ReviewRuntimeError::Corrupt)?,
+            stage_id: row
+                .get::<_, Option<String>>(7)
+                .ok_or(ReviewRuntimeError::Corrupt)?,
+        },
+        _ => return Err(ReviewRuntimeError::Corrupt),
+    };
+    let state = match row.get::<_, String>(8).as_str() {
+        "running" => ReviewClockState::Running,
+        "paused" => ReviewClockState::Paused,
+        "completed" => ReviewClockState::Completed,
+        "cancelled" => ReviewClockState::Cancelled,
+        "source_facts_missing" => ReviewClockState::SourceFactsMissing,
+        _ => return Err(ReviewRuntimeError::Corrupt),
+    };
+    Ok(ReviewClockOccurrence {
+        clock_occurrence_id: row.get(0),
+        clock_id: row.get(1),
+        correlation,
+        state,
+        policy_digest: ContentDigest::parse(&row.get::<_, String>(9))
+            .map_err(|_| ReviewRuntimeError::Corrupt)?,
+        anchor_at: row.get(10),
+        due_at: row.get(11),
+        at_risk_at: row.get(12),
+        completed_at: row.get(13),
+    })
+}
+
 fn actor_reference(actor: &IssuerPrincipal) -> String {
     let mut hash = Sha256::new();
     hash.update(actor.issuer.as_bytes());
@@ -3491,6 +4078,17 @@ fn map_review_source_error(error: SourceAdapterError) -> ReviewRuntimeError {
         | SourceAdapterError::ActionNotOffered
         | SourceAdapterError::BindingMoved
         | SourceAdapterError::ReasonUnsupported => ReviewRuntimeError::Forbidden,
+    }
+}
+
+fn map_review_context_source_error(error: SourceAdapterError) -> ReviewRuntimeError {
+    match error {
+        SourceAdapterError::Concealed
+        | SourceAdapterError::Denied
+        | SourceAdapterError::RecordMissing
+        | SourceAdapterError::ReviewerNotAuthorized
+        | SourceAdapterError::BindingMoved => ReviewRuntimeError::NotFound,
+        other => map_review_source_error(other),
     }
 }
 

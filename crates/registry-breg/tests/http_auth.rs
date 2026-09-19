@@ -540,8 +540,8 @@ fn task_profiles_allow_governed_draft_authoring_and_refuse_direct_target_mutatio
             "  - id: reviewer\n    default: true\n    principalClaim: registry_principal\n    actorKind: agent\n    requesterClients: [agent-client]\n    requiredPurposes: [record-review]\n    taskGrant: {sourceIssuer: https://casework.example}",
         )
         .replace(
-            "operations: [get, submit_request, approve_request",
-            "operations: [create, get, patch, submit_request, approve_request",
+            "operations: [get, submit_request, apply_request",
+            "operations: [create, get, patch, submit_request, apply_request",
         );
     let project = parse_project_yaml(governed.as_bytes()).expect("governed draft project parses");
     compile_project(&project, &[], CompileProfile::Authoring)
@@ -1927,7 +1927,7 @@ async fn action_only_purpose_and_target_claims_are_discovered_from_signed_tokens
 }
 
 #[tokio::test]
-async fn nested_workflow_and_lookup_claims_are_mapped_without_requiring_unrelated_claims() {
+async fn nested_application_and_lookup_claims_are_mapped_without_requiring_unrelated_claims() {
     let project = parse_project_yaml(include_bytes!("fixtures/authority-mapping.yaml")).unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
     let inventory = registry_breg::authority::authority_inventory(&registry).unwrap();
@@ -1937,12 +1937,7 @@ async fn nested_workflow_and_lookup_claims_are_mapped_without_requiring_unrelate
             .keys()
             .map(String::as_str)
             .collect::<Vec<_>>(),
-        [
-            "apply_label",
-            "lookup_label",
-            "presence_label",
-            "review_labels"
-        ]
+        ["apply_label", "lookup_label", "presence_label"]
     );
     let idp = MockIdp::start().await;
     let auth = authenticator(
@@ -1952,7 +1947,7 @@ async fn nested_workflow_and_lookup_claims_are_mapped_without_requiring_unrelate
     )
     .unwrap();
     let base = json!({"aud": AUDIENCE, "registry_actor_kind": "service", "registry_principal": PRINCIPAL,
-        "apply_label": "A", "lookup_label": "L", "presence_label": "P", "review_labels": ["R"]});
+        "apply_label": "A", "lookup_label": "L", "presence_label": "P"});
     let direct = BTreeMap::from([
         (
             "apply_label".to_owned(),
@@ -1965,10 +1960,6 @@ async fn nested_workflow_and_lookup_claims_are_mapped_without_requiring_unrelate
         (
             "presence_label".to_owned(),
             VerifiedClaimValue::direct_string("P").unwrap(),
-        ),
-        (
-            "review_labels".to_owned(),
-            VerifiedClaimValue::direct_string_set(["R"]).unwrap(),
         ),
     ]);
     let expected = VerifiedRequestClaims::authenticated_with_actor_kind(
@@ -2014,23 +2005,8 @@ async fn nested_workflow_and_lookup_claims_are_mapped_without_requiring_unrelate
 }
 
 #[tokio::test]
-async fn cross_surface_shapes_and_set_valued_principal_reuse_are_refused_at_startup() {
+async fn set_valued_principal_reuse_is_refused_at_startup() {
     let idp = MockIdp::start().await;
-    let conflicting = include_str!("fixtures/authority-mapping.yaml")
-        .replace("claim: apply_label", "claim: review_labels");
-    let project = parse_project_yaml(conflicting.as_bytes()).unwrap();
-    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
-    let error = authenticator(
-        &registry,
-        &idp,
-        AuthorityClaimConfig::new("registry_principal", None),
-    )
-    .unwrap_err();
-    assert_eq!(
-        error,
-        AuthenticationConfigError::ConflictingClaimExpectation
-    );
-
     let conflicting = CANONICAL_ID_BOUNDARY_PROJECT.replace(
         "claim: record_id, operator: equals",
         "claim: registry_principal, operator: in",

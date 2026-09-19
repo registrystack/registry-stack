@@ -537,7 +537,6 @@ pub(crate) struct ChangeRequestActionContext {
     principal: Option<String>,
     purpose: Option<String>,
     operation: Operation,
-    stage: Option<String>,
     route_id: String,
     canonical_context: String,
 }
@@ -600,9 +599,6 @@ impl ChangeRequestActionContext {
         if !action_exists {
             return Err(invalid_context());
         }
-        if route.request_stage.is_some() {
-            return Err(invalid_context());
-        }
         let mut context = Self {
             request_entity_id: route.entity_id.clone(),
             request_id,
@@ -614,7 +610,6 @@ impl ChangeRequestActionContext {
             principal: request_claims.principal().map(str::to_owned),
             purpose: request_claims.purpose().map(str::to_owned),
             operation: route.operation,
-            stage: None,
             route_id: route.id.clone(),
             canonical_context: String::new(),
         };
@@ -642,15 +637,8 @@ impl ChangeRequestActionContext {
             .as_deref()
             .map(validate_required_context_value)
             .transpose()?;
-        self.stage
-            .as_deref()
-            .map(validate_required_context_value)
-            .transpose()?;
         validate_required_context_value(&self.route_id)?;
         if self.proposal_version <= 0 || !is_change_request_action_operation(self.operation) {
-            return Err(invalid_context());
-        }
-        if self.stage.is_some() {
             return Err(invalid_context());
         }
         if Self::canonicalize(self)? != self.canonical_context {
@@ -672,7 +660,6 @@ impl ChangeRequestActionContext {
             "principal": context.principal,
             "purpose": context.purpose,
             "operation": change_request_action_operation_name(context.operation),
-            "stage": context.stage,
             "routeId": context.route_id,
         });
         let bytes = canonicalize_json(&payload).map_err(|_| invalid_context())?;
@@ -697,7 +684,6 @@ impl fmt::Debug for ChangeRequestActionContext {
             .field("principal", &self.principal.as_ref().map(|_| "<redacted>"))
             .field("purpose", &self.purpose.as_ref().map(|_| "<redacted>"))
             .field("operation", &self.operation)
-            .field("stage", &self.stage)
             .field("route_id", &self.route_id)
             .finish()
     }

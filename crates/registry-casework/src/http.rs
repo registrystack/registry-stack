@@ -18,17 +18,15 @@ use registry_casework_core::{
     ClockRecomputeApplyRequest, ClockRecomputePreview, ClockRecomputeRequest, ClockRecomputeResult,
     DecideRequest, DelegateRequest, Description, DirectoryResponse, DirectoryTargetPage,
     DirectoryTargetsQuery, DraftResponse, EventRequest, HistoryPage, HoldingsQuery,
-    HolidaySetDocument, HolidaySetRevisionInput, HostedAccountabilityRecord, HostedCancelRequest,
-    HostedCreateRequest, HostedDecisionRequest, HostedHistoryPage, HostedNotePage,
-    HostedNoteRequest, HostedPageQuery, HostedTerminalPage, HostedTerminalQuery,
-    HostedTerminalResult, HostedValidationError, HostedValidationReason, ListWorkItemsQuery,
-    MutationResponse, NextWorkItemQuery, QueueRecord, RecoverAttemptRequest, RequesterHostedItem,
-    ReviewAccountabilityRecord, ReviewCancelRequest, ReviewCreateRequest, ReviewHistoryEntry,
-    ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewRequestView,
-    ReviewResultFeedPage, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage, ReviewerTask,
-    SaveDraftRequest, ATTEMPT_REFERENCE_HEADER, CASEWORK_PROFILE_HEADER, IDEMPOTENCY_KEY_HEADER,
-    IF_MATCH_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES,
-    SOURCE_PROFILE_HEADER, VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
+    HolidaySetDocument, HolidaySetRevisionInput, ListWorkItemsQuery, MutationResponse,
+    NextWorkItemQuery, QueueRecord, RecoverAttemptRequest, ReviewAccountabilityRecord,
+    ReviewCancelRequest, ReviewCreateRequest, ReviewHistoryEntry, ReviewHistoryPage,
+    ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewPageQuery, ReviewRequestView,
+    ReviewResultFeedPage, ReviewTaskContext, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage,
+    ReviewValidationError, ReviewValidationReason, ReviewerTask, SaveDraftRequest,
+    ATTEMPT_REFERENCE_HEADER, CASEWORK_PROFILE_HEADER, IDEMPOTENCY_KEY_HEADER, IF_MATCH_HEADER,
+    MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES, SOURCE_PROFILE_HEADER,
+    VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
 };
 use registry_platform_authcommon::parse_bearer_token;
 use registry_platform_httpsec::{
@@ -56,155 +54,150 @@ pub struct HttpState {
 }
 
 pub fn router(state: HttpState) -> Router {
-    http_edge(
-        Router::new()
-            .route("/health", get(health))
-            .route("/ready", get(ready))
-            .route("/v1/casework", get(description))
-            .route("/.well-known/jwks.json", get(task_jwks))
-            .route(
-                "/v1/work-items/{item_id}/task-templates",
-                get(preview_task_templates),
-            )
-            .route(
-                "/v1/work-items/{item_id}/task-grants",
-                get(list_task_grants).post(approve_task_grant),
-            )
-            .route(
-                "/v1/work-items/{item_id}/task-grants/{grant_id}/revoke",
-                post(revoke_task_grant),
-            )
-            .route("/v1/task-grants/{grant_id}/assertion", post(task_assertion))
-            .route("/v1/task-grants/{grant_id}/status", get(task_status))
-            .route("/v1/hosted-items", post(create_hosted_item))
-            .route("/v1/review-requests", post(create_review_request))
-            .route("/v1/review-kinds", get(review_kind_descriptions))
-            .route("/v1/review-kinds/{kind_id}", get(review_kind_description))
-            .route("/v1/review-results", get(review_result_feed))
-            .route("/v1/review-tasks", get(review_tasks))
-            .route("/v1/review-tasks/{task_id}", get(get_review_task))
-            .route("/v1/review-requests/{request_id}", get(get_review_request))
-            .route(
-                "/v1/review-requests/{request_id}/result",
-                get(get_review_result),
-            )
-            .route(
-                "/v1/review-requests/{request_id}/cancel",
-                post(cancel_review_request),
-            )
-            .route("/v1/review-tasks/{task_id}/claim", post(claim_review_task))
-            .route(
-                "/v1/review-tasks/{task_id}/assign",
-                post(assign_review_task),
-            )
-            .route(
-                "/v1/review-tasks/{task_id}/delegate",
-                post(delegate_review_task),
-            )
-            .route(
-                "/v1/review-tasks/{task_id}/release",
-                post(release_review_task),
-            )
-            .route(
-                "/v1/review-tasks/{task_id}/draft",
-                get(get_review_task_draft)
-                    .put(save_review_task_draft)
-                    .delete(delete_review_task_draft),
-            )
-            .route(
-                "/v1/review-tasks/{task_id}/decisions",
-                post(decide_review_task),
-            )
-            .route(
-                "/v1/review-requests/{request_id}/history",
-                get(review_history),
-            )
-            .route(
-                "/v1/review-requests/{request_id}/notes",
-                post(add_review_note),
-            )
-            .route(
-                "/v1/review-accountability/{event_id}",
-                get(review_accountability),
-            )
-            .route("/v1/hosted-items/terminal", get(hosted_terminal_items))
-            .route("/v1/hosted-items/{item_id}", get(get_hosted_item))
-            .route(
-                "/v1/hosted-items/{item_id}/notes",
-                get(requester_hosted_notes).post(add_hosted_note),
-            )
-            .route(
-                "/v1/hosted-items/{item_id}/cancel",
-                post(cancel_hosted_item),
-            )
-            .route(
-                "/v1/hosted-accountability/{event_id}",
-                get(hosted_accountability),
-            )
-            .route("/v1/work-items", get(list_items))
-            .route("/v1/work-items/next", get(next_item))
-            .route("/v1/work-items/{item_id}", get(get_item))
-            .route("/v1/work-items/{item_id}/clocks", get(work_item_clocks))
-            .route("/v1/work-items/{item_id}/claim", post(claim))
-            .route("/v1/work-items/{item_id}/release", post(release))
-            .route("/v1/work-items/{item_id}/assign", post(assign_item))
-            .route("/v1/work-items/{item_id}/delegate", post(delegate_item))
-            .route(
-                "/v1/work-items/{item_id}/draft",
-                get(get_draft).put(save_draft).delete(delete_draft),
-            )
-            .route("/v1/work-items/{item_id}/decisions", post(decide))
-            .route(
-                "/v1/work-items/{item_id}/hosted-decisions",
-                post(decide_hosted_item),
-            )
-            .route(
-                "/v1/work-items/{item_id}/attempts/recover",
-                post(recover_by_key),
-            )
-            .route(
-                "/v1/work-items/{item_id}/attempts/{attempt_id}/recover",
-                post(recover),
-            )
-            .route("/v1/work-items/{item_id}/history", get(history))
-            .route(
-                "/v1/work-items/{item_id}/hosted-history",
-                get(hosted_staff_history),
-            )
-            .route("/v1/holdings", get(holdings))
-            .route("/v1/directory", get(directory))
-            .route("/v1/directory/targets", get(directory_targets))
-            .route(
-                "/v1/directory/teams/{team_id}",
-                axum::routing::put(update_directory_team),
-            )
-            .route("/v1/directory/bootstrap", post(bootstrap))
-            .route("/v1/directory/holidays", post(create_holiday_revision))
-            .route(
-                "/v1/directory/holidays/{id}/revisions/{revision}",
-                get(holiday_revision),
-            )
-            .route(
-                "/v1/directory/clocks/recompute/preview",
-                post(preview_clock_recompute),
-            )
-            .route(
-                "/v1/directory/clocks/recompute/apply",
-                post(apply_clock_recompute),
-            )
-            .route("/v1/directory/absences", get(absences).post(create_absence))
-            .route(
-                "/v1/directory/absences/{absence_id}",
-                axum::routing::put(update_absence).delete(delete_absence),
-            )
-            .route(
-                "/v1/directory/caseload/preview",
-                post(preview_caseload_move),
-            )
-            .route("/v1/directory/caseload/apply", post(apply_caseload_move))
-            .route("/events/sources/{source_id}", post(source_event)),
-    )
-    .with_state(state)
+    let app = Router::new()
+        .route("/health", get(health))
+        .route("/ready", get(ready))
+        .route("/v1/casework", get(description))
+        .route("/.well-known/jwks.json", get(task_jwks))
+        .route(
+            "/v1/work-items/{item_id}/task-templates",
+            get(preview_task_templates),
+        )
+        .route(
+            "/v1/work-items/{item_id}/task-grants",
+            get(list_task_grants).post(approve_task_grant),
+        )
+        .route(
+            "/v1/work-items/{item_id}/task-grants/{grant_id}/revoke",
+            post(revoke_task_grant),
+        )
+        .route("/v1/task-grants/{grant_id}/assertion", post(task_assertion))
+        .route("/v1/task-grants/{grant_id}/status", get(task_status))
+        .route("/v1/review-requests", post(create_review_request))
+        .route("/v1/review-kinds", get(review_kind_descriptions))
+        .route("/v1/review-kinds/{kind_id}", get(review_kind_description))
+        .route("/v1/review-results", get(review_result_feed))
+        .route("/v1/review-tasks", get(review_tasks))
+        .route("/v1/review-tasks/{task_id}", get(get_review_task))
+        .route(
+            "/v1/review-tasks/{task_id}/context",
+            get(get_review_task_context),
+        )
+        .route(
+            "/v1/review-tasks/{task_id}/task-templates",
+            get(preview_review_task_templates),
+        )
+        .route(
+            "/v1/review-tasks/{task_id}/task-grants",
+            get(list_review_task_grants).post(approve_review_task_grant),
+        )
+        .route(
+            "/v1/review-tasks/{task_id}/task-grants/{grant_id}/revoke",
+            post(revoke_review_task_grant),
+        )
+        .route("/v1/review-requests/{request_id}", get(get_review_request))
+        .route(
+            "/v1/review-requests/{request_id}/result",
+            get(get_review_result),
+        )
+        .route(
+            "/v1/review-requests/{request_id}/cancel",
+            post(cancel_review_request),
+        )
+        .route("/v1/review-tasks/{task_id}/claim", post(claim_review_task))
+        .route(
+            "/v1/review-tasks/{task_id}/assign",
+            post(assign_review_task),
+        )
+        .route(
+            "/v1/review-tasks/{task_id}/delegate",
+            post(delegate_review_task),
+        )
+        .route(
+            "/v1/review-tasks/{task_id}/release",
+            post(release_review_task),
+        )
+        .route(
+            "/v1/review-tasks/{task_id}/draft",
+            get(get_review_task_draft)
+                .put(save_review_task_draft)
+                .delete(delete_review_task_draft),
+        )
+        .route(
+            "/v1/review-tasks/{task_id}/decisions",
+            post(decide_review_task),
+        )
+        .route(
+            "/v1/review-requests/{request_id}/history",
+            get(review_history),
+        )
+        .route(
+            "/v1/review-requests/{request_id}/clocks",
+            get(review_clocks),
+        )
+        .route(
+            "/v1/review-requests/{request_id}/notes",
+            post(add_review_note),
+        )
+        .route(
+            "/v1/review-accountability/{event_id}",
+            get(review_accountability),
+        )
+        .route("/v1/work-items", get(list_items))
+        .route("/v1/work-items/next", get(next_item))
+        .route("/v1/work-items/{item_id}", get(get_item))
+        .route("/v1/work-items/{item_id}/clocks", get(work_item_clocks))
+        .route("/v1/work-items/{item_id}/claim", post(claim))
+        .route("/v1/work-items/{item_id}/release", post(release))
+        .route("/v1/work-items/{item_id}/assign", post(assign_item))
+        .route("/v1/work-items/{item_id}/delegate", post(delegate_item))
+        .route(
+            "/v1/work-items/{item_id}/draft",
+            get(get_draft).put(save_draft).delete(delete_draft),
+        )
+        .route("/v1/work-items/{item_id}/decisions", post(decide))
+        .route(
+            "/v1/work-items/{item_id}/attempts/recover",
+            post(recover_by_key),
+        )
+        .route(
+            "/v1/work-items/{item_id}/attempts/{attempt_id}/recover",
+            post(recover),
+        )
+        .route("/v1/work-items/{item_id}/history", get(history))
+        .route("/v1/holdings", get(holdings))
+        .route("/v1/directory", get(directory))
+        .route("/v1/directory/targets", get(directory_targets))
+        .route(
+            "/v1/directory/teams/{team_id}",
+            axum::routing::put(update_directory_team),
+        )
+        .route("/v1/directory/bootstrap", post(bootstrap))
+        .route("/v1/directory/holidays", post(create_holiday_revision))
+        .route(
+            "/v1/directory/holidays/{id}/revisions/{revision}",
+            get(holiday_revision),
+        )
+        .route(
+            "/v1/directory/clocks/recompute/preview",
+            post(preview_clock_recompute),
+        )
+        .route(
+            "/v1/directory/clocks/recompute/apply",
+            post(apply_clock_recompute),
+        )
+        .route("/v1/directory/absences", get(absences).post(create_absence))
+        .route(
+            "/v1/directory/absences/{absence_id}",
+            axum::routing::put(update_absence).delete(delete_absence),
+        )
+        .route(
+            "/v1/directory/caseload/preview",
+            post(preview_caseload_move),
+        )
+        .route("/v1/directory/caseload/apply", post(apply_caseload_move))
+        .route("/events/sources/{source_id}", post(source_event));
+    http_edge(app).with_state(state)
 }
 
 fn http_edge<S>(router: Router<S>) -> Router<S>
@@ -281,12 +274,6 @@ async fn description(
     headers: HeaderMap,
 ) -> Result<Json<Description>, HttpError> {
     let (actor, _) = authenticate(&state, &headers).await?;
-    let selected_profile = state
-        .project
-        .access_profiles
-        .iter()
-        .find(|profile| profile.id == actor.profile_id)
-        .ok_or(HttpError::ProfileNotAuthorized)?;
     Ok(Json(Description {
         project_id: state.project.casework.id.clone(),
         policy_version: state.project.casework.version.clone(),
@@ -314,19 +301,6 @@ async fn description(
         } else {
             state.project.clocks.clone()
         },
-        hosted_kinds: state
-            .project
-            .hosted_kinds
-            .iter()
-            .filter(|kind| match actor.role {
-                CaseworkRole::Requester => selected_profile.kinds.contains(&kind.id),
-                CaseworkRole::Staff | CaseworkRole::Supervisor => {
-                    kind.deciding_profiles.contains(&actor.profile_id)
-                }
-                CaseworkRole::Administrator => true,
-            })
-            .cloned()
-            .collect(),
     }))
 }
 
@@ -407,6 +381,21 @@ async fn get_review_task(
         state
             .service
             .review_task(&actor, task_id, source_profile_id, token)
+            .await?,
+    ))
+}
+
+async fn get_review_task_context(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+) -> Result<Json<ReviewTaskContext>, HttpError> {
+    let source_profile_id = source_profile_optional(&headers)?;
+    let (actor, token) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .review_task_context(&actor, task_id, source_profile_id, token)
             .await?,
     ))
 }
@@ -633,6 +622,16 @@ async fn review_history(
     ))
 }
 
+async fn review_clocks(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(request_id): Path<Uuid>,
+) -> Result<Json<Vec<registry_casework_core::ReviewClockOccurrence>>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(state.service.review_clocks(&actor, request_id).await?))
+}
+
 async fn add_review_note(
     State(state): State<HttpState>,
     headers: HeaderMap,
@@ -714,205 +713,44 @@ async fn decide_review_task(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn create_hosted_item(
-    State(state): State<HttpState>,
-    headers: HeaderMap,
-    Json(request): Json<HostedCreateRequest>,
-) -> Result<(StatusCode, Json<RequesterHostedItem>), HttpError> {
-    reject_source_profile(&headers)?;
-    let (actor, _) = authenticate(&state, &headers).await?;
-    let item = state
-        .service
-        .hosted_create(&actor, &request, idempotency_key(&headers)?)
-        .await?;
-    Ok((StatusCode::CREATED, Json(item)))
-}
-
-async fn get_hosted_item(
-    State(state): State<HttpState>,
-    headers: HeaderMap,
-    Path(item_id): Path<Uuid>,
-) -> Result<Json<RequesterHostedItem>, HttpError> {
-    reject_source_profile(&headers)?;
-    let (actor, _) = authenticate(&state, &headers).await?;
-    Ok(Json(
-        state.service.hosted_requester_item(&actor, item_id).await?,
-    ))
-}
-
-async fn add_hosted_note(
-    State(state): State<HttpState>,
-    headers: HeaderMap,
-    Path(item_id): Path<Uuid>,
-    Json(request): Json<HostedNoteRequest>,
-) -> Result<Json<RequesterHostedItem>, HttpError> {
-    reject_source_profile(&headers)?;
-    let (actor, _) = authenticate(&state, &headers).await?;
-    Ok(Json(
-        state
-            .service
-            .hosted_note(
-                &actor,
-                item_id,
-                if_match(&headers)?,
-                &request,
-                idempotency_key(&headers)?,
-            )
-            .await?,
-    ))
-}
-
-async fn requester_hosted_notes(
-    State(state): State<HttpState>,
-    headers: HeaderMap,
-    Path(item_id): Path<Uuid>,
-    Query(query): Query<HostedPageQuery>,
-) -> Result<Json<HostedNotePage>, HttpError> {
-    reject_source_profile(&headers)?;
-    let (actor, _) = authenticate(&state, &headers).await?;
-    Ok(Json(
-        state
-            .service
-            .hosted_requester_notes(
-                &actor,
-                item_id,
-                page_limit(&state, query.limit)?,
-                query.cursor.as_deref(),
-            )
-            .await?,
-    ))
-}
-
-async fn hosted_accountability(
-    State(state): State<HttpState>,
-    headers: HeaderMap,
-    Path(event_id): Path<Uuid>,
-) -> Result<Json<HostedAccountabilityRecord>, HttpError> {
-    reject_source_profile(&headers)?;
-    let (actor, _) = authenticate(&state, &headers).await?;
-    Ok(Json(
-        state
-            .service
-            .hosted_accountability_record(&actor, event_id)
-            .await?,
-    ))
-}
-
-async fn cancel_hosted_item(
-    State(state): State<HttpState>,
-    headers: HeaderMap,
-    Path(item_id): Path<Uuid>,
-    Json(request): Json<HostedCancelRequest>,
-) -> Result<Json<HostedTerminalResult>, HttpError> {
-    reject_source_profile(&headers)?;
-    let (actor, _) = authenticate(&state, &headers).await?;
-    Ok(Json(
-        state
-            .service
-            .hosted_cancel(
-                &actor,
-                item_id,
-                if_match(&headers)?,
-                &request,
-                idempotency_key(&headers)?,
-            )
-            .await?,
-    ))
-}
-
-async fn hosted_terminal_items(
-    State(state): State<HttpState>,
-    headers: HeaderMap,
-    Query(query): Query<HostedTerminalQuery>,
-) -> Result<Json<HostedTerminalPage>, HttpError> {
-    reject_source_profile(&headers)?;
-    let (actor, _) = authenticate(&state, &headers).await?;
-    Ok(Json(
-        state
-            .service
-            .hosted_terminal_page(
-                &actor,
-                page_limit(&state, query.limit)?,
-                crate::HOSTED_TERMINAL_CURSOR_CONTEXT,
-                query.cursor.as_deref(),
-            )
-            .await?,
-    ))
-}
-
 async fn list_items(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Query(query): Query<ListWorkItemsQuery>,
 ) -> Result<Json<registry_casework_core::WorkItemPage>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
-    let source_profile = source_profile_optional(&headers)?;
-    if source_profile.is_none()
-        && matches!(actor.role, CaseworkRole::Staff | CaseworkRole::Supervisor)
-        && !state.project.sources.is_empty()
-        && match actor.role {
-            CaseworkRole::Staff => !state.project.hosted_kinds.iter().any(|kind| {
-                kind.deciding_profiles
-                    .iter()
-                    .any(|profile| profile == &actor.profile_id)
-            }),
-            CaseworkRole::Supervisor => state.project.hosted_kinds.is_empty(),
-            _ => false,
-        }
-    {
-        return Err(HttpError::SourceProfileRequired);
-    }
+    let source_profile = source_profile(&headers)?;
     let limit = page_limit(&state, query.limit)?;
     let subject = query.subject().map_err(|_| HttpError::Invalid)?;
     let reference = query.reference().map_err(|_| HttpError::Invalid)?;
-    let page = if let Some(source_profile) = source_profile {
-        if reference.is_some()
-            && !state.service.project.sources.iter().any(|source| {
-                source.requests.iter().any(|request| {
-                    request.display_reference.is_some()
-                        && query
-                            .queue
-                            .as_deref()
-                            .is_none_or(|queue| request.queue == queue)
-                })
+    if reference.is_some()
+        && !state.service.project.sources.iter().any(|source| {
+            source.requests.iter().any(|request| {
+                request.display_reference.is_some()
+                    && query
+                        .queue
+                        .as_deref()
+                        .is_none_or(|queue| request.queue == queue)
             })
-        {
-            return Err(HttpError::Invalid);
-        }
-        state
-            .service
-            .inbox_for_view_query(
-                &actor,
-                source_profile,
-                token,
-                query.view,
-                limit,
-                query.queue.as_deref(),
-                subject.as_ref(),
-                reference,
-                query.sort,
-                query.cursor.as_deref(),
-            )
-            .await?
-    } else {
-        if subject.is_some()
-            || reference.is_some()
-            || query.sort != registry_casework_core::InboxSort::Due
-        {
-            return Err(HttpError::Invalid);
-        }
-        state
-            .service
-            .hosted_staff_inbox(
-                &actor,
-                query.view,
-                limit,
-                query.queue.as_deref(),
-                crate::HOSTED_STAFF_INBOX_CURSOR_CONTEXT,
-                query.cursor.as_deref(),
-            )
-            .await?
-    };
+        })
+    {
+        return Err(HttpError::Invalid);
+    }
+    let page = state
+        .service
+        .inbox_for_view_query(
+            &actor,
+            source_profile,
+            token,
+            query.view,
+            limit,
+            query.queue.as_deref(),
+            subject.as_ref(),
+            reference,
+            query.sort,
+            query.cursor.as_deref(),
+        )
+        .await?;
     Ok(Json(page))
 }
 
@@ -942,36 +780,11 @@ async fn get_item(
     Path(item_id): Path<Uuid>,
 ) -> Result<Json<registry_casework_core::WorkItem>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
-    let item = if let Some(source_profile) = source_profile_optional(&headers)? {
-        state
-            .service
-            .open_source_item(&actor, item_id, source_profile, token)
-            .await?
-    } else {
-        state.service.hosted_work_item(&actor, item_id).await?
-    };
+    let item = state
+        .service
+        .open_source_item(&actor, item_id, source_profile(&headers)?, token)
+        .await?;
     Ok(Json(item))
-}
-
-async fn hosted_staff_history(
-    State(state): State<HttpState>,
-    headers: HeaderMap,
-    Path(item_id): Path<Uuid>,
-    Query(query): Query<HostedPageQuery>,
-) -> Result<Json<HostedHistoryPage>, HttpError> {
-    reject_source_profile(&headers)?;
-    let (actor, _) = authenticate(&state, &headers).await?;
-    Ok(Json(
-        state
-            .service
-            .hosted_staff_history(
-                &actor,
-                item_id,
-                page_limit(&state, query.limit)?,
-                query.cursor.as_deref(),
-            )
-            .await?,
-    ))
 }
 
 async fn claim(
@@ -982,25 +795,18 @@ async fn claim(
     let (actor, token) = authenticate(&state, &headers).await?;
     let expected_revision = if_match(&headers)?;
     let key = idempotency_key(&headers)?;
-    let item = if let Some(source_profile) = source_profile_optional(&headers)? {
-        state
-            .service
-            .claim_source_item(
-                &actor,
-                item_id,
-                expected_revision,
-                source_profile,
-                key,
-                token,
-            )
-            .await
-            .map_err(HttpError::from_source_event)?
-    } else {
-        state
-            .service
-            .hosted_claim(&actor, item_id, expected_revision, key)
-            .await?
-    };
+    let item = state
+        .service
+        .claim_source_item(
+            &actor,
+            item_id,
+            expected_revision,
+            source_profile(&headers)?,
+            key,
+            token,
+        )
+        .await
+        .map_err(HttpError::from_source_event)?;
     Ok(Json(MutationResponse {
         item,
         attempt: None,
@@ -1015,24 +821,17 @@ async fn release(
     let (actor, token) = authenticate(&state, &headers).await?;
     let expected_revision = if_match(&headers)?;
     let key = idempotency_key(&headers)?;
-    let item = if let Some(source_profile) = source_profile_optional(&headers)? {
-        state
-            .service
-            .release_source_item(
-                &actor,
-                item_id,
-                expected_revision,
-                source_profile,
-                key,
-                token,
-            )
-            .await?
-    } else {
-        state
-            .service
-            .hosted_release(&actor, item_id, expected_revision, key)
-            .await?
-    };
+    let item = state
+        .service
+        .release_source_item(
+            &actor,
+            item_id,
+            expected_revision,
+            source_profile(&headers)?,
+            key,
+            token,
+        )
+        .await?;
     Ok(Json(MutationResponse {
         item,
         attempt: None,
@@ -1131,28 +930,6 @@ async fn decide(
     Ok(Json(response))
 }
 
-async fn decide_hosted_item(
-    State(state): State<HttpState>,
-    headers: HeaderMap,
-    Path(item_id): Path<Uuid>,
-    Json(request): Json<HostedDecisionRequest>,
-) -> Result<Json<HostedTerminalResult>, HttpError> {
-    reject_source_profile(&headers)?;
-    let (actor, _) = authenticate(&state, &headers).await?;
-    Ok(Json(
-        state
-            .service
-            .hosted_decide(
-                &actor,
-                item_id,
-                if_match(&headers)?,
-                &request,
-                idempotency_key(&headers)?,
-            )
-            .await?,
-    ))
-}
-
 async fn recover(
     State(state): State<HttpState>,
     headers: HeaderMap,
@@ -1205,7 +982,7 @@ async fn history(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(item_id): Path<Uuid>,
-    Query(query): Query<HostedPageQuery>,
+    Query(query): Query<ReviewPageQuery>,
 ) -> Result<Json<HistoryPage>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     Ok(Json(
@@ -1649,6 +1426,71 @@ async fn revoke_task_grant(
     let (actor, _) = authenticate(&state, &headers).await?;
     Ok(Json(state.service.revoke_task(&actor, item, grant).await?))
 }
+async fn preview_review_task_templates(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+) -> Result<Json<registry_casework_core::TaskTemplatePreviews>, HttpError> {
+    let (actor, token) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .preview_review_task_templates(&actor, task_id, source_profile(&headers)?, token)
+            .await?,
+    ))
+}
+async fn approve_review_task_grant(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+    Json(request): Json<registry_casework_core::TaskApprovalRequest>,
+) -> Result<Json<registry_casework_core::TaskGrantView>, HttpError> {
+    let (actor, token) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .approve_review_task(
+                &actor,
+                task_id,
+                if_match(&headers)?,
+                source_profile(&headers)?,
+                idempotency_key(&headers)?,
+                token,
+                request,
+            )
+            .await?,
+    ))
+}
+async fn list_review_task_grants(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+) -> Result<Json<registry_casework_core::TaskGrantList>, HttpError> {
+    let (actor, token) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .list_review_task_grants(&actor, task_id, source_profile(&headers)?, token)
+            .await?,
+    ))
+}
+async fn revoke_review_task_grant(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path((task_id, grant_id)): Path<(Uuid, Uuid)>,
+    body: Bytes,
+) -> Result<Json<registry_casework_core::TaskGrantRevocation>, HttpError> {
+    if !body.is_empty() {
+        return Err(HttpError::Invalid);
+    }
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .revoke_review_task_grant(&actor, task_id, grant_id)
+            .await?,
+    ))
+}
 async fn task_client(
     state: &HttpState,
     headers: &HeaderMap,
@@ -1847,7 +1689,7 @@ pub enum HttpError {
     SourceSignatureInvalid,
     SourceUnavailable(Option<Uuid>),
     Internal,
-    Validation(HostedValidationError),
+    Validation(ReviewValidationError),
 }
 
 impl From<StoreError> for HttpError {
@@ -1866,7 +1708,7 @@ impl From<StoreError> for HttpError {
             StoreError::IdempotencyConflict => Self::IdempotencyKeyReused,
             StoreError::AttemptPending => Self::RecoveryPending(None),
             StoreError::Invalid => Self::Invalid,
-            StoreError::HostedValidation(validation) => Self::Validation(validation),
+            StoreError::ReviewValidation(validation) => Self::Validation(validation),
             StoreError::Unavailable | StoreError::Postgres(_) => Self::ServiceUnavailable,
             StoreError::Configuration
             | StoreError::SecretConfiguration(_)
@@ -1885,7 +1727,7 @@ impl From<ServiceError> for HttpError {
             ServiceError::Store(error) => error.into(),
             ServiceError::NotFound => Self::NotFound,
             ServiceError::Forbidden => Self::Forbidden,
-            ServiceError::HostedValidation(validation) => Self::Validation(validation),
+            ServiceError::ReviewValidation(validation) => Self::Validation(validation),
             ServiceError::BindingMoved => Self::ProposalChanged,
             ServiceError::UncertainAttempt(attempt_id) => Self::RecoveryPending(Some(attempt_id)),
             ServiceError::PostWriteSourceUnavailable(attempt_id) => {
@@ -2027,7 +1869,7 @@ impl IntoResponse for HttpError {
 fn problem_response(
     problem: ProblemCode,
     attempt_reference: Option<Uuid>,
-    validation: Option<&HostedValidationError>,
+    validation: Option<&ReviewValidationError>,
 ) -> Response {
     let trace = REQUEST_TRACE
         .try_with(Clone::clone)
@@ -2082,7 +1924,7 @@ fn problem_response(
         );
         response.headers_mut().insert(
             VALIDATION_REASON_HEADER,
-            hosted_validation_reason(validation.reason)
+            review_validation_reason(validation.reason)
                 .parse()
                 .expect("validation reasons are valid header values"),
         );
@@ -2090,22 +1932,22 @@ fn problem_response(
     response
 }
 
-fn hosted_validation_reason(reason: HostedValidationReason) -> &'static str {
+fn review_validation_reason(reason: ReviewValidationReason) -> &'static str {
     match reason {
-        HostedValidationReason::KindNotAllowed => "kind_not_allowed",
-        HostedValidationReason::ReferenceInvalid => "reference_invalid",
-        HostedValidationReason::ObjectRequired => "object_required",
-        HostedValidationReason::MaximumBytesExceeded => "maximum_bytes_exceeded",
-        HostedValidationReason::MaximumDepthExceeded => "maximum_depth_exceeded",
-        HostedValidationReason::SchemaMismatch => "schema_mismatch",
-        HostedValidationReason::OutcomeNotDeclared => "outcome_not_declared",
-        HostedValidationReason::ReasonRequired => "reason_required",
-        HostedValidationReason::TextInvalid => "text_invalid",
-        HostedValidationReason::ResultNotDeclared => "result_not_declared",
-        HostedValidationReason::ResultRequired => "result_required",
-        HostedValidationReason::FieldNotDeclared => "field_not_declared",
-        HostedValidationReason::ConstraintInvalid => "constraint_invalid",
-        HostedValidationReason::ConstraintViolated => "constraint_violated",
+        ReviewValidationReason::KindNotAllowed => "kind_not_allowed",
+        ReviewValidationReason::ReferenceInvalid => "reference_invalid",
+        ReviewValidationReason::ObjectRequired => "object_required",
+        ReviewValidationReason::MaximumBytesExceeded => "maximum_bytes_exceeded",
+        ReviewValidationReason::MaximumDepthExceeded => "maximum_depth_exceeded",
+        ReviewValidationReason::SchemaMismatch => "schema_mismatch",
+        ReviewValidationReason::OutcomeNotDeclared => "outcome_not_declared",
+        ReviewValidationReason::ReasonRequired => "reason_required",
+        ReviewValidationReason::TextInvalid => "text_invalid",
+        ReviewValidationReason::ResultNotDeclared => "result_not_declared",
+        ReviewValidationReason::ResultRequired => "result_required",
+        ReviewValidationReason::FieldNotDeclared => "field_not_declared",
+        ReviewValidationReason::ConstraintInvalid => "constraint_invalid",
+        ReviewValidationReason::ConstraintViolated => "constraint_violated",
     }
 }
 
@@ -2153,78 +1995,6 @@ mod tests {
         http_edge(Router::new().route("/json/{id}", post(json_route)))
     }
 
-    async fn source_scoped_history(headers: HeaderMap) -> Result<StatusCode, HttpError> {
-        source_profile(&headers)?;
-        Ok(StatusCode::NO_CONTENT)
-    }
-
-    async fn hosted_history(headers: HeaderMap) -> Result<StatusCode, HttpError> {
-        reject_source_profile(&headers)?;
-        Ok(StatusCode::NO_CONTENT)
-    }
-
-    /// One header separates the two history reads, and neither route answers
-    /// the other one's callers.
-    ///
-    /// `/history` is source-scoped: without `Registry-Source-Profile` there is
-    /// no source to read from, so it refuses. `/hosted-history` reads Casework's
-    /// own retained lifecycle, so it refuses that header instead. A deployment
-    /// with no sources at all, such as the `standalone-decision` starter, can
-    /// only use the hosted route.
-    #[tokio::test]
-    async fn the_two_history_routes_are_separated_by_the_source_profile_header() {
-        let id = Uuid::nil();
-        let app = http_edge(
-            Router::new()
-                .route(
-                    "/v1/work-items/{item_id}/history",
-                    axum::routing::get(source_scoped_history),
-                )
-                .route(
-                    "/v1/work-items/{item_id}/hosted-history",
-                    axum::routing::get(hosted_history),
-                ),
-        );
-        let cases = [
-            ("history", None, Some(ProblemCode::SourceProfileRequired)),
-            ("history", Some("reader"), None),
-            ("hosted-history", None, None),
-            (
-                "hosted-history",
-                Some("reader"),
-                Some(ProblemCode::SourceProfileNotApplicable),
-            ),
-        ];
-
-        for (route, profile, expected) in cases {
-            let mut request = Request::builder()
-                .method("GET")
-                .uri(format!("/v1/work-items/{id}/{route}"));
-            if let Some(profile) = profile {
-                request = request.header(SOURCE_PROFILE_HEADER, profile);
-            }
-            let response = app
-                .clone()
-                .oneshot(request.body(Body::empty()).expect("history request"))
-                .await
-                .expect("history response");
-            let label = format!("{route} with source profile {profile:?}");
-            match expected {
-                None => assert_eq!(response.status(), StatusCode::NO_CONTENT, "{label}"),
-                Some(problem) => {
-                    assert_eq!(response.status(), problem.status(), "{label}");
-                    let body = to_bytes(response.into_body(), 16 * 1024)
-                        .await
-                        .expect("bounded problem");
-                    let body: serde_json::Value =
-                        serde_json::from_slice(&body).expect("problem JSON");
-                    assert_eq!(body["code"], problem.code(), "{label}");
-                    assert_eq!(body["detail"], problem.detail(), "{label}");
-                }
-            }
-        }
-    }
-
     #[test]
     fn unsupported_source_reason_is_a_client_problem_without_hiding_bad_gateway() {
         let unsupported = HttpError::from(ServiceError::Adapter(
@@ -2242,25 +2012,6 @@ mod tests {
         ));
         assert_eq!(malformed.problem(), ProblemCode::SourceBadGateway);
         assert_eq!(malformed.problem().status(), StatusCode::BAD_GATEWAY);
-    }
-
-    /// The published contract keeps both reads, so a client that meets the
-    /// closed 400 on one of them has a documented route to move to.
-    #[test]
-    fn both_history_routes_stay_in_the_published_operation_contract() {
-        for path in [
-            "/v1/work-items/{item_id}/history",
-            "/v1/work-items/{item_id}/hosted-history",
-        ] {
-            let operation = crate::problem::OPERATION_CONTRACTS
-                .iter()
-                .find(|operation| operation.method == "GET" && operation.path == path)
-                .unwrap_or_else(|| panic!("{path} is declared"));
-            assert!(
-                operation.problems.contains(&ProblemCode::RequestInvalid),
-                "{path} does not declare the closed rejection it answers with"
-            );
-        }
     }
 
     #[tokio::test]

@@ -23,6 +23,7 @@ use registry_breg::postgres::{
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
     RegistryStateTestIdentity,
 };
+use registry_breg::review_store::{ReviewAuthorityClient, ReviewAuthorityRegistry};
 use registry_breg::task_grant::{TaskGrantBinding, TaskGrantError, TaskGrantStatusChecker};
 use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
 use registry_platform_audit::AuditProfile;
@@ -87,7 +88,8 @@ const PROJECT: &str = r#"{
       ],
       "changeRequest":{
         "effects":[{"target":{"fromField":"placement"},"operation":"patch","set":{"site":{"fromField":"proposed-site"}}}],
-        "review":{"stages":[{"id":"review","approvals":1,"excludeSubmitter":true}]}
+        "review":{"mode":"none"},
+        "onApproved":{"mode":"manual"}
       }
     }
   ],
@@ -141,10 +143,9 @@ const PROJECT: &str = r#"{
       "permissions":[
         {
           "entity":"correction-request",
-          "operations":["get","list","approve_request","reject_request","request_revision"],
+          "operations":["get","list"],
           "readableFields":["tenant","placement","proposed-site","reason"],
-          "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-          "reviewStages":[{"stage":"review","targets":[{"entity":"asset-placement","readableFields":["site"],"rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]}]
+          "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
         }
       ]
     },
@@ -181,11 +182,9 @@ impl TaskGrantStatusChecker for Status {
     {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            assert_eq!(
-                self.bindings.lock().unwrap().get(binding.grant_id()),
-                Some(binding),
-                "every later human check uses the entire original immutable binding"
-            );
+            if self.bindings.lock().unwrap().get(binding.grant_id()) != Some(binding) {
+                return Err(TaskGrantError::Refused);
+            }
             if self
                 .unavailable
                 .lock()
@@ -253,7 +252,7 @@ fn app(
     idp: &MockIdp,
     status: Arc<Status>,
 ) -> Router {
-    app_with_evidence(db, registry, identity, idp, status, None)
+    app_with_services(db, registry, identity, idp, status, None, None)
 }
 fn app_with_evidence(
     db: &TestDatabase,
@@ -262,6 +261,17 @@ fn app_with_evidence(
     idp: &MockIdp,
     status: Arc<Status>,
     evidence: Option<Arc<registry_breg::action_evidence::ActionEvidenceEvaluator>>,
+) -> Router {
+    app_with_services(db, registry, identity, idp, status, evidence, None)
+}
+fn app_with_services(
+    db: &TestDatabase,
+    registry: Arc<CompiledRegistry>,
+    identity: ExpectedRegistryIdentity,
+    idp: &MockIdp,
+    status: Arc<Status>,
+    evidence: Option<Arc<registry_breg::action_evidence::ActionEvidenceEvaluator>>,
+    reviews: Option<Arc<ReviewAuthorityRegistry>>,
 ) -> Router {
     let pool = db.runtime_config.build_pool().unwrap();
     let lock = RegistryLockKey::derive(PACKAGE).unwrap();
@@ -289,6 +299,9 @@ fn app_with_evidence(
     .with_task_status(status);
     if let Some(evidence) = evidence {
         writes = writes.with_evidence_evaluator(evidence);
+    }
+    if let Some(reviews) = reviews {
+        writes = writes.with_review_result_source(reviews);
     }
     let writes = Arc::new(writes);
     let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
@@ -345,6 +358,35 @@ fn agent(idp: &MockIdp, status: &Status) -> (String, String) {
     status.bindings.lock().unwrap().insert(id.clone(), binding);
     let token=idp.mint_token(json!({"aud":AUDIENCE,"sub":"agent-subject","client_id":"task-agent","registry_actor_kind":"agent","registry_grant_id":id,"registry_approver":"synthetic-approver","registry_grant_source_issuer":SOURCE,"registry_grant_client":"task-agent","registry_grant_resource":AUDIENCE,"registry_purpose":"review","registry_grant_exp":expires,"registry_grant_bounds":bounds,"identity":subjects}));
     (id, token)
+}
+
+fn external_review_authority() -> Arc<ReviewAuthorityRegistry> {
+    let client = registry_review_client::ReviewClient::new(
+        registry_review_client::ReviewClientConfig::new(
+            "http://127.0.0.1:9/".parse().expect("loopback URL"),
+        )
+        .with_profile("producer-profile"),
+    )
+    .expect("review client");
+    let authority = Arc::new(
+        ReviewAuthorityClient::new(
+            "casework-a".to_owned(),
+            client,
+            Arc::new(
+                registry_platform_httputil::StaticToken::new("producer-token".to_owned())
+                    .expect("static token"),
+            ),
+            "registry-producer".to_owned(),
+            7,
+            None,
+            None,
+        )
+        .expect("review authority"),
+    );
+    Arc::new(
+        ReviewAuthorityRegistry::new(BTreeMap::from([("casework-a".to_owned(), authority)]))
+            .expect("review authority registry"),
+    )
 }
 struct Response {
     status: StatusCode,
@@ -440,14 +482,11 @@ fn action(r: &Response, operation: &str) -> Value {
         .clone()
 }
 async fn perform(app: &Router, action: &Value, token: &str, key: &str) -> Response {
-    let mut body = if action.get("proposalVersion").is_some() {
+    let body = if action.get("proposalVersion").is_some() {
         json!({"proposalVersion":action["proposalVersion"],"effectDigest":action["effectDigest"]})
     } else {
         json!({})
     };
-    if action["operation"] == "reject_request" {
-        body["reason"] = json!("The task was revoked.");
-    }
     send(
         app,
         Method::POST,
@@ -465,10 +504,31 @@ async fn counts(db: &TestDatabase) -> Vec<i64> {
         "registry_revisions",
         "registry_idempotency",
         "registry_request_proposals",
-        "registry_request_decisions",
         "registry_request_applications",
         "registry_request_results",
         "registry_request_task_authority",
+    ] {
+        counts.push(
+            db.admin
+                .query_one(
+                    &format!("SELECT count(*) FROM registry_internal.{table}"),
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get(0),
+        );
+    }
+    counts
+}
+async fn external_review_counts(db: &TestDatabase) -> Vec<i64> {
+    let mut counts = Vec::new();
+    for table in [
+        "registry_revisions",
+        "registry_idempotency",
+        "registry_request_proposals",
+        "registry_request_task_authority",
+        "registry_request_review_submissions",
     ] {
         counts.push(
             db.admin
@@ -557,7 +617,6 @@ async fn task_http_to_postgres_preserves_original_authority_and_completed_receip
     let status = Arc::new(Status::default());
     let app = app(&db, registry.clone(), identity, &idp, status.clone());
     let steward = human(&idp, "steward", "maintain");
-    let reviewer = human(&idp, "reviewer", "review");
     let applier = human(&idp, "applier", "apply");
     let old = create(
         &app,
@@ -583,14 +642,7 @@ async fn task_http_to_postgres_preserves_original_authority_and_completed_receip
         json!({"tenant":"tenant-a","site":id(&old)}),
     )
     .await;
-    for phase in [
-        "draft",
-        "unavailable",
-        "retry",
-        "submitted",
-        "approved",
-        "applied",
-    ] {
+    for phase in ["draft", "unavailable", "retry", "submitted", "applied"] {
         let (grant, token) = agent(&idp, &status);
         let create_key = format!("{phase}-create");
         let before_calls = status.calls();
@@ -713,15 +765,15 @@ async fn task_http_to_postgres_preserves_original_authority_and_completed_receip
         let stored:Value=db.admin.query_one("SELECT binding FROM registry_internal.registry_request_task_authority WHERE request_id=$1",&[&Uuid::parse_str(&record).unwrap()]).await.unwrap().get(0);
         assert_eq!(stored["grantId"], grant);
         assert_eq!(stored["principal"], "agent-subject");
-        let review = action(
-            &get(&app, &record, "reviewer", &reviewer).await,
-            "approve_request",
+        let apply = action(
+            &get(&app, &record, "applier", &applier).await,
+            "apply_request",
         );
         if phase == "submitted" {
             status.revoke(&grant);
             let before = counts(&db).await;
             assert_eq!(
-                perform(&app, &review, &reviewer, "revoked-approve")
+                perform(&app, &apply, &applier, "revoked-apply")
                     .await
                     .status,
                 StatusCode::PRECONDITION_FAILED
@@ -737,42 +789,6 @@ async fn task_http_to_postgres_preserves_original_authority_and_completed_receip
                 call_count,
                 "completed receipt does not reacquire mutation authority"
             );
-            let reject = action(
-                &get(&app, &record, "reviewer", &reviewer).await,
-                "reject_request",
-            );
-            assert_eq!(
-                perform(&app, &reject, &reviewer, "human-reject")
-                    .await
-                    .status,
-                StatusCode::OK
-            );
-            assert_eq!(
-                status.calls(),
-                call_count,
-                "reviewer rejection does not depend on revoked task"
-            );
-            continue;
-        }
-        let review_key = format!("{phase}-approve");
-        assert_eq!(
-            perform(&app, &review, &reviewer, &review_key).await.status,
-            StatusCode::OK
-        );
-        let apply = action(
-            &get(&app, &record, "applier", &applier).await,
-            "apply_request",
-        );
-        if phase == "approved" {
-            status.revoke(&grant);
-            let before = counts(&db).await;
-            assert_eq!(
-                perform(&app, &apply, &applier, "revoked-apply")
-                    .await
-                    .status,
-                StatusCode::PRECONDITION_FAILED
-            );
-            assert_eq!(counts(&db).await, before);
             continue;
         }
         let receipt = perform(&app, &apply, &applier, "apply").await;
@@ -822,19 +838,15 @@ async fn task_http_to_postgres_preserves_original_authority_and_completed_receip
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn automatic_apply_rechecks_original_task_after_human_approval() {
+async fn external_review_submission_preserves_exact_task_grant_and_refuses_substitution() {
     let mut project: Value = serde_json::from_str(PROJECT).unwrap();
-    project["entities"][2]["changeRequest"]["application"] = json!({"mode":"automatic"});
-    let profiles = project["accessProfiles"].as_array_mut().unwrap();
-    let apply_targets = profiles.iter().find(|p| p["id"] == "applier").unwrap()["permissions"][0]
-        ["applyTargets"]
-        .clone();
-    let reviewer = profiles.iter_mut().find(|p| p["id"] == "reviewer").unwrap();
-    reviewer["permissions"][0]["operations"]
+    project["entities"][2]["changeRequest"]["review"] =
+        json!({"authority":"casework-a","policyId":"correction-review"});
+    project["entities"][2]["changeRequest"]["onApproved"] = json!({"mode":"manual"});
+    project["accessProfiles"]
         .as_array_mut()
         .unwrap()
-        .push(json!("apply_request"));
-    reviewer["permissions"][0]["applyTargets"] = apply_targets;
+        .retain(|profile| profile["id"] != "reviewer");
     let registry = Arc::new(
         compile_project(
             &parse_project_json(&serde_json::to_vec(&project).unwrap()).unwrap(),
@@ -847,22 +859,29 @@ async fn automatic_apply_rechecks_original_task_after_human_approval() {
     let identity = install(&db, &registry).await;
     let idp = MockIdp::start().await;
     let status = Arc::new(Status::default());
-    let app = app(&db, registry, identity, &idp, status.clone());
+    let app = app_with_services(
+        &db,
+        registry,
+        identity,
+        &idp,
+        Arc::clone(&status),
+        None,
+        Some(external_review_authority()),
+    );
     let steward = human(&idp, "steward", "maintain");
-    let reviewer = human(&idp, "reviewer", "review");
     let old = create(
         &app,
         "/v1/records/sites?accessProfile=steward",
         &steward,
-        "old-site",
+        "external-old-site",
         json!({"tenant":"tenant-a","name":"old"}),
     )
     .await;
-    let new = create(
+    let replacement = create(
         &app,
         "/v1/records/sites?accessProfile=steward",
         &steward,
-        "new-site",
+        "external-new-site",
         json!({"tenant":"tenant-a","name":"new"}),
     )
     .await;
@@ -870,62 +889,91 @@ async fn automatic_apply_rechecks_original_task_after_human_approval() {
         &app,
         "/v1/records/placements?accessProfile=steward",
         &steward,
-        "placement",
+        "external-placement",
         json!({"tenant":"tenant-a","site":id(&old)}),
     )
     .await;
     let (grant, token) = agent(&idp, &status);
-    let draft = create(&app, "/v1/records/correction-requests?accessProfile=submitter", &token,
-        "draft", json!({"tenant":"tenant-a","placement":id(&target),"proposedSite":id(&new),"reason":"synthetic correction"})).await;
+    let draft = create(
+        &app,
+        "/v1/records/correction-requests?accessProfile=submitter",
+        &token,
+        "external-draft",
+        json!({"tenant":"tenant-a","placement":id(&target),
+            "proposedSite":id(&replacement),"reason":"external review"}),
+    )
+    .await;
     let record = id(&draft);
     let submit = action(
         &get(&app, &record, "submitter", &token).await,
         "submit_request",
     );
+    let submitted = perform(&app, &submit, &token, "external-submit").await;
+    assert_eq!(submitted.status, StatusCode::OK, "{}", submitted.body);
+
+    let row = db
+        .admin
+        .query_one(
+            "SELECT a.binding,s.authority,s.policy_id,s.create_request
+               FROM registry_internal.registry_request_task_authority a
+               JOIN registry_internal.registry_request_review_submissions s
+                 ON s.request_entity_id=a.request_entity_id
+                AND s.request_id=a.request_id AND s.proposal_version=a.proposal_version
+              WHERE a.request_id=$1",
+            &[&Uuid::parse_str(&record).unwrap()],
+        )
+        .await
+        .expect("task authority and external review submission commit together");
+    let stored_binding: Value = row.get(0);
+    let create_request: Value = row.get(3);
+    assert_eq!(stored_binding["grantId"], grant);
+    assert_eq!(stored_binding["principal"], "agent-subject");
     assert_eq!(
-        perform(&app, &submit, &token, "submit").await.status,
-        StatusCode::OK
+        stored_binding["subjects"],
+        json!({"tenant_claim":"tenant-a"})
     );
-    let approve = action(
-        &get(&app, &record, "reviewer", &reviewer).await,
-        "approve_request",
-    );
-    let before = counts(&db).await;
-    let before_calls = status.calls();
-    // The approval check succeeds; revocation then precedes the automatic apply check.
-    *status.revoke_after_check.lock().unwrap() = Some(grant.clone());
-    let refused = perform(&app, &approve, &reviewer, "automatic-refused").await;
+    assert_eq!(row.get::<_, String>(1), "casework-a");
+    assert_eq!(row.get::<_, String>(2), "correction-review");
+    assert_eq!(create_request["subject"]["source"], PACKAGE);
+    assert_eq!(create_request["subject"]["type"], "change-request");
+    assert_eq!(create_request["subject"]["id"], record);
+    assert_eq!(create_request["subject"]["version"], "1");
+
+    let before = external_review_counts(&db).await;
+    let (_other_grant, other_token) = agent(&idp, &status);
+    let cross_grant = perform(&app, &submit, &other_token, "external-submit").await;
     assert_eq!(
-        refused.status,
-        StatusCode::PRECONDITION_FAILED,
-        "{}",
-        refused.body
+        cross_grant.status,
+        StatusCode::CONFLICT,
+        "a different task grant cannot recover the submitted proposal receipt"
     );
-    assert_eq!(
-        status.calls(),
-        before_calls + 2,
-        "automatic apply must reacquire original task status"
-    );
-    assert_eq!(
-        counts(&db).await,
-        before,
-        "refused automatic apply rolls back approval and mutation together"
-    );
-    // Restore the synthetic authority response to prove the same proposal can complete.
-    *status.revoke_after_check.lock().unwrap() = None;
-    status.revoked.lock().unwrap().remove(&grant);
-    let accepted = perform(&app, &approve, &reviewer, "automatic-accepted").await;
-    assert_eq!(accepted.status, StatusCode::OK, "{}", accepted.body);
-    let after = counts(&db).await;
-    assert_eq!(
-        after[4],
-        before[4] + 1,
-        "exactly one automatic application is recorded"
-    );
-    assert_eq!(
-        after[6], before[6],
-        "the original task binding is retained unchanged"
-    );
+    assert_eq!(external_review_counts(&db).await, before);
+
+    let expires = stored_binding["expiresAt"].as_u64().unwrap();
+    let bounds = stored_binding["bounds"].clone();
+    let substituted_subjects = json!({"tenant_claim":"tenant-b"});
+    let substituted = idp.mint_token(json!({
+        "aud":AUDIENCE,"sub":"agent-subject","client_id":"task-agent",
+        "registry_actor_kind":"agent","registry_grant_id":grant,
+        "registry_approver":"synthetic-approver","registry_grant_source_issuer":SOURCE,
+        "registry_grant_client":"task-agent","registry_grant_resource":AUDIENCE,
+        "registry_purpose":"review","registry_grant_exp":expires,
+        "registry_grant_bounds":bounds,"identity":substituted_subjects
+    }));
+    let subject_refusal = send(
+        &app,
+        Method::POST,
+        "/v1/records/correction-requests?accessProfile=submitter",
+        &substituted,
+        Some("substituted-subject-create"),
+        None,
+        json!({"data":{"tenant":"tenant-b","placement":id(&target),
+            "proposedSite":id(&replacement),"reason":"must be refused"}}),
+    )
+    .await;
+    assert_eq!(subject_refusal.status, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(external_review_counts(&db).await, before);
+
     db.cleanup().await;
 }
 
@@ -941,7 +989,7 @@ async fn evidence_apply_checks_original_task_before_disclosure_and_before_commit
         "subjectResolution":"trusted-provider-exact-selector"
     }]);
     source["entities"][2]["changeRequest"]["application"] = json!({
-        "mode":"manual", "preconditions":{"evidence":[{
+        "preconditions":{"evidence":[{
             "id":"farmer-status", "provider":"farmer-registry",
             "requirement":"urn:example:farmer:status-v1",
             "subjects":{"farmer":{"profile":"farmer-number-v1",
@@ -980,7 +1028,6 @@ async fn evidence_apply_checks_original_task_before_disclosure_and_before_commit
         )),
     );
     let steward = human(&idp, "steward", "maintain");
-    let reviewer = human(&idp, "reviewer", "review");
     let applier = human(&idp, "applier", "apply");
     let site = create(
         &app,
@@ -1022,22 +1069,8 @@ async fn evidence_apply_checks_original_task_before_disclosure_and_before_commit
             &get(&app, &record, "submitter", &token).await,
             "submit_request",
         );
-        assert_eq!(
-            perform(&app, &submit, &token, &format!("{phase}-submit"))
-                .await
-                .status,
-            StatusCode::OK
-        );
-        let review = action(
-            &get(&app, &record, "reviewer", &reviewer).await,
-            "approve_request",
-        );
-        assert_eq!(
-            perform(&app, &review, &reviewer, &format!("{phase}-review"))
-                .await
-                .status,
-            StatusCode::OK
-        );
+        let submitted = perform(&app, &submit, &token, &format!("{phase}-submit")).await;
+        assert_eq!(submitted.status, StatusCode::OK, "{}", submitted.body);
         let apply = action(
             &get(&app, &record, "applier", &applier).await,
             "apply_request",

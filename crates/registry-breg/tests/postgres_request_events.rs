@@ -96,7 +96,6 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
             "draft",
             "submitted",
             "submit",
-            None,
             &values,
             &schemas,
         ),
@@ -124,10 +123,9 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
             2,
             1,
             2,
-            "draft",
             "submitted",
-            "submit",
-            None,
+            "cancelled",
+            "cancel",
             &values,
             &schemas,
         ),
@@ -144,14 +142,9 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
     let invalid = migration.transaction().await.expect("transaction starts");
     let overlong_reason = "é".repeat(4097);
     for (transition, state, reason) in [
-        ("reject", "needs_changes", "mismatched transition state"),
-        (
-            "request_revision",
-            "rejected",
-            "mismatched transition state",
-        ),
-        ("reject", "rejected", overlong_reason.as_str()),
-        ("apply", "approved", "mismatched transition state"),
+        ("submit", "submitted", "reason is application-only"),
+        ("cancel", "cancelled", overlong_reason.as_str()),
+        ("apply", "submitted", "mismatched transition state"),
     ] {
         let mut event = lifecycle_event(
             request_id,
@@ -161,7 +154,6 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
             "submitted",
             state,
             transition,
-            Some("review"),
             &values,
             &schemas,
         );
@@ -189,10 +181,9 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
                 3,
                 1,
                 3,
+                "draft",
                 "submitted",
-                "approved",
-                "approve",
-                Some("review"),
+                "submit",
                 &values,
                 &schemas,
             ),
@@ -212,8 +203,8 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
         )
         .await
         .expect("outbox rows read");
-    assert_eq!(rows.len(), 1, "request/version/stage identity deduplicates");
-    assert_eq!(rows[0].get::<_, String>(1), "approval-ready");
+    assert_eq!(rows.len(), 1, "request/version identity deduplicates");
+    assert_eq!(rows[0].get::<_, String>(1), "request-submitted");
     assert_eq!(rows[0].get::<_, String>(2), "request_lifecycle");
     assert_eq!(rows[0].get::<_, String>(3), REQUEST_ENTITY);
     assert_eq!(rows[0].get::<_, i64>(4), 3);
@@ -221,23 +212,26 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
     let payload_text = rows[0].get::<_, String>(5);
     let envelope = parse_json_strict(payload_text.as_bytes()).expect("payload is strict JSON");
     assert_eq!(envelope["id"], rows[0].get::<_, Uuid>(0).to_string());
-    assert_eq!(envelope["type"], "approval-ready");
+    assert_eq!(envelope["type"], "request-submitted");
     assert_eq!(envelope["source"], EVENT_SOURCE);
     assert_eq!(envelope["subject"]["recordReference"], "request-reference");
     assert_eq!(envelope["subject"]["recordRevision"], 3);
     assert_eq!(envelope["causation"]["root"], envelope["id"]);
     assert_eq!(envelope["causation"]["hop"], 0);
-    assert_eq!(envelope["dataschema"], schemas["approval-ready"].as_str());
+    assert_eq!(
+        envelope["dataschema"],
+        schemas["request-submitted"].as_str()
+    );
     let payload = &envelope["data"];
     assert_eq!(payload["trigger"], "request_lifecycle");
     assert_eq!(payload["recordId"], request_id.to_string());
     assert_eq!(payload["revision"], 3);
     assert_eq!(payload["request"]["proposalVersion"], 1);
     assert_eq!(payload["request"]["workflowRevision"], 3);
-    assert_eq!(payload["request"]["transition"], "approve");
-    assert_eq!(payload["request"]["fromState"], "submitted");
-    assert_eq!(payload["request"]["toState"], "approved");
-    assert_eq!(payload["request"]["stage"], "review");
+    assert_eq!(payload["request"]["transition"], "submit");
+    assert_eq!(payload["request"]["fromState"], "draft");
+    assert_eq!(payload["request"]["toState"], "submitted");
+    assert!(payload["request"].get("stage").is_none());
     assert_eq!(payload["request"]["reasonPresent"], false);
     assert!(payload["request"].get("reason").is_none());
     assert_eq!(payload["request"]["effectDigest"], Value::Null);
@@ -299,7 +293,7 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
         .event_deliveries()
         .deliveries
         .iter()
-        .find(|delivery| delivery.event_id == "request-rejected")
+        .find(|delivery| delivery.event_id == "request-applied")
         .expect("compiled lifecycle delivery exists")
         .clone();
     let schemas = compiled_data_schemas(&compiled);
@@ -315,9 +309,8 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
         1,
         3,
         "submitted",
-        "rejected",
-        "reject",
-        Some("review"),
+        "applied",
+        "apply",
         &values,
         &schemas,
     );
@@ -345,7 +338,7 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
         .expect("payload carries consumer deduplication key")
         .to_owned();
     assert_eq!(payload["trigger"], "request_lifecycle");
-    assert_eq!(payload["request"]["transition"], "reject");
+    assert_eq!(payload["request"]["transition"], "apply");
     assert_eq!(payload["request"]["reason"], reason);
     assert_eq!(payload["request"]["reasonPresent"], true);
     assert!(captured.payload.len() > 4096 * 6);
@@ -523,7 +516,7 @@ async fn authenticated_webhook_service_event_material_does_not_grant_request_act
             &app,
             Method::POST,
             &format!(
-                "/v1/records/correction-requests/{}/actions/stages/review/approve?accessProfile=service",
+                "/v1/records/correction-requests/{}/actions/apply?accessProfile=service",
                 request.id
             ),
             Some(service_claims),
@@ -532,13 +525,12 @@ async fn authenticated_webhook_service_event_material_does_not_grant_request_act
                 ("idempotency-key", "event-callback-authority-attempt"),
                 ("if-match", &request.etag),
                 ("ce-id", "00000000-0000-4000-8000-000000000001"),
-                ("ce-type", "request-approved"),
+                ("ce-type", "request-applied"),
                 ("x-registry-signature", "sha256=fakesignature"),
                 ("x-registry-event-generation", "7"),
             ],
             serde_json::to_vec(&json!({
                 "proposalVersion": 1,
-                "stage": "review",
                 "effectDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
                 "callbackGranted": true,
                 "deduplicationKey": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
@@ -577,14 +569,13 @@ async fn authenticated_webhook_service_event_material_does_not_grant_request_act
 
 fn configured_events() -> BTreeMap<String, HookSource> {
     let event = HookSource {
-        id: "approval-ready".to_owned(),
+        id: "request-submitted".to_owned(),
         phase: HookPhase::After,
         trigger: EventTrigger::RequestLifecycle,
         projection: BTreeSet::from(["reason".to_owned()]),
         when: Some(EventConditionSource::RequestLifecycle {
-            transitions: BTreeSet::from(["approve".to_owned()]),
-            to_states: BTreeSet::from(["approved".to_owned()]),
-            stages: BTreeSet::from(["review".to_owned()]),
+            transitions: BTreeSet::from(["submit".to_owned()]),
+            to_states: BTreeSet::from(["submitted".to_owned()]),
         }),
         handler: None,
         principal: None,
@@ -604,11 +595,10 @@ fn compiled_lifecycle_registry_with_rejection() -> registry_breg::CompiledRegist
         .iter_mut()
         .find(|entity| entity.id == REQUEST_ENTITY)
         .expect("fixture declares request entity");
-    request.hooks[0].id = "request-rejected".to_owned();
+    request.hooks[0].id = "request-applied".to_owned();
     request.hooks[0].when = Some(EventConditionSource::RequestLifecycle {
-        transitions: BTreeSet::from(["reject".to_owned()]),
-        to_states: BTreeSet::from(["rejected".to_owned()]),
-        stages: BTreeSet::from(["review".to_owned()]),
+        transitions: BTreeSet::from(["apply".to_owned()]),
+        to_states: BTreeSet::from(["applied".to_owned()]),
     });
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("rejection event fixture compiles")
@@ -643,14 +633,13 @@ fn lifecycle_project() -> registry_breg::contract::RegistryProject {
             ],
             "hooks":[{
               "phase": "after",
-              "id":"request-approved",
+              "id":"request-applied",
               "trigger":"request_lifecycle",
               "projection":["reason"],
               "when":{
                 "kind":"request_lifecycle",
-                "transitions":["approve"],
-                "toStates":["approved"],
-                "stages":["review"]
+                "transitions":["apply"],
+                "toStates":["applied"]
               },
               "handler":{"kind":"url","destinationId":"review-operations"}
             }],
@@ -660,7 +649,8 @@ fn lifecycle_project() -> registry_breg::contract::RegistryProject {
                 "operation":"patch",
                 "set":{"site":{"fromField":"proposed-site"}}
               }],
-              "review":{"stages":[{"id":"review","approvals":1,"excludeSubmitter":true}]}
+              "review":{"authority":"casework-main","policyId":"placement-correction"},
+              "onApproved":{"mode":"manual"}
             }
           }],
           "accessProfiles":[{
@@ -688,13 +678,9 @@ fn lifecycle_project() -> registry_breg::contract::RegistryProject {
           },{
             "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],"permissions":[{
               "entity":"placement-correction-request",
-              "operations":["get","list","approve_request","reject_request","request_revision"],
+              "operations":["get","list"],
               "readableFields":["tenant","placement","proposed-site","reason"],
-              "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-              "reviewStages":[{
-                "stage":"review",
-                "targets":[{"entity":"asset-placement","readableFields":["site"],"rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
-              }]
+              "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
             }]
           },{
             "id":"service","principalClaim":"registry_principal","requiredPurposes":["webhook"],"permissions":[{
@@ -789,7 +775,7 @@ fn assert_lifecycle_delivery_request(
     assert_eq!(header(request, "ce-id"), event.event_id.to_string());
     assert_eq!(header(request, "ce-specversion"), "1.0");
     assert_eq!(header(request, "ce-source"), EVENT_SOURCE);
-    assert_eq!(header(request, "ce-type"), "request-rejected");
+    assert_eq!(header(request, "ce-type"), "request-applied");
     assert_eq!(header(request, "ce-dataschema"), event.data_schema);
     assert_eq!(
         header(request, "x-registry-event-generation"),
@@ -817,7 +803,6 @@ fn lifecycle_event<'a>(
     from_state: &'a str,
     to_state: &'a str,
     transition: &'a str,
-    stage_id: Option<&'a str>,
     request_values: &'a Map<String, Value>,
     data_schemas: &'a BTreeMap<String, String>,
 ) -> RequestLifecycleEvent<'a> {
@@ -831,7 +816,6 @@ fn lifecycle_event<'a>(
         from_state,
         to_state,
         transition,
-        stage_id,
         reason: None,
         effect_digest: None,
         package_revision: PACKAGE_REVISION,
@@ -856,8 +840,8 @@ const EVENT_SOURCE: &str =
 /// no compiled delivery.
 fn configured_data_schemas() -> BTreeMap<String, String> {
     BTreeMap::from([(
-        "approval-ready".to_owned(),
-        format!("urn:breg:event-schema:request-event-registry:{REQUEST_ENTITY}:approval-ready:sha256:{}", "a".repeat(64)),
+        "request-submitted".to_owned(),
+        format!("urn:breg:event-schema:request-event-registry:{REQUEST_ENTITY}:request-submitted:sha256:{}", "a".repeat(64)),
     )])
 }
 

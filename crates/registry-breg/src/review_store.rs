@@ -6,11 +6,16 @@
 //! A claimed job is committed before I/O and every response is written through
 //! an exact proposal and submission-digest comparison.
 
+use registry_platform_httputil::client::{
+    build_client, OutboundOptions, ServiceBaseUrl, TokenProvider,
+};
+use registry_platform_httputil::{read_bounded, validate_response_headers};
 use registry_review_client::{
     submission_digest, BearerToken, ReviewClient, ReviewClientError, ReviewCompletion,
     ReviewCompletionType, ReviewCreateRequest, ReviewRequestAccepted, ReviewResult,
     ReviewResultResponse, ReviewResultsQuery, SourceContextBinding, SubjectBinding,
 };
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, IF_MATCH};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -28,6 +33,147 @@ use crate::request_workflow::ProposalSnapshot;
 
 const SUBJECT_TYPE: &str = "change-request";
 const SUBMISSION_LEASE_SECONDS: i64 = 30;
+const MAX_APPLICATION_RESPONSE_BYTES: u64 = 256 * 1024;
+
+pub struct ReviewExecutorClient {
+    executor: String,
+    http: reqwest::Client,
+    base_url: ServiceBaseUrl,
+    token: BearerToken,
+    registry_id: String,
+    access_profile: String,
+    request_routes: BTreeMap<String, String>,
+}
+
+impl ReviewExecutorClient {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        executor: String,
+        endpoint: reqwest::Url,
+        token: BearerToken,
+        registry_id: String,
+        access_profile: String,
+        request_routes: BTreeMap<String, String>,
+        request_timeout: std::time::Duration,
+    ) -> Result<Self, ()> {
+        if executor.trim().is_empty()
+            || executor.len() > 128
+            || registry_id.trim().is_empty()
+            || registry_id.len() > 128
+            || access_profile.trim().is_empty()
+            || access_profile.len() > 128
+            || request_routes.is_empty()
+            || request_routes.iter().any(|(entity, route)| {
+                entity.is_empty()
+                    || entity.len() > 128
+                    || route.is_empty()
+                    || route.len() > 128
+                    || !route.bytes().all(|byte| {
+                        byte.is_ascii_lowercase()
+                            || byte.is_ascii_digit()
+                            || matches!(byte, b'-' | b'_')
+                    })
+            })
+        {
+            return Err(());
+        }
+        let base_url = ServiceBaseUrl::new(endpoint).map_err(|_| ())?;
+        let http = build_client(OutboundOptions {
+            request_timeout,
+            connect_timeout: request_timeout,
+            user_agent: Some("registry-breg-review-executor"),
+            trusted_root_certificates: None,
+        })
+        .map_err(|_| ())?;
+        Ok(Self {
+            executor,
+            http,
+            base_url,
+            token,
+            registry_id,
+            access_profile,
+            request_routes,
+        })
+    }
+}
+
+pub struct ReviewExecutorRegistry {
+    executors: BTreeMap<String, Arc<ReviewExecutorClient>>,
+}
+
+impl ReviewExecutorRegistry {
+    pub fn new(executors: BTreeMap<String, Arc<ReviewExecutorClient>>) -> Result<Self, ()> {
+        if executors.is_empty()
+            || executors
+                .iter()
+                .any(|(id, executor)| id != &executor.executor)
+        {
+            return Err(());
+        }
+        Ok(Self { executors })
+    }
+
+    async fn run_one(&self, client: &mut tokio_postgres::Client) -> Result<bool, MutationError> {
+        let Some(row) = client
+            .query_opt(
+                "SELECT executor,job_id
+                   FROM registry_internal.registry_request_application_jobs
+                  WHERE state IN ('queued','applying')
+                    AND next_attempt_at <= transaction_timestamp()
+                  ORDER BY next_attempt_at,created_at LIMIT 1",
+                &[],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+        else {
+            return Ok(false);
+        };
+        let executor: String = row.get(0);
+        let Some(configured) = self.executors.get(&executor) else {
+            let job_id: Uuid = row.get(1);
+            client
+                .execute(
+                    "UPDATE registry_internal.registry_request_application_jobs
+                        SET state='blocked',last_error_code='executor-unconfigured',
+                            updated_at=transaction_timestamp()
+                      WHERE job_id=$1 AND state IN ('queued','applying')",
+                    &[&job_id],
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            return Ok(true);
+        };
+        run_one_application(client, configured).await
+    }
+}
+
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn run_review_application_once_for_test(
+    client: &mut tokio_postgres::Client,
+    executor: &ReviewExecutorClient,
+) -> Result<bool, MutationError> {
+    run_one_application(client, executor).await
+}
+
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn run_review_authority_once_for_test(
+    pool: &crate::postgres::RuntimePool,
+    authorities: &ReviewAuthorityRegistry,
+) -> Result<bool, MutationError> {
+    let mut client = pool.get().await.map_err(|_| MutationError::Unavailable)?;
+    authorities.run_one(&mut client).await
+}
+
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn install_review_storage_for_test(
+    client: &impl GenericClient,
+    runtime_role: &SqlIdentifier,
+) -> Result<(), MutationError> {
+    install(client, runtime_role).await
+}
 
 #[async_trait::async_trait]
 pub trait ReviewResultSource: Send + Sync {
@@ -41,7 +187,7 @@ pub trait ReviewResultSource: Send + Sync {
 pub struct ReviewAuthorityClient {
     authority: String,
     client: ReviewClient,
-    token: BearerToken,
+    token_provider: Arc<dyn TokenProvider>,
     producer_id: String,
     recovery_days: u32,
     completion_token: Option<Zeroizing<String>>,
@@ -52,7 +198,7 @@ impl ReviewAuthorityClient {
     pub fn new(
         authority: String,
         client: ReviewClient,
-        token: BearerToken,
+        token_provider: Arc<dyn TokenProvider>,
         producer_id: String,
         recovery_days: u32,
         completion_token: Option<Zeroizing<String>>,
@@ -79,7 +225,7 @@ impl ReviewAuthorityClient {
         Ok(Self {
             authority,
             client,
-            token,
+            token_provider,
             producer_id,
             recovery_days,
             completion_token,
@@ -158,6 +304,13 @@ impl ReviewAuthorityRegistry {
         client: &tokio_postgres::Client,
         states: &[&str],
     ) -> Result<Option<Arc<ReviewAuthorityClient>>, MutationError> {
+        // Bind an owned PostgreSQL text array. A slice of borrowed `&str`
+        // values is not a supported tokio-postgres array parameter and fails
+        // before the query reaches PostgreSQL.
+        let states = states
+            .iter()
+            .map(|state| (*state).to_owned())
+            .collect::<Vec<_>>();
         let row = client
             .query_opt(
                 "SELECT authority
@@ -178,6 +331,14 @@ impl ReviewAuthorityRegistry {
     }
 
     async fn run_one(&self, client: &mut tokio_postgres::Client) -> Result<bool, MutationError> {
+        let erased_completions = erase_expired_review_completions(client).await?;
+        if erased_completions > 0 {
+            tracing::debug!(
+                erased = erased_completions,
+                "BReg review completion retention pass erased expired rows"
+            );
+            return Ok(true);
+        }
         if client
             .execute(
                 "UPDATE registry_internal.registry_request_review_submissions
@@ -197,22 +358,22 @@ impl ReviewAuthorityRegistry {
             .authority_for_pending(client, &["pending", "uncertain", "submitting"])
             .await?
         {
-            return run_one_submission(
-                client,
-                &authority.authority,
-                &authority.client,
-                &authority.token,
-            )
-            .await;
+            let token = authority
+                .token_provider
+                .bearer_token()
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            return run_one_submission(client, &authority.authority, &authority.client, &token)
+                .await;
         }
         if let Some(authority) = self.authority_for_pending(client, &["cancelling"]).await? {
-            return run_one_cancellation(
-                client,
-                &authority.authority,
-                &authority.client,
-                &authority.token,
-            )
-            .await;
+            let token = authority
+                .token_provider
+                .bearer_token()
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            return run_one_cancellation(client, &authority.authority, &authority.client, &token)
+                .await;
         }
         for authority in self.authorities.values() {
             if consume_result_feed(client, authority).await? {
@@ -238,22 +399,39 @@ impl ReviewAuthorityRegistry {
                 .authorities
                 .get(row.get::<_, String>(0).as_str())
                 .ok_or(MutationError::Unavailable)?;
-            return poll_one_result(
-                client,
-                &authority.authority,
-                &authority.client,
-                &authority.token,
-            )
-            .await;
+            let token = authority
+                .token_provider
+                .bearer_token()
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            return poll_one_result(client, &authority.authority, &authority.client, &token).await;
         }
         Ok(false)
     }
+}
+
+async fn erase_expired_review_completions(
+    client: &impl GenericClient,
+) -> Result<u64, MutationError> {
+    client
+        .execute(
+            "DELETE FROM registry_internal.registry_request_review_completions
+              WHERE expires_at <= transaction_timestamp()",
+            &[],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)
 }
 
 async fn consume_result_feed(
     client: &mut tokio_postgres::Client,
     authority: &ReviewAuthorityClient,
 ) -> Result<bool, MutationError> {
+    let token = authority
+        .token_provider
+        .bearer_token()
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
     let cursor = client
         .query_opt(
             "SELECT cursor FROM registry_internal.registry_request_review_feed_checkpoints
@@ -266,7 +444,7 @@ async fn consume_result_feed(
     let page = match authority
         .client
         .requester_results(
-            &authority.token,
+            &token,
             &ReviewResultsQuery {
                 cursor: cursor.as_deref(),
                 limit: Some(100),
@@ -391,14 +569,20 @@ impl ReviewCompletionReceiver {
 pub struct ReviewWorker {
     pool: crate::postgres::RuntimePool,
     authorities: Arc<ReviewAuthorityRegistry>,
+    executors: Option<Arc<ReviewExecutorRegistry>>,
 }
 
 impl ReviewWorker {
     pub fn new(
         pool: crate::postgres::RuntimePool,
         authorities: Arc<ReviewAuthorityRegistry>,
+        executors: Option<Arc<ReviewExecutorRegistry>>,
     ) -> Self {
-        Self { pool, authorities }
+        Self {
+            pool,
+            authorities,
+            executors,
+        }
     }
 
     pub async fn run(self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
@@ -407,11 +591,20 @@ impl ReviewWorker {
                 return;
             }
             let worked = match self.pool.get().await {
-                Ok(mut client) => self
-                    .authorities
-                    .run_one(&mut **client)
-                    .await
-                    .unwrap_or(false),
+                Ok(mut client) => {
+                    // A source apply whose response was lost is retried against
+                    // BReg before another Casework exchange. The source's
+                    // idempotency receipt is the application authority.
+                    let application_worked = match &self.executors {
+                        Some(executors) => executors.run_one(&mut client).await.unwrap_or(false),
+                        None => false,
+                    };
+                    if application_worked {
+                        true
+                    } else {
+                        self.authorities.run_one(&mut client).await.unwrap_or(false)
+                    }
+                }
                 Err(_) => false,
             };
             if worked {
@@ -452,7 +645,14 @@ impl ReviewResultSource for ReviewAuthorityClient {
         }
         let result = match self
             .client
-            .result(&self.token, accepted)
+            .result(
+                &self
+                    .token_provider
+                    .bearer_token()
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?,
+                accepted,
+            )
             .await
             .map_err(|_| MutationError::Unavailable)?
         {
@@ -660,6 +860,14 @@ pub(crate) async fn install(
                      last_error_code IS NULL OR
                      (last_error_code <> '' AND octet_length(last_error_code) <= 128)
                  ),
+                 action_href text CHECK (
+                     action_href IS NULL OR
+                     (action_href <> '' AND octet_length(action_href) <= 2048)
+                 ),
+                 action_if_match text CHECK (
+                     action_if_match IS NULL OR
+                     (action_if_match <> '' AND octet_length(action_if_match) <= 1024)
+                 ),
                  application_id uuid,
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
                  updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
@@ -667,8 +875,35 @@ pub(crate) async fn install(
                  FOREIGN KEY (request_entity_id, request_id, proposal_version)
                      REFERENCES registry_internal.registry_request_review_results,
                  CHECK ((state = 'applied' AND application_id IS NOT NULL)
-                     OR (state <> 'applied' AND application_id IS NULL))
+                     OR (state <> 'applied' AND application_id IS NULL)),
+                 CHECK ((action_href IS NULL) = (action_if_match IS NULL))
              );",
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    client
+        .batch_execute(
+            "ALTER TABLE registry_internal.registry_request_application_jobs
+                 ADD COLUMN IF NOT EXISTS action_href text;
+             ALTER TABLE registry_internal.registry_request_application_jobs
+                 ADD COLUMN IF NOT EXISTS action_if_match text;
+             DO $$ BEGIN
+                 ALTER TABLE registry_internal.registry_request_application_jobs
+                     ADD CONSTRAINT registry_request_application_jobs_action_href_check
+                     CHECK (action_href IS NULL OR
+                         (action_href <> '' AND octet_length(action_href) <= 2048));
+             EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+             DO $$ BEGIN
+                 ALTER TABLE registry_internal.registry_request_application_jobs
+                     ADD CONSTRAINT registry_request_application_jobs_action_if_match_check
+                     CHECK (action_if_match IS NULL OR
+                         (action_if_match <> '' AND octet_length(action_if_match) <= 1024));
+             EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+             DO $$ BEGIN
+                 ALTER TABLE registry_internal.registry_request_application_jobs
+                     ADD CONSTRAINT registry_request_application_jobs_action_binding_check
+                     CHECK ((action_href IS NULL) = (action_if_match IS NULL));
+             EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
@@ -751,7 +986,7 @@ pub(crate) async fn enqueue_submission(
               job_id, authority, producer_id, policy_id, idempotency_key, create_request,
               expected_submission_digest, on_approved_mode, executor, state,recovery_deadline)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',
-                     transaction_timestamp()+($14 * interval '1 day'))
+                     transaction_timestamp()+($14::bigint * interval '1 day'))
              ON CONFLICT DO NOTHING",
             &[
                 &request_entity_id,
@@ -854,7 +1089,7 @@ pub async fn claim_submission(
              )
              UPDATE registry_internal.registry_request_review_submissions s
                 SET state='submitting', attempt_count=attempt_count+1,
-                    lease_until=transaction_timestamp()+($1 * interval '1 second'),
+                    lease_until=transaction_timestamp()+($1::bigint * interval '1 second'),
                     updated_at=transaction_timestamp()
                FROM candidate c
               WHERE s.request_entity_id=c.request_entity_id
@@ -925,7 +1160,7 @@ pub async fn run_one_submission(
                 return Err(MutationError::PreconditionFailed);
             }
         }
-        Err(_) => {
+        Err(_error) => {
             client
                 .execute(
                     "UPDATE registry_internal.registry_request_review_submissions
@@ -956,7 +1191,7 @@ pub async fn run_one_cancellation(
     let Some(row) = client
         .query_opt(
             "UPDATE registry_internal.registry_request_review_submissions
-                SET lease_until=transaction_timestamp()+($1 * interval '1 second'),
+                SET lease_until=transaction_timestamp()+($1::bigint * interval '1 second'),
                     attempt_count=attempt_count+1,updated_at=transaction_timestamp()
               WHERE (request_entity_id,request_id,proposal_version)=(
                     SELECT request_entity_id,request_id,proposal_version
@@ -1267,6 +1502,428 @@ pub async fn poll_one_result(
     Ok(true)
 }
 
+struct ApplicationJob {
+    entity_id: String,
+    request_id: Uuid,
+    proposal_version: i64,
+    job_id: Uuid,
+    proposal_digest: String,
+    action_href: Option<String>,
+    action_if_match: Option<String>,
+}
+
+enum ApplicationDiscovery {
+    Action { href: String, if_match: String },
+    Applied(Uuid),
+}
+
+async fn run_one_application(
+    client: &mut tokio_postgres::Client,
+    executor: &ReviewExecutorClient,
+) -> Result<bool, MutationError> {
+    let Some(row) = client
+        .query_opt(
+            "UPDATE registry_internal.registry_request_application_jobs j
+                SET state='applying',attempt_count=attempt_count+1,
+                    next_attempt_at=transaction_timestamp()+interval '30 seconds',
+                    last_error_code=NULL,updated_at=transaction_timestamp()
+              WHERE (request_entity_id,request_id,proposal_version)=(
+                    SELECT q.request_entity_id,q.request_id,q.proposal_version
+                      FROM registry_internal.registry_request_application_jobs q
+                     WHERE q.executor=$1 AND q.state IN ('queued','applying')
+                       AND q.next_attempt_at <= transaction_timestamp()
+                     ORDER BY q.next_attempt_at,q.created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
+          RETURNING request_entity_id,request_id,proposal_version,job_id,proposal_digest,
+                    action_href,action_if_match",
+            &[&executor.executor],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?
+    else {
+        return Ok(false);
+    };
+    let mut job = ApplicationJob {
+        entity_id: row.get(0),
+        request_id: row.get(1),
+        proposal_version: row.get(2),
+        job_id: row.get(3),
+        proposal_digest: row.get(4),
+        action_href: row.get(5),
+        action_if_match: row.get(6),
+    };
+    if job.action_href.is_none() {
+        match discover_application(executor, &job).await {
+            Ok(ApplicationDiscovery::Applied(application_id)) => {
+                finish_application_job(client, &job, application_id).await?;
+                return Ok(true);
+            }
+            Ok(ApplicationDiscovery::Action { href, if_match }) => {
+                let updated = client
+                    .execute(
+                        "UPDATE registry_internal.registry_request_application_jobs
+                            SET action_href=$2,action_if_match=$3,updated_at=transaction_timestamp()
+                          WHERE job_id=$1 AND state='applying'
+                            AND action_href IS NULL AND action_if_match IS NULL",
+                        &[&job.job_id, &href, &if_match],
+                    )
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?;
+                if updated != 1 {
+                    return Err(MutationError::Unavailable);
+                }
+                job.action_href = Some(href);
+                job.action_if_match = Some(if_match);
+            }
+            Err(ApplicationExchangeError::Denied) => {
+                block_application_job(client, &job, "executor-denied").await?;
+                return Ok(true);
+            }
+            Err(ApplicationExchangeError::UnavailableAction) => {
+                block_application_job(client, &job, "source-action-unavailable").await?;
+                return Ok(true);
+            }
+            Err(ApplicationExchangeError::Transient) => return Ok(true),
+            Err(ApplicationExchangeError::InvalidResponse) => {
+                block_application_job(client, &job, "source-response-invalid").await?;
+                return Ok(true);
+            }
+            Err(ApplicationExchangeError::Stale) => return Err(MutationError::Unavailable),
+        }
+    }
+    match send_application(executor, &job).await {
+        Ok(application_id) => finish_application_job(client, &job, application_id).await?,
+        Err(ApplicationExchangeError::Denied) => {
+            block_application_job(client, &job, "executor-denied").await?
+        }
+        Err(ApplicationExchangeError::UnavailableAction) => {
+            block_application_job(client, &job, "source-action-unavailable").await?
+        }
+        Err(ApplicationExchangeError::InvalidResponse) => {
+            block_application_job(client, &job, "source-response-invalid").await?
+        }
+        Err(ApplicationExchangeError::Stale) => {
+            client
+                .execute(
+                    "UPDATE registry_internal.registry_request_application_jobs
+                        SET state='queued',action_href=NULL,action_if_match=NULL,
+                            next_attempt_at=transaction_timestamp(),last_error_code='source-precondition-changed',
+                            updated_at=transaction_timestamp()
+                      WHERE job_id=$1 AND state='applying'",
+                    &[&job.job_id],
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+        }
+        Err(ApplicationExchangeError::Transient) => {}
+    }
+    Ok(true)
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ApplicationExchangeError {
+    Denied,
+    UnavailableAction,
+    InvalidResponse,
+    Stale,
+    Transient,
+}
+
+async fn discover_application(
+    executor: &ReviewExecutorClient,
+    job: &ApplicationJob,
+) -> Result<ApplicationDiscovery, ApplicationExchangeError> {
+    let route = executor
+        .request_routes
+        .get(&job.entity_id)
+        .ok_or(ApplicationExchangeError::InvalidResponse)?;
+    let mut url = executor
+        .base_url
+        .join(&format!("v1/records/{route}/{}", job.request_id))
+        .map_err(|_| ApplicationExchangeError::InvalidResponse)?;
+    url.query_pairs_mut()
+        .append_pair("accessProfile", &executor.access_profile);
+    let response = executor
+        .http
+        .get(url)
+        .header(AUTHORIZATION, executor.token.authorization_header_value())
+        .header(ACCEPT, "application/json")
+        .send()
+        .await
+        .map_err(|_| ApplicationExchangeError::Transient)?;
+    if matches!(response.status().as_u16(), 401 | 403 | 404) {
+        return Err(ApplicationExchangeError::Denied);
+    }
+    if response.status() != reqwest::StatusCode::OK {
+        return if response.status().is_server_error() {
+            Err(ApplicationExchangeError::Transient)
+        } else {
+            Err(ApplicationExchangeError::InvalidResponse)
+        };
+    }
+    validate_response_headers(response.headers())
+        .map_err(|_| ApplicationExchangeError::InvalidResponse)?;
+    let body = read_bounded(response, MAX_APPLICATION_RESPONSE_BYTES)
+        .await
+        .map_err(|_| ApplicationExchangeError::Transient)?;
+    decode_application_discovery(executor, job, &body)
+}
+
+fn decode_application_discovery(
+    executor: &ReviewExecutorClient,
+    job: &ApplicationJob,
+    body: &[u8],
+) -> Result<ApplicationDiscovery, ApplicationExchangeError> {
+    let value: Value =
+        serde_json::from_slice(body).map_err(|_| ApplicationExchangeError::InvalidResponse)?;
+    let root = value
+        .as_object()
+        .ok_or(ApplicationExchangeError::InvalidResponse)?;
+    let data = root
+        .get("data")
+        .and_then(Value::as_object)
+        .ok_or(ApplicationExchangeError::InvalidResponse)?;
+    let meta = root
+        .get("meta")
+        .and_then(Value::as_object)
+        .ok_or(ApplicationExchangeError::InvalidResponse)?;
+    if meta.get("registryIdentifier").and_then(Value::as_str) != Some(executor.registry_id.as_str())
+        || meta.get("entityTypeIdentifier").and_then(Value::as_str) != Some(job.entity_id.as_str())
+        || data.get("recordIdentifier").and_then(Value::as_str)
+            != Some(job.request_id.to_string().as_str())
+    {
+        return Err(ApplicationExchangeError::InvalidResponse);
+    }
+    let request = data
+        .get("request")
+        .and_then(Value::as_object)
+        .ok_or(ApplicationExchangeError::InvalidResponse)?;
+    if request.get("proposalVersion").and_then(Value::as_i64) != Some(job.proposal_version)
+        || request.get("effectDigest").and_then(Value::as_str) != Some(job.proposal_digest.as_str())
+    {
+        return Err(ApplicationExchangeError::InvalidResponse);
+    }
+    if request.get("bregState").and_then(Value::as_str) == Some("applied") {
+        let application_id = request
+            .get("application")
+            .and_then(Value::as_object)
+            .and_then(|application| application.get("applicationId"))
+            .and_then(Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .ok_or(ApplicationExchangeError::InvalidResponse)?;
+        return Ok(ApplicationDiscovery::Applied(application_id));
+    }
+    if request.get("bregState").and_then(Value::as_str) != Some("submitted") {
+        return Err(ApplicationExchangeError::UnavailableAction);
+    }
+    let actions = request
+        .get("actions")
+        .and_then(Value::as_array)
+        .ok_or(ApplicationExchangeError::UnavailableAction)?;
+    let mut matches = actions.iter().filter_map(|action| {
+        let action = action.as_object()?;
+        (action.get("operation")?.as_str()? == "apply_request"
+            && action.get("method")?.as_str()? == "POST"
+            && action.get("proposalVersion")?.as_i64()? == job.proposal_version
+            && action.get("effectDigest")?.as_str()? == job.proposal_digest)
+            .then_some(action)
+    });
+    let action = matches
+        .next()
+        .filter(|_| matches.next().is_none())
+        .ok_or(ApplicationExchangeError::UnavailableAction)?;
+    let href = action
+        .get("href")
+        .and_then(Value::as_str)
+        .ok_or(ApplicationExchangeError::InvalidResponse)?;
+    validate_application_href(href, &executor.access_profile)?;
+    let if_match = action
+        .get("ifMatch")
+        .and_then(Value::as_str)
+        .filter(|value| {
+            value.len() <= 1024
+                && value.starts_with('"')
+                && value.ends_with('"')
+                && value.bytes().all(|byte| byte >= 0x21 && byte != 0x7f)
+        })
+        .ok_or(ApplicationExchangeError::InvalidResponse)?;
+    Ok(ApplicationDiscovery::Action {
+        href: href.to_owned(),
+        if_match: if_match.to_owned(),
+    })
+}
+
+fn validate_application_href(
+    href: &str,
+    access_profile: &str,
+) -> Result<(), ApplicationExchangeError> {
+    if href.is_empty()
+        || href.len() > 2048
+        || !href.starts_with("/v1/records/")
+        || href.starts_with("//")
+        || href.contains('#')
+    {
+        return Err(ApplicationExchangeError::InvalidResponse);
+    }
+    let (path, query) = href
+        .split_once('?')
+        .ok_or(ApplicationExchangeError::InvalidResponse)?;
+    if path.split('/').any(|segment| matches!(segment, "." | ".."))
+        || query != format!("accessProfile={}", percent_encode_query(access_profile))
+    {
+        return Err(ApplicationExchangeError::InvalidResponse);
+    }
+    Ok(())
+}
+
+fn percent_encode_query(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut output = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            output.push(char::from(byte));
+        } else {
+            output.push('%');
+            output.push(char::from(HEX[usize::from(byte >> 4)]));
+            output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    output
+}
+
+async fn send_application(
+    executor: &ReviewExecutorClient,
+    job: &ApplicationJob,
+) -> Result<Uuid, ApplicationExchangeError> {
+    let href = job
+        .action_href
+        .as_deref()
+        .ok_or(ApplicationExchangeError::InvalidResponse)?;
+    validate_application_href(href, &executor.access_profile)?;
+    let (path, query) = href
+        .trim_start_matches('/')
+        .split_once('?')
+        .ok_or(ApplicationExchangeError::InvalidResponse)?;
+    let mut url = executor
+        .base_url
+        .join(path)
+        .map_err(|_| ApplicationExchangeError::InvalidResponse)?;
+    url.set_query(Some(query));
+    let response = executor
+        .http
+        .post(url)
+        .header(AUTHORIZATION, executor.token.authorization_header_value())
+        .header(ACCEPT, "application/json")
+        .header(CONTENT_TYPE, "application/json")
+        .header(
+            IF_MATCH,
+            job.action_if_match
+                .as_deref()
+                .ok_or(ApplicationExchangeError::InvalidResponse)?,
+        )
+        .header("idempotency-key", format!("review-apply-{}", job.job_id))
+        .json(&json!({
+            "proposalVersion": job.proposal_version,
+            "effectDigest": job.proposal_digest,
+        }))
+        .send()
+        .await
+        .map_err(|_| ApplicationExchangeError::Transient)?;
+    if matches!(response.status().as_u16(), 401 | 403 | 404) {
+        return Err(ApplicationExchangeError::Denied);
+    }
+    if matches!(response.status().as_u16(), 409 | 412) {
+        return Err(ApplicationExchangeError::Stale);
+    }
+    if response.status() != reqwest::StatusCode::OK {
+        return if response.status().is_server_error() {
+            Err(ApplicationExchangeError::Transient)
+        } else {
+            Err(ApplicationExchangeError::InvalidResponse)
+        };
+    }
+    validate_response_headers(response.headers())
+        .map_err(|_| ApplicationExchangeError::InvalidResponse)?;
+    let body = read_bounded(response, MAX_APPLICATION_RESPONSE_BYTES)
+        .await
+        .map_err(|_| ApplicationExchangeError::Transient)?;
+    decode_application_receipt(job, &body)
+}
+
+fn decode_application_receipt(
+    job: &ApplicationJob,
+    body: &[u8],
+) -> Result<Uuid, ApplicationExchangeError> {
+    let value: Value =
+        serde_json::from_slice(body).map_err(|_| ApplicationExchangeError::InvalidResponse)?;
+    let root = value
+        .as_object()
+        .ok_or(ApplicationExchangeError::InvalidResponse)?;
+    let request = root
+        .get("request")
+        .and_then(Value::as_object)
+        .ok_or(ApplicationExchangeError::InvalidResponse)?;
+    if root.get("id").and_then(Value::as_str) != Some(job.request_id.to_string().as_str())
+        || request.get("bregState").and_then(Value::as_str) != Some("applied")
+        || request.get("proposalVersion").and_then(Value::as_i64) != Some(job.proposal_version)
+        || request.get("effectDigest").and_then(Value::as_str) != Some(job.proposal_digest.as_str())
+    {
+        return Err(ApplicationExchangeError::InvalidResponse);
+    }
+    let application = request
+        .get("application")
+        .and_then(Value::as_object)
+        .ok_or(ApplicationExchangeError::InvalidResponse)?;
+    if application.get("proposalVersion").and_then(Value::as_i64) != Some(job.proposal_version)
+        || application.get("effectDigest").and_then(Value::as_str)
+            != Some(job.proposal_digest.as_str())
+    {
+        return Err(ApplicationExchangeError::InvalidResponse);
+    }
+    application
+        .get("applicationId")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .ok_or(ApplicationExchangeError::InvalidResponse)
+}
+
+async fn finish_application_job(
+    client: &tokio_postgres::Client,
+    job: &ApplicationJob,
+    application_id: Uuid,
+) -> Result<(), MutationError> {
+    let updated = client
+        .execute(
+            "UPDATE registry_internal.registry_request_application_jobs
+                SET state='applied',application_id=$2,last_error_code=NULL,
+                    updated_at=transaction_timestamp()
+              WHERE job_id=$1 AND state='applying'",
+            &[&job.job_id, &application_id],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    if updated != 1 {
+        return Err(MutationError::Unavailable);
+    }
+    Ok(())
+}
+
+async fn block_application_job(
+    client: &tokio_postgres::Client,
+    job: &ApplicationJob,
+    code: &'static str,
+) -> Result<(), MutationError> {
+    client
+        .execute(
+            "UPDATE registry_internal.registry_request_application_jobs
+                SET state='blocked',last_error_code=$2,updated_at=transaction_timestamp()
+              WHERE job_id=$1 AND state='applying'",
+            &[&job.job_id, &code],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    Ok(())
+}
+
 fn result_status(status: registry_review_client::ReviewResultStatus) -> &'static str {
     match status {
         registry_review_client::ReviewResultStatus::Approved => "approved",
@@ -1361,8 +2018,12 @@ pub(crate) async fn read_projection(
     let mut result = json!({"state": result_state});
     if let Some(result_id) = row.get::<_, Option<Uuid>>(6) {
         result["resultId"] = json!(result_id);
-        result["completedAt"] = json!(row.get::<_, Option<String>>(7));
-        result["availableUntil"] = json!(row.get::<_, Option<String>>(8));
+        if let Some(completed_at) = row.get::<_, Option<String>>(7) {
+            result["completedAt"] = json!(completed_at);
+        }
+        if let Some(available_until) = row.get::<_, Option<String>>(8) {
+            result["availableUntil"] = json!(available_until);
+        }
     }
     let delivery_state = match row.get::<_, Option<String>>(12).as_deref() {
         None => "polling",
@@ -1375,7 +2036,9 @@ pub(crate) async fn read_projection(
     let mut delivery = json!({"state":delivery_state});
     if let Some(event_id) = row.get::<_, Option<Uuid>>(13) {
         delivery["eventId"] = json!(event_id);
-        delivery["receivedAt"] = json!(row.get::<_, Option<String>>(14));
+        if let Some(received_at) = row.get::<_, Option<String>>(14) {
+            delivery["receivedAt"] = json!(received_at);
+        }
     }
     let application_state = match row.get::<_, Option<String>>(9).as_deref() {
         Some("queued") => "queued",
@@ -1415,16 +2078,50 @@ fn application_mode(proposal: &ProposalSnapshot) -> &'static str {
 mod tests {
     use super::*;
 
+    fn executor() -> ReviewExecutorClient {
+        ReviewExecutorClient::new(
+            "registry-automatic".to_owned(),
+            "http://127.0.0.1:8080/registry-prefix/"
+                .parse()
+                .expect("URL"),
+            BearerToken::new("ordinary-executor-token").expect("token"),
+            "registry-a".to_owned(),
+            "automatic-applier".to_owned(),
+            BTreeMap::from([("requests".to_owned(), "requests".to_owned())]),
+            std::time::Duration::from_secs(1),
+        )
+        .expect("executor")
+    }
+
+    fn application_job() -> ApplicationJob {
+        ApplicationJob {
+            entity_id: "requests".to_owned(),
+            request_id: Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap(),
+            proposal_version: 7,
+            job_id: Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap(),
+            proposal_digest:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            action_href: None,
+            action_if_match: None,
+        }
+    }
+
     fn authority(id: &str, completion: Option<(&str, &str)>) -> Arc<ReviewAuthorityClient> {
-        let client = ReviewClient::new(registry_review_client::ReviewClientConfig::new(
-            "https://casework.example.test/".parse().expect("URL"),
-        ))
+        let client = ReviewClient::new(
+            registry_review_client::ReviewClientConfig::new(
+                "https://casework.example.test/".parse().expect("URL"),
+            )
+            .with_profile("producer"),
+        )
         .expect("client");
         Arc::new(
             ReviewAuthorityClient::new(
                 id.to_owned(),
                 client,
-                BearerToken::new("outgoing-token".to_owned()).expect("outgoing token"),
+                Arc::new(
+                    registry_platform_httputil::StaticToken::new("outgoing-token".to_owned())
+                        .expect("outgoing token"),
+                ),
                 format!("{id}-producer"),
                 30,
                 completion.map(|(token, _)| Zeroizing::new(token.to_owned())),
@@ -1482,5 +2179,106 @@ mod tests {
             registry.submission_binding("casework-a"),
             Some(("casework-a-producer", 30))
         );
+    }
+
+    #[test]
+    fn automatic_executor_discovers_only_the_exact_source_action_binding() {
+        let executor = executor();
+        let job = application_job();
+        let response = json!({
+            "data": {
+                "recordIdentifier": job.request_id,
+                "revisionIdentifier": "3",
+                "domainData": {},
+                "request": {
+                    "bregState": "submitted",
+                    "proposalVersion": job.proposal_version,
+                    "effectDigest": job.proposal_digest,
+                    "editable": false,
+                    "actions": [{
+                        "operation": "apply_request",
+                        "method": "POST",
+                        "href": format!(
+                            "/v1/records/requests/{}/actions/apply?accessProfile=automatic-applier",
+                            job.request_id
+                        ),
+                        "ifMatch": "\"breg-request-etag\"",
+                        "proposalVersion": job.proposal_version,
+                        "effectDigest": job.proposal_digest,
+                    }]
+                }
+            },
+            "meta": {
+                "registryIdentifier": "registry-a",
+                "datasetIdentifier": "requests",
+                "entityTypeIdentifier": "requests"
+            }
+        });
+        let decoded =
+            decode_application_discovery(&executor, &job, &serde_json::to_vec(&response).unwrap());
+        assert!(matches!(decoded, Ok(ApplicationDiscovery::Action { .. })));
+
+        for pointer in [
+            "/meta/registryIdentifier",
+            "/data/request/effectDigest",
+            "/data/request/actions/0/effectDigest",
+            "/data/request/actions/0/href",
+        ] {
+            let mut substituted = response.clone();
+            *substituted.pointer_mut(pointer).expect("fixture pointer") =
+                Value::String("substituted".to_owned());
+            assert!(matches!(
+                decode_application_discovery(
+                    &executor,
+                    &job,
+                    &serde_json::to_vec(&substituted).unwrap()
+                ),
+                Err(ApplicationExchangeError::InvalidResponse)
+                    | Err(ApplicationExchangeError::UnavailableAction)
+            ));
+        }
+    }
+
+    #[test]
+    fn automatic_executor_accepts_only_an_exact_application_receipt() {
+        let job = application_job();
+        let application_id = Uuid::parse_str("00000000-0000-4000-8000-000000000003").unwrap();
+        let receipt = json!({
+            "id": job.request_id,
+            "revision": 4,
+            "snapshot": "breg1_00000000-0000-4000-8000-000000000004",
+            "actorReference": "actor",
+            "request": {
+                "bregState": "applied",
+                "proposalVersion": job.proposal_version,
+                "effectDigest": job.proposal_digest,
+                "application": {
+                    "applicationId": application_id,
+                    "proposalVersion": job.proposal_version,
+                    "effectDigest": job.proposal_digest,
+                    "appliedAt": "2026-09-19T00:00:00Z"
+                }
+            }
+        });
+        assert_eq!(
+            decode_application_receipt(&job, &serde_json::to_vec(&receipt).unwrap())
+                .expect("exact receipt"),
+            application_id
+        );
+
+        for pointer in [
+            "/id",
+            "/request/proposalVersion",
+            "/request/application/effectDigest",
+            "/request/application/applicationId",
+        ] {
+            let mut substituted = receipt.clone();
+            *substituted.pointer_mut(pointer).expect("fixture pointer") =
+                Value::String("substituted".to_owned());
+            assert!(matches!(
+                decode_application_receipt(&job, &serde_json::to_vec(&substituted).unwrap()),
+                Err(ApplicationExchangeError::InvalidResponse)
+            ));
+        }
     }
 }

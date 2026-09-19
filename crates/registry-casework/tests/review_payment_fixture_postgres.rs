@@ -1,28 +1,46 @@
 #![cfg(feature = "postgres-test")]
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     env,
     sync::{Arc, Mutex},
 };
 
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    routing::post,
+    Json, Router,
+};
+use chrono::{TimeDelta, Utc};
 use registry_casework::{
-    CaseworkService, DatabaseConfig, PostgresStore, ReviewResultRead, ReviewTaskDecisionRequest,
+    router, CaseworkAuthenticator, CaseworkService, DatabaseConfig, HttpState, HumanIdentityConfig,
+    PostgresStore, ReviewResultRead, ReviewTaskDecisionRequest,
 };
 use registry_casework_core::{
     AccessProfile, ActorContext, CaseworkIdentity, CaseworkProject, CaseworkRole, ContentDigest,
     InboxPolicy, IssuerPrincipal, QueuePolicy, ReviewCompletion, ReviewCompletionDestinationPolicy,
     ReviewCompletionType, ReviewContext, ReviewContextStrategy, ReviewCreateRequest,
-    ReviewKindPolicy, ReviewKindPurpose, ReviewProducerPolicy, ReviewResult, ReviewResultStatus,
-    ReviewRetentionPolicy, ReviewStagePolicy, ReviewerDecisionKind, SubjectBinding,
+    ReviewKindPolicy, ReviewKindPurpose, ReviewProducerPolicy, ReviewRequestAccepted, ReviewResult,
+    ReviewResultFeedPage, ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy,
+    ReviewTaskPage, ReviewerDecisionKind, SubjectBinding, CASEWORK_PROFILE_HEADER,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
+use registry_platform_httputil::FetchUrlPolicy;
+use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
+use registry_platform_testing::{oidc_verifier_config, MockIdp};
 use serde_json::json;
+use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
 const ISSUER: &str = "https://payments.example.test";
 const BATCH_ID: &str = "batch-2026-09";
+const AUDIENCE: &str = "urn:test:casework-payment-review";
+const RECEIVER_TOKEN: &str = "payment-sender-secret-canary";
+const RECEIVER_BINDING: &str = "payment-service-recipient-canary";
+const PRIVATE_REFERENCE: &str = "private-payment-reference-canary";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum PaymentBatchState {
@@ -44,6 +62,144 @@ struct PaymentBatch {
 struct PaymentStore {
     batch: Arc<Mutex<Option<PaymentBatch>>>,
     completion_events: Arc<Mutex<BTreeSet<Uuid>>>,
+}
+
+#[derive(Clone, Default)]
+struct ReceiverStore {
+    inbox: Arc<Mutex<BTreeMap<Uuid, ReviewCompletion>>>,
+    known_requests: Arc<Mutex<BTreeSet<Uuid>>>,
+    lost_ack_events: Arc<Mutex<BTreeSet<Uuid>>>,
+}
+
+impl ReceiverStore {
+    fn register_request(&self, request_id: Uuid) {
+        self.known_requests
+            .lock()
+            .expect("receiver request lock")
+            .insert(request_id);
+    }
+
+    fn unmatched_count(&self) -> usize {
+        let known = self.known_requests.lock().expect("receiver request lock");
+        self.inbox
+            .lock()
+            .expect("receiver inbox lock")
+            .values()
+            .filter(|event| !known.contains(&event.request_id))
+            .count()
+    }
+
+    fn record_feed(&self, page: &ReviewResultFeedPage) {
+        let mut inbox = self.inbox.lock().expect("receiver inbox lock");
+        for entry in &page.items {
+            inbox.entry(entry.event_id).or_insert(ReviewCompletion {
+                event_type: ReviewCompletionType::ReviewCompleted,
+                event_id: entry.event_id,
+                request_id: entry.request_id,
+                result_id: entry.result_id,
+                completed_at: entry.completed_at,
+            });
+        }
+    }
+
+    fn diagnostics(&self) -> String {
+        let accepted = self.inbox.lock().expect("receiver inbox lock").len();
+        let unmatched = self.unmatched_count();
+        format!("accepted={accepted} unmatched={unmatched}")
+    }
+}
+
+#[derive(Clone)]
+struct ReceiverHttpState {
+    store: ReceiverStore,
+}
+
+async fn receive_completion(
+    State(state): State<ReceiverHttpState>,
+    headers: HeaderMap,
+    Json(event): Json<ReviewCompletion>,
+) -> impl IntoResponse {
+    let authenticated = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == format!("Bearer {RECEIVER_TOKEN}"));
+    if !authenticated {
+        return StatusCode::UNAUTHORIZED;
+    }
+    let intended_recipient = headers
+        .get("registry-recipient-binding")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == RECEIVER_BINDING);
+    if !intended_recipient {
+        return StatusCode::FORBIDDEN;
+    }
+    let idempotency_matches = headers
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == event.event_id.to_string());
+    if !idempotency_matches {
+        return StatusCode::BAD_REQUEST;
+    }
+
+    let inserted = {
+        let mut inbox = state.store.inbox.lock().expect("receiver inbox lock");
+        match inbox.get(&event.event_id) {
+            Some(existing) if existing == &event => false,
+            Some(_) => return StatusCode::CONFLICT,
+            None => {
+                inbox.insert(event.event_id, event.clone());
+                true
+            }
+        }
+    };
+    if inserted
+        && state
+            .store
+            .lost_ack_events
+            .lock()
+            .expect("receiver lost acknowledgement lock")
+            .insert(event.event_id)
+    {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+    StatusCode::NO_CONTENT
+}
+
+struct LoopbackServer {
+    base_url: String,
+    shutdown: Option<oneshot::Sender<()>>,
+    task: JoinHandle<()>,
+}
+
+impl LoopbackServer {
+    async fn start(app: Router) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("loopback server listener");
+        let address = listener.local_addr().expect("loopback server address");
+        let (shutdown, stopped) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = stopped.await;
+                })
+                .await
+                .expect("loopback server");
+        });
+        Self {
+            base_url: format!("http://{address}"),
+            shutdown: Some(shutdown),
+            task,
+        }
+    }
+
+    async fn stop(mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        self.task.abort();
+        let _ = self.task.await;
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,7 +243,7 @@ impl PaymentStore {
                 version: batch.version.clone(),
                 digest: batch.digest.clone(),
             },
-            requester_reference: "payment-review-2026-09".to_owned(),
+            requester_reference: PRIVATE_REFERENCE.to_owned(),
             initiator: None,
             context: ReviewContext::Submitted {
                 snapshot: json!({
@@ -151,7 +307,6 @@ fn profile(id: &str, role: CaseworkRole) -> AccessProfile {
         principal_claim: "sub".to_owned(),
         required_scopes: vec![format!("casework:{id}")],
         role,
-        kinds: Vec::new(),
     }
 }
 
@@ -166,7 +321,7 @@ fn actor(subject: &str, role: CaseworkRole, profile_id: &str) -> ActorContext {
     }
 }
 
-fn project() -> CaseworkProject {
+fn project(issuer: &str) -> CaseworkProject {
     CaseworkProject {
         api_version: registry_casework_core::CASEWORK_API_VERSION.to_owned(),
         kind: registry_casework_core::CASEWORK_KIND.to_owned(),
@@ -185,7 +340,6 @@ fn project() -> CaseworkProject {
             label: "Payment review".to_owned(),
         }],
         sources: Vec::new(),
-        hosted_kinds: Vec::new(),
         review_kinds: vec![ReviewKindPolicy {
             id: "payment-batch".to_owned(),
             version: "1".to_owned(),
@@ -220,7 +374,7 @@ fn project() -> CaseworkProject {
         review_producers: vec![ReviewProducerPolicy {
             id: "payments".to_owned(),
             profile: "payments".to_owned(),
-            issuer: ISSUER.to_owned(),
+            issuer: issuer.to_owned(),
             subject: "payment-service".to_owned(),
             trusted_initiator_issuer: None,
             source_namespaces: vec!["payments".to_owned()],
@@ -228,7 +382,7 @@ fn project() -> CaseworkProject {
             recovery_days: 7,
             completion: Some(ReviewCompletionDestinationPolicy {
                 destination_id: "payment-results".to_owned(),
-                recipient_binding: "payment-service".to_owned(),
+                recipient_binding: RECEIVER_BINDING.to_owned(),
             }),
         }],
         calendars: Vec::new(),
@@ -238,7 +392,14 @@ fn project() -> CaseworkProject {
     }
 }
 
-async fn fixture() -> (CaseworkService, tokio_postgres::Client) {
+async fn fixture_for_issuer(
+    issuer: &str,
+) -> (
+    CaseworkService,
+    PostgresStore,
+    tokio_postgres::Client,
+    CaseworkProject,
+) {
     let base = env::var("CASEWORK_REVIEW_TEST_DATABASE_URL")
         .expect("CASEWORK_REVIEW_TEST_DATABASE_URL is required for the payment fixture");
     let schema = format!("review_payment_{}", Uuid::new_v4().simple());
@@ -279,20 +440,31 @@ async fn fixture() -> (CaseworkService, tokio_postgres::Client) {
         .batch_execute(
             "INSERT INTO casework_teams(team_id,revision) VALUES('payment-team',1);
              INSERT INTO casework_queue_service(queue_id,team_id,revision)
-             VALUES('payment-review','payment-team',1);
-             INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
-             VALUES('payment-team','https://payments.example.test','reviewer','staff');",
+             VALUES('payment-review','payment-team',1);",
         )
         .await
         .expect("seed payment reviewer");
-    let project = project();
+    database
+        .execute(
+            "INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
+             VALUES('payment-team',$1,'reviewer','staff')",
+            &[&issuer],
+        )
+        .await
+        .expect("bind payment reviewer issuer");
+    let project = project(issuer);
     project.check().expect("payment review project");
     let service = CaseworkService::new(
-        store,
-        project,
+        store.clone(),
+        project.clone(),
         Vec::<Arc<dyn registry_casework_core::SourceAdapter>>::new(),
     )
     .expect("payment review service");
+    (service, store, database, project)
+}
+
+async fn fixture() -> (CaseworkService, tokio_postgres::Client) {
+    let (service, _, database, _) = fixture_for_issuer(ISSUER).await;
     (service, database)
 }
 
@@ -300,7 +472,7 @@ async fn fixture() -> (CaseworkService, tokio_postgres::Client) {
 async fn independent_payment_source_uses_casework_but_retains_release_authority() {
     let (service, database) = fixture().await;
     let payments = PaymentStore::default();
-    payments.create(125_00).expect("valid payment batch");
+    payments.create(12_500).expect("valid payment batch");
     let request = payments.submit_for_review().expect("freeze payment batch");
     let producer = actor("payment-service", CaseworkRole::Requester, "payments");
     let reviewer = actor("reviewer", CaseworkRole::Staff, "reviewer");
@@ -373,4 +545,407 @@ async fn independent_payment_source_uses_casework_but_retains_release_authority(
             .expect("recover payment receipt"),
         receipt
     );
+}
+
+#[tokio::test]
+async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_boundaries() {
+    let idp = MockIdp::start().await;
+    let (service, _, database, project) = fixture_for_issuer(&idp.issuer()).await;
+    let authenticator = CaseworkAuthenticator::new(
+        &project,
+        oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]),
+        Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            idp.jwks_uri(),
+            JwksFetcherConfig::defaults(),
+            FetchUrlPolicy::dev(),
+        )),
+        HumanIdentityConfig::default(),
+    );
+    let casework = LoopbackServer::start(router(HttpState {
+        service,
+        authenticator: Arc::new(authenticator),
+        project: Arc::new(project),
+    }))
+    .await;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("payment HTTP client");
+    let producer_token = idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "sub": "payment-service",
+        "scope": "casework:payments",
+        "registry_actor_kind": "service"
+    }));
+    let reviewer_token = idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "sub": "reviewer",
+        "scope": "casework:reviewer",
+        "registry_actor_kind": "human"
+    }));
+
+    let payments = PaymentStore::default();
+    payments.create(12_500).expect("valid payment batch");
+    let request = payments.submit_for_review().expect("freeze payment batch");
+    let created = client
+        .post(format!("{}/v1/review-requests", casework.base_url))
+        .bearer_auth(&producer_token)
+        .header(CASEWORK_PROFILE_HEADER, "payments")
+        .header("idempotency-key", "submit-payment-over-http")
+        .json(&request)
+        .send()
+        .await
+        .expect("submit payment review over HTTP");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created: ReviewRequestAccepted = created
+        .json()
+        .await
+        .expect("payment review accepted response");
+
+    let mut withdrawn_request = request.clone();
+    withdrawn_request.subject.id = "withdrawn-payment-batch".to_owned();
+    withdrawn_request.subject.digest = ContentDigest::for_bytes(b"withdrawn-payment-batch");
+    withdrawn_request.requester_reference = "withdrawn-payment-reference".to_owned();
+    withdrawn_request.context = ReviewContext::Submitted {
+        snapshot: json!({
+            "batchId": "withdrawn-payment-batch",
+            "amountMinor": 12500,
+            "currency": "USD"
+        }),
+    };
+    let withdrawn = client
+        .post(format!("{}/v1/review-requests", casework.base_url))
+        .bearer_auth(&producer_token)
+        .header(CASEWORK_PROFILE_HEADER, "payments")
+        .header("idempotency-key", "submit-withdrawn-payment")
+        .json(&withdrawn_request)
+        .send()
+        .await
+        .expect("submit payment that will be withdrawn");
+    assert_eq!(withdrawn.status(), StatusCode::CREATED);
+    let withdrawn: ReviewRequestAccepted = withdrawn
+        .json()
+        .await
+        .expect("withdrawn payment accepted response");
+    let cancelled = client
+        .post(format!(
+            "{}/v1/review-requests/{}/cancel",
+            casework.base_url, withdrawn.request_id
+        ))
+        .bearer_auth(&producer_token)
+        .header(CASEWORK_PROFILE_HEADER, "payments")
+        .header("idempotency-key", "withdraw-payment-before-review")
+        .json(&registry_casework_core::ReviewCancelRequest {
+            subject: withdrawn_request.subject,
+            reason: "Payment batch withdrawn before review".to_owned(),
+        })
+        .send()
+        .await
+        .expect("withdraw payment review");
+    assert_eq!(cancelled.status(), StatusCode::OK);
+    let cancelled_result = client
+        .get(format!(
+            "{}/v1/review-requests/{}/result",
+            casework.base_url, withdrawn.request_id
+        ))
+        .bearer_auth(&producer_token)
+        .header(CASEWORK_PROFILE_HEADER, "payments")
+        .send()
+        .await
+        .expect("read withdrawn payment result");
+    assert_eq!(cancelled_result.status(), StatusCode::OK);
+    let cancelled_result: ReviewResult = cancelled_result
+        .json()
+        .await
+        .expect("withdrawn payment result");
+    assert_eq!(cancelled_result.status, ReviewResultStatus::Cancelled);
+    assert_eq!(
+        payments.release(true, &cancelled_result),
+        Err(PaymentError::NotApproved)
+    );
+
+    let tasks = client
+        .get(format!("{}/v1/review-tasks", casework.base_url))
+        .bearer_auth(&reviewer_token)
+        .header(CASEWORK_PROFILE_HEADER, "reviewer")
+        .send()
+        .await
+        .expect("list payment review tasks");
+    assert_eq!(tasks.status(), StatusCode::OK);
+    let tasks: ReviewTaskPage = tasks.json().await.expect("payment review task page");
+    assert_eq!(tasks.items.len(), 1);
+    let task_id = tasks.items[0].task_id;
+    let claimed = client
+        .post(format!(
+            "{}/v1/review-tasks/{task_id}/claim",
+            casework.base_url
+        ))
+        .bearer_auth(&reviewer_token)
+        .header(CASEWORK_PROFILE_HEADER, "reviewer")
+        .header("if-match", "\"1\"")
+        .header("idempotency-key", "claim-payment-over-http")
+        .send()
+        .await
+        .expect("claim payment review over HTTP");
+    assert_eq!(claimed.status(), StatusCode::OK);
+    let decided = client
+        .post(format!(
+            "{}/v1/review-tasks/{task_id}/decisions",
+            casework.base_url
+        ))
+        .bearer_auth(&reviewer_token)
+        .header(CASEWORK_PROFILE_HEADER, "reviewer")
+        .header("if-match", "\"2\"")
+        .header("idempotency-key", "approve-payment-over-http")
+        .json(&ReviewTaskDecisionRequest {
+            decision: ReviewerDecisionKind::Approve,
+        })
+        .send()
+        .await
+        .expect("approve payment review over HTTP");
+    assert_eq!(decided.status(), StatusCode::NO_CONTENT);
+    let result = client
+        .get(format!(
+            "{}/v1/review-requests/{}/result",
+            casework.base_url, created.request_id
+        ))
+        .bearer_auth(&producer_token)
+        .header(CASEWORK_PROFILE_HEADER, "payments")
+        .send()
+        .await
+        .expect("poll approved payment result");
+    assert_eq!(result.status(), StatusCode::OK);
+    let result: ReviewResult = result.json().await.expect("approved payment result");
+    assert_eq!(result.status, ReviewResultStatus::Approved);
+    let completion_event_id: Uuid = database
+        .query_one(
+            "SELECT event_id FROM casework_review_terminal_events WHERE request_id=$1",
+            &[&result.request_id],
+        )
+        .await
+        .expect("approved payment completion event")
+        .get(0);
+
+    let completion = ReviewCompletion {
+        event_type: ReviewCompletionType::ReviewCompleted,
+        event_id: completion_event_id,
+        request_id: result.request_id,
+        result_id: result.result_id,
+        completed_at: result.completed_at,
+    };
+    let completion_body = serde_json::to_string(&completion).expect("completion JSON");
+    for canary in [
+        RECEIVER_TOKEN,
+        RECEIVER_BINDING,
+        PRIVATE_REFERENCE,
+        BATCH_ID,
+    ] {
+        assert!(!completion_body.contains(canary));
+    }
+
+    let receiver_store = ReceiverStore::default();
+    let receiver = LoopbackServer::start(
+        Router::new()
+            .route("/completion", post(receive_completion))
+            .with_state(ReceiverHttpState {
+                store: receiver_store.clone(),
+            }),
+    )
+    .await;
+    let wrong_sender = client
+        .post(format!("{}/completion", receiver.base_url))
+        .bearer_auth("wrong-sender-secret-canary")
+        .header("registry-recipient-binding", RECEIVER_BINDING)
+        .header("idempotency-key", completion.event_id.to_string())
+        .json(&completion)
+        .send()
+        .await
+        .expect("wrong sender completion response");
+    assert_eq!(wrong_sender.status(), StatusCode::UNAUTHORIZED);
+    assert!(wrong_sender
+        .bytes()
+        .await
+        .expect("wrong sender body")
+        .is_empty());
+    let wrong_recipient = client
+        .post(format!("{}/completion", receiver.base_url))
+        .bearer_auth(RECEIVER_TOKEN)
+        .header(
+            "registry-recipient-binding",
+            "different-payment-recipient-canary",
+        )
+        .header("idempotency-key", completion.event_id.to_string())
+        .json(&completion)
+        .send()
+        .await
+        .expect("wrong recipient completion response");
+    assert_eq!(wrong_recipient.status(), StatusCode::FORBIDDEN);
+    assert!(wrong_recipient
+        .bytes()
+        .await
+        .expect("wrong recipient body")
+        .is_empty());
+    assert_eq!(
+        receiver_store.inbox.lock().expect("receiver inbox").len(),
+        0
+    );
+
+    let lost_ack = client
+        .post(format!("{}/completion", receiver.base_url))
+        .bearer_auth(RECEIVER_TOKEN)
+        .header("registry-recipient-binding", RECEIVER_BINDING)
+        .header("idempotency-key", completion.event_id.to_string())
+        .json(&completion)
+        .send()
+        .await
+        .expect("lost acknowledgement completion response");
+    assert_eq!(lost_ack.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(receiver_store.unmatched_count(), 1);
+    receiver.stop().await;
+
+    let restarted_receiver = LoopbackServer::start(
+        Router::new()
+            .route("/completion", post(receive_completion))
+            .with_state(ReceiverHttpState {
+                store: receiver_store.clone(),
+            }),
+    )
+    .await;
+    let duplicate = client
+        .post(format!("{}/completion", restarted_receiver.base_url))
+        .bearer_auth(RECEIVER_TOKEN)
+        .header("registry-recipient-binding", RECEIVER_BINDING)
+        .header("idempotency-key", completion.event_id.to_string())
+        .json(&completion)
+        .send()
+        .await
+        .expect("duplicate completion after receiver restart");
+    assert_eq!(duplicate.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        receiver_store.inbox.lock().expect("receiver inbox").len(),
+        1
+    );
+
+    receiver_store.register_request(created.request_id);
+    assert_eq!(receiver_store.unmatched_count(), 0);
+    assert!(payments.accept_completion(&completion));
+    assert!(!payments.accept_completion(&completion));
+    let receipt = payments
+        .release(true, &result)
+        .expect("release exact approved payment after unmatched reconciliation");
+    assert_eq!(
+        payments
+            .release(true, &result)
+            .expect("recover payment release after duplicate completion"),
+        receipt
+    );
+
+    let now = Utc::now();
+    database
+        .execute(
+            "UPDATE casework_review_terminal_events
+             SET completed_at=$2,retained_until=$3 WHERE request_id=$1",
+            &[
+                &created.request_id,
+                &(now - TimeDelta::minutes(2)),
+                &(now + TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("order pushed payment event first");
+    database
+        .execute(
+            "UPDATE casework_review_terminal_events
+             SET completed_at=$2,retained_until=$3 WHERE request_id=$1",
+            &[
+                &withdrawn.request_id,
+                &(now - TimeDelta::minutes(1)),
+                &(now + TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("order withdrawn payment event second");
+    let first_feed = client
+        .get(format!("{}/v1/review-results?limit=1", casework.base_url))
+        .bearer_auth(&producer_token)
+        .header(CASEWORK_PROFILE_HEADER, "payments")
+        .send()
+        .await
+        .expect("read first payment result feed page");
+    assert_eq!(first_feed.status(), StatusCode::OK);
+    let first_feed_bytes = first_feed.bytes().await.expect("first feed bytes");
+    let first_feed: ReviewResultFeedPage =
+        serde_json::from_slice(&first_feed_bytes).expect("first payment feed page");
+    assert_eq!(first_feed.items.len(), 1);
+    assert_eq!(first_feed.items[0].event_id, completion.event_id);
+    receiver_store.record_feed(&first_feed);
+    assert_eq!(
+        receiver_store.inbox.lock().expect("receiver inbox").len(),
+        1
+    );
+    let cursor = first_feed.next_cursor.expect("payment feed cursor");
+
+    database
+        .execute(
+            "UPDATE casework_review_terminal_events
+             SET retained_until=now()-interval '1 second' WHERE event_id=$1",
+            &[&completion.event_id],
+        )
+        .await
+        .expect("expire payment feed cursor event");
+    let expired_cursor = client
+        .get(format!(
+            "{}/v1/review-results?limit=1&cursor={cursor}",
+            casework.base_url
+        ))
+        .bearer_auth(&producer_token)
+        .header(CASEWORK_PROFILE_HEADER, "payments")
+        .send()
+        .await
+        .expect("read expired payment feed cursor");
+    assert_eq!(expired_cursor.status(), StatusCode::GONE);
+    let expired_cursor_body = expired_cursor
+        .bytes()
+        .await
+        .expect("expired payment cursor body");
+    let restarted_feed = client
+        .get(format!("{}/v1/review-results?limit=1", casework.base_url))
+        .bearer_auth(&producer_token)
+        .header(CASEWORK_PROFILE_HEADER, "payments")
+        .send()
+        .await
+        .expect("restart payment result feed");
+    assert_eq!(restarted_feed.status(), StatusCode::OK);
+    let restarted_feed_bytes = restarted_feed.bytes().await.expect("restarted feed bytes");
+    let restarted_feed: ReviewResultFeedPage =
+        serde_json::from_slice(&restarted_feed_bytes).expect("restarted payment feed page");
+    assert_eq!(restarted_feed.items.len(), 1);
+    assert_eq!(restarted_feed.items[0].request_id, withdrawn.request_id);
+    receiver_store.record_feed(&restarted_feed);
+    receiver_store.register_request(withdrawn.request_id);
+    assert_eq!(
+        receiver_store.inbox.lock().expect("receiver inbox").len(),
+        2
+    );
+    assert_eq!(receiver_store.unmatched_count(), 0);
+
+    let diagnostics = receiver_store.diagnostics();
+    for canary in [
+        RECEIVER_TOKEN,
+        RECEIVER_BINDING,
+        PRIVATE_REFERENCE,
+        BATCH_ID,
+        "wrong-sender-secret-canary",
+        "different-payment-recipient-canary",
+    ] {
+        assert!(!String::from_utf8_lossy(&first_feed_bytes).contains(canary));
+        assert!(!String::from_utf8_lossy(&expired_cursor_body).contains(canary));
+        assert!(!String::from_utf8_lossy(&restarted_feed_bytes).contains(canary));
+        assert!(!diagnostics.contains(canary));
+    }
+
+    drop(client);
+    restarted_receiver.stop().await;
+    casework.stop().await;
+    drop(idp);
 }

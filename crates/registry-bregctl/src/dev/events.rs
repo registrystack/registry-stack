@@ -559,7 +559,8 @@ mod tests {
             }));
             project["entities"][0]["changeRequest"] = json!({
                 "effects":[{"target":{"fromField":"target"}, "operation":"patch", "set":{"label":{"fromField":"proposed-label"}}}],
-                "review":{"stages":[{"id":"review", "approvals":1, "excludeSubmitter":true}]}
+                "review":{"authority":"casework", "policyId":"record-change"},
+                "onApproved":{"mode":"manual"}
             });
             project["entities"].as_array_mut().unwrap().push(json!({
                 "id":"target-record", "primaryDataset":"test-dataset", "route":"target-records", "mutationMode":"mutable", "classification":"internal",
@@ -571,10 +572,9 @@ mod tests {
             project["accessProfiles"] = json!([{
                 "id":"operator", "default":true, "principalClaim":"registry_principal",
                 "permissions":[{
-                    "entity":"record", "operations":["create", "get", "list", "patch", "submit_request", "approve_request", "apply_request"],
+                    "entity":"record", "operations":["create", "get", "list", "patch", "submit_request", "apply_request"],
                     "readableFields":["label", "target", "proposed-label"],
                     "writableFields":["label", "target", "proposed-label"], "rowBoundaries":[],
-                    "reviewStages":[{"stage":"review", "targets":[{"entity":"target-record", "readableFields":["label"], "rowBoundaries":[]}]}],
                     "applyTargets":[{"entity":"target-record", "rowBoundaries":[]}]
                 }]
             }]);
@@ -976,7 +976,7 @@ mod tests {
         let (root, port, _receiver) = fixture_with_contract(EventTrigger::RequestLifecycle, false);
         let valid = json!({
             "proposalVersion":1, "workflowRevision":2, "transition":"submit",
-            "fromState":"draft", "toState":"submitted", "stage":null,
+            "fromState":"draft", "toState":"submitted",
             "effectDigest":null, "deduplicationKey":"sha256:synthetic",
             "reasonPresent":false
         });
@@ -993,7 +993,6 @@ mod tests {
             ("transition", json!(false)),
             ("fromState", json!(1)),
             ("toState", json!([])),
-            ("stage", json!({})),
             ("effectDigest", json!(7)),
             ("deduplicationKey", Value::Null),
             ("reasonPresent", Value::Null),

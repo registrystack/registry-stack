@@ -70,6 +70,39 @@ pub struct RoutingFieldDescriptor {
     pub schema: Value,
 }
 
+/// Check that an imported source descriptor carries a compilable generated
+/// JSON Schema before an adapter becomes active.
+pub fn check_source_field_descriptor(descriptor: &RoutingFieldDescriptor) -> bool {
+    JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .compile(&descriptor.schema)
+        .is_ok()
+}
+
+/// Validate one current source value against the exact generated descriptor
+/// imported for that source field. Adapters use this before releasing a
+/// caller-authorized review-context projection.
+pub fn validate_source_field_value(
+    descriptor: &RoutingFieldDescriptor,
+    value: &Value,
+) -> Result<(), RoutingDiagnostic> {
+    let schema = JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .compile(&descriptor.schema)
+        .map_err(|_| {
+            RoutingDiagnostic::new(
+                format!("source.fields.{}", descriptor.field),
+                RoutingDiagnosticReason::UnknownField,
+            )
+        })?;
+    schema.validate(value).map_err(|_| {
+        RoutingDiagnostic::new(
+            format!("source.fields.{}", descriptor.field),
+            RoutingDiagnosticReason::InvalidSourceValue,
+        )
+    })
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RoutingSourceMetadata {

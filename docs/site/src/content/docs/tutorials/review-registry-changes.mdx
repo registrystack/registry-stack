@@ -1,11 +1,11 @@
 ---
 title: Review changes before updating a registry
-description: Test an approval workflow, change a review stage, and check that direct writes cannot bypass review.
+description: Author and inspect a BReg change request whose review is owned by Registry Casework, then verify that source application remains separately authorized.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-08"
+last_reviewed: "2026-09-20"
 doc_type: tutorial
 persona:
   - data publisher
@@ -15,427 +15,98 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If you are evaluating Base Registry Engine for data that needs approval, this tutorial takes you through
-an asset-location correction: propose a different site, collect two approvals, and apply the change.
-A change request is a record that proposes a write to another record and carries it out only after the
-review its configuration requires, and a review stage is one named round of that review with its own
-approval count and its own deciding profiles, both declared in
-[declare change requests and actions](../../configure/breg-change-control/).
-You will run the supplied workflow against PostgreSQL, adapt its configuration, and check a refusal.
+BReg owns the proposal, its frozen effects, source authorization, application guards, and the
+application receipt. Registry Casework owns reviewer stages and the review result. This tutorial
+checks the BReg half of that boundary before you connect the two services.
 
 <QuickstartMeta
-  outcome="A tested approval workflow with a review stage you configured"
-  time="About 25 minutes, plus the PostgreSQL image download"
-  level="Local evaluation only"
-  prerequisites={[
-    'The binaries from Create and query your first registry, and git',
-    'Running Docker, and two terminals',
-    'PostgreSQL client tools (psql) and OpenSSL',
-    'Python 3.11 or later, uv, and an editor',
-  ]}
+  outcome="A checked BReg request type with a frozen external-review binding and separately authorized application."
+  time="About 15 minutes"
+  level="Local authoring"
+  prerequisites={['bregctl from the same Registry Stack release as your project', 'A shell and an editor']}
 />
 
-## Before you start
+## Copy the maintained example
 
-[Create and query your first registry](../first-breg/) installs `breg` and `bregctl`.
-The example project, and the launcher this tutorial borrows a database from, live in the repository,
-so clone it at the version you installed:
-
-```sh
-installed="$(bregctl --version | awk '{print $2}')"
-git clone --depth 1 --branch "v$installed" https://github.com/registrystack/registry-stack.git breg-tutorial
-cd breg-tutorial
-```
-
-The project is pre-1.0, so the default branch may carry changes the installed binaries do not
-implement; pinning the checkout keeps the launcher and the binaries on one contract.
-
-Confirm the binaries answer from that checkout:
-
-```sh
-bregctl --version
-```
-
-This tutorial adds two requirements to that setup.
-The example runner calls `psql` directly, so confirm the PostgreSQL client tools are installed:
-
-```sh
-psql --version
-```
-
-It also needs a disposable PostgreSQL database, which you borrow from the quickstart launcher in
-step 3 rather than from any database you already run.
-
-Run commands from the root of that clone unless a step says otherwise.
-The workflow runs through `bregctl test`, which sends requests through the real HTTP
-router with separate caller credentials and a disposable database.
-It does not leave the change-request example running as an HTTP service.
-
-{/* Evidence: products/breg/scripts/test-change-request-examples.sh, require_tool;
-    crates/registry-bregctl/src/test_lifecycle.rs;
-    crates/registry-breg/src/fixtures.rs;
-    crates/registry-breg/src/change_request.rs. */}
-
-## Check the example project
-
-Copy the supplied example into a working directory so your edits leave the original unchanged,
-then check it:
+From a Registry Stack checkout, copy the asset placement example:
 
 ```sh
 mkdir -p tutorial-work
-cp -R products/breg/acceptance/asset-site-placement-change-requests tutorial-work/asset-corrections
+cp -R products/breg/acceptance/asset-site-placement-change-requests \
+  tutorial-work/asset-corrections
 bregctl check tutorial-work/asset-corrections
 ```
 
-The check passes, prints the compiled configuration's digest, and lists 26 findings under four
-codes.
-A code reported against more than one path states its sentence once and lists the paths beneath it;
-the first group and the summary line are kept below, the other three groups omitted:
+The request entity declares the effect BReg will freeze and the logical review authority and
+policy Casework will evaluate:
 
-```text
-Authoring check passed.
-  revision  sha256:<configuration-digest>
-
-  finding  access.profile.no_required_scope  7 paths
-           no scope restricts who may select this profile; any authenticated principal
-           satisfying its purpose and row claims qualifies. Add a required scope unless
-           this is intended
-             entities[id=asset-item].accessProfiles[id=asset-operator].requiredScopes
-             entities[id=asset-item].accessProfiles[id=site-planner].requiredScopes
-             entities[id=asset-placement].accessProfiles[id=asset-operator].requiredScopes
-             entities[id=asset-placement].accessProfiles[id=site-planner].requiredScopes
-             entities[id=asset-site].accessProfiles[id=asset-operator].requiredScopes
-             entities[id=asset-site].accessProfiles[id=site-planner].requiredScopes
-             entities[id=inspection-event].accessProfiles[id=asset-operator].requiredScopes
-
-0 errors, 26 findings.
+```yaml
+changeRequest:
+  effects:
+    - target: {fromField: placement}
+      operation: patch
+      set:
+        site: {fromField: proposed-site}
+  review:
+    authority: casework
+    policyId: asset-placement-correction
+  onApproved:
+    mode: manual
+  retention:
+    mode: operator_erase
 ```
 
-Findings are advisories, not failures.
-The first code is about who may select a profile: `asset-operator` and `site-planner` declare no
-required scope, so any authenticated caller with the right purpose qualifies.
-Each `correction-` profile declares a scope of its own, which is why none of them appear in that group.
-The three remaining codes are about row authority instead.
-They name grants that hold no claim-bound row restriction, within the operations and fields each
-grant allows, and a grant that includes `list` can therefore list every row.
-Leave the findings as they are for this tutorial; `--deny-findings` turns them into failures when
-you want a project held to that bar.
-Every check that passes in this tutorial repeats them, so read past them to the summary line.
-A check that is refused prints its errors instead, and you will meet one at the end.
+`review` is part of the immutable proposal binding. It is not a local BReg stage declaration.
+`onApproved.mode: manual` means an ordinary caller must still hold the current `apply_request`
+grant and every required `applyTargets` grant after BReg has reconciled an exact approved result.
 
-## Explain the workflow
+{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml;
+    crates/registry-breg/src/change_request.rs;
+    crates/registry-breg/src/request_workflow.rs. */}
 
-You have a valid request type without writing server code, and no database has changed yet.
-Ask the CLI to describe what it compiled:
+## Inspect the compiled boundary
 
 ```sh
 bregctl --format json explain change-requests tutorial-work/asset-corrections \
   > tutorial-work/change-requests.json
-python3 - tutorial-work/change-requests.json <<'PY'
-import json
-import sys
-explanation = json.load(open(sys.argv[1]))["explanation"]
-request = explanation["requests"][0]
-print(request["requestEntity"], request["requestRoute"])
-for stage in request["stages"]:
-    print(stage["id"], stage["approvals"])
-for action in request["actions"]:
-    print(action["operation"], action["stage"] or "-", ",".join(action["preconditions"]))
-PY
 ```
 
-```text
-placement-correction-request placement-correction-requests
-review 1
-final-approval 1
-submit_request - Idempotency-Key,If-Match
-revise_request - Idempotency-Key,If-Match
-cancel_request - Idempotency-Key,If-Match
-apply_request - Idempotency-Key,If-Match,proposalVersion,effectDigest
-approve_request review Idempotency-Key,If-Match,proposalVersion,effectDigest
-reject_request review Idempotency-Key,If-Match,proposalVersion,effectDigest
-request_revision review Idempotency-Key,If-Match,proposalVersion,effectDigest
-approve_request final-approval Idempotency-Key,If-Match,proposalVersion,effectDigest
-reject_request final-approval Idempotency-Key,If-Match,proposalVersion,effectDigest
-request_revision final-approval Idempotency-Key,If-Match,proposalVersion,effectDigest
-```
+Inspect `tutorial-work/change-requests.json`. The request has only four source lifecycle actions:
+`submit_request`, `revise_request`, `cancel_request`, and `apply_request`. It also carries the
+frozen review requirement, approved-application mode, effects, target entities, and application
+grants. It has no BReg reviewer action or stage route.
 
-The example requires one approval at each of two stages.
-Every action needs an `Idempotency-Key` and an `If-Match`; a decision or an apply also binds to
-the `proposalVersion` and `effectDigest` the caller read.
-The JSON file also lists the compiled effects, the planner, the grants of each role, and the request bounds.
-This example declares a fixed `effects` list, so the planner `kind` is `declarative`;
-[plan effects with a Rhai script](../../configure/breg-change-control/#plan-effects-with-a-rhai-script)
-is the alternative.
+Submission freezes request values, target identities and revisions, the effect digest, the review
+requirement, and application preconditions. A later package cannot silently change that proposal.
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs, explain_change_requests;
-    crates/registry-breg/src/rhai_planner.rs;
-    products/breg/acceptance/asset-site-placement-change-requests/registry.yaml. */}
+## Check source roles
 
-## Find the rule you are testing
+The example separates these BReg roles:
 
-Open `tutorial-work/asset-corrections/registry.yaml` and find the `placement-correction-request`
-entity.
-Its `changeRequest` block declares one effect, a `patch` of the referenced placement's `site`, and
-the two stages the explanation listed:
+- The submitter creates and edits its own draft, then submits, revises, or cancels it.
+- A request reader may receive `review_state` when its `readableRequestFields` grants that
+  disclosure. Reading review state does not grant a Casework decision or BReg application.
+- The applier holds `apply_request` and the required `applyTargets`. BReg rechecks both at use.
+
+Casework policy defines reviewer eligibility, stages, approval counts, and independence. Configure
+that policy in Casework rather than adding reviewer operations to BReg access profiles.
+
+To use an automatic source application, change the authored binding to:
 
 ```yaml
-      review:
-        stages:
-          - {id: review, approvals: 1, excludeSubmitter: true}
-          - {id: final-approval, approvals: 1, excludeSubmitter: true}
+onApproved:
+  mode: automatic
+  executor: corrections-applier
 ```
 
-Submitting and approving a request store a proposal; only an apply carries out the effect.
-Now find the `asset-placement` entity above it:
+The BReg runtime must separately bind `corrections-applier` to an ordinary credential and source
+profile. Automatic application follows the same authenticated HTTP action and guards as manual
+application. A completion notification is never authority to write the target.
 
-```yaml
-    changeControl:
-      requiredFor: [patch]
-```
+## Continue with the combined journey
 
-This makes patching a placement a controlled operation.
-The ordinary placement grants omit `patch`, so the only way to change a placement's site is an
-applied request, and you test that rule in the last step.
-The four `correction-*` profiles split the work between a submitter, a reviewer for the `review`
-stage, a supervisor for `final-approval`, and an applier;
-[split the roles across profiles](../../configure/breg-change-control/#split-the-roles-across-profiles)
-explains each grant and the `retention` mode the example selects.
-
-{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml;
-    crates/registry-breg/src/request_workflow.rs;
-    crates/registry-breg/src/request_retention.rs. */}
-
-## Start a disposable database
-
-In a second terminal, at the root of the same clone, start the local quickstart.
-You are borrowing its disposable PostgreSQL cluster, which the runner reaches over TLS with the
-quickstart's certificate authority.
-The `--installed` flag makes the launcher use the `breg` and `bregctl` you installed
-rather than building them from the checkout.
-
-:::caution[Disposable local services]
-The quickstart refuses an existing `products/breg/quickstart/.run` directory so
-it cannot overwrite retained or unrelated state.
-Do not run two quickstarts in the same clone.
-Stopping the launcher removes its database container and the records inside it.
-Keep real data and production credentials out of this tutorial.
-:::
-
-```sh
-products/breg/quickstart/run.sh --installed
-```
-
-Wait for this line, then leave the terminal running:
-
-```text
-Base Registry Engine quickstart is ready.
-```
-
-## Run the approval workflow
-
-Return to your first terminal and create a Python environment for the example runner's YAML support:
-
-```sh
-uv venv tutorial-work/venv
-uv pip install --python tutorial-work/venv/bin/python 'PyYAML==6.0.2'
-export PATH="$PWD/tutorial-work/venv/bin:$PATH"
-```
-
-Success installs PyYAML into your working directory rather than changing your system Python.
-
-Create a private connection file from the quickstart's generated credentials, so the database
-password never enters your shell history:
-
-:::caution[Local database credentials]
-The file grants administrative access to the disposable cluster.
-Do not share or commit it, and do not substitute a production database.
-The example runner sources the file as shell code, so use only the file you create yourself.
-:::
-
-```sh
-python3 - "$PWD/products/breg/quickstart/.run" tutorial-work/test.env <<'PY'
-from pathlib import Path
-from urllib.parse import urlsplit
-import shlex
-import sys
-run = Path(sys.argv[1])
-connection = urlsplit((run / "project/.breg/dev/secrets/runtime-database-url").read_text().strip())
-database = dict(
-    line.split("=", 1)
-    for line in (run / "project/.breg/dev/database/postgres.env").read_text().splitlines()
-    if "=" in line
-)
-url = f"postgresql://{database['POSTGRES_USER']}:{database['POSTGRES_PASSWORD']}@localhost:{connection.port}/postgres"
-values = {
-    "BREG_TEST_DATABASE_URL": url,
-    "BREG_TEST_TLS_CA_PEM_PATH": str(run / "project/.breg/dev/tls/ca.pem"),
-}
-target = Path(sys.argv[2])
-target.touch(mode=0o600)
-target.write_text("".join(
-    f"export {name}={shlex.quote(value)}\n" for name, value in values.items()
-))
-PY
-products/breg/scripts/test-change-request-examples.sh --installed \
-  --env tutorial-work/test.env --asset-project "$PWD/tutorial-work/asset-corrections"
-```
-
-The `--installed` flag makes the runner use the same installed `breg` and `bregctl`.
-Look for these lines in its output:
-
-```text
-running change-request fixture: asset-site-placement-change-requests
-change-request fixture passed: asset-site-placement-change-requests
-running change-request fixture: publicschema-household-change-requests
-change-request fixture passed: publicschema-household-change-requests
-running change-request fixture: person-name-change-rhai
-change-request fixture passed: person-name-change-rhai
-```
-
-The runner checks and tests your copy, the unchanged household example, and a third example whose
-effects a Rhai planner computes.
-Each run creates its own test databases and roles and removes them on exit.
-The quickstart's generic registry stays separate from those test databases.
-
-Open `tests/journeys.yaml` in your copy.
-A journey is a sequence of API calls with the status and fields expected from each response.
-This one creates an asset, two sites, and a placement, drafts the correction, submits it, collects
-both approvals, and applies it.
-Each action step names its caller's profile, the operation, and for a decision the stage.
-The routes behind those steps, and the `request.actions[]` members a client reads before each call,
-are in the [API reference](../../reference/breg-api/#change-requests).
-
-{/* Evidence: products/breg/quickstart/run.sh;
-    products/breg/quickstart/support/quickstart.py, prepare;
-    products/breg/scripts/test-change-request-examples.sh;
-    products/breg/acceptance/asset-site-placement-change-requests/tests/journeys.yaml;
-    products/breg/generated/asset-site-placement-change-requests/generated/openapi.json;
-    crates/registry-breg/src/fixtures.rs;
-    crates/registry-breg/src/request_workflow.rs. */}
-
-## Rename the second stage
-
-Rename `final-approval` to `operations-approval` in your copied `registry.yaml`, in two places:
-the stage's `id` and the `correction-supervisor` grant's `reviewStages` entry.
-Then change the `stage` of the `approve-final-stage` step in `tests/journeys.yaml` to the same
-name.
-The step and capture identifiers can keep their original names.
-
-Your stage, grant, and journey step now agree on who approves what:
-
-```yaml
-          - {id: operations-approval, approvals: 1, excludeSubmitter: true}
-```
-
-```yaml
-        reviewStages:
-          - stage: operations-approval
-```
-
-```yaml
-          operation: approve_request
-          stage: operations-approval
-```
-
-Run the structural check and the database journey again:
-
-```sh
-bregctl check tutorial-work/asset-corrections
-products/breg/scripts/test-change-request-examples.sh --installed \
-  --env tutorial-work/test.env --asset-project "$PWD/tutorial-work/asset-corrections"
-```
-
-The check reports a different configuration digest with the same findings, and all three fixtures
-pass again.
-You changed the stage name, its authority grant, and the caller's action without changing server
-code.
-For a new stage rather than a rename, you would also add its GET and approval steps to the journey.
-
-{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml;
-    products/breg/acceptance/asset-site-placement-change-requests/tests/journeys.yaml;
-    products/breg/scripts/test-change-request-examples.sh. */}
-
-## Check that a direct write is refused
-
-In your copied `registry.yaml`, find the `asset-operator` grant for `asset-placement`.
-Temporarily add `patch` to its operations:
-
-```yaml
-operations: [create, get, list, patch]
-```
-
-```sh
-bregctl check tutorial-work/asset-corrections
-```
-
-```text
-bregctl check refused.
-
-  error    change_control.direct_write_grant  entities[id=asset-placement].accessProfiles[id=asset-operator].operations
-           a controlled mutation operation cannot remain directly granted
-
-1 error, 0 findings.
-```
-
-This is an expected refusal: a grant cannot bypass the placement's `changeControl` rule.
-Remove `patch` from that grant and rerun the check; it passes again.
-
-{/* Evidence: crates/registry-breg/src/change_request.rs;
-    products/breg/acceptance/asset-site-placement-change-requests/registry.yaml. */}
-
-## Cleanup
-
-The example runner already removed its temporary databases, roles, and credentials.
-In the second terminal, press `Ctrl+C` to stop the quickstart services and remove its container.
-
-Your copied project remains in `tutorial-work/asset-corrections`.
-To keep that project but remove the tutorial connection file:
-
-```sh
-rm -f tutorial-work/test.env
-```
-
-:::caution[Generated local secrets]
-The quickstart leaves keys, credentials, and logs under its `.run` directory.
-After stopping the services, remove that directory if you no longer need those files.
-This also deletes the quickstart's generated project, but not your separate copy.
-:::
-
-```sh
-rm -rf products/breg/quickstart/.run
-```
-
-## What you built
-
-You tested a proposal with its own schema, two approval stages, and a controlled effect on an
-existing record.
-You changed one stage and verified that an ordinary write grant cannot override change control.
-These are local authoring and database tests; packaging and activating the configuration for your
-deployment are separate steps.
-
-## Troubleshooting
-
-| Symptom | Next move |
-| --- | --- |
-| `check` prints findings | Findings are advisories; the first line is the verdict. Pass `--deny-findings` when you want them to fail the check. |
-| The quickstart cannot start Docker or a service | Start Docker and check the named prerequisite. Inspect `.run/logs/` without sharing secrets. |
-| The database connection is refused or the certificate fails | Keep the quickstart running and recreate `test.env` after restarting it. Each run has new ports and certificates. |
-| Python cannot import `yaml` | Repeat the virtual environment installation and `PATH` assignment in your first terminal. |
-| Renaming the stage makes `check` fail | Match the stage `id` to the supervisor's `reviewStages` entry. |
-| The runner reports `test.step.failed` | Its path `journeys[0].steps[<n>]` counts the steps of `tests/journeys.yaml` from zero. Check that step's `stage` and expected status. |
-| `change-requests` is not a recognized explain subject | Your `bregctl` predates the checkout. Confirm that `bregctl --version` matches the checkout's tag, then reinstall or clone again so they agree. |
-| `command not found` for `bregctl` | The installer in [Create and query your first registry](../first-breg/) places `breg` and `bregctl` in `~/.local/bin`. Add that directory to `PATH` in this terminal, or rerun the installer you skipped. |
-
-## Next
-
-- [Declare change requests and actions](../../configure/breg-change-control/#change-requests) for every
-  member of `changeRequest` and `changeControl`.
-- [Base Registry Engine API reference](../../reference/breg-api/#change-requests) for the
-  seven request states, the action routes, and the `request.actions[]` shape.
-- [Deploy a registry](../../operate/breg/) to package and activate your
-  project, to review a later revision with `bregctl diff`, and to erase proposal detail under
-  `operator_erase`.
-- Open `products/breg/CHANGE_REQUEST_EXAMPLES.md` in your clone for the household
-  example and stale-proposal recovery.
-- Configure your OpenID Connect provider when connecting callers to your own deployment.
+Follow [Review Base Registry Engine changes in Casework](../review-breg-changes-in-casework/) to
+configure the authority client, submit a proposal, decide it under Casework policy, and apply it at
+the source. Use [Declare change requests and actions](../../configure/breg-change-control/) for the
+complete authoring shape and [Base Registry Engine API reference](../../reference/breg-api/#change-requests)
+for the four source actions and review projection.

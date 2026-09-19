@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Proves change-request diagnostics name the entity, access profile, review
-//! stage, or effect they concern, using the same `[id=...]` and index
+//! binding, or effect they concern, using the same `[id=...]` and index
 //! conventions the contract compiler already uses elsewhere.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
@@ -48,7 +48,7 @@ fn change_control_direct_write_grant_identifies_entity_and_profile() {
               {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"id":"apply-label","target":{"fromField":"asset"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"stages":[{"id":"review","approvals":1}]}}
+              "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
             "id":"asset-operator","principalClaim":"principal","permissions":[{
@@ -57,8 +57,7 @@ fn change_control_direct_write_grant_identifies_entity_and_profile() {
             }]
           },{
             "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
-              "entity":"asset-placement-request","operations":["get","submit_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["asset","label"],
-              "reviewStages":[{"stage":"review","targets":[{"entity":"asset","readableFields":["label"], "rowBoundaries": []}]}],
+              "entity":"asset-placement-request","operations":["get","submit_request","apply_request"],"readableFields":["asset","label"],
               "applyTargets":[{"entity":"asset", "rowBoundaries": []}],
               "rowBoundaries": []
             }]
@@ -89,12 +88,11 @@ fn change_control_required_for_empty_identifies_entity() {
               {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"id":"apply-label","target":{"fromField":"asset"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"stages":[{"id":"review","approvals":1}]}}
+              "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
             "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
-              "entity":"asset-placement-request","operations":["get","submit_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["asset","label"],
-              "reviewStages":[{"stage":"review","targets":[{"entity":"asset","readableFields":["label"], "rowBoundaries": []}]}],
+              "entity":"asset-placement-request","operations":["get","submit_request","apply_request"],"readableFields":["asset","label"],
               "applyTargets":[{"entity":"asset", "rowBoundaries": []}],
               "rowBoundaries": []
             }]
@@ -109,7 +107,7 @@ fn change_control_required_for_empty_identifies_entity() {
 }
 
 #[test]
-fn change_request_review_stage_approvals_invalid_identifies_entity_and_stage() {
+fn change_request_review_authority_invalid_identifies_entity_and_binding() {
     let failure = compile_json(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
@@ -125,22 +123,21 @@ fn change_request_review_stage_approvals_invalid_identifies_entity_and_stage() {
               {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"id":"apply-label","target":{"fromField":"asset"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"stages":[{"id":"review","approvals":0}]}}
+              "review":{"authority":"Casework","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
             "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
-              "entity":"asset-placement-request","operations":["get","submit_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["asset","label"],
-              "reviewStages":[{"stage":"review","targets":[{"entity":"asset","readableFields":["label"], "rowBoundaries": []}]}],
+              "entity":"asset-placement-request","operations":["get","submit_request","apply_request"],"readableFields":["asset","label"],
               "applyTargets":[{"entity":"asset", "rowBoundaries": []}],
               "rowBoundaries": []
             }]
           }]
         }"#,
     )
-    .expect_err("review stage approval counts must be within the supported bounds");
+    .expect_err("review authority must be a bounded logical identifier");
     assert_eq!(
-        diagnostic_path(&failure, "change_request.review.stage.approvals_invalid"),
-        "entities[id=asset-placement-request].changeRequest.review.stages[id=review].approvals"
+        diagnostic_path(&failure, "identifier.invalid"),
+        "entities[id=asset-placement-request].changeRequest.review.authority"
     );
 }
 
@@ -163,12 +160,11 @@ fn change_request_effect_paths_use_index_when_id_missing_and_id_when_present() {
             "changeRequest":{"effects":[
               {"target":{"entity":"asset"},"operation":"create"},
               {"id":"apply-label","target":{"fromField":"asset"},"operation":"patch","set":{"nonexistent-field":{"fromField":"label"}}}
-            ],"review":{"stages":[{"id":"review","approvals":1}]}}
+            ],"review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
             "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
-              "entity":"asset-placement-request","operations":["get","submit_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["asset","label"],
-              "reviewStages":[{"stage":"review","targets":[{"entity":"asset","readableFields":["label"], "rowBoundaries": []}]}],
+              "entity":"asset-placement-request","operations":["get","submit_request","apply_request"],"readableFields":["asset","label"],
               "applyTargets":[{"entity":"asset", "rowBoundaries": []}],
               "rowBoundaries": []
             }]
@@ -203,7 +199,7 @@ fn change_request_submit_operation_missing_identifies_entity() {
               {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"id":"apply-label","target":{"fromField":"asset"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"stages":[{"id":"review","approvals":1}]}}
+              "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
             "id":"asset-placement-reader","default":true,"principalClaim":"principal","permissions":[{

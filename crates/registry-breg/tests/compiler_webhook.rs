@@ -123,7 +123,8 @@ fn change_request_event_project() -> Value {
                     "operation":"patch",
                     "set":{"site":{"fromField":"proposed-site"}}
                 }],
-                "review":{"stages":[{"id":"review","approvals":1,"excludeSubmitter":true}]}
+                "review":{"authority":"casework-main","policyId":"placement-correction"},
+                "onApproved":{"mode":"manual"}
             }
         }],
         "accessProfiles":[{
@@ -142,12 +143,8 @@ fn change_request_event_project() -> Value {
             "principalClaim":"registry_principal",
             "permissions":[{
                 "entity":"placement-correction-request",
-                "operations":["get","list","approve_request","reject_request","request_revision"],
+                "operations":["get","list"],
                 "readableFields":["placement","proposed-site","reason"],
-                "reviewStages":[{
-                    "stage":"review",
-                    "targets":[{"entity":"asset-placement","readableFields":["site"],"rowBoundaries":[]}]
-                }],
               "rowBoundaries": []
             }]
         },{
@@ -253,7 +250,7 @@ fn governed_webhook_compiles_to_deterministic_destination_neutral_inventory() {
 }
 
 #[test]
-fn reviewer_reason_webhooks_require_internal_delivery_unless_conditions_exclude_reasons() {
+fn application_reason_webhooks_require_internal_delivery_unless_conditions_exclude_apply() {
     let mut source = change_request_event_project();
     let request = &mut source["entities"][2];
     request["classification"] = json!("public");
@@ -262,40 +259,36 @@ fn reviewer_reason_webhooks_require_internal_delivery_unless_conditions_exclude_
     for (condition, expected) in [
         (None, Classification::Internal),
         (
-            Some(json!({"kind":"request_lifecycle", "transitions":["reject"]})),
-            Classification::Internal,
-        ),
-        (
-            Some(json!({"kind":"request_lifecycle", "toStates":["needs_changes"]})),
-            Classification::Internal,
-        ),
-        (
-            Some(json!({"kind":"request_lifecycle", "stages":["review"]})),
-            Classification::Internal,
-        ),
-        (
-            Some(json!({"kind":"request_lifecycle", "transitions":["approve"]})),
+            Some(json!({"kind":"request_lifecycle", "transitions":["cancel"]})),
             Classification::Public,
+        ),
+        (
+            Some(json!({"kind":"request_lifecycle", "toStates":["cancelled"]})),
+            Classification::Public,
+        ),
+        (
+            Some(json!({"kind":"request_lifecycle", "transitions":["apply"]})),
+            Classification::Internal,
         ),
         (
             Some(json!({"kind":"request_lifecycle", "toStates":["applied"]})),
-            Classification::Public,
+            Classification::Internal,
         ),
         (
             Some(
-                json!({"kind":"request_lifecycle", "transitions":["reject"], "toStates":["needs_changes"]}),
+                json!({"kind":"request_lifecycle", "transitions":["cancel"], "toStates":["applied"]}),
             ),
             Classification::Public,
         ),
         (
             Some(
-                json!({"kind":"request_lifecycle", "transitions":["approve","request_revision"], "toStates":["needs_changes"]}),
+                json!({"kind":"request_lifecycle", "transitions":["apply","cancel"], "toStates":["applied"]}),
             ),
             Classification::Internal,
         ),
     ] {
-        if let Some(condition) = condition {
-            source["entities"][2]["hooks"][0]["when"] = condition;
+        if let Some(condition) = &condition {
+            source["entities"][2]["hooks"][0]["when"] = condition.clone();
         } else {
             source["entities"][2]["hooks"][0]
                 .as_object_mut()
@@ -309,7 +302,7 @@ fn reviewer_reason_webhooks_require_internal_delivery_unless_conditions_exclude_
             .iter()
             .find(|delivery| delivery.event_id == "request-lifecycle")
             .expect("delivery");
-        assert_eq!(delivery.classification_ceiling, expected);
+        assert_eq!(delivery.classification_ceiling, expected, "{condition:?}");
     }
 }
 
@@ -364,10 +357,9 @@ fn request_lifecycle_webhook_uses_classified_request_projection() {
             "transition",
             "fromState",
             "toState",
-            "stage",
+            "reasonPresent",
             "effectDigest",
-            "deduplicationKey",
-            "reasonPresent"
+            "deduplicationKey"
         ])
     );
 }
@@ -391,22 +383,19 @@ fn lifecycle_request(transition: &str, to_state: &str) -> Value {
     json!({
         "proposalVersion": 1, "workflowRevision": 3,
         "transition": transition, "fromState": "submitted", "toState": to_state,
-        "stage": "review", "effectDigest": null, "deduplicationKey": "captured-event",
+        "effectDigest": null, "deduplicationKey": "captured-event",
         "reasonPresent": false
     })
 }
 
 #[test]
-fn lifecycle_event_reason_schema_matches_captured_presence_and_negative_transition_pairs() {
+fn lifecycle_event_reason_schema_matches_application_presence_and_negative_transition_pairs() {
     let schema = lifecycle_request_schema(&change_request_event_project());
     let validator = jsonschema::JSONSchema::options()
         .with_draft(jsonschema::Draft::Draft202012)
         .compile(&schema)
         .unwrap();
-    for (transition, state) in [
-        ("reject", "rejected"),
-        ("request_revision", "needs_changes"),
-    ] {
+    for (transition, state) in [("apply", "applied")] {
         let mut request = lifecycle_request(transition, state);
         assert!(validator.is_valid(&request));
         request["reason"] = json!("explanation");
@@ -439,28 +428,21 @@ fn lifecycle_event_reason_schema_matches_captured_presence_and_negative_transiti
         assert!(!validator.is_valid(&request));
     }
     for (transition, state) in [
-        ("approve", "approved"),
-        ("reject", "needs_changes"),
-        ("request_revision", "rejected"),
-        ("apply", "applied"),
+        ("submit", "submitted"),
+        ("revise", "draft"),
+        ("cancel", "cancelled"),
+        ("apply", "cancelled"),
     ] {
         let mut request = lifecycle_request(transition, state);
         request["reasonPresent"] = json!(true);
         request["reason"] = json!("");
         assert!(!validator.is_valid(&request));
     }
-    let mut ordinary = lifecycle_request("approve", "approved");
+    let mut ordinary = lifecycle_request("submit", "submitted");
     assert!(validator.is_valid(&ordinary));
-    ordinary["stage"] = Value::Null;
-    assert!(validator.is_valid(&ordinary));
-    for stage in [json!(""), json!("review\n"), json!("a".repeat(65))] {
-        ordinary["stage"] = stage;
-        assert!(!validator.is_valid(&ordinary));
-    }
-    ordinary["stage"] = json!("review");
     ordinary["transition"] = json!("unknown");
     assert!(!validator.is_valid(&ordinary));
-    ordinary["transition"] = json!("approve");
+    ordinary["transition"] = json!("submit");
     ordinary["toState"] = json!("unknown");
     assert!(!validator.is_valid(&ordinary));
 }
@@ -469,9 +451,9 @@ fn lifecycle_event_reason_schema_matches_captured_presence_and_negative_transiti
 fn lifecycle_event_schema_preserves_authored_filter_intersection() {
     let mut source = change_request_event_project();
     for condition in [
-        json!({"kind":"request_lifecycle", "transitions":["approve"]}),
-        json!({"kind":"request_lifecycle", "toStates":["approved"]}),
-        json!({"kind":"request_lifecycle", "transitions":["approve"], "toStates":["approved"], "stages":["review"]}),
+        json!({"kind":"request_lifecycle", "transitions":["apply"]}),
+        json!({"kind":"request_lifecycle", "toStates":["applied"]}),
+        json!({"kind":"request_lifecycle", "transitions":["apply"], "toStates":["applied"]}),
     ] {
         source["entities"][2]["hooks"][0]["when"] = condition;
         let schema = lifecycle_request_schema(&source);
@@ -479,11 +461,8 @@ fn lifecycle_event_schema_preserves_authored_filter_intersection() {
             .with_draft(jsonschema::Draft::Draft202012)
             .compile(&schema)
             .unwrap();
-        assert!(validator.is_valid(&lifecycle_request("approve", "approved")));
-        for (transition, state) in [
-            ("reject", "rejected"),
-            ("request_revision", "needs_changes"),
-        ] {
+        assert!(validator.is_valid(&lifecycle_request("apply", "applied")));
+        for (transition, state) in [("cancel", "cancelled"), ("submit", "submitted")] {
             let mut request = lifecycle_request(transition, state);
             assert!(!validator.is_valid(&request));
             request["reasonPresent"] = json!(true);
@@ -492,26 +471,19 @@ fn lifecycle_event_schema_preserves_authored_filter_intersection() {
         }
     }
     source["entities"][2]["hooks"][0]["when"] = json!({
-        "kind":"request_lifecycle", "transitions":["reject","request_revision"],
-        "toStates":["rejected","needs_changes"], "stages":["review"]
+        "kind":"request_lifecycle", "transitions":["apply"],
+        "toStates":["applied"]
     });
     let schema = lifecycle_request_schema(&source);
     let validator = jsonschema::JSONSchema::options()
         .with_draft(jsonschema::Draft::Draft202012)
         .compile(&schema)
         .unwrap();
-    for (transition, state) in [
-        ("reject", "rejected"),
-        ("request_revision", "needs_changes"),
-    ] {
+    for (transition, state) in [("apply", "applied")] {
         let mut request = lifecycle_request(transition, state);
         request["reasonPresent"] = json!(true);
         request["reason"] = json!("");
         assert!(validator.is_valid(&request));
-        for stage in [Value::Null, json!("another-review")] {
-            request["stage"] = stage;
-            assert!(!validator.is_valid(&request));
-        }
     }
 }
 
@@ -532,9 +504,8 @@ fn lifecycle_events_are_request_only_and_use_closed_lifecycle_conditions() {
     let mut lifecycle_condition = change_request_event_project();
     lifecycle_condition["entities"][2]["hooks"][0]["when"] = json!({
         "kind":"request_lifecycle",
-        "transitions":["approve"],
-        "toStates":["approved"],
-        "stages":["review"]
+        "transitions":["apply"],
+        "toStates":["applied"]
     });
     compile(&lifecycle_condition).expect("closed lifecycle condition compiles");
 
@@ -550,36 +521,18 @@ fn lifecycle_events_are_request_only_and_use_closed_lifecycle_conditions() {
 fn unknown_lifecycle_predicates_list_the_closed_sets_the_runtime_accepts() {
     assert_eq!(
         REQUEST_LIFECYCLE_TRANSITIONS,
-        [
-            "submit",
-            "approve",
-            "reject",
-            "request_revision",
-            "revise",
-            "rebase",
-            "cancel",
-            "apply"
-        ]
+        ["submit", "revise", "rebase", "cancel", "apply"]
     );
     assert_eq!(
         REQUEST_LIFECYCLE_STATES,
-        [
-            "draft",
-            "submitted",
-            "approved",
-            "needs_changes",
-            "rejected",
-            "canceled",
-            "applied"
-        ]
+        ["draft", "submitted", "cancelled", "applied", "superseded"]
     );
 
     let mut lifecycle_condition = change_request_event_project();
     lifecycle_condition["entities"][2]["hooks"][0]["when"] = json!({
         "kind":"request_lifecycle",
-        "transitions":["approve"],
-        "toStates":["approved"],
-        "stages":["review"]
+        "transitions":["apply"],
+        "toStates":["applied"]
     });
 
     let mut bad_transition = lifecycle_condition.clone();
@@ -1046,17 +999,17 @@ fn module_lock(module: &RegistryModule) -> ModuleLockSource {
 }
 
 #[test]
-fn approve_only_lifecycle_payload_bounds_exclude_impossible_reviewer_text() {
+fn non_apply_lifecycle_payload_bounds_exclude_impossible_application_text() {
     let mut source = change_request_event_project();
     let request = &mut source["entities"][2];
     request["hooks"][0]["projection"] = json!(["reason"]);
     request["fields"][2]["maxLength"] = json!(173_000);
     for condition in [
-        json!({"kind":"request_lifecycle", "transitions":["approve"]}),
-        json!({"kind":"request_lifecycle", "toStates":["approved"]}),
+        json!({"kind":"request_lifecycle", "transitions":["cancel"]}),
+        json!({"kind":"request_lifecycle", "toStates":["cancelled"]}),
     ] {
         source["entities"][2]["hooks"][0]["when"] = condition;
-        let compiled = compile(&source).expect("approve-only payload fits the webhook limit");
+        let compiled = compile(&source).expect("non-apply payload fits the webhook limit");
         let delivery = compiled
             .event_deliveries()
             .deliveries
@@ -1066,7 +1019,7 @@ fn approve_only_lifecycle_payload_bounds_exclude_impossible_reviewer_text() {
         assert!(delivery.maximum_payload_bytes < 1_048_576);
     }
     source["entities"][2]["hooks"][0]["when"] =
-        json!({"kind":"request_lifecycle", "transitions":["request_revision"]});
+        json!({"kind":"request_lifecycle", "transitions":["apply"]});
     assert_compile_code(&source, "event.webhook.projection_too_large");
 }
 
@@ -1160,7 +1113,7 @@ fn the_request_lifecycle_payload_proof_carries_the_same_envelope_wrapper() {
         .expect("the lifecycle hook compiles a delivery");
     // The lifecycle data object worst case, plus the wrapper this project's
     // identifiers produce.
-    const LIFECYCLE_DATA_OBJECT_BYTES: u32 = 33_472;
+    const LIFECYCLE_DATA_OBJECT_BYTES: u32 = 33_205;
     const LIFECYCLE_WRAPPER_BYTES: u32 = 584
         + 2 * "request-events".len() as u32
         + "placement-correction-request".len() as u32

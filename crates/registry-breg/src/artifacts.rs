@@ -633,13 +633,24 @@ fn request_lifecycle_event_schema(event: &HookSource) -> Value {
             "transition": transition,
             "fromState": request_state_schema(),
             "toState": to_state,
+            "reasonPresent": {"type": "boolean"},
+            "reason": application_reason_schema(),
             "effectDigest": {"type": ["string", "null"]},
             "deduplicationKey": {"type": "string"}
         },
         "required": [
             "proposalVersion", "workflowRevision", "transition", "fromState", "toState",
-            "effectDigest", "deduplicationKey"
-        ]
+            "reasonPresent", "effectDigest", "deduplicationKey"
+        ],
+        "if": {"properties": {"reasonPresent": {"const": true}}},
+        "then": {
+            "required": ["reason"],
+            "properties": {
+                "transition": {"const": "apply"},
+                "toState": {"const": "applied"}
+            }
+        },
+        "else": {"not": {"required": ["reason"]}}
     })
 }
 
@@ -2157,7 +2168,6 @@ fn geojson_operation_response_shape(spec: OpenApiOperationSpec<'_>) -> &'static 
 fn render_request_action(spec: OpenApiOperationSpec<'_>) -> Value {
     json!({
         "operation": operation_name(spec.route.operation),
-        "stage": spec.route.request_stage,
         "method": method_name(spec.route.method),
         "path": spec.route.path,
         "requestEntity": spec.route.entity_id,
@@ -3174,7 +3184,80 @@ fn request_record_metadata_schema() -> Value {
                 "items": request_action_link_schema(),
             },
             "application": request_application_metadata_schema(false),
+            "review": request_review_metadata_schema(),
             "history": retained_request_history_schema(),
+        }
+    })
+}
+
+fn request_review_metadata_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["submission", "result", "delivery", "application", "recovery"],
+        "properties": {
+            "submission": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state", "authority"],
+                "properties": {
+                    "state": {"type": "string", "enum": ["pending", "accepted", "uncertain", "cancelling", "cancelled", "failed"]},
+                    "authority": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "requestId": {"type": "string", "format": "uuid"},
+                    "submissionDigest": effect_digest_schema(),
+                    "policy": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["id", "version", "digest"],
+                        "properties": {
+                            "id": {"type": "string", "minLength": 1, "maxLength": 128},
+                            "version": {"type": "string", "minLength": 1, "maxLength": 128},
+                            "digest": effect_digest_schema()
+                        }
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state"],
+                "properties": {
+                    "state": {"type": "string", "enum": ["pending", "approved", "rejected", "changesRequested", "answered", "cancelled", "superseded"]},
+                    "resultId": {"type": "string", "format": "uuid"},
+                    "completedAt": {"type": "string", "format": "date-time", "maxLength": 128},
+                    "availableUntil": {"type": "string", "format": "date-time", "maxLength": 128}
+                }
+            },
+            "delivery": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state"],
+                "properties": {
+                    "state": {"type": "string", "enum": ["polling", "received", "reconciled", "unmatched", "exhausted"]},
+                    "eventId": {"type": "string", "format": "uuid"},
+                    "receivedAt": {"type": "string", "format": "date-time", "maxLength": 128}
+                }
+            },
+            "application": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["mode", "state"],
+                "properties": {
+                    "mode": {"type": "string", "enum": ["manual", "automatic"]},
+                    "state": {"type": "string", "enum": ["awaitingReview", "ready", "queued", "applying", "applied", "blocked"]},
+                    "executor": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "applicationId": {"type": "string", "format": "uuid"}
+                }
+            },
+            "recovery": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state"],
+                "properties": {
+                    "state": {"type": "string", "enum": ["none", "operatorAttention"]},
+                    "code": {"type": "string", "minLength": 1, "maxLength": 128}
+                }
+            }
         }
     })
 }
@@ -4375,7 +4458,7 @@ mod problem_contract_tests {
         })));
         assert!(!validator.is_valid(&json!({
             "review": {"mode": "none"},
-            "applicationDisposition": "apply"
+            "unexpected": "value"
         })));
     }
 

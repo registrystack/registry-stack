@@ -19,11 +19,14 @@ use registry_stack_client::casework::{
     ClockRecomputeApplyRequest, ClockRecomputePreview, ClockRecomputeRequest, ClockRecomputeResult,
     DecideRequest, DelegateRequest, Description, DirectoryResponse, DirectoryTargetPage,
     DirectoryTargetsQuery, DirectoryTeamUpdateRequest, DraftResponse, HistoryPage, HoldingsPage,
-    HoldingsQuery, HolidaySetDocument, HolidaySetRevisionInput, HostedAccountabilityRecord,
-    HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest, HostedHistoryPage,
-    HostedNotePage, HostedNoteRequest, HostedPageQuery, HostedTerminalPage, HostedTerminalQuery,
-    HostedTerminalResult, ListWorkItemsQuery, MutationResponse, NextWorkItemQuery,
-    RecoverAttemptRequest, RequesterHostedItem, SaveDraftRequest, Uuid, WorkItem, WorkItemPage,
+    HoldingsQuery, HolidaySetDocument, HolidaySetRevisionInput, ListWorkItemsQuery,
+    MutationResponse, NextWorkItemQuery, RecoverAttemptRequest, ReviewAccountabilityRecord,
+    ReviewCancelRequest, ReviewCancelResponse, ReviewCreateRequest, ReviewHistoryEntry,
+    ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewPageQuery,
+    ReviewRequestAccepted, ReviewRequestView, ReviewResultFeedPage, ReviewTaskContext,
+    ReviewTaskDecisionRequest, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage,
+    ReviewTaskQuery, ReviewerTask, SaveDraftRequest, SubmissionDigest, Uuid, WorkItem,
+    WorkItemHistoryQuery, WorkItemPage,
 };
 
 /// The client's public surface, read from the crate that publishes it.
@@ -50,12 +53,16 @@ async fn every_casework_method_names_its_types(
     expected_revision: i64,
     idempotency_key: &str,
     action: &CaseworkAction,
-    hosted_create: &HostedCreateRequest,
-    hosted_note: &HostedNoteRequest,
-    hosted_cancel: &HostedCancelRequest,
-    hosted_decision: &HostedDecisionRequest,
-    hosted_page: &HostedPageQuery,
-    hosted_terminal: &HostedTerminalQuery,
+    review_create: &ReviewCreateRequest,
+    expected_submission_digest: &SubmissionDigest,
+    review_accepted: &ReviewRequestAccepted,
+    review_cancel: &ReviewCancelRequest,
+    review_note: &ReviewNoteRequest,
+    review_decision: &ReviewTaskDecisionRequest,
+    review_draft: &ReviewTaskDraftInput,
+    review_page: &ReviewPageQuery,
+    work_item_history_query: &WorkItemHistoryQuery,
+    review_task_query: &ReviewTaskQuery,
     list_query: &ListWorkItemsQuery,
     next_query: &NextWorkItemQuery,
     draft: &SaveDraftRequest,
@@ -80,65 +87,122 @@ async fn every_casework_method_names_its_types(
     let _: CaseworkComplete<Description> = client
         .description(CaseworkAuth::new(token, profile))
         .await?;
-    let _: CaseworkComplete<RequesterHostedItem> = client
-        .create_hosted_item(
+    let _: CaseworkComplete<ReviewRequestAccepted> = client
+        .create_or_recover_review_request(
             CaseworkAuth::new(token, profile),
             idempotency_key,
-            hosted_create,
+            review_create,
+            expected_submission_digest,
         )
         .await?;
-    let _: CaseworkComplete<RequesterHostedItem> = client
-        .get_hosted_item(CaseworkAuth::new(token, profile), item_id)
+    let _: CaseworkComplete<ReviewRequestView> = client
+        .review_request(CaseworkAuth::new(token, profile), item_id)
         .await?;
-    let _: CaseworkComplete<RequesterHostedItem> = client
-        .add_hosted_note(
+    let _ = client
+        .review_result(CaseworkAuth::new(token, profile), review_accepted)
+        .await?;
+    let _: CaseworkComplete<ReviewResultFeedPage> = client
+        .review_results(CaseworkAuth::new(token, profile), review_page)
+        .await?;
+    let _: CaseworkComplete<ReviewCancelResponse> = client
+        .cancel_review_request(
+            CaseworkAuth::new(token, profile),
+            item_id,
+            idempotency_key,
+            review_cancel,
+        )
+        .await?;
+    let _: CaseworkComplete<Vec<ReviewKindPolicySnapshot>> = client
+        .review_kinds(CaseworkAuth::new(token, profile))
+        .await?;
+    let _: CaseworkComplete<ReviewKindPolicySnapshot> = client
+        .review_kind(CaseworkAuth::new(token, profile), "payment")
+        .await?;
+    let _: CaseworkComplete<ReviewTaskPage> = client
+        .review_tasks(CaseworkAuth::new(token, profile), review_task_query)
+        .await?;
+    let _: CaseworkComplete<ReviewerTask> = client
+        .review_task(CaseworkAuth::new(token, profile), item_id)
+        .await?;
+    let _: CaseworkComplete<ReviewTaskContext> = client
+        .review_task_context(CaseworkAuth::new(token, profile), item_id)
+        .await?;
+    let _: CaseworkComplete<ReviewerTask> = client
+        .claim_review_task(
             CaseworkAuth::new(token, profile),
             item_id,
             expected_revision,
             idempotency_key,
-            hosted_note,
         )
         .await?;
-    let _: CaseworkComplete<HostedNotePage> = client
-        .requester_hosted_notes(CaseworkAuth::new(token, profile), item_id, hosted_page)
-        .await?;
-    let _: CaseworkComplete<HostedTerminalResult> = client
-        .cancel_hosted_item(
+    let _: CaseworkComplete<ReviewerTask> = client
+        .release_review_task(
             CaseworkAuth::new(token, profile),
             item_id,
             expected_revision,
             idempotency_key,
-            hosted_cancel,
         )
         .await?;
-    let _: CaseworkComplete<HostedTerminalPage> = client
-        .hosted_terminal_items(CaseworkAuth::new(token, profile), hosted_terminal)
-        .await?;
-    let _: CaseworkComplete<WorkItemPage> = client
-        .list_hosted_work_items(CaseworkAuth::new(token, profile), list_query)
-        .await?;
-    let _: CaseworkComplete<WorkItem> = client
-        .get_hosted_work_item(CaseworkAuth::new(token, profile), item_id)
-        .await?;
-    let _: CaseworkComplete<HostedHistoryPage> = client
-        .hosted_work_item_history(CaseworkAuth::new(token, profile), item_id, hosted_page)
-        .await?;
-    let _: CaseworkComplete<HostedAccountabilityRecord> = client
-        .hosted_accountability_record(CaseworkAuth::new(token, profile), event_id)
-        .await?;
-    let _: CaseworkComplete<MutationResponse> = client
-        .claim_hosted_work_item(CaseworkAuth::new(token, profile), action, idempotency_key)
-        .await?;
-    let _: CaseworkComplete<MutationResponse> = client
-        .release_hosted_work_item(CaseworkAuth::new(token, profile), action, idempotency_key)
-        .await?;
-    let _: CaseworkComplete<HostedTerminalResult> = client
-        .decide_hosted_work_item(
+    let _: CaseworkComplete<ReviewerTask> = client
+        .assign_review_task(
             CaseworkAuth::new(token, profile),
-            action,
+            item_id,
+            expected_revision,
             idempotency_key,
-            hosted_decision,
+            assignment,
         )
+        .await?;
+    let _: CaseworkComplete<ReviewerTask> = client
+        .delegate_review_task(
+            CaseworkAuth::new(token, profile),
+            item_id,
+            expected_revision,
+            idempotency_key,
+            delegation,
+        )
+        .await?;
+    let _: CaseworkComplete<Option<ReviewTaskDraft>> = client
+        .review_task_draft(CaseworkAuth::new(token, profile), item_id)
+        .await?;
+    let _: CaseworkComplete<ReviewTaskDraft> = client
+        .save_review_task_draft(
+            CaseworkAuth::new(token, profile),
+            item_id,
+            expected_revision,
+            idempotency_key,
+            review_draft,
+        )
+        .await?;
+    let _: CaseworkComplete<()> = client
+        .delete_review_task_draft(
+            CaseworkAuth::new(token, profile),
+            item_id,
+            expected_revision,
+            idempotency_key,
+        )
+        .await?;
+    let _: CaseworkComplete<()> = client
+        .decide_review_task(
+            CaseworkAuth::new(token, profile),
+            item_id,
+            expected_revision,
+            idempotency_key,
+            review_decision,
+        )
+        .await?;
+    let _: CaseworkComplete<ReviewHistoryPage> = client
+        .review_history(CaseworkAuth::new(token, profile), item_id, review_page)
+        .await?;
+    let _: CaseworkComplete<ReviewHistoryEntry> = client
+        .add_review_note(
+            CaseworkAuth::new(token, profile),
+            item_id,
+            idempotency_key,
+            review_note,
+        )
+        .await?;
+    let _: CaseworkComplete<ReviewAccountabilityRecord> = client
+        .review_accountability(CaseworkAuth::new(token, profile), event_id)
         .await?;
     let _: CaseworkComplete<WorkItemPage> = client
         .list_work_items(CaseworkAuth::new(token, profile), list_query)
@@ -200,7 +264,11 @@ async fn every_casework_method_names_its_types(
         )
         .await?;
     let _: CaseworkComplete<HistoryPage> = client
-        .work_item_history(CaseworkAuth::new(token, profile), item_id, hosted_page)
+        .work_item_history(
+            CaseworkAuth::new(token, profile),
+            item_id,
+            work_item_history_query,
+        )
         .await?;
     let _: CaseworkComplete<HoldingsPage> = client
         .holdings(CaseworkAuth::new(token, profile), holdings_query)

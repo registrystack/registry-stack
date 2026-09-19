@@ -17,6 +17,7 @@ TRACEPARENT = f"00-{TRACE_ID}-00f067aa0ba902b7-01"
 ITEM_ID = "00000000-0000-4000-8000-000000000001"
 CLOCK_OCCURRENCE_ID = "00000000-0000-4000-8000-000000000002"
 PREVIEW_ID = "00000000-0000-4000-8000-000000000003"
+EXPIRED_CURSOR = "00000000-0000-4000-8000-000000000004"
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -29,12 +30,45 @@ class _Handler(BaseHTTPRequestHandler):
             "profile": self.headers.get("registry-casework-profile", ""),
             "source_profile": self.headers.get("registry-source-profile", ""),
         })
-        if "cursor=expired" in self.path:
+        if f"cursor={EXPIRED_CURSOR}" in self.path:
             self.respond_problem(
                 "cursor.expired",
                 "Cursor expired",
                 "This cursor has expired. Start again without a cursor and deduplicate entries by eventId.",
             )
+            return
+        if self.path == f"/tenant/v1/review-tasks/{ITEM_ID}/context":
+            self.respond({
+                "taskId": ITEM_ID,
+                "requestId": "10000000-0000-4000-8000-000000000001",
+                "subject": {
+                    "source": "professional-licences",
+                    "type": "change-request",
+                    "id": "correction-42",
+                    "version": "1",
+                    "digest": f"sha256:{'a' * 64}",
+                },
+                "requesterReference": "correction-42",
+                "policy": {
+                    "id": "registry-correction",
+                    "version": "1",
+                    "digest": f"sha256:{'b' * 64}",
+                },
+                "context": {
+                    "strategy": "source",
+                    "reference": "correction-42",
+                    "bindingStatus": "current",
+                    "projection": {
+                        "binding": {
+                            "sourceRevision": "revision-42",
+                            "version": "1",
+                            "generation": "generation-42",
+                        },
+                        "displayReference": "Correction 42",
+                        "display": {"record": "licence-42"},
+                    },
+                },
+            })
             return
         if self.path == f"/tenant/v1/work-items/{ITEM_ID}":
             self.respond({
@@ -137,7 +171,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "policyVersion": "v1",
                 "queues": [],
                 "sources": [],
-                "hostedKinds": [],
+                "calendars": [],
+                "clocks": [],
             })
 
     def do_POST(self) -> None:  # noqa: N802
@@ -268,17 +303,7 @@ class NativeRequestTests(unittest.TestCase):
         self.thread.join()
         self.server.server_close()
 
-    def test_requester_and_staff_calls_preserve_explicit_authority(self) -> None:
-        created = self.client.create_hosted_item(
-            "requester-token", "requester", "exact-create-key", {
-                "kind": "decision",
-                "requesterReference": "python-smoke",
-                "display": {"summary": "Review"},
-            }
-        )
-        self.assertEqual(created["kind"], "complete")
-        self.assertEqual(created["trace_id"], TRACE_ID)
-        self.assertEqual(created["value"]["itemId"], ITEM_ID)
+    def test_staff_calls_preserve_explicit_authority(self) -> None:
         page = self.client.list_work_items(
             "staff-token",
             "staff",
@@ -309,11 +334,7 @@ class NativeRequestTests(unittest.TestCase):
         )
         self.assertEqual(preview["value"], {"items": [], "status": "complete"})
 
-        requester, staff, supervisor = _Handler.observations
-        self.assertEqual(requester["authorization"], "Bearer requester-token")
-        self.assertEqual(requester["profile"], "requester")
-        self.assertEqual(requester["idempotency_key"], "exact-create-key")
-        self.assertEqual(requester["source_profile"], "")
+        staff, supervisor = _Handler.observations
         self.assertEqual(staff["authorization"], "Bearer staff-token")
         self.assertEqual(staff["profile"], "staff")
         self.assertEqual(staff["source_profile"], "source-one")
@@ -333,10 +354,27 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(supervisor["source_profile"], "source-one")
         self.assertIn('"reason": "Coverage transfer"', supervisor["body"])
 
+    def test_review_task_context_uses_exact_route_and_source_profile(self) -> None:
+        context = self.client.review_task_context(
+            "staff-token", "staff", ITEM_ID, "source-one"
+        )
+
+        self.assertEqual(
+            context["value"]["context"]["projection"]["displayReference"],
+            "Correction 42",
+        )
+        observation = _Handler.observations[0]
+        self.assertEqual(
+            observation["path"], f"/tenant/v1/review-tasks/{ITEM_ID}/context"
+        )
+        self.assertEqual(observation["authorization"], "Bearer staff-token")
+        self.assertEqual(observation["profile"], "staff")
+        self.assertEqual(observation["source_profile"], "source-one")
+
     def test_expiry_is_typed_and_never_retried(self) -> None:
         with self.assertRaises(CaseworkClientError) as cursor_error:
-            self.client.hosted_terminal_items(
-                "requester-token", "requester", {"cursor": "expired"}
+            self.client.review_results(
+                "requester-token", "requester", {"cursor": EXPIRED_CURSOR}
             )
         self.assertEqual(cursor_error.exception.kind, "problem")
         self.assertEqual(cursor_error.exception.code, "cursor.expired")
@@ -344,14 +382,20 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(cursor_error.exception.trace_id, TRACE_ID)
 
         with self.assertRaises(CaseworkClientError) as key_error:
-            self.client.create_hosted_item(
+            self.client.cancel_review_request(
                 "requester-token",
                 "requester",
+                ITEM_ID,
                 "expired-create-key",
                 {
-                    "kind": "decision",
-                    "requesterReference": "python-smoke",
-                    "display": {"summary": "Review"},
+                    "subject": {
+                        "source": "source-one",
+                        "type": "case",
+                        "id": "case-one",
+                        "version": "1",
+                        "digest": f"sha256:{'a' * 64}",
+                    },
+                    "reason": "No longer needed",
                 },
             )
         self.assertEqual(key_error.exception.kind, "problem")

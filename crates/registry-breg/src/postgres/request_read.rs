@@ -323,7 +323,7 @@ async fn annotate_request_records(
             if may_disclose_effect_digests(entity, request) {
                 application_metadata["effectDigest"] = json!(application.effect_digest().as_str());
             }
-            if may_disclose_decision_reasons(entity, request) {
+            if may_disclose_application_reason(entity, request) {
                 if let Some(reason) = application.reason() {
                     application_metadata["reason"] = json!(reason);
                 }
@@ -1095,7 +1095,6 @@ async fn retained_history(
             after_proposal_version: request.request_history_after_proposal_version,
             limit: 50,
             authorized_target_entities: &authorized_target_entities,
-            include_decision_reasons: false,
         },
     )
     .await
@@ -1123,8 +1122,6 @@ async fn retained_history(
             .map(|proposal| retained_history_value(
                 proposal,
                 may_disclose_effect_digests(entity, request),
-                may_disclose_decision_reasons(entity, request),
-                may_disclose_actor_references(entity, request),
             ))
             .collect::<Vec<_>>(),
         "nextAfterProposalVersion": page.next_after_proposal_version,
@@ -1174,7 +1171,6 @@ fn bind_history_to_workflow(page: &mut RetainedRequestHistoryPage, workflow: &Re
             .map(|application| application.application_id().as_str().to_owned());
         proposal.result_link_count = 0;
         proposal.result_links.clear();
-        proposal.decisions.clear();
     }
 }
 
@@ -1331,8 +1327,6 @@ async fn target_get_is_authorized(
 fn retained_history_value(
     proposal: RetainedRequestProposal,
     disclose_effect_digests: bool,
-    _disclose_decision_reasons: bool,
-    _disclose_actor_references: bool,
 ) -> Value {
     let mut value = json!({
         "requestEntityId": proposal.request_entity_id,
@@ -1359,7 +1353,7 @@ fn retained_history_value(
     value
 }
 
-fn may_disclose_decision_reasons(entity: &CompiledEntity, request: &RecordReadRequest) -> bool {
+fn may_disclose_application_reason(entity: &CompiledEntity, request: &RecordReadRequest) -> bool {
     entity
         .access_profiles
         .get(request.context.selected_profile())
@@ -1539,11 +1533,12 @@ impl std::fmt::Display for SqlIdent {
 mod tests {
     #[test]
     fn final_request_size_cap_keeps_whole_proposals_and_exclusive_cursor() {
-        let decisions = (0..1024)
+        let result_links = (0..768)
             .map(|index| {
                 serde_json::json!({
-                    "stageId": format!("stage-{}", index / 32), "kind": "approve",
-                    "decidedAt": "2026-09-09T12:00:00Z", "reasonPresent": false,
+                    "targetEntityId": "bounded-target",
+                    "targetRecordId": format!("00000000-0000-4000-8000-{index:012}"),
+                    "targetRevision": 1,
                 })
             })
             .collect::<Vec<_>>();
@@ -1559,9 +1554,8 @@ mod tests {
                     "contractFingerprint": "contract-fingerprint",
                     "detailErased": false,
                     "applicationId": null,
-                    "resultLinkCount": 0,
-                    "resultLinks": [],
-                    "decisions": decisions,
+                    "resultLinkCount": result_links.len(),
+                    "resultLinks": result_links,
                 })).collect::<Vec<_>>(),
                 "nextAfterProposalVersion": null,
             },
@@ -1578,13 +1572,13 @@ mod tests {
         );
         assert!(proposals
             .iter()
-            .all(|proposal| proposal["decisions"].as_array().unwrap().len() == 1024));
+            .all(|proposal| proposal["resultLinks"].as_array().unwrap().len() == 768));
     }
 
     #[test]
     fn oversized_single_history_proposal_refuses_without_an_empty_cursor_loop() {
         let metadata = serde_json::json!({
-            "history": {"proposals": [{"proposalVersion": 1, "decisions": [],
+            "history": {"proposals": [{"proposalVersion": 1, "resultLinks": [],
                 "oversized": "x".repeat(super::MAX_REQUEST_EXTENSION_BYTES)}],
                 "nextAfterProposalVersion": 1},
         });
@@ -1599,7 +1593,7 @@ mod tests {
     use super::{
         action_href, action_is_available, authorized_target_claims,
         erased_terminal_request_metadata, may_disclose_actor_references,
-        may_disclose_decision_reasons, may_disclose_review_state, retained_history_value,
+        may_disclose_application_reason, may_disclose_review_state, retained_history_value,
         revise_rebase_available, selected_profile_allows_draft_patch, ClaimContext,
         RetainedHistoryMetadata, RowBoundaryContext,
     };
@@ -1607,7 +1601,7 @@ mod tests {
         AuthorizedRequestContext, RecordReadKind, RecordReadRequest, VerifiedRequestAction,
     };
     use crate::compiler::{compile_project, CompileProfile};
-    use crate::contract::{parse_project_json, Operation};
+    use crate::contract::{parse_project_json, parse_project_yaml, Operation};
     use crate::correlation::RequestCorrelation;
     use crate::model::{
         CompiledChangeRequestNoReview, CompiledChangeRequestNoReviewMode,
@@ -1679,56 +1673,6 @@ mod tests {
         let ordinary = action(Operation::SubmitRequest);
         assert!(action_is_available(&ordinary, &draft, Some("owner-ref")));
         assert!(!action_is_available(&ordinary, &draft, Some("other-ref")));
-    }
-
-    #[cfg(any())]
-    #[test]
-    fn revise_action_marks_rebase_false_for_revision_drafts() {
-        let revise = action(Operation::ReviseRequest, None);
-        let submitted = submitted_workflow(1, false);
-        let needs_changes = decide(
-            submitted,
-            "reviewer-ref",
-            ReviewDecisionKind::RequestRevision,
-        );
-        assert_eq!(
-            revise_rebase_available(&revise, &needs_changes),
-            Some(false)
-        );
-        assert!(action_is_available(
-            &revise,
-            &needs_changes,
-            Some("owner-ref")
-        ));
-    }
-
-    #[cfg(any())]
-    #[test]
-    fn review_actions_omit_self_and_duplicate_decisions() {
-        let approve = action(Operation::ApproveRequest, Some("review"));
-        let submitted = submitted_workflow(2, true);
-        assert!(!action_is_available(
-            &approve,
-            &submitted,
-            Some("owner-ref")
-        ));
-        assert!(action_is_available(
-            &approve,
-            &submitted,
-            Some("reviewer-ref")
-        ));
-
-        let after_reviewer = decide(submitted, "reviewer-ref", ReviewDecisionKind::Approve);
-        assert!(!action_is_available(
-            &approve,
-            &after_reviewer,
-            Some("reviewer-ref")
-        ));
-        assert!(action_is_available(
-            &approve,
-            &after_reviewer,
-            Some("second-reviewer-ref")
-        ));
     }
 
     #[test]
@@ -1831,183 +1775,6 @@ mod tests {
         );
     }
 
-    #[cfg(any())]
-    #[test]
-    fn current_history_uses_loaded_lifecycle_despite_later_review_application_or_revision() {
-        let loaded = submitted_workflow(1, false);
-        let later = loaded
-            .clone()
-            .decide_with_reason(
-                context("later-reviewer", 2),
-                "review",
-                loaded.current_version(),
-                loaded.current_proposal().unwrap().effect_digest(),
-                ReviewDecisionKind::RequestRevision,
-                Some("later-feedback-canary".to_owned()),
-            )
-            .expect("later decision")
-            .into_workflow();
-        let later_decision = &later.decisions()[0];
-        let mut page = crate::request_retention::RetainedRequestHistoryPage {
-            proposals: (1..=2)
-                .map(|version| RetainedRequestProposal {
-                    request_entity_id: "request".to_owned(),
-                    request_id: "00000000-0000-4000-8000-000000000001".to_owned(),
-                    proposal_version: version,
-                    request_state: "applied".to_owned(),
-                    current: version == 2,
-                    contract_fingerprint: "sha256:later-contract".to_owned(),
-                    effect_digest: "sha256:later-effect".to_owned(),
-                    detail_erased: true,
-                    application_id: Some("00000000-0000-4000-8000-000000000099".to_owned()),
-                    result_link_count: 1,
-                    result_links: vec![RetainedRequestResultLink {
-                        target_entity_id: "target".to_owned(),
-                        target_record_id: "later-target".to_owned(),
-                        target_revision: 9,
-                    }],
-                    decisions: vec![RetainedRequestDecision {
-                        stage_id: later_decision.stage_id().to_owned(),
-                        kind: later_decision.kind().as_storage().to_owned(),
-                        decided_at: later_decision.decided_at().as_str().to_owned(),
-                        actor_reference: later_decision.actor().as_str().to_owned(),
-                        reason_present: true,
-                        reason: Some("later-feedback-canary".to_owned()),
-                    }],
-                })
-                .collect(),
-            next_after_proposal_version: Some(2),
-        };
-        let mut submitted_page = page.clone();
-        super::bind_history_to_workflow(&mut submitted_page, &loaded);
-        assert_eq!(submitted_page.proposals.len(), 1);
-        assert_eq!(submitted_page.next_after_proposal_version, None);
-        let current = &submitted_page.proposals[0];
-        assert_eq!(current.request_state, "submitted");
-        assert!(current.current);
-        assert!(!current.detail_erased);
-        assert!(current.application_id.is_none());
-        assert_eq!(current.result_link_count, 0);
-        assert!(current.result_links.is_empty());
-        assert_eq!(
-            current.effect_digest,
-            loaded.current_proposal().unwrap().effect_digest().as_str()
-        );
-        for disclose in [true, false] {
-            let history = retained_history_value(current.clone(), true, disclose, false);
-            assert_eq!(
-                history["decisions"],
-                super::workflow_decisions_value(&loaded, disclose, false)
-            );
-            assert!(!history.to_string().contains("later-feedback-canary"));
-        }
-        super::bind_history_to_workflow(&mut page, &later);
-        for disclose in [true, false] {
-            let history = retained_history_value(page.proposals[0].clone(), true, disclose, false);
-            assert_eq!(
-                history["decisions"],
-                super::workflow_decisions_value(&later, disclose, false)
-            );
-        }
-        let draft = later
-            .revise(context("owner-ref", 3))
-            .expect("revise to next draft")
-            .into_workflow();
-        // A concurrent submission creates a proposal for this draft's version.
-        let mut later_current = page.proposals[0].clone();
-        later_current.proposal_version = 2;
-        later_current.current = true;
-        page.proposals.push(later_current);
-        page.next_after_proposal_version = Some(2);
-        super::bind_history_to_workflow(&mut page, &draft);
-        assert_eq!(page.proposals.len(), 1);
-        assert_eq!(page.proposals[0].proposal_version, 1);
-        assert_eq!(page.proposals[0].request_state, "draft");
-        assert!(!page.proposals[0].current);
-        assert_eq!(page.next_after_proposal_version, None);
-    }
-
-    #[cfg(any())]
-    #[test]
-    fn current_decision_projection_uses_the_loaded_workflow_and_discloses_only_safe_fields() {
-        let loaded = submitted_workflow(1, false);
-        let later = loaded
-            .clone()
-            .decide_with_reason(
-                context("private-reviewer-actor-canary", 2),
-                "review",
-                loaded.current_version(),
-                loaded.current_proposal().unwrap().effect_digest(),
-                ReviewDecisionKind::RequestRevision,
-                Some("private-review-reason-canary".to_owned()),
-            )
-            .expect("a later review requests revision")
-            .into_workflow();
-        assert_eq!(
-            super::workflow_decisions_value(&loaded, true, false),
-            serde_json::json!([]),
-            "a subsequently decided workflow cannot alter the loaded submitted projection"
-        );
-        let disclosed = super::workflow_decisions_value(&later, true, false);
-        assert_eq!(
-            disclosed,
-            serde_json::json!([{
-                "stageId": "review", "kind": "request_revision",
-                "decidedAt": later.decisions()[0].decided_at().as_str(),
-                "reasonPresent": true, "reason": "private-review-reason-canary",
-            }])
-        );
-        let redacted = super::workflow_decisions_value(&later, false, false);
-        assert_eq!(
-            redacted,
-            serde_json::json!([{
-                "stageId": "review", "kind": "request_revision",
-                "decidedAt": later.decisions()[0].decided_at().as_str(), "reasonPresent": true,
-            }])
-        );
-        for projection in [&disclosed, &redacted] {
-            let serialized = projection.to_string();
-            assert!(!serialized.contains("private-reviewer-actor-canary"));
-            assert!(!serialized.contains(later.decisions()[0].effect_digest().as_str()));
-        }
-        let correlated = super::workflow_decisions_value(&later, false, true);
-        assert_eq!(
-            correlated[0]["actorReference"],
-            "private-reviewer-actor-canary"
-        );
-        assert!(correlated[0].get("reason").is_none());
-    }
-
-    #[cfg(any())]
-    #[test]
-    fn decision_metadata_hides_reason_text_but_preserves_presence_and_decision_facts() {
-        let mut decision = RetainedRequestDecision {
-            stage_id: "review".to_owned(),
-            kind: "reject".to_owned(),
-            decided_at: "2026-09-09T00:00:00Z".to_owned(),
-            actor_reference: "private-reviewer-actor-canary".to_owned(),
-            reason_present: true,
-            reason: Some("protected-review-reason-canary".to_owned()),
-        };
-        let disclosed = decisions_value(std::slice::from_ref(&decision), true, false);
-        assert_eq!(disclosed[0]["reason"], "protected-review-reason-canary");
-        let hidden = decisions_value(std::slice::from_ref(&decision), false, false);
-        assert_eq!(hidden[0]["reasonPresent"], true);
-        assert_eq!(hidden[0]["stageId"], "review");
-        assert_eq!(hidden[0]["kind"], "reject");
-        assert!(hidden[0].get("reason").is_none());
-        assert!(!hidden
-            .to_string()
-            .contains("protected-review-reason-canary"));
-        assert!(hidden[0].get("actor").is_none());
-        assert!(hidden[0].get("actorReference").is_none());
-        assert!(hidden[0].get("effectDigest").is_none());
-        decision.reason = None;
-        let erased = decisions_value(std::slice::from_ref(&decision), true, false);
-        assert_eq!(erased[0]["reasonPresent"], true);
-        assert!(erased[0].get("reason").is_none());
-    }
-
     #[test]
     fn request_actor_reference_is_a_keyed_hash_scoped_to_the_source_database() {
         let compiled = compiled_product_fixture(include_bytes!(
@@ -2060,24 +1827,21 @@ mod tests {
     }
 
     #[test]
-    fn decision_reason_disclosure_requires_selected_profile_permission_and_authentication() {
+    fn application_reason_disclosure_requires_selected_profile_permission_and_authentication() {
         let compiled = compiled_product_fixture(include_bytes!(
             "../../../../products/breg/acceptance/asset-site-placement-change-requests/registry.yaml"
         ));
         let mut entity = compiled.entities()["placement-correction-request"].clone();
         let request = request_for_profile("correction-submitter");
-        assert!(may_disclose_decision_reasons(&entity, &request));
+        assert!(may_disclose_application_reason(&entity, &request));
         assert!(!may_disclose_actor_references(&entity, &request));
-        assert!(!may_disclose_review_state(&entity, &request));
+        assert!(may_disclose_review_state(&entity, &request));
         entity
             .access_profiles
             .get_mut("correction-submitter")
             .expect("profile")
             .readable_request_fields
-            .extend([
-                crate::contract::RequestMetadataFieldSource::ActorReference,
-                crate::contract::RequestMetadataFieldSource::ReviewState,
-            ]);
+            .extend([crate::contract::RequestMetadataFieldSource::ActorReference]);
         assert!(may_disclose_actor_references(&entity, &request));
         assert!(may_disclose_review_state(&entity, &request));
         entity
@@ -2086,7 +1850,7 @@ mod tests {
             .expect("profile")
             .readable_request_fields
             .clear();
-        assert!(!may_disclose_decision_reasons(&entity, &request));
+        assert!(!may_disclose_application_reason(&entity, &request));
         assert!(!may_disclose_actor_references(&entity, &request));
         assert!(!may_disclose_review_state(&entity, &request));
         entity
@@ -2104,38 +1868,17 @@ mod tests {
             .get_mut("correction-submitter")
             .expect("profile")
             .anonymous = true;
-        assert!(!may_disclose_decision_reasons(&entity, &request));
+        assert!(!may_disclose_application_reason(&entity, &request));
         assert!(!may_disclose_actor_references(&entity, &request));
         assert!(!may_disclose_review_state(&entity, &request));
-        assert!(!may_disclose_decision_reasons(
+        assert!(!may_disclose_application_reason(
             &entity,
             &request_for_profile("missing")
         ));
     }
-
-    #[cfg(any())]
-    #[test]
-    fn current_review_metadata_uses_frozen_stages_and_authoritative_entry_time() {
-        let workflow = submitted_workflow(2, true);
-        let review = super::request_review_metadata(&workflow).expect("submitted proposal");
-        assert_eq!(review["stages"][0]["id"], "review");
-        assert_eq!(review["stages"][0]["approvals"], 2);
-        assert_eq!(review["stages"][0]["excludeSubmitter"], true);
-        assert_eq!(review["submittedAt"], "2026-08-31T00:00:01Z");
-        assert_eq!(review["pendingStage"], "review");
-        assert_eq!(review["stageEnteredAt"], review["submittedAt"]);
-
-        let current_configuration = vec![CompiledChangeRequestStage {
-            id: "replacement-stage".to_owned(),
-            approvals: 1,
-            exclude_submitter: false,
-            exclude_previous_reviewers: false,
-        }];
-        assert_ne!(
-            review["stages"],
-            serde_json::to_value(current_configuration).unwrap(),
-            "a current configuration change cannot rewrite a frozen proposal"
-        );
+    fn compiled_product_fixture(bytes: &[u8]) -> crate::model::CompiledRegistry {
+        let project = parse_project_yaml(bytes).expect("product fixture parses");
+        compile_project(&project, &[], CompileProfile::Authoring).expect("product fixture compiles")
     }
 
     #[test]
@@ -2144,12 +1887,11 @@ mod tests {
             request_entity_id: "request".to_owned(),
             request_id: "00000000-0000-4000-8000-000000000001".to_owned(),
             proposal_version: 2,
-            request_state: "approved".to_owned(),
+            request_state: "applied".to_owned(),
             current: true,
             contract_fingerprint: "sha256:contract".to_owned(),
             effect_digest: "sha256:effect".to_owned(),
             detail_erased: true,
-            decisions: Vec::new(),
             application_id: Some("00000000-0000-4000-8000-0000000000aa".to_owned()),
             result_link_count: 1,
             result_links: vec![RetainedRequestResultLink {
@@ -2158,7 +1900,7 @@ mod tests {
                 target_revision: 7,
             }],
         };
-        let value = retained_history_value(proposal, true, true, false);
+        let value = retained_history_value(proposal, true);
         assert_eq!(value["detailErased"], json!(true));
         assert_eq!(value["effectDigest"], json!("sha256:effect"));
         assert_eq!(value["resultLinkCount"], json!(1));
@@ -2175,18 +1917,15 @@ mod tests {
                 request_entity_id: "request".to_owned(),
                 request_id: "00000000-0000-4000-8000-000000000001".to_owned(),
                 proposal_version: 2,
-                request_state: "approved".to_owned(),
+                request_state: "applied".to_owned(),
                 current: true,
                 contract_fingerprint: "sha256:contract".to_owned(),
                 effect_digest: "sha256:effect".to_owned(),
                 detail_erased: true,
-                decisions: Vec::new(),
                 application_id: Some("00000000-0000-4000-8000-0000000000aa".to_owned()),
                 result_link_count: 0,
                 result_links: Vec::new(),
             },
-            false,
-            false,
             false,
         );
         assert_eq!(value["detailErased"], json!(true));
@@ -2317,99 +2056,6 @@ mod tests {
             action_href(&action, &request, "00000000-0000-4000-8000-000000000001"),
             "/requests/00000000-0000-4000-8000-000000000001/action?accessProfile=editor-profile"
         );
-    }
-
-    #[cfg(any())]
-    #[test]
-    fn review_snapshot_uses_configured_api_names() {
-        let project = parse_project_json(
-            br#"{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{"id":"snapshot-api-name","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-              "entities":[{
-                "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable",
-                "fields":[
-                  {"id":"proposed-site","apiName":"proposedSite","type":"string","maxLength":64,"classification":"internal"},
-                  {"id":"hidden-field","apiName":"hiddenField","type":"string","maxLength":64,"classification":"internal"}
-                ]
-              }],
-              "accessProfiles":[{
-                "id":"operator","default":true,"principalClaim":"principal","permissions":[{
-                  "entity":"target","operations":["get"],"readableFields":["proposed-site"],
-                  "rowBoundaries": []
-                }]
-              }]
-            }"#,
-        )
-        .expect("fixture parses");
-        let compiled =
-            compile_project(&project, &[], CompileProfile::Authoring).expect("fixture compiles");
-        let target = compiled.entities().get("target").expect("target exists");
-        let snapshot = Map::from_iter([
-            ("proposed-site".to_owned(), json!("site-a")),
-            ("hidden-field".to_owned(), json!("do-not-include")),
-        ]);
-        let value = api_object(
-            target,
-            &snapshot,
-            &BTreeSet::from(["proposed-site".to_owned()]),
-        )
-        .expect("snapshot serializes");
-        assert_eq!(value, json!({"proposedSite": "site-a"}));
-        assert!(value.get("proposed-site").is_none());
-        assert!(value.get("hiddenField").is_none());
-    }
-    fn compiled_product_fixture(bytes: &[u8]) -> crate::model::CompiledRegistry {
-        let mut source: Value = serde_norway::from_slice(bytes).expect("product fixture is YAML");
-        for entity in source["entities"]
-            .as_array_mut()
-            .expect("fixture has entities")
-        {
-            let Some(change_request) = entity
-                .as_object_mut()
-                .and_then(|entity| entity.get_mut("changeRequest"))
-            else {
-                continue;
-            };
-            change_request["review"] =
-                json!({"authority": "casework-main", "policyId": "request-review"});
-            change_request["onApproved"] = json!({"mode": "manual"});
-            if let Some(application) = change_request
-                .as_object_mut()
-                .and_then(|request| request.get_mut("application"))
-                .and_then(Value::as_object_mut)
-            {
-                application.remove("mode");
-            }
-        }
-        for profile in source["accessProfiles"]
-            .as_array_mut()
-            .expect("fixture has access profiles")
-        {
-            let Some(permissions) = profile["permissions"].as_array_mut() else {
-                continue;
-            };
-            for permission in permissions {
-                if let Some(operations) = permission["operations"].as_array_mut() {
-                    operations.retain(|operation| {
-                        !matches!(
-                            operation.as_str(),
-                            Some("approve_request" | "reject_request" | "request_revision")
-                        )
-                    });
-                }
-                permission
-                    .as_object_mut()
-                    .expect("permission is an object")
-                    .remove("reviewStages");
-            }
-        }
-        let project =
-            parse_project_json(&serde_json::to_vec(&source).expect("migrated fixture serializes"))
-                .expect("migrated product fixture parses");
-        compile_project(&project, &[], CompileProfile::Authoring)
-            .expect("migrated product fixture compiles")
     }
 
     fn action(operation: Operation) -> VerifiedRequestAction {

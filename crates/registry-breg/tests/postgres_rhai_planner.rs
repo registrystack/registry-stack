@@ -41,7 +41,7 @@ use zeroize::Zeroizing;
 static PLANNER_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn rhai_planner_automatic_transition_requires_same_profile_and_is_atomic() {
+async fn rhai_planner_no_review_manual_application_is_atomic() {
     let _test_guard = PLANNER_TEST_LOCK.lock().await;
     let harness = PilotHarness::start("person-name-change-rhai").await;
     reset_test_planner_invocation_count();
@@ -76,9 +76,8 @@ async fn rhai_planner_automatic_transition_requires_same_profile_and_is_atomic()
     )
     .await;
 
-    // Authority stays with the selected profile. An actor holding the separate
-    // assisted application profile cannot borrow the submitter profile's
-    // request authority or make the automatic transition available.
+    // Authority stays with the selected profile. A separate application
+    // profile cannot borrow the submitter profile's request authority.
     let cross_profile = harness
         .send(
             Method::GET,
@@ -123,24 +122,39 @@ async fn rhai_planner_automatic_transition_requires_same_profile_and_is_atomic()
         first.body,
         test_planner_invocation_count()
     );
-    assert_eq!(first.body["request"]["bregState"], "applied");
+    assert_eq!(first.body["request"]["bregState"], "submitted");
     assert_eq!(first.body["request"]["proposalVersion"], 1);
-    assert_eq!(first.body["request"]["application"]["proposalVersion"], 1);
+    assert_eq!(first.body["request"]["proposal"]["review"]["mode"], "none");
+    assert_eq!(first.body["request"]["application"], Value::Null);
     assert_eq!(test_planner_invocation_count(), 1);
 
-    // Lost-response recovery returns the one stored terminal response. It does
-    // not re-run Rhai, apply the effect twice, or split the request transition
-    // from the authoritative mutation.
+    let apply = action(&first.body, "apply_request");
+    let application_body = json!({
+        "proposalVersion": first.body["request"]["proposalVersion"],
+        "effectDigest": first.body["request"]["effectDigest"]
+    });
+    let applied = send_action(
+        &harness,
+        &apply,
+        &submitter,
+        "rhai-manual-apply",
+        application_body.clone(),
+    )
+    .await;
+    assert_eq!(applied.status, StatusCode::OK, "{}", applied.body);
+    assert_eq!(applied.body["request"]["bregState"], "applied");
+
+    // Lost-response recovery returns the one stored terminal application.
     let replay = send_action(
         &harness,
-        &submit,
+        &apply,
         &submitter,
-        "rhai-atomic-submit-and-apply",
-        json!({}),
+        "rhai-manual-apply",
+        application_body,
     )
     .await;
     assert_eq!(replay.status, StatusCode::OK, "{}", replay.body);
-    assert_eq!(replay.bytes, first.bytes);
+    assert_eq!(replay.bytes, applied.bytes);
     assert_eq!(test_planner_invocation_count(), 1);
 
     let changed = get_record(
@@ -173,7 +187,7 @@ async fn rhai_planner_automatic_transition_requires_same_profile_and_is_atomic()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn rhai_planner_assisted_queue_applies_frozen_effects_without_rerun() {
+async fn rhai_planner_separate_manual_applier_uses_frozen_effects_without_rerun() {
     let _test_guard = PLANNER_TEST_LOCK.lock().await;
     let harness = PilotHarness::start("person-name-change-rhai").await;
     reset_test_planner_invocation_count();
@@ -218,29 +232,21 @@ async fn rhai_planner_assisted_queue_applies_frozen_effects_without_rerun() {
     .await;
     let submit = action(&before_submit.body, "submit_request");
 
-    let queued = send_action(
+    let submitted = send_action(
         &harness,
         &submit,
         &submitter,
-        "rhai-assisted-submit-and-queue",
+        "rhai-assisted-submit",
         json!({}),
     )
     .await;
-    assert_eq!(queued.status, StatusCode::OK, "{}", queued.body);
-    assert_eq!(queued.body["request"]["bregState"], "approved");
-    assert_eq!(queued.body["request"]["proposal"]["reviewMode"], "none");
+    assert_eq!(submitted.status, StatusCode::OK, "{}", submitted.body);
+    assert_eq!(submitted.body["request"]["bregState"], "submitted");
     assert_eq!(
-        queued.body["request"]["proposal"]["applicationDisposition"],
-        "queue"
+        submitted.body["request"]["proposal"]["review"]["mode"],
+        "none"
     );
-    assert_eq!(
-        queued.body["request"]["proposal"]["queueReason"],
-        json!({
-            "code": "assisted-review",
-            "label": "Assisted review requested by synthetic handling."
-        })
-    );
-    assert_eq!(queued.body["request"]["application"], Value::Null);
+    assert_eq!(submitted.body["request"]["application"], Value::Null);
     assert_eq!(test_planner_invocation_count(), 1);
 
     let before_apply = get_record(
@@ -252,7 +258,7 @@ async fn rhai_planner_assisted_queue_applies_frozen_effects_without_rerun() {
         &assisted_applier,
     )
     .await;
-    assert_eq!(before_apply.body["request"]["bregState"], "approved");
+    assert_eq!(before_apply.body["request"]["bregState"], "submitted");
     assert_eq!(test_planner_invocation_count(), 1);
     let apply = action(&before_apply.body, "apply_request");
     let applied = send_action(
@@ -284,378 +290,6 @@ async fn rhai_planner_assisted_queue_applies_frozen_effects_without_rerun() {
     assert_eq!(test_planner_invocation_count(), 1);
 
     harness.finish().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn staged_rhai_final_approval_applies_atomically_and_faults_roll_back_every_surface() {
-    let _test_guard = PLANNER_TEST_LOCK.lock().await;
-    let database = TestDatabase::create(8).await;
-    let registry = Arc::new(staged_rhai_registry());
-    let package_id = "staged-rhai-final-approval";
-    let identity = install_staged_registry(&database, &registry, package_id).await;
-    let app = staged_router(
-        &database,
-        registry.clone(),
-        identity.clone(),
-        package_id,
-        None,
-    );
-    let before_current_row = staged_router(
-        &database,
-        registry.clone(),
-        identity.clone(),
-        package_id,
-        Some(MutationFaultPoint::BeforeCurrentRow),
-    );
-    let after_first_target = staged_router(
-        &database,
-        registry,
-        identity,
-        package_id,
-        Some(MutationFaultPoint::AfterFirstBatchItem),
-    );
-    reset_test_planner_invocation_count();
-    let operator = verified_claims("staged-operator", "person-maintenance", &[]);
-    let submitter = verified_claims(
-        "staged-submitter",
-        "person-name-change",
-        &["registry:person-name:submit"],
-    );
-    let final_reviewer = verified_claims("staged-final-reviewer", "person-name-final", &[]);
-
-    let person = direct_create_record(
-        &app,
-        "/v1/records/persons?accessProfile=person-operator",
-        operator.clone(),
-        "staged-rhai-create-person",
-        json!({"personCode":"SEC-RHAI-STAGED","displayName":"Before Staged Planner"}),
-    )
-    .await;
-    let request = direct_create_record(
-        &app,
-        "/v1/records/person-name-change-requests?accessProfile=name-change-submitter",
-        submitter.clone(),
-        "staged-rhai-create-request",
-        json!({
-            "person": person.id,
-            "givenName": "  Dorothy  ",
-            "familyName": "  Vaughan  ",
-            "handling": "routine"
-        }),
-    )
-    .await;
-    let draft = direct_get_record(
-        &app,
-        &format!(
-            "/v1/records/person-name-change-requests/{}?accessProfile=name-change-submitter",
-            request.id
-        ),
-        submitter.clone(),
-    )
-    .await;
-    let submit = action(&draft.body, "submit_request");
-    let submitted =
-        direct_send_action(&app, &submit, submitter, "staged-rhai-submit", json!({})).await;
-    assert_eq!(submitted.status, StatusCode::OK, "{}", submitted.body);
-    assert_eq!(submitted.body["request"]["bregState"], "submitted");
-    assert_eq!(
-        submitted.body["request"]["proposal"]["applicationDisposition"],
-        "apply"
-    );
-    assert_eq!(test_planner_invocation_count(), 1);
-
-    let pending = direct_get_record(
-        &app,
-        &format!(
-            "/v1/records/person-name-change-requests/{}?accessProfile=staged-final-reviewer",
-            request.id
-        ),
-        final_reviewer.clone(),
-    )
-    .await;
-    let approve = action(&pending.body, "approve_request");
-    let approve_body = json!({
-        "proposalVersion": pending.body["request"]["proposalVersion"],
-        "effectDigest": pending.body["request"]["effectDigest"]
-    });
-    for (fault_app, key) in [
-        (&before_current_row, "staged-rhai-fault-before-current"),
-        (&after_first_target, "staged-rhai-fault-after-first-target"),
-    ] {
-        let before_fault = staged_persistence_snapshot(&database, &request.id).await;
-        let failed = direct_send_action(
-            fault_app,
-            &approve,
-            final_reviewer.clone(),
-            key,
-            approve_body.clone(),
-        )
-        .await;
-        assert_eq!(failed.status, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(failed.body["code"], "service.unavailable");
-        let mut after_fault = staged_persistence_snapshot(&database, &request.id).await;
-        assert_eq!(
-            after_fault.audit,
-            before_fault.audit + 1,
-            "fault {key} must produce exactly one durable failure audit"
-        );
-        after_fault.audit = before_fault.audit;
-        assert_eq!(
-            after_fault,
-            before_fault,
-            "fault {key} must not retain a decision, application, target write, event, audit, or receipt"
-        );
-        let unchanged_request = direct_get_record(
-            &app,
-            &format!(
-                "/v1/records/person-name-change-requests/{}?accessProfile=staged-final-reviewer",
-                request.id
-            ),
-            final_reviewer.clone(),
-        )
-        .await;
-        assert_eq!(unchanged_request.body["request"]["bregState"], "submitted");
-        assert_eq!(unchanged_request.body["revision"], pending.body["revision"]);
-        let unchanged_person = direct_get_record(
-            &app,
-            &format!(
-                "/v1/records/persons/{}?accessProfile=person-operator",
-                person.id
-            ),
-            operator.clone(),
-        )
-        .await;
-        assert_eq!(unchanged_person.body["revision"], 1);
-        assert_eq!(
-            unchanged_person.body["data"]["displayName"],
-            "Before Staged Planner"
-        );
-        assert_eq!(test_planner_invocation_count(), 1);
-    }
-
-    let applied = direct_send_action(
-        &app,
-        &approve,
-        final_reviewer.clone(),
-        "staged-rhai-final-approve",
-        approve_body.clone(),
-    )
-    .await;
-    assert_eq!(applied.status, StatusCode::OK, "{}", applied.body);
-    assert_eq!(applied.body["request"]["bregState"], "applied");
-    assert_eq!(test_planner_invocation_count(), 1);
-    let replay = direct_send_action(
-        &app,
-        &approve,
-        final_reviewer,
-        "staged-rhai-final-approve",
-        approve_body,
-    )
-    .await;
-    assert_eq!(replay.status, StatusCode::OK, "{}", replay.body);
-    assert_eq!(replay.bytes, applied.bytes);
-    assert_eq!(test_planner_invocation_count(), 1);
-
-    let changed = direct_get_record(
-        &app,
-        &format!(
-            "/v1/records/persons/{}?accessProfile=person-operator",
-            person.id
-        ),
-        operator,
-    )
-    .await;
-    assert_eq!(changed.body["revision"], 2);
-    assert_eq!(changed.body["data"]["displayName"], "Dorothy Vaughan");
-    let terminal = staged_persistence_snapshot(&database, &request.id).await;
-    assert_eq!(terminal.state, "applied");
-    assert_eq!(terminal.decisions, 1);
-    assert_eq!(terminal.applications, 1);
-    assert_eq!(terminal.results, 1);
-
-    database.cleanup().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn automatic_submission_and_approval_emit_the_committed_transition_with_its_audit() {
-    let _test_guard = PLANNER_TEST_LOCK.lock().await;
-    for review_required in [false, true] {
-        let database = TestDatabase::create(8).await;
-        let registry = Arc::new(lifecycle_rhai_registry(review_required));
-        let package_id = "automatic-rhai-lifecycle";
-        let identity = install_staged_registry(&database, &registry, package_id).await;
-        let app = staged_router(
-            &database,
-            registry.clone(),
-            identity.clone(),
-            package_id,
-            None,
-        );
-        let fault_app = staged_router(
-            &database,
-            registry.clone(),
-            identity,
-            package_id,
-            Some(MutationFaultPoint::BeforeTerminalAudit),
-        );
-        reset_test_planner_invocation_count();
-        let operator = verified_claims("lifecycle-operator", "person-maintenance", &[]);
-        let submitter = verified_claims(
-            "lifecycle-submitter",
-            "person-name-change",
-            &["registry:person-name:submit"],
-        );
-        let reviewer = verified_claims("lifecycle-reviewer", "person-name-final", &[]);
-        let person = direct_create_record(
-            &app,
-            "/v1/records/persons?accessProfile=person-operator",
-            operator,
-            "lifecycle-person",
-            json!({"personCode":"LIFECYCLE-001","displayName":"Before"}),
-        )
-        .await;
-        let request = direct_create_record(
-            &app,
-            "/v1/records/person-name-change-requests?accessProfile=name-change-submitter",
-            submitter.clone(),
-            "lifecycle-request",
-            json!({"person":person.id,"givenName":"Dorothy","familyName":"Vaughan","handling":"routine"}),
-        )
-        .await;
-        let draft = direct_get_record(
-            &app,
-            &format!(
-                "/v1/records/person-name-change-requests/{}?accessProfile=name-change-submitter",
-                request.id
-            ),
-            submitter.clone(),
-        )
-        .await;
-        let submit = action(&draft.body, "submit_request");
-        let (ready_action, actor, body, transition, from_state) = if review_required {
-            let submitted =
-                direct_send_action(&app, &submit, submitter, "lifecycle-submit", json!({})).await;
-            assert_eq!(submitted.status, StatusCode::OK, "{}", submitted.body);
-            assert_eq!(submitted.body["request"]["bregState"], "submitted");
-            let pending = direct_get_record(
-                &app,
-                &format!("/v1/records/person-name-change-requests/{}?accessProfile=staged-final-reviewer", request.id),
-                reviewer.clone(),
-            )
-            .await;
-            (
-                action(&pending.body, "approve_request"),
-                reviewer,
-                json!({
-                    "proposalVersion": pending.body["request"]["proposalVersion"],
-                    "effectDigest": pending.body["request"]["effectDigest"]
-                }),
-                "approve",
-                "submitted",
-            )
-        } else {
-            (submit, submitter, json!({}), "submit", "draft")
-        };
-        let before_fault = staged_persistence_snapshot(&database, &request.id).await;
-        let failed = direct_send_action(
-            &fault_app,
-            &ready_action,
-            actor.clone(),
-            "lifecycle-terminal-fault",
-            body.clone(),
-        )
-        .await;
-        assert_eq!(failed.status, StatusCode::SERVICE_UNAVAILABLE);
-        let mut after_fault = staged_persistence_snapshot(&database, &request.id).await;
-        assert_eq!(after_fault.audit, before_fault.audit + 1);
-        after_fault.audit = before_fault.audit;
-        assert_eq!(
-            after_fault, before_fault,
-            "{transition} terminal failure rolls back its event and effects"
-        );
-        let applied = direct_send_action(
-            &app,
-            &ready_action,
-            actor.clone(),
-            "lifecycle-ready",
-            body.clone(),
-        )
-        .await;
-        assert_eq!(applied.status, StatusCode::OK, "{}", applied.body);
-        assert_eq!(applied.body["request"]["bregState"], "applied");
-        let invocations = test_planner_invocation_count();
-        let replay = direct_send_action(&app, &ready_action, actor, "lifecycle-ready", body).await;
-        assert_eq!(replay.status, StatusCode::OK, "{}", replay.body);
-        assert_eq!(replay.bytes, applied.bytes);
-        assert_eq!(test_planner_invocation_count(), invocations);
-        let events = database.admin.query(
-            "SELECT record_reference, payload FROM registry_internal.registry_outbox WHERE trigger = 'request_lifecycle'",
-            &[],
-        ).await.unwrap();
-        assert_eq!(
-            events.len(),
-            1,
-            "exact replay emits no second {transition} event"
-        );
-        let record_reference: String = events[0].get(0);
-        let envelope: Value = serde_json::from_slice(&events[0].get::<_, Vec<u8>>(1)).unwrap();
-        let event = &envelope["data"];
-        assert_eq!(event["recordId"], request.id);
-        assert_eq!(event["revision"], applied.body["revision"]);
-        assert_eq!(event["values"], json!({"handling":"routine"}));
-        assert_eq!(event["request"]["transition"], transition);
-        assert_eq!(event["request"]["fromState"], from_state);
-        assert_eq!(event["request"]["toState"], "applied");
-        assert_eq!(
-            event["request"]["stage"],
-            if review_required {
-                json!("final")
-            } else {
-                Value::Null
-            }
-        );
-        assert_eq!(
-            event["request"]["effectDigest"],
-            applied.body["request"]["effectDigest"]
-        );
-        let operation = if review_required {
-            registry_breg::contract::Operation::ApproveRequest
-        } else {
-            registry_breg::contract::Operation::SubmitRequest
-        };
-        let route = registry
-            .routes()
-            .routes
-            .iter()
-            .find(|route| {
-                route.entity_id == "person-name-change-request" && route.operation == operation
-            })
-            .unwrap();
-        let audits = database
-            .admin
-            .query(
-                "SELECT envelope FROM registry_internal.registry_audit ORDER BY created_at, envelope_id",
-                &[],
-            )
-            .await
-            .unwrap();
-        let terminal = audits
-            .iter()
-            .map(|row| {
-                serde_json::from_slice::<Value>(&row.get::<_, Vec<u8>>(0)).unwrap()["record"]
-                    .clone()
-            })
-            .filter(|record| record["phase"] == "terminal" && record["operationId"] == route.id)
-            .collect::<Vec<_>>();
-        assert_eq!(terminal.len(), 2);
-        assert_eq!(terminal[0]["outcome"], "committed");
-        assert_eq!(terminal[1]["outcome"], "replayed");
-        for record in terminal {
-            assert_eq!(record["recordReference"], record_reference);
-            assert_eq!(record["recordRevision"], event["revision"]);
-        }
-        database.cleanup().await;
-    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -820,73 +454,6 @@ fn refusing_rhai_registry() -> registry_breg::CompiledRegistry {
         CompileProfile::Production,
     )
     .expect("refusing Rhai project closes under the Production compiler")
-}
-
-fn staged_rhai_project() -> Value {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/breg/acceptance/person-name-change-rhai");
-    let project_bytes = std::fs::read(root.join("registry.yaml"))
-        .expect("committed Rhai fixture project is readable");
-    let mut project: Value =
-        serde_norway::from_slice(&project_bytes).expect("Rhai fixture YAML converts to JSON");
-    let request = project["entities"]
-        .as_array_mut()
-        .expect("fixture entities are an array")
-        .iter_mut()
-        .find(|entity| entity["id"] == "person-name-change-request")
-        .expect("fixture request entity exists");
-    request["changeRequest"]["review"] = json!({
-        "stages": [{"id": "final", "approvals": 1}]
-    });
-    project["accessProfiles"]
-        .as_array_mut()
-        .expect("fixture profiles are an array")
-        .push(json!({
-            "id": "staged-final-reviewer",
-            "principalClaim": "registry_principal",
-            "requiredPurposes": ["person-name-final"],
-            "permissions": [{
-                "entity": "person-name-change-request",
-                "operations": ["get", "approve_request", "apply_request"],
-                "readableFields": ["person", "given-name", "family-name", "handling"],
-                "reviewStages": [{
-                    "stage": "final",
-                    "targets": [{"entity": "person", "readableFields": ["display-name"], "rowBoundaries": []}]
-                }],
-                "applyTargets": [{"entity": "person", "rowBoundaries": []}],
-              "rowBoundaries": []
-            }]
-        }));
-    project
-}
-
-fn staged_rhai_registry() -> registry_breg::CompiledRegistry {
-    compile_rhai_project(staged_rhai_project(), CompileProfile::Production)
-}
-
-fn lifecycle_rhai_registry(review_required: bool) -> registry_breg::CompiledRegistry {
-    let mut project = staged_rhai_project();
-    let request = project["entities"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|entity| entity["id"] == "person-name-change-request")
-        .unwrap();
-    request["hooks"] = json!([{
-        "phase": "after",
-        "id":"automatic-name-change-applied", "trigger":"request_lifecycle", "projection":["handling"],
-        "when":{"kind":"request_lifecycle","toStates":["applied"]}
-    }]);
-    if !review_required {
-        request["changeRequest"]["review"] = json!({"mode":"none"});
-        project["accessProfiles"]
-            .as_array_mut()
-            .unwrap()
-            .retain(|profile| profile["id"] != "staged-final-reviewer");
-    }
-    // These events exercise transactional capture without an external delivery
-    // destination. Production package journeys remain in the tests above.
-    compile_rhai_project(project, CompileProfile::Authoring)
 }
 
 fn compile_rhai_project(
@@ -1118,7 +685,6 @@ struct StagedPersistenceSnapshot {
     workflow_revision: i64,
     proposals: i64,
     targets: i64,
-    decisions: i64,
     applications: i64,
     results: i64,
     outbox: i64,
@@ -1139,8 +705,6 @@ async fn staged_persistence_snapshot(
                       WHERE request_entity_id = 'person-name-change-request' AND request_id = $1),
                     (SELECT count(*) FROM registry_internal.registry_request_targets
                       WHERE request_entity_id = 'person-name-change-request' AND request_id = $1),
-                    (SELECT count(*) FROM registry_internal.registry_request_decisions
-                      WHERE request_entity_id = 'person-name-change-request' AND request_id = $1),
                     (SELECT count(*) FROM registry_internal.registry_request_applications
                       WHERE request_entity_id = 'person-name-change-request' AND request_id = $1),
                     (SELECT count(*) FROM registry_internal.registry_request_results
@@ -1159,12 +723,11 @@ async fn staged_persistence_snapshot(
         workflow_revision: row.get(1),
         proposals: row.get(2),
         targets: row.get(3),
-        decisions: row.get(4),
-        applications: row.get(5),
-        results: row.get(6),
-        outbox: row.get(7),
-        audit: row.get(8),
-        idempotency: row.get(9),
+        applications: row.get(4),
+        results: row.get(5),
+        outbox: row.get(6),
+        audit: row.get(7),
+        idempotency: row.get(8),
     }
 }
 

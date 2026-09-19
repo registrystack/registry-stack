@@ -21,7 +21,6 @@
     - ['`GET /v1/records/{route}:as-of`', '`list`', 'Entity declares `temporal`', 'Collection of the records valid at `asOf`.']
     - ['`GET /v1/records/{route}/{recordId}/{readPath}`', '`list` through `readPaths[]`', 'Entity declares `readPaths`', 'Collection of related records.']
     - ['`POST /v1/records/{route}/{recordId}/actions/{action}`', '`submit_request`, `revise_request`, `cancel_request`, `apply_request`', 'Entity declares `changeRequest`', 'Request action result. Requires `If-Match` and `Idempotency-Key`.']
-    - ['`POST /v1/records/{route}/{recordId}/actions/stages/{stage}/{decision}`', '`approve_request`, `reject_request`, `request_revision`', 'Entity declares `changeRequest.review.stages`', 'Request action result. Requires `If-Match` and `Idempotency-Key`.']
     - ['`POST /v1/actions/{action}/target-conditions`', '`invoke`', 'Registry declares `actions[]`', '`{"preconditions": {...}}` for the targets the input names.']
     - ['`POST /v1/actions/{action}`', '`invoke`', 'Registry declares `actions[]`', '`{"action", "applicationId", "results"}`. Requires `Idempotency-Key`.']
 - id: query-options
@@ -68,14 +67,11 @@
   title: Change request actions
   columns: [Action, Route suffix, Body, Accepted from]
   rows:
-    - ['`submit`', '`/actions/submit`', '`{}`', '`draft`; the request reaches `approved` when `review.mode` is `none`, and `applied` when the disposition is `apply`']
-    - ['`approve`', '`/actions/stages/{stage}/approve`', '`{"proposalVersion", "effectDigest"}`, optional `reason` string', '`submitted`; the request reaches `approved` once every stage is satisfied, and `applied` when the disposition is `apply`']
-    - ['`reject`', '`/actions/stages/{stage}/reject`', '`{"proposalVersion", "effectDigest"}`, optional `reason` string', '`submitted`']
-    - ['`request-revision`', '`/actions/stages/{stage}/request-revision`', '`{"proposalVersion", "effectDigest"}`, optional `reason` string', '`submitted`']
-    - ['`revise`', '`/actions/revise`', '`{"rebase": false}`', '`needs_changes`, `rejected`']
-    - ['`revise` with rebase', '`/actions/revise`', '`{"rebase": true}`', '`submitted`, `approved`, `needs_changes`, `rejected`']
-    - ['`cancel`', '`/actions/cancel`', '`{}`', 'Any state except `applied` and `canceled`, and only for the principal that owns the request']
-    - ['`apply`', '`/actions/apply`', '`{"proposalVersion", "effectDigest"}`, optional `reason` string', '`approved`']
+    - ['`submit`', '`/actions/submit`', '`{}`', '`draft`; freezes the effects, review requirement, and application guards, then queues external review submission when required']
+    - ['`revise`', '`/actions/revise`', '`{"rebase": false}`', '`submitted`; starts a new draft proposal version']
+    - ['`revise` with rebase', '`/actions/revise`', '`{"rebase": true}`', '`submitted`; starts a new draft after target changes']
+    - ['`cancel`', '`/actions/cancel`', '`{}`', '`draft` or `submitted`, only for the principal that owns the request; an accepted external review is cancelled asynchronously']
+    - ['`apply`', '`/actions/apply`', '`{"proposalVersion", "effectDigest"}`, optional `reason` string', '`submitted` with an exactly correlated approved external result, or explicit no-review; current source authority and guards are rechecked']
 - id: field-encodings
   title: Field type encodings
   columns: [Field type, JSON encoding, Notes]

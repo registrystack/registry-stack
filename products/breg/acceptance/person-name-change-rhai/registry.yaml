@@ -70,11 +70,8 @@ entities:
             fields: [display-name]
       review:
         mode: none
-      application:
-        mode: planner
-        allowedDispositions: [apply, queue]
-        queueReasons:
-          assisted-review: Assisted review requested by synthetic handling.
+      onApproved:
+        mode: manual
       retention:
         mode: operator_erase
 accessProfiles:

@@ -1055,10 +1055,6 @@ struct PlannerTestSuccessReport {
     planner: Option<PlannerTestIdentityReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     handler: Option<PlannerTestIdentityReport>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    disposition: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    queue_reason: Option<PlannerTestQueueReasonReport>,
     effects: Vec<PlannerTestEffectReport>,
     counts: PlannerTestCountReport,
 }
@@ -1069,13 +1065,6 @@ struct PlannerTestIdentityReport {
     kind: &'static str,
     abi: String,
     script_sha256: String,
-}
-
-#[derive(Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PlannerTestQueueReasonReport {
-    code: String,
-    label: String,
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize)]
@@ -5330,16 +5319,6 @@ fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessRepor
             })
         })
         .collect::<Result<Vec<_>, FailureReport>>()?;
-    let disposition = match candidate.disposition {
-        registry_breg::model::CompiledChangeRequestDisposition::Apply => "apply",
-        registry_breg::model::CompiledChangeRequestDisposition::Queue => "queue",
-    };
-    let queue_reason = candidate
-        .queue_reason
-        .map(|reason| PlannerTestQueueReasonReport {
-            code: reason.code,
-            label: reason.label,
-        });
     Ok(PlannerTestSuccessReport {
         ok: true,
         command: COMMAND,
@@ -5354,8 +5333,6 @@ fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessRepor
             script_sha256: planner.script_sha256.clone(),
         }),
         handler: None,
-        disposition: Some(disposition),
-        queue_reason,
         counts: PlannerTestCountReport {
             effects: effects.len(),
             field_mutations,
@@ -7695,17 +7672,17 @@ fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Va
                     "maximumSnapshotBytes": request.maximum_snapshot_bytes,
                 },
                 "planner": explain_change_request_planner(compiled, entity, request),
-                "reviewMode": match request.review_mode {
-                    registry_breg::model::CompiledChangeRequestReviewMode::None => "none",
-                    registry_breg::model::CompiledChangeRequestReviewMode::Stages => "staged",
+                "review": match &request.review {
+                    registry_breg::model::CompiledChangeRequestReview::Required(requirement) => json!({
+                        "authority": requirement.authority,
+                        "policyId": requirement.policy_id,
+                    }),
+                    registry_breg::model::CompiledChangeRequestReview::None(no_review) => json!({
+                        "mode": no_review.mode,
+                    }),
                 },
-                "application": explain_change_request_application(&request.application),
-                "stages": request.stages.iter().map(|stage| json!({
-                    "id": stage.id,
-                    "approvals": stage.approvals,
-                    "excludeSubmitter": stage.exclude_submitter,
-                    "excludePreviousReviewers": stage.exclude_previous_reviewers,
-                })).collect::<Vec<_>>(),
+                "onApproved": request.on_approved,
+                "application": request.application,
                 "effects": request.effects.iter().map(|effect| {
                     let target = compiled.entities().get(&effect.target.entity_id);
                     json!({
@@ -7745,23 +7722,12 @@ fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Va
                 }).collect::<Vec<_>>(),
                 "actions": request.actions.iter().map(|action| json!({
                     "operation": operation_wire_name(action.operation.access_operation()),
-                    "stage": action.review_stage,
                     "routeId": compiled.routes().routes.iter()
                         .find(|route| route.entity_id == entity.id
-                            && route.operation == action.operation.access_operation()
-                            && route.request_stage == action.review_stage)
+                            && route.operation == action.operation.access_operation())
                         .map(|route| route.id.as_str()),
                     "method": "POST",
                     "preconditions": request_action_preconditions(action.operation.access_operation()),
-                })).collect::<Vec<_>>(),
-                "reviewPermissions": request.review_permissions.iter().map(|grant| json!({
-                    "profile": grant.profile_id,
-                    "stage": grant.stage,
-                    "targetEntity": grant.target_entity_id,
-                    "readableFields": grant.readable_fields.iter()
-                        .map(|field| field_summary_optional(compiled.entities().get(&grant.target_entity_id), field))
-                        .collect::<Vec<_>>(),
-                    "rowBoundaries": grant.row_boundaries,
                 })).collect::<Vec<_>>(),
                 "applyPermissions": request.apply_permissions.iter().map(|grant| json!({
                     "profile": grant.profile_id,
@@ -7870,35 +7836,6 @@ fn explain_change_request_planner(
                     .collect::<Vec<_>>(),
             })
         }).collect::<Vec<_>>(),
-    })
-}
-
-fn explain_change_request_application(
-    application: &registry_breg::model::CompiledChangeRequestApplication,
-) -> Value {
-    let mode = match application.mode {
-        registry_breg::model::CompiledChangeRequestApplicationMode::Manual => "manual",
-        registry_breg::model::CompiledChangeRequestApplicationMode::Automatic => "automatic",
-        registry_breg::model::CompiledChangeRequestApplicationMode::Planner => "planner",
-    };
-    let allowed_dispositions = match application.mode {
-        registry_breg::model::CompiledChangeRequestApplicationMode::Manual => vec!["queue"],
-        registry_breg::model::CompiledChangeRequestApplicationMode::Automatic => vec!["apply"],
-        registry_breg::model::CompiledChangeRequestApplicationMode::Planner => application
-            .allowed_dispositions
-            .iter()
-            .map(|disposition| match disposition {
-                registry_breg::model::CompiledChangeRequestDisposition::Apply => "apply",
-                registry_breg::model::CompiledChangeRequestDisposition::Queue => "queue",
-            })
-            .collect::<Vec<_>>(),
-    };
-    json!({
-        "mode": mode,
-        "allowedDispositions": allowed_dispositions,
-        "queueReasons": application.queue_reasons.iter()
-            .map(|(code, label)| json!({"code": code, "label": label}))
-            .collect::<Vec<_>>(),
     })
 }
 
@@ -8374,13 +8311,7 @@ fn request_action_preconditions(
     operation: registry_breg::contract::Operation,
 ) -> Vec<&'static str> {
     let mut preconditions = vec!["Idempotency-Key", "If-Match"];
-    if matches!(
-        operation,
-        registry_breg::contract::Operation::ApproveRequest
-            | registry_breg::contract::Operation::RejectRequest
-            | registry_breg::contract::Operation::RequestRevision
-            | registry_breg::contract::Operation::ApplyRequest
-    ) {
+    if matches!(operation, registry_breg::contract::Operation::ApplyRequest) {
         preconditions.push("proposalVersion");
         preconditions.push("effectDigest");
     }
@@ -8398,9 +8329,6 @@ fn operation_wire_name(operation: registry_breg::contract::Operation) -> &'stati
         registry_breg::contract::Operation::Batch => "batch",
         registry_breg::contract::Operation::Revisions => "revisions",
         registry_breg::contract::Operation::SubmitRequest => "submit_request",
-        registry_breg::contract::Operation::ApproveRequest => "approve_request",
-        registry_breg::contract::Operation::RejectRequest => "reject_request",
-        registry_breg::contract::Operation::RequestRevision => "request_revision",
         registry_breg::contract::Operation::ReviseRequest => "revise_request",
         registry_breg::contract::Operation::CancelRequest => "cancel_request",
         registry_breg::contract::Operation::ApplyRequest => "apply_request",
@@ -9341,10 +9269,9 @@ fn write_planner_test_success(
             .ok_or_else(|| io::Error::other("missing compiled script identity"))
             .and_then(|(kind_label, abi_label, digest_label, identity)| {
                 let mut lines = report::Lines::new();
-                if let Some(disposition) = report.disposition {
+                if report.planner.is_some() {
                     lines.lead(&format!(
-                        "Ran the planner. Disposition {}, {}.",
-                        disposition,
+                        "Ran the planner. Produced {}.",
                         report::counted(report.effects.len(), "effect")
                     ));
                 } else if report.refusal.is_some() {
@@ -9368,9 +9295,6 @@ fn write_planner_test_success(
                 if report.assertions_passed == Some(true) {
                     pairs.push(("exact assertions", "passed".to_owned()));
                 }
-                if let Some(disposition) = report.disposition {
-                    pairs.push(("disposition", disposition.to_owned()));
-                }
                 if let Some(refusal) = &report.refusal {
                     pairs.push((
                         "refusal",
@@ -9383,12 +9307,6 @@ fn write_planner_test_success(
                     if let Some(field) = refusal.get("field").and_then(Value::as_str) {
                         pairs.push(("refusal input", field.to_owned()));
                     }
-                }
-                if let Some(reason) = &report.queue_reason {
-                    pairs.push((
-                        "queue reason",
-                        format!("{} ({})", reason.code, reason.label),
-                    ));
                 }
                 pairs.push(("effects", report.counts.effects.to_string()));
                 pairs.push(("field mutations", report.counts.field_mutations.to_string()));
@@ -11334,7 +11252,7 @@ mod tests {
         fs::create_dir_all(directory.path.join("planners")).unwrap();
         fs::write(
             directory.path.join("planners/request.rhai"),
-            b"fn plan(ctx) { #{ disposition: \"apply\", effects: [] } }\n",
+            b"fn plan(ctx) { #{ effects: [] } }\n",
         )
         .unwrap();
         let origin = SafeDir::resolve(&directory.path).expect("the test directory resolves");
@@ -11581,19 +11499,6 @@ mod tests {
                 schema["properties"][&field.logical.api_name]
             );
         }
-        for (stage, descriptor) in entity
-            .change_request
-            .as_ref()
-            .unwrap()
-            .stages
-            .iter()
-            .zip(request["stages"].as_array().unwrap())
-        {
-            assert_eq!(
-                descriptor["excludePreviousReviewers"],
-                stage.exclude_previous_reviewers
-            );
-        }
         assert_eq!(request["planner"]["kind"], "rhai");
         assert_eq!(
             request["planner"]["abi"],
@@ -11616,12 +11521,9 @@ mod tests {
             request["planner"]["possibleWrites"][0]["operation"],
             "patch"
         );
-        assert_eq!(request["reviewMode"], "none");
-        assert_eq!(request["application"]["mode"], "planner");
-        assert_eq!(
-            request["application"]["allowedDispositions"],
-            json!(["apply", "queue"])
-        );
+        assert_eq!(request["review"], json!({"mode": "none"}));
+        assert_eq!(request["onApproved"], json!({"mode": "manual"}));
+        assert_eq!(request["application"], json!({}));
         assert!(explanation["controlledWrites"]
             .as_array()
             .and_then(|writes| writes.iter().find(|write| write["entity"] == "person"))
@@ -11692,8 +11594,8 @@ mod tests {
         assert!(value["planner"]["scriptSha256"]
             .as_str()
             .is_some_and(|digest| digest.starts_with("sha256:")));
-        assert_eq!(value["disposition"], "queue");
-        assert_eq!(value["queueReason"]["code"], "assisted-review");
+        assert!(value.get("disposition").is_none());
+        assert!(value.get("queueReason").is_none());
         assert_eq!(value["effects"][0]["id"], "effect-1");
         assert_eq!(value["effects"][0]["targetKind"], "existing");
         assert_eq!(value["effects"][0]["operation"], "patch");
@@ -11728,8 +11630,7 @@ mod tests {
                         target: #{fromField: "person"},
                         operation: "patch",
                         set: #{"display-name": ctx.request["family-name"]}
-                    }],
-                    disposition: "apply"
+                    }]
                 }
             }
             "#,
@@ -11806,12 +11707,12 @@ mod tests {
         );
 
         let declarative = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/acceptance/asset-site-placement-change-requests")
+            .join("../../products/breg/starters/public-organizations/core")
             .canonicalize()
             .expect("declarative fixture canonicalizes");
         assert_planner_test_failure(
             &declarative,
-            "placement-correction-request",
+            "name-correction",
             &request_path,
             "planner_test.planner.declarative",
         );
@@ -12751,7 +12652,7 @@ extendEntities:
         kind: rhai
         script: planners/person.rhai
         abi: registry.change-request-plan/v1
-      review: {}
+      review: {mode: none}
 actions:
   - id: normalize-person
     handler:

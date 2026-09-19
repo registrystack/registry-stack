@@ -305,3 +305,65 @@ CREATE TABLE casework_review_accountability (
 );
 CREATE INDEX casework_review_accountability_retention_idx
     ON casework_review_accountability(retained_until, event_id);
+
+-- Review-native institutional task grants. These deliberately bind the exact
+-- active reviewer task rather than treating a terminal approval as authority.
+CREATE TABLE casework_review_task_grants (
+    grant_id uuid PRIMARY KEY,
+    task_id uuid NOT NULL,
+    request_id uuid NOT NULL,
+    task_revision bigint NOT NULL CHECK (task_revision > 0),
+    holder_issuer text NOT NULL CHECK (octet_length(holder_issuer) BETWEEN 1 AND 256),
+    holder_subject text NOT NULL CHECK (octet_length(holder_subject) BETWEEN 1 AND 256),
+    approver_profile text NOT NULL CHECK (octet_length(approver_profile) BETWEEN 1 AND 128),
+    approver_role text NOT NULL CHECK (approver_role IN ('staff','supervisor')),
+    idempotency_key text NOT NULL CHECK (octet_length(idempotency_key) BETWEEN 1 AND 256),
+    request_hash text NOT NULL CHECK (request_hash ~ '^[0-9a-f]{64}$'),
+    record jsonb NOT NULL CHECK (octet_length(record::text) <= 65536),
+    approved_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL CHECK (
+        expires_at > approved_at AND expires_at <= approved_at + interval '900 seconds'
+    ),
+    invalidated_at timestamptz,
+    invalidation_reason text CHECK (
+        invalidation_reason IN ('revoked','eligibility','template','source')
+    ),
+    FOREIGN KEY (task_id,request_id)
+        REFERENCES casework_review_tasks(task_id,request_id) ON DELETE CASCADE,
+    UNIQUE(task_id,holder_issuer,holder_subject,approver_profile,idempotency_key)
+);
+CREATE INDEX casework_review_task_grants_active_idx
+    ON casework_review_task_grants(expires_at,task_id)
+    WHERE invalidated_at IS NULL;
+CREATE INDEX casework_review_task_grants_task_idx
+    ON casework_review_task_grants(task_id,approved_at,grant_id);
+
+CREATE TABLE casework_review_clock_occurrences (
+    clock_occurrence_id uuid PRIMARY KEY,
+    clock_id text NOT NULL CHECK (octet_length(clock_id) BETWEEN 1 AND 128),
+    scope text NOT NULL CHECK (scope IN ('subject','activity')),
+    correlation_key text NOT NULL CHECK (octet_length(correlation_key) BETWEEN 1 AND 256),
+    subject_source text NOT NULL CHECK (octet_length(subject_source) BETWEEN 1 AND 128),
+    subject_type text NOT NULL CHECK (octet_length(subject_type) BETWEEN 1 AND 128),
+    subject_id text NOT NULL CHECK (octet_length(subject_id) BETWEEN 1 AND 128),
+    request_id uuid REFERENCES casework_review_requests(request_id) ON DELETE SET NULL,
+    task_id uuid REFERENCES casework_review_tasks(task_id) ON DELETE SET NULL,
+    policy_digest text NOT NULL CHECK (policy_digest ~ '^sha256:[0-9a-f]{64}$'),
+    policy jsonb NOT NULL CHECK (octet_length(policy::text) <= 65536),
+    state text NOT NULL CHECK (state IN ('running','paused','completed','cancelled','source_facts_missing')),
+    anchor_at timestamptz NOT NULL,
+    due_at timestamptz,
+    at_risk_at timestamptz,
+    paused_at timestamptz,
+    paused_seconds bigint NOT NULL DEFAULT 0 CHECK (paused_seconds >= 0),
+    completed_at timestamptz,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    UNIQUE(subject_source,subject_type,subject_id,clock_id,scope,correlation_key),
+    CHECK ((state='paused') = (paused_at IS NOT NULL)),
+    CHECK ((state='completed') = (completed_at IS NOT NULL))
+);
+CREATE INDEX casework_review_clock_request_idx
+    ON casework_review_clock_occurrences(request_id,clock_id,clock_occurrence_id);
+CREATE INDEX casework_review_clock_subject_idx
+    ON casework_review_clock_occurrences(subject_source,subject_type,subject_id,clock_id);

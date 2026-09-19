@@ -11,19 +11,15 @@ equally narrow: it can only patch the referenced `person` record's
 review decision.
 
 `scripts/person-name-change.rhai` trims the supplied name parts and joins them
-with a single space. Both handling values use the selected
-`name-change-submitter` profile, which has `apply_request` plus the matching
-`applyTargets` grant because the planner's disposition is not known until
-submission. `handling: routine` returns `apply`, so submission freezes and
-applies the plan in one transaction. `handling: assisted` returns `queue` with
-the closed `assisted-review` reason. It freezes the complete proposal but does
-not rerun the script; the separate `assisted-applier` later applies that frozen
-proposal through the ordinary authorized action.
+with a single space. Submission freezes the complete proposal. The selected
+`name-change-submitter` profile has `apply_request` plus the matching
+`applyTargets` grant, so a separate manual application can later apply those
+frozen effects without rerunning the planner.
 
 This distinction is why the name construction belongs in Rhai while the
 authority remains YAML. YAML declares request fields, the ABI, target and field
-ceiling, no-review policy, allowed planner outcomes, queue reason catalogue,
-and grants. Rhai only chooses a bounded value and one of the declared outcomes.
+ceiling, no-review policy, manual application mode, and grants. Rhai only
+computes bounded frozen effects and never chooses review or execution authority.
 
 Run the structural check from the repository root:
 
@@ -44,9 +40,9 @@ CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
   --request products/breg/acceptance/person-name-change-rhai/examples/routine-request.json
 ```
 
-The report contains only compiled planner identity, its disposition and declared
-queue reason, ordinal effect aliases, target kinds, operations, field names,
-dependencies, and counts. It deliberately omits request values, target record
+The report contains only compiled planner identity, ordinal effect aliases,
+target kinds, operations, field names, dependencies, and counts. It deliberately
+omits request values, target record
 identifiers, source text and paths, claims, and credentials. This command tests
 the closed planner calculation. The PostgreSQL journey remains the authority for
 base-revision checks, authorization, freezing, and application.
@@ -63,7 +59,6 @@ the new digest. A proposal already frozen by an earlier package keeps its
 stored effects and digest; review, retry, and application do not rerun the
 edited script.
 
-The synthetic journey covers both planner outcomes. It verifies the routine
-submit's applied target value and the later assisted apply target value. It
-intentionally does not assert an invented review receipt, queue-only public
-state, or planner rerun signal.
+The synthetic journey covers two planner inputs and verifies that both frozen
+proposals are applied only through the later authorized apply action. It
+intentionally does not assert an invented review receipt or planner rerun signal.

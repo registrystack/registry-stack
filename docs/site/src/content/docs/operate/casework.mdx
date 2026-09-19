@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-11"
+last_reviewed: "2026-09-20"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -50,7 +50,7 @@ the package directory and ends at a serving deployment.
 
 ### What it does not need
 
-A hosted deployment that declares no source needs no Base Registry Engine (BReg): the work items
+A submitted-context review deployment that declares no source needs no Base Registry Engine (BReg): the review requests
 its callers create live in Casework's own database, and the source bindings in the runtime file
 exist only for the sources a package declares. Work, claims, drafts, attempts, accountability
 records, and the idempotency ledger all live in PostgreSQL, so no message broker and no cache take

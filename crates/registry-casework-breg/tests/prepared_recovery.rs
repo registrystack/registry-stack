@@ -28,6 +28,7 @@ fn adapter(base: &str) -> BregAdapter {
                 stages: vec![],
                 fields: vec![],
             },
+            context_projection: Vec::new(),
             display_reference: None,
             expected_registry_revision: REVISION.into(),
             binding_generation: "generation-1".into(),

@@ -2608,8 +2608,6 @@ pub enum EventConditionSource {
         transitions: BTreeSet<String>,
         #[serde(default)]
         to_states: BTreeSet<String>,
-        #[serde(default)]
-        stages: BTreeSet<String>,
     },
 }
 

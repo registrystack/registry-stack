@@ -22,7 +22,7 @@ fn binding() -> SourceBinding {
     SourceBinding {
         source_revision: "1".into(),
         version: "proposal-1".into(),
-        integrity: None,
+        integrity: Some(ContentDigest::for_bytes(b"request-1").to_string()),
         generation: "generation-1".into(),
     }
 }
@@ -131,6 +131,7 @@ struct Fixture {
     app: Router,
     mode: Arc<AtomicUsize>,
     item: Uuid,
+    review_task: Uuid,
     profile_id: &'static str,
     template: TaskTemplate,
     project: CaseworkProject,
@@ -175,7 +176,8 @@ async fn fixture_for_role(lifetime: u64, role: CaseworkRole) -> Fixture {
     store.migrate().await.unwrap();
     std::env::remove_var(name);
     let template:TaskTemplate=serde_json::from_value(json!({"id":"summary","version":"1","label":"Prepare summary","eligibleTeams":["team"],"eligibleProfiles":[profile_id],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":ISSUER,"subject":"agent"},"client":"agent-client","resource":"urn:breg:test","purpose":"prepare-summary","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},"subjects":{"person_reference":"person-reference"},"lifetimeSeconds":lifetime})).unwrap();
-    let project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"casework":{"id":"tasks","version":"1"},"accessProfiles":[{"id":profile_id,"principalClaim":"sub","requiredScopes":[scope],"role":profile_id}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Test source","requests":[{"entity":"request","queue":"review"}]}],"taskTemplates":[template]})).unwrap();
+    let review_template:TaskTemplate=serde_json::from_value(json!({"id":"review-summary","version":"1","label":"Prepare review summary","eligibleTeams":["team"],"eligibleProfiles":[profile_id],"source":"source","reviewKinds":["external-review"],"agent":{"issuer":ISSUER,"subject":"agent"},"client":"agent-client","resource":"urn:breg:test","purpose":"prepare-review-summary","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},"subjects":{"person_reference":"person-reference"},"lifetimeSeconds":lifetime})).unwrap();
+    let project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"casework":{"id":"tasks","version":"1"},"accessProfiles":[{"id":profile_id,"principalClaim":"sub","requiredScopes":[scope],"role":profile_id},{"id":"producer","principalClaim":"sub","requiredScopes":["casework:producer"],"role":"requester"}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Test source","requests":[{"entity":"request","queue":"review"}]}],"reviewKinds":[{"id":"external-review","version":"1","purpose":"approval","contextStrategy":"source","stages":[{"id":"review","queue":"review","decidingProfiles":[profile_id],"requiredApprovals":1,"excludeInitiator":true,"excludePreviousStageReviewers":false}],"retention":{"terminalDays":30,"accountabilityDays":90},"displaySchema":{"type":"object","additionalProperties":false,"properties":{}},"outcomes":[]}],"reviewProducers":[{"id":"producer","profile":"producer","issuer":ISSUER,"subject":"producer","trustedInitiatorIssuer":ISSUER,"sourceNamespaces":["source"],"kinds":["external-review"],"recoveryDays":30}],"taskTemplates":[template,review_template]})).unwrap();
     let template = project.task_templates[0].clone();
     store
         .activate_task_templates(&project.task_templates)
@@ -197,12 +199,48 @@ async fn fixture_for_role(lifetime: u64, role: CaseworkRole) -> Fixture {
     .unwrap();
     let item = Uuid::new_v4();
     db.execute("INSERT INTO casework_items(item_id,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,binding,state,queue_id,holder_issuer,holder_subject,revision,first_observed_at,updated_at) VALUES($1,'source','request','request-1','review','review-1',$2,'claimed','review',$3,'human',1,now(),now())",&[&item,&serde_json::to_value(binding()).unwrap(),&ISSUER]).await.unwrap();
+    let review_request = Uuid::new_v4();
+    let review_task = Uuid::new_v4();
+    let snapshot = project.review_kinds[0].snapshot().unwrap();
+    db.execute(
+        "INSERT INTO casework_review_requests(
+            request_id,producer_id,producer_issuer,producer_subject,source_namespace,
+            subject_source,subject_type,subject_id,subject_version,subject_digest,
+            requester_reference,initiator_issuer,initiator_subject,context_strategy,context,
+            policy_id,policy_version,policy_digest,policy_snapshot,submission_digest,
+            lifecycle,active_stage_index,revision,created_at,updated_at)
+         VALUES($1,'producer',$2,'producer','source','source','request','request-1',
+            'proposal-1',$3,'task-grant-review',$2,'initiator','source',$4,
+            'external-review','1',$5,$6,$7,'reviewing',0,1,now(),now())",
+        &[
+            &review_request,
+            &ISSUER,
+            &ContentDigest::for_bytes(b"request-1").to_string(),
+            &json!({"reference":"source:request:request-1"}),
+            &snapshot.identity.digest.to_string(),
+            &serde_json::to_value(&snapshot).unwrap(),
+            &ContentDigest::for_bytes(b"submission").to_string(),
+        ],
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO casework_review_tasks(
+            task_id,request_id,stage_index,stage_id,slot,queue_id,state,
+            holder_issuer,holder_subject,assignment_kind,assignment_owner_issuer,
+            assignment_owner_subject,revision,created_at,updated_at)
+         VALUES($1,$2,0,'review',0,'review','claimed',$3,'human','claim',$3,'human',1,now(),now())",
+        &[&review_task, &review_request, &ISSUER],
+    )
+    .await
+    .unwrap();
     let mode = Arc::new(AtomicUsize::new(0));
     let app = test_app(&store, &project, mode.clone());
     Fixture {
         app,
         mode,
         item,
+        review_task,
         profile_id,
         template,
         project,
@@ -866,6 +904,188 @@ async fn eligible_officer_can_revoke_without_holding_the_item_or_reading_the_sou
     let (status, body) = request(&f, "POST", &revoke, &revoker, true, None, None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["invalidated"], true);
+
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn review_task_grants_bind_holder_revision_subject_and_revocation() {
+    let f = fixture(900).await;
+    let human = token("human", "human-client", "human", "casework:staff");
+    let agent = token("agent", "agent-client", "agent", "casework:grants:assert");
+    let resource = token(
+        "resource",
+        "breg-status",
+        "service",
+        "casework:grants:status",
+    );
+    let preview = format!("/v1/review-tasks/{}/task-templates", f.review_task);
+    let grants = format!("/v1/review-tasks/{}/task-grants", f.review_task);
+    let (status, body) = request(&f, "GET", &preview, &human, true, None, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["itemRevision"], 1);
+    assert_eq!(body["templates"].as_array().unwrap().len(), 1);
+    assert_eq!(body["templates"][0]["id"], "review-summary");
+
+    let approval = json!({"templateId":"review-summary","templateVersion":"1"});
+    let (status, first) = request(
+        &f,
+        "POST",
+        &grants,
+        &human,
+        true,
+        Some(approval.clone()),
+        Some("review-grant"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let first_id = first["id"].as_str().unwrap();
+    let (_, replay) = request(
+        &f,
+        "POST",
+        &grants,
+        &human,
+        true,
+        Some(approval.clone()),
+        Some("review-grant"),
+    )
+    .await;
+    assert_eq!(replay, first);
+    let assertion = format!("/v1/task-grants/{first_id}/assertion");
+    let status_path = format!("/v1/task-grants/{first_id}/status");
+    assert_eq!(
+        request(&f, "POST", &assertion, &agent, false, None, None)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(&f, "GET", &status_path, &resource, false, None, None)
+            .await
+            .1["active"],
+        true
+    );
+    f.mode.store(1, Ordering::SeqCst);
+    assert_eq!(
+        request(&f, "POST", &assertion, &agent, false, None, None)
+            .await
+            .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    f.mode.store(0, Ordering::SeqCst);
+    assert_eq!(
+        request(&f, "POST", &assertion, &agent, false, None, None)
+            .await
+            .0,
+        StatusCode::OK,
+        "temporary source outage must not revoke a review task grant"
+    );
+
+    let (_, revoked) = request(
+        &f,
+        "POST",
+        &grants,
+        &human,
+        true,
+        Some(approval.clone()),
+        Some("review-revoke"),
+    )
+    .await;
+    let revoked_id = revoked["id"].as_str().unwrap();
+    let revoke_path = format!(
+        "/v1/review-tasks/{}/task-grants/{revoked_id}/revoke",
+        f.review_task
+    );
+    assert_eq!(
+        request(&f, "POST", &revoke_path, &human, true, None, None)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(
+            &f,
+            "GET",
+            &format!("/v1/task-grants/{revoked_id}/status"),
+            &resource,
+            false,
+            None,
+            None,
+        )
+        .await
+        .1["active"],
+        false
+    );
+
+    let (_, source_changed) = request(
+        &f,
+        "POST",
+        &grants,
+        &human,
+        true,
+        Some(approval),
+        Some("review-source-change"),
+    )
+    .await;
+    let source_changed_id = source_changed["id"].as_str().unwrap();
+    let source_changed_status = format!("/v1/task-grants/{source_changed_id}/status");
+    f.mode.store(2, Ordering::SeqCst);
+    assert_eq!(
+        request(
+            &f,
+            "GET",
+            &source_changed_status,
+            &resource,
+            false,
+            None,
+            None,
+        )
+        .await
+        .1["active"],
+        false
+    );
+    f.mode.store(0, Ordering::SeqCst);
+    assert_eq!(
+        request(
+            &f,
+            "GET",
+            &source_changed_status,
+            &resource,
+            false,
+            None,
+            None,
+        )
+        .await
+        .1["active"],
+        false,
+        "restored source disclosure must not revive an invalidated review task grant"
+    );
+
+    f.store
+        .client()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE casework_review_tasks SET revision=revision+1 WHERE task_id=$1",
+            &[&f.review_task],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        request(&f, "POST", &assertion, &agent, false, None, None)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(&f, "GET", &status_path, &resource, false, None, None)
+            .await
+            .1["active"],
+        false
+    );
 
     f.admin
         .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))

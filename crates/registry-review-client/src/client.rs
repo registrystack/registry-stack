@@ -28,6 +28,7 @@ use crate::{
 const JSON_MEDIA_TYPE: &str = "application/json";
 const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
+const CASEWORK_PROFILE_HEADER: &str = "registry-casework-profile";
 const MAXIMUM_IDEMPOTENCY_KEY_BYTES: usize = 128;
 const MAXIMUM_PROBLEM_BYTES: u64 = 8 * 1024;
 const PROBLEM_TYPE_BASE: &str = "https://id.registrystack.org/problems/registry-casework/";
@@ -36,6 +37,7 @@ pub struct ReviewClient {
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
     max_response_bytes: u64,
+    profile: HeaderValue,
 }
 
 impl fmt::Debug for ReviewClient {
@@ -44,6 +46,7 @@ impl fmt::Debug for ReviewClient {
             .debug_struct("ReviewClient")
             .field("base_url", &"<validated service URL>")
             .field("max_response_bytes", &self.max_response_bytes)
+            .field("profile", &"<configured>")
             .finish_non_exhaustive()
     }
 }
@@ -51,6 +54,13 @@ impl fmt::Debug for ReviewClient {
 impl ReviewClient {
     pub fn new(config: ReviewClientConfig) -> Result<Self, ReviewClientError> {
         let base_url = config.validate()?;
+        let profile = HeaderValue::from_str(
+            config
+                .profile
+                .as_deref()
+                .expect("validated review client profile"),
+        )
+        .map_err(|_| ReviewClientError::configuration("the Casework profile is invalid"))?;
         let http = build_client(OutboundOptions {
             request_timeout: config.request_timeout,
             connect_timeout: config.connect_timeout,
@@ -62,6 +72,7 @@ impl ReviewClient {
             http,
             base_url,
             max_response_bytes: config.max_response_bytes,
+            profile,
         })
     }
 
@@ -238,6 +249,10 @@ impl ReviewClient {
     fn authorized(&self, request: RequestBuilder, token: &BearerToken) -> RequestBuilder {
         request
             .header(AUTHORIZATION, token.authorization_header_value())
+            .header(
+                HeaderName::from_static(CASEWORK_PROFILE_HEADER),
+                self.profile.clone(),
+            )
             .header(ACCEPT, JSON_MEDIA_TYPE)
     }
 

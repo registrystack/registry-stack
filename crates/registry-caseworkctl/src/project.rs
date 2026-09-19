@@ -40,6 +40,11 @@ sources:
     requests:
       - entity: scope-correction
         queue: corrections
+        contextProjection:
+          - record
+          - licensed-activities
+          - authorization-conditions
+          - supporting-reference
         target:
           id: first-review-response
           after: {elapsed: PT48H}
@@ -98,11 +103,17 @@ const BREG_SOURCE_DESCRIPTION: &str = r#"{
   "request": {
     "requestEntity": "scope-correction",
     "requestRoute": "scope-corrections",
-    "reviewMode": "staged",
-    "stages": [{"id":"review","approvals":1,"excludeSubmitter":true,"excludePreviousReviewers":false}],
-    "fields": [],
+    "fields": [
+      {"field":"record","apiName":"record","schema":{"type":"object","additionalProperties":false,"required":["recordRef"],"properties":{"recordRef":{"type":"string","maxLength":128}}}},
+      {"field":"licensed-activities","apiName":"licensedActivities","schema":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":3,"uniqueItems":true}},
+      {"field":"authorization-conditions","apiName":"authorizationConditions","schema":{"type":"string","maxLength":500}},
+      {"field":"reason","apiName":"reason","schema":{"type":"string","minLength":1,"maxLength":500}},
+      {"field":"supporting-reference","apiName":"supportingReference","schema":{"type":"string","minLength":1,"maxLength":500}}
+    ],
     "contractFingerprint": "sha256:contract",
-    "application": {"mode":"manual"}
+    "review": {"authority":"casework-main","policyId":"scope-correction"},
+    "onApproved": {"mode":"manual"},
+    "application": {}
   }
 }
 "#;
@@ -144,15 +155,19 @@ accessProfiles:
     principalClaim: sub
     requiredScopes: [casework:request]
     role: requester
-    kinds: [decision]
 queues:
   - id: decisions
     label: Decisions awaiting review
-hostedKinds:
+reviewKinds:
   - id: decision
     version: "1"
-    queue: decisions
-    decidingProfiles: [staff]
+    purpose: answer
+    contextStrategy: submitted
+    stages:
+      - id: answer
+        queue: decisions
+        decidingProfiles: [staff]
+        requiredApprovals: 1
     retention:
       terminalDays: 90
       accountabilityDays: 365
@@ -166,16 +181,26 @@ hostedKinds:
     outcomes:
       - id: confirmed
         label: Confirm
+        settlement: answered
         reasonRequired: false
       - id: rejected
         label: Return for correction
+        settlement: answered
         reasonRequired: true
+reviewProducers:
+  - id: requester
+    profile: requester
+    issuer: http://127.0.0.1:8091
+    subject: requester
+    sourceNamespaces: [standalone]
+    kinds: [decision]
+    recoveryDays: 30
 "#;
 
 const STANDALONE_FIXTURE: &str = r#"apiVersion: registry.registrystack.org/casework-fixture/v1alpha1
 kind: CaseworkFixture
 name: standalone-decision-offline
-hosted:
+review:
   kind: decision
   display:
     summary: Confirm the prepared synthetic batch
@@ -378,7 +403,8 @@ pub(super) fn check(project: &Path, production: bool, deny_findings: bool) -> Re
                 "projectId": policy.casework.id,
                 "mode": "standalone",
                 "queues": policy.queues,
-                "hostedKinds": policy.hosted_kinds,
+                "reviewKinds": policy.review_kinds,
+                "reviewProducers": policy.review_producers,
                 "inbox": policy.inbox,
                 "sourceConnections": 0
             },
@@ -486,8 +512,8 @@ pub(super) fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
     let policy = CaseworkProject::load(project.join("casework.yaml"))
         .context("loading and checking casework.yaml")?;
     if policy.sources.is_empty() {
-        if policy.hosted_kinds.is_empty() {
-            bail!("declare a hosted kind or connect a source before checking the project");
+        if policy.review_kinds.is_empty() || policy.review_producers.is_empty() {
+            bail!("declare a review kind and producer or connect a source before checking the project");
         }
         return Ok(policy);
     }
@@ -617,26 +643,27 @@ fn validate_fixture(fixture: &Value, effective: &Value, policy: &CaseworkProject
     {
         bail!("fixture must declare the v1alpha1 CaseworkFixture contract");
     }
-    if let Some(hosted) = fixture.get("hosted") {
-        let kind_id = hosted["kind"]
+    if let Some(review) = fixture.get("review") {
+        let kind_id = review["kind"]
             .as_str()
-            .context("hosted fixture requires a kind")?;
+            .context("review fixture requires a kind")?;
         let kind = policy
-            .hosted_kinds
+            .review_kinds
             .iter()
             .find(|kind| kind.id == kind_id)
-            .context("hosted fixture names an undeclared kind")?;
-        kind.validate_display(&hosted["display"])
-            .context("hosted fixture display does not satisfy the kind schema")?;
+            .context("review fixture names an undeclared kind")?;
+        kind.snapshot()?
+            .validate_display(&review["display"])
+            .context("review fixture display does not satisfy the kind schema")?;
         let outcomes = kind
             .outcomes
             .iter()
             .map(|outcome| outcome.id.as_str())
             .collect::<Vec<_>>();
-        if fixture["expect"]["queue"] != kind.queue
+        if fixture["expect"]["queue"] != kind.stages[0].queue
             || fixture["expect"]["outcomes"] != json!(outcomes)
         {
-            bail!("hosted fixture queue or outcomes do not match the declared kind");
+            bail!("review fixture queue or outcomes do not match the declared kind");
         }
         return Ok(());
     }
@@ -1412,7 +1439,7 @@ mod tests {
     }
 
     #[test]
-    fn standalone_starter_checks_real_display_schema_without_a_source() {
+    fn standalone_starter_checks_real_review_display_schema_without_a_source() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let root = tempfile::tempdir().unwrap();
@@ -1429,8 +1456,8 @@ mod tests {
         );
         let checked = check(&project, false, false).unwrap();
         assert_eq!(
-            load_and_check_policy(&project).unwrap().hosted_kinds,
-            vec![registry_casework_core::standalone_decision_starter_kind()]
+            load_and_check_policy(&project).unwrap().review_kinds.len(),
+            1
         );
         assert_eq!(checked["effective"]["mode"], "standalone");
         assert_eq!(checked["effective"]["sourceConnections"], 0);
@@ -1442,7 +1469,7 @@ mod tests {
         assert_eq!(tested["productionClosure"], false);
         let fixture = project.join("fixtures/standalone-decision.yaml");
         let mut value = load_yaml(&fixture, "fixture").unwrap();
-        value["hosted"]["display"]["undeclared"] = json!("synthetic");
+        value["review"]["display"]["undeclared"] = json!("synthetic");
         fs::write(&fixture, serde_norway::to_string(&value).unwrap()).unwrap();
         assert!(test(&project).is_err());
         let runtime = RuntimeConfig::load(project.join("runtime.example.yaml")).unwrap();

@@ -1,4 +1,4 @@
-use registry_casework_core::HostedValidationError;
+use registry_casework_core::ReviewValidationError;
 use registry_casework_core::{
     ABSENCE_COVER_CYCLE_PROBLEM, ABSENCE_INVALID_PERIOD_PROBLEM, ABSENCE_OVERLAP_PROBLEM,
     ABSENCE_SELF_COVER_PROBLEM, AUTHENTICATION_REFUSED_PROBLEM,
@@ -20,6 +20,10 @@ use registry_casework_core::{
 use registry_platform_httputil::client::TransportKind;
 use std::fmt;
 use thiserror::Error;
+
+const REVIEW_RESULT_EXPIRED_PROBLEM: &str = "review.result-expired";
+const REVIEW_SUBMISSION_CONFLICT_PROBLEM: &str = "review.submission-conflict";
+const REVIEW_TASK_NOT_HELD_PROBLEM: &str = "review.task-not-held";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -58,6 +62,9 @@ pub enum CaseworkProblemCode {
     RequestSourceRejected,
     RequestUnprocessable,
     RequestUnsupportedMediaType,
+    ReviewResultExpired,
+    ReviewSubmissionConflict,
+    ReviewTaskNotHeld,
     RuntimeFailure,
     ServiceUnavailable,
     SourceProfileNotApplicable,
@@ -84,7 +91,7 @@ impl CaseworkProblemCode {
     ///
     /// `Unknown` is absent: it carries whatever a newer Casework service
     /// answered, so it names no registered code.
-    pub const ALL: [Self; 40] = [
+    pub const ALL: [Self; 43] = [
         Self::AbsenceCoverCycle,
         Self::AbsenceInvalidPeriod,
         Self::AbsenceOverlap,
@@ -108,6 +115,9 @@ impl CaseworkProblemCode {
         Self::RequestSourceRejected,
         Self::RequestUnprocessable,
         Self::RequestUnsupportedMediaType,
+        Self::ReviewResultExpired,
+        Self::ReviewSubmissionConflict,
+        Self::ReviewTaskNotHeld,
         Self::RuntimeFailure,
         Self::ServiceUnavailable,
         Self::SourceProfileNotApplicable,
@@ -153,6 +163,9 @@ impl CaseworkProblemCode {
             Self::RequestSourceRejected => REQUEST_SOURCE_REJECTED_PROBLEM,
             Self::RequestUnprocessable => REQUEST_UNPROCESSABLE_PROBLEM,
             Self::RequestUnsupportedMediaType => REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM,
+            Self::ReviewResultExpired => REVIEW_RESULT_EXPIRED_PROBLEM,
+            Self::ReviewSubmissionConflict => REVIEW_SUBMISSION_CONFLICT_PROBLEM,
+            Self::ReviewTaskNotHeld => REVIEW_TASK_NOT_HELD_PROBLEM,
             Self::RuntimeFailure => RUNTIME_FAILURE_PROBLEM,
             Self::ServiceUnavailable => SERVICE_UNAVAILABLE_PROBLEM,
             Self::SourceProfileNotApplicable => SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM,
@@ -199,6 +212,9 @@ impl CaseworkProblemCode {
             REQUEST_SOURCE_REJECTED_PROBLEM => Self::RequestSourceRejected,
             REQUEST_UNPROCESSABLE_PROBLEM => Self::RequestUnprocessable,
             REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM => Self::RequestUnsupportedMediaType,
+            REVIEW_RESULT_EXPIRED_PROBLEM => Self::ReviewResultExpired,
+            REVIEW_SUBMISSION_CONFLICT_PROBLEM => Self::ReviewSubmissionConflict,
+            REVIEW_TASK_NOT_HELD_PROBLEM => Self::ReviewTaskNotHeld,
             RUNTIME_FAILURE_PROBLEM => Self::RuntimeFailure,
             SERVICE_UNAVAILABLE_PROBLEM => Self::ServiceUnavailable,
             SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM => Self::SourceProfileNotApplicable,
@@ -230,7 +246,9 @@ impl CaseworkProblemCode {
             | Self::AbsenceOverlap
             | Self::AbsenceSelfCover => 422,
             Self::AuthenticationRefused => 401,
-            Self::ClockRecomputePreviewExpired | Self::CursorExpired => 410,
+            Self::ClockRecomputePreviewExpired
+            | Self::CursorExpired
+            | Self::ReviewResultExpired => 410,
             Self::CursorInvalid => 400,
             Self::IdempotencyExpired => 410,
             Self::ProfileNotAuthorized | Self::ProfileNotHuman | Self::OperationNotAuthorized => {
@@ -251,6 +269,8 @@ impl CaseworkProblemCode {
             | Self::WorkItemNotOffered
             | Self::WorkItemProposalChanged
             | Self::WorkItemRecoveryPending
+            | Self::ReviewSubmissionConflict
+            | Self::ReviewTaskNotHeld
             | Self::WorkItemSuperseded => 409,
             Self::PreconditionFailed => 412,
             Self::RequestBodyTooLarge => 413,
@@ -352,6 +372,18 @@ impl CaseworkProblemCode {
                 "Unsupported media type",
                 "Send a JSON request body with Content-Type application/json.",
             ),
+            Self::ReviewResultExpired => (
+                "Review result expired",
+                "The retained review result is no longer available. Reconcile through the producer's retained source correlation.",
+            ),
+            Self::ReviewSubmissionConflict => (
+                "Review submission conflict",
+                "The same producer, source subject, version, and policy were already submitted with different canonical content.",
+            ),
+            Self::ReviewTaskNotHeld => (
+                "Review task not held",
+                "Claim the review task before deciding it, and decide only while the claim remains current.",
+            ),
             Self::RuntimeFailure => (
                 "Casework runtime failure",
                 "Casework could not complete the request.",
@@ -451,7 +483,7 @@ pub enum CaseworkClientError {
         detail: Option<String>,
         trace_id: Option<String>,
         original_attempt_id: Option<uuid::Uuid>,
-        validation: Option<HostedValidationError>,
+        validation: Option<ReviewValidationError>,
     },
     #[error("Registry Casework returned an invalid response")]
     Protocol {
@@ -536,6 +568,38 @@ mod tests {
                 "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key."
             ))
         );
+    }
+
+    #[test]
+    fn review_lifecycle_problems_have_exact_recovery_contracts() {
+        for (value, expected, status, title, detail) in [
+            (
+                "review.result-expired",
+                CaseworkProblemCode::ReviewResultExpired,
+                410,
+                "Review result expired",
+                "The retained review result is no longer available. Reconcile through the producer's retained source correlation.",
+            ),
+            (
+                "review.submission-conflict",
+                CaseworkProblemCode::ReviewSubmissionConflict,
+                409,
+                "Review submission conflict",
+                "The same producer, source subject, version, and policy were already submitted with different canonical content.",
+            ),
+            (
+                "review.task-not-held",
+                CaseworkProblemCode::ReviewTaskNotHeld,
+                409,
+                "Review task not held",
+                "Claim the review task before deciding it, and decide only while the claim remains current.",
+            ),
+        ] {
+            let code = CaseworkProblemCode::parse(value);
+            assert_eq!(code, expected);
+            assert_eq!(code.expected_status(), Some(status));
+            assert_eq!(code.expected_text(), Some((title, detail)));
+        }
     }
 
     #[test]

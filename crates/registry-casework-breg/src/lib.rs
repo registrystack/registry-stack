@@ -30,6 +30,9 @@ pub struct BregSourceConfig {
     pub entity: String,
     pub route: String,
     pub routing_metadata: RoutingSourceMetadata,
+    /// Imported source descriptors for the exact fields a current human read
+    /// may disclose through the unified review-task context endpoint.
+    pub context_projection: Vec<RoutingFieldDescriptor>,
     pub display_reference: Option<RoutingFieldDescriptor>,
     pub binding_generation: String,
     pub expected_registry_revision: String,
@@ -87,6 +90,24 @@ impl BregAdapter {
                 .enumerate()
                 .any(|(index, field)| {
                     config.routing_metadata.fields[..index]
+                        .iter()
+                        .any(|prior| prior.field == field.field || prior.api_name == field.api_name)
+                })
+            || config.context_projection.len() > 32
+            || config.context_projection.iter().any(|field| {
+                field.field.is_empty()
+                    || field.field.len() > 128
+                    || field.api_name.is_empty()
+                    || field.api_name.len() > 128
+                    || !matches!(&field.schema, Value::Object(_) | Value::Bool(_))
+                    || !check_source_field_descriptor(field)
+            })
+            || config
+                .context_projection
+                .iter()
+                .enumerate()
+                .any(|(index, field)| {
+                    config.context_projection[..index]
                         .iter()
                         .any(|prior| prior.field == field.field || prior.api_name == field.api_name)
                 })
@@ -395,7 +416,6 @@ impl BregAdapter {
         let activity = match kind {
             OccurrenceKind::Review => RoutingActivity::Review,
             OccurrenceKind::Application => RoutingActivity::Apply,
-            OccurrenceKind::Hosted => return Err(SourceAdapterError::Invalid),
         };
         let fields = self
             .config
@@ -515,7 +535,6 @@ fn occurrence_key(
         match kind {
             OccurrenceKind::Review => "review",
             OccurrenceKind::Application => "application",
-            OccurrenceKind::Hosted => return Err(SourceAdapterError::Invalid),
         },
         stage,
         binding.version.as_str(),
@@ -858,35 +877,20 @@ impl SourceAdapter for BregAdapter {
             .await?;
         let request = Self::request(&record)?;
         let mut disclosed = BTreeMap::new();
-        if let Some(proposal) = request.proposal() {
-            disclosed.insert(
-                "proposal".into(),
-                serde_json::to_value(match proposal.review() {
-                    BRegRequestReviewRequirement::None => {
-                        serde_json::json!({"review":{"mode":"none"}})
-                    }
-                    BRegRequestReviewRequirement::External(requirement) => serde_json::json!({
-                        "review":{"authority":requirement.authority(),"policyId":requirement.policy_id()}
-                    }),
-                })
-                .map_err(|_| SourceAdapterError::Invalid)?,
-            );
+        for field in &self.config.context_projection {
+            let Some(value) = record.data.domain_data.get(&field.api_name) else {
+                // Caller-filtered BReg reads omit fields this exact human and
+                // profile cannot see. Omission must never be widened with the
+                // source reader's service credential.
+                continue;
+            };
+            if validate_source_field_value(field, value).is_err() {
+                return Err(SourceAdapterError::Invalid);
+            }
+            disclosed.insert(field.api_name.clone(), value.clone());
         }
-        if !record.data.domain_data.is_empty() {
-            // Names are used only to filter Casework's routing flags. Values
-            // stay in the caller's direct BReg read and are never copied here.
-            disclosed.insert(
-                "readableFields".into(),
-                Value::Array(
-                    record
-                        .data
-                        .domain_data
-                        .keys()
-                        .cloned()
-                        .map(Value::String)
-                        .collect(),
-                ),
-            );
+        if !serde_json::to_vec(&disclosed).is_ok_and(|bytes| bytes.len() <= 16 * 1024) {
+            return Err(SourceAdapterError::Invalid);
         }
         Ok(CallerSubjectView {
             subject: subject.clone(),
@@ -1116,7 +1120,6 @@ mod tests {
         };
         let review = occurrence_key(OccurrenceKind::Review, Some("review"), &binding)
             .expect("review occurrence key");
-        assert!(occurrence_key(OccurrenceKind::Hosted, None, &binding).is_err());
         let mut changed = binding.clone();
         changed.version = "proposal-2".into();
         assert_ne!(

@@ -804,6 +804,123 @@ fn governed_unknown_keys_are_refused_before_they_become_runtime() {
 }
 
 #[test]
+fn review_executors_are_strict_ordinary_self_http_bindings() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let valid = format!(
+        "{base}reviewExecutors:\n  registry-automatic:\n    endpoint: https://registry.example/registry-a/\n    tokenRef: secret:file/automatic-executor-token\n    registryId: registry-a\n    accessProfile: automatic-applier\n"
+    );
+    parse_runtime_config_with_env(&valid, env_lookup).expect("strict HTTPS executor binding");
+    parse_runtime_config_with_env(
+        &valid.replace(
+            "https://registry.example/registry-a/",
+            "http://127.0.0.1:8080/registry-a/",
+        ),
+        env_lookup,
+    )
+    .expect("loopback executor binding");
+
+    for (invalid, expected) in [
+        (
+            valid.replace(
+                "https://registry.example/registry-a/",
+                "http://registry.example/registry-a/",
+            ),
+            RuntimeConfigError::InvalidBinding,
+        ),
+        (
+            valid.replace("    accessProfile: automatic-applier\n", ""),
+            RuntimeConfigError::Document,
+        ),
+        (
+            valid.replace(
+                "    accessProfile: automatic-applier\n",
+                "    accessProfile: automatic-applier\n    authority: internal\n",
+            ),
+            RuntimeConfigError::Document,
+        ),
+    ] {
+        assert_eq!(
+            parse_runtime_config_with_env(&invalid, env_lookup)
+                .expect_err("unsafe executor binding refused"),
+            expected
+        );
+    }
+}
+
+#[test]
+fn review_authorities_accept_one_refreshing_or_static_credential() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let refreshing = format!(
+        "{base}reviewAuthorities:\n  casework-a:\n    endpoint: https://casework.example/reviews/\n    profile: producer\n    producerId: registry-producer\n    recoveryDays: 7\n    privateKeyJwt:\n      tokenEndpoint: https://issuer.example/oauth2/token\n      clientIdRef: secret:file/review-producer-client-id\n      clientAssertionKeyRef: secret:file/review-producer-private-jwk\n      assertionAudience: https://issuer.example\n      resource: urn:casework:primary\n      scopes: [casework:reviews:request]\n"
+    );
+    parse_runtime_config_with_env(&refreshing, env_lookup)
+        .expect("a refreshing review producer credential is accepted");
+    let opaque = refreshing.replace(
+        "    privateKeyJwt:\n      tokenEndpoint: https://issuer.example/oauth2/token\n      clientIdRef: secret:file/review-producer-client-id\n      clientAssertionKeyRef: secret:file/review-producer-private-jwk\n      assertionAudience: https://issuer.example\n      resource: urn:casework:primary\n      scopes: [casework:reviews:request]\n",
+        "    tokenRef: secret:file/opaque-review-token\n",
+    );
+    parse_runtime_config_with_env(&opaque, env_lookup)
+        .expect("an explicitly supplied opaque token remains supported");
+
+    assert_eq!(
+        parse_runtime_config_with_env(
+            &refreshing.replace("    profile: producer\n", ""),
+            env_lookup,
+        )
+        .expect_err("a missing Casework profile is refused"),
+        RuntimeConfigError::Document
+    );
+    for invalid in [
+        refreshing.replace("    profile: producer\n", "    profile: ''\n"),
+        refreshing.replace(
+            "    profile: producer\n",
+            &format!("    profile: {}\n", "x".repeat(129)),
+        ),
+    ] {
+        assert_eq!(
+            parse_runtime_config_with_env(&invalid, env_lookup)
+                .expect_err("a missing or invalid Casework profile is refused"),
+            RuntimeConfigError::InvalidBinding
+        );
+    }
+
+    for invalid in [
+        refreshing.replace(
+            "    privateKeyJwt:\n",
+            "    tokenRef: secret:file/opaque-review-token\n    privateKeyJwt:\n",
+        ),
+        refreshing.replace(
+            "    privateKeyJwt:\n      tokenEndpoint: https://issuer.example/oauth2/token\n      clientIdRef: secret:file/review-producer-client-id\n      clientAssertionKeyRef: secret:file/review-producer-private-jwk\n      assertionAudience: https://issuer.example\n      resource: urn:casework:primary\n      scopes: [casework:reviews:request]\n",
+            "",
+        ),
+        refreshing.replace(
+            "      scopes: [casework:reviews:request]\n",
+            "      scopes: []\n",
+        ),
+        refreshing.replace(
+            "      resource: urn:casework:primary\n",
+            "      resource: not-a-resource\n",
+        ),
+    ] {
+        assert_eq!(
+            parse_runtime_config_with_env(&invalid, env_lookup)
+                .expect_err("ambiguous or incomplete authority credentials are refused"),
+            RuntimeConfigError::InvalidBinding
+        );
+    }
+}
+
+#[test]
 fn metrics_listener_is_absent_by_default_and_optional() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(

@@ -283,7 +283,7 @@ fn current_proposal_schema_keeps_review_binding_closed() {
         &validator,
         &json!({
             "review": {"authority": "casework-main", "policyId": "request-review"},
-            "applicationDisposition": "apply"
+            "unexpected": "value"
         }),
     );
 }

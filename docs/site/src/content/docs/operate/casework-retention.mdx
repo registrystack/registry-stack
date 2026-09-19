@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-11"
+last_reviewed: "2026-09-20"
 doc_type: how-to
 persona:
   - operator
@@ -16,63 +16,62 @@ standards_referenced: []
 You operate a running Registry Casework deployment, hold its migration database credential, and
 need to account for what the deployment keeps, remove the local payload copies a source owner has
 authorized you to remove, or close out a source attempt whose outcome Casework could not observe.
-Casework expires hosted work on its own clocks and keeps source-backed work until you act. The two
+Casework expires unified review state on its policy clocks and keeps source-backed work until you act. The two
 operator commands here each change one exact selection, take no copy first, and write nothing until
 you repeat them with `--apply`.
 
 ## What Casework retains
 
-Two retention regimes run side by side. Hosted work carries its own declared periods and the
+Two retention regimes run side by side. Unified reviews carry declared periods and the
 runtime enforces them. Source-backed work carries no clock at all: it stays until an operator
 erases it for one exact source request.
 
 | State | Kept for | What removes it |
 | --- | --- | --- |
-| Hosted item payload, the decision result and its result constraints, requester notes, and staff hosted history | `terminalDays` from the moment the item completed or was cancelled | The runtime retention pass |
-| Requester terminal feed events, including a completed item's recorded result | The same `terminalDays` from the terminal time | The runtime retention pass |
+| Review request context, result and constraints, notes, drafts, tasks, and minimized history | `terminalDays` from terminal settlement | The runtime retention pass |
+| Producer result-feed events | The same `terminalDays` from terminal settlement | The runtime retention pass |
 | Protected accountability record: the raw issuer-qualified deciding identity, the staff reason, and only a sha256 digest of a recorded result | `accountabilityDays` from the same terminal time, never shorter than `terminalDays` | The runtime retention pass |
-| Hosted idempotency response | Until the item payload expires, then a payload-free tombstone until the accountability deadline | The runtime retention pass, after which the key is free again |
+| Review-create and mutation replay responses | Until request payload expiry, then a payload-free tombstone until the accountability deadline | The runtime retention pass, after which the key is free again |
 | Source-backed subjects, work items, private drafts, attempts, receipts, history, and durable events | No expiry; they stay for the life of the database | `caseworkctl retention erase --apply` |
 | The keyed audit JSONL file and its rotated siblings | Your retention policy alone | No Casework command |
 
-Each hosted kind declares `terminalDays` and `accountabilityDays` in the project, and the project
+Each review kind declares `terminalDays` and `accountabilityDays` in the project, and the project
 is refused unless `terminalDays` is at least 1, `accountabilityDays` is at least `terminalDays`,
 and `accountabilityDays` is at most 3,650. Pin the two periods to the institution's own decision
 record: Casework enforces the numbers it was given and holds no view on what they must be.
 
-{/* Evidence: crates/registry-casework-core/src/hosted.rs, HostedRetentionPolicy and
-    MAXIMUM_HOSTED_RETENTION_DAYS;
+{/* Evidence: crates/registry-casework-core/src/review.rs, ReviewRetentionPolicy and
+    MAXIMUM_REVIEW_RETENTION_DAYS;
     products/casework/examples/standalone-decision/casework.yaml;
     products/casework/README.md. */}
 
 The retention pass runs inside `casework serve`, on every thirtieth tick of the two-second
 maintenance loop, so about once a minute. It works in bounded batches of at most 100 rows per
 table per pass, skipping locked rows, which keeps it from competing with live traffic and means a
-large backlog drains over several passes rather than in one. It deletes expired terminal events,
-deletes the notes and staff hosted history of an expired item, clears that item's requester binding
-and display together with its result constraints, and deletes the protected accountability record
-at its own later expiry. A failed pass logs a warning and the next tick retries.
+large backlog drains over several passes rather than in one. It deletes expired result-feed events,
+request context, results, notes, drafts, tasks, history, and replay responses, then deletes the
+protected accountability record and payload-free replay tombstones at their later expiry. A failed
+pass logs a warning and the next tick retries.
 
 A structured decision result is decision data, not source record content, but it follows the same
-clock as the display payload it was decided on: the result a terminal event carries is deleted with
-the event at `terminalDays`, and the constraints the Requester supplied at create time are nulled
-beside the display. What outlives them is the accountability record's sha256 digest of the result,
+clock as the request context it was decided on: the result is deleted at `terminalDays`, together
+with the constraints the producer supplied at create time. What outlives them is the accountability record's sha256 digest of the result,
 which proves that a specific result was decided without keeping its content until
 `accountabilityDays` closes.
 
 {/* Evidence: crates/registry-casework/src/runtime.rs, serve_from_path();
-    crates/registry-casework/src/hosted.rs, erase_expired_hosted_at() and RETENTION_BATCH_SIZE. */}
+    crates/registry-casework/src/review.rs, erase_expired_reviews_at(). */}
 
-Requester clients must poll inside the terminal period, because an expired item is no longer
-reachable through the requester read, the notes, the staff history, or the terminal feed. When a
-hosted item's payload expires, Casework erases the stored idempotency response and keeps only a
+Producer clients must poll inside the terminal period, because an expired request is no longer
+reachable through the request read, result, history, notes, tasks, or result feed. When a
+review request payload expires, Casework erases the stored idempotency response and keeps only a
 request hash and hashed binding metadata in a tombstone. An exact retry against that tombstone
 returns the `idempotency.expired` problem with HTTP 410, so the caller reconciles the original
-operation instead of creating a second item; a changed request under the same key still returns
+operation instead of creating a second request; a changed request under the same key still returns
 `idempotency.key-reused`. Once the accountability deadline passes, the tombstone is forgotten and
 the key may be reused.
 
-{/* Evidence: crates/registry-casework/src/hosted.rs, erase_expired_hosted_at();
+{/* Evidence: crates/registry-casework/src/review.rs, erase_expired_reviews_at();
     crates/registry-casework-core/src/http.rs, IDEMPOTENCY_EXPIRED_PROBLEM and
     IDEMPOTENCY_KEY_REUSED_PROBLEM;
     crates/registry-casework/src/problem.rs, IdempotencyExpired. */}
@@ -312,18 +311,18 @@ sentinel lock beside the file.
 | `attempt settle` refuses with `the source attempt still holds a live execution lease` | A client acquired the attempt within the last 330 seconds. Wait for the lease to expire, then preview again. |
 | `attempt settle` refuses with `only an uncertain attempt can be settled` | The attempt is pending, completed, or refused. A terminal attempt already carries its outcome; a pending one is still recoverable by its holder. |
 | `attempt settle` refuses with `only a work item awaiting its source outcome can be settled` | Recovery or source readback already moved the item out of synchronizing. No settlement is needed. |
-| A hosted item disappeared from the requester read and the terminal feed | Its `terminalDays` period closed. The accountability record may still exist; a Supervisor leading a team that serves the queue can resolve one completed terminal `eventId` through the accountability route until `accountabilityDays` closes too. |
+| A review request disappeared from producer polling and the result feed | Its `terminalDays` period closed. The accountability record may still exist; an authorized Supervisor can resolve one event until `accountabilityDays` closes too. |
 | An exact retry returns `idempotency.expired` with HTTP 410 | The item payload expired and only a payload-free tombstone remains. Reconcile the original operation before choosing a new key. |
 | `GET /ready` fails with an audit publication warning in the log | The audit path, its permissions, or its single-writer lock is the likely cause. Fix the path and let the next pass restore readiness. |
 
-{/* Evidence: crates/registry-casework/src/hosted.rs, hosted_accountability();
-    crates/registry-casework/src/http.rs, hosted_accountability();
+{/* Evidence: crates/registry-casework/src/review.rs, review_accountability();
+    crates/registry-casework/src/http.rs, review_accountability();
     crates/registry-casework/src/store.rs, AttemptSettlementError. */}
 
 ## Next
 
 - [Run Registry Casework](../casework/) for the deployment this page maintains.
-- [Author a Casework policy](../../configure/casework/) for the hosted kinds that declare
+- [Author a Casework policy](../../configure/casework/) for the review kinds that declare
   `terminalDays` and `accountabilityDays`.
 - [Retention and persistent state](../retention-and-persistent-state/) for what the other Registry
   Stack runtimes retain.

@@ -1,11 +1,11 @@
 ---
 title: Author a Casework policy
-description: Write the Casework project file that declares access profiles, queues, hosted kinds, routing rules, calendars, and clocks, verify it offline, package it for an operator, and connect a Base Registry Engine source.
+description: Write the Casework project file that declares access profiles, queues, review kinds, producers, routing rules, calendars, and clocks, verify it offline, package it for an operator, and connect a Base Registry Engine source.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-11"
+last_reviewed: "2026-09-20"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -13,7 +13,7 @@ standards_referenced:
 ---
 
 You have decided an item in [Decide your first Casework item](../../tutorials/first-casework/), and now you want to author the policy a real team will work under.
-This page covers the project file: the access profiles that separate Staff, Supervisor, and Administrator, the queues work waits in, the hosted kinds Registry Casework stores and decides itself, the routing rules and clocks that move work over time, and the source declaration that binds a Base Registry Engine (BReg) register.
+This page covers the project file: the access profiles that separate people from producer services, the queues work waits in, the unified review policies, the routing rules and clocks that move work over time, and the source declaration that binds a Base Registry Engine (BReg) register.
 At the end, `caseworkctl package` writes a directory whose manifest an operator verifies before a runtime serves it.
 
 If `caseworkctl` is not installed yet, the release installer places `casework` and `caseworkctl` together in `~/.local/bin` after checking the release `SHA256SUMS`:
@@ -33,7 +33,7 @@ Use `--format json` only when another tool needs to consume its report.
 ## The project file `casework.yaml`
 
 `caseworkctl init` writes a complete authoring project into a new directory.
-The `standalone-decision` template declares a policy with no source: Casework stores the work, presents it, and records the decision itself.
+The `standalone-decision` template declares a submitted-context review with no source.
 
 ```sh
 caseworkctl init ./decisions --template standalone-decision
@@ -59,13 +59,14 @@ casework:
 ```
 
 `casework.id` names the policy, and `casework.version` is the policy version that `caseworkctl explain` reports and that every accountability record carries, so bump it when you change what a team may do.
-The rest of the document is the members in this table, and a project needs either `sources` or `hostedKinds` to have any work at all.
+The rest of the document is the members in this table, and a project needs either `sources` or `reviewKinds` to have any work at all.
 
 | Member | Declares |
 | --------------- | ------------------------------------------------------------ |
 | `accessProfiles` | which token reaches which role |
 | `queues` | the named places work waits for a team |
-| `hostedKinds` | the kinds Casework stores, displays, and decides itself |
+| `reviewKinds` | immutable staged review policies, schemas, outcomes, and retention |
+| `reviewProducers` | exact service identities admitted to create each review kind |
 | `sources` | the source systems whose own work Casework presents |
 | `calendars` and `clocks` | working time, and the deadlines measured over it |
 | `inbox` | page size and the per-page read budgets |
@@ -95,13 +96,12 @@ accessProfiles:
     principalClaim: sub
     requiredScopes: [casework:request]
     role: requester
-    kinds: [decision]
 ```
 
 Every project declares a Staff, a Supervisor, and an Administrator profile, and the three are separately scoped: Supervisor holds a scope that no Staff profile holds, and Administrator holds a scope that no other profile holds at all.
 A profile that reuses a lower role's scope set is refused, so a Staff token can never reach a Supervisor action by accident.
-A Requester profile is a calling system rather than a person: it lists the `kinds` it may submit, and each named kind must be a hosted kind this project declares.
-Human profiles list no `kinds`.
+A Requester profile is a calling system rather than a person.
+The separate `reviewProducers` policy binds that profile to an exact issuer, subject, source namespace, and set of review kinds.
 
 {/* Evidence: crates/registry-casework-core/src/config.rs, AccessProfile and
     access_roles_are_separately_scoped(). */}
@@ -122,16 +122,23 @@ A deployment needs one team serving every queue you declare before its inbox ope
 
 {/* Evidence: crates/registry-casework-core/src/config.rs, QueuePolicy and CaseworkProject::check. */}
 
-### Hosted kinds
+### Review kinds and producers
 
-A [hosted kind](../../reference/glossary/#hosted-kind) is work Casework owns end to end, for the case where no source system holds the record yet.
+A review kind is the source-neutral policy Casework pins when an admitted producer creates a request.
+Use `contextStrategy: submitted` when the producer supplies the bounded snapshot.
+Use `contextStrategy: source` when a human reviewer's current source credential must authorize a bounded current projection.
 
 ```yaml
-hostedKinds:
+reviewKinds:
   - id: decision
     version: "1"
-    queue: decisions
-    decidingProfiles: [staff]
+    purpose: answer
+    contextStrategy: submitted
+    stages:
+      - id: answer
+        queue: decisions
+        decidingProfiles: [staff]
+        requiredApprovals: 1
     retention:
       terminalDays: 90
       accountabilityDays: 365
@@ -164,33 +171,44 @@ hostedKinds:
     outcomes:
       - id: confirmed
         label: Confirm
+        settlement: answered
         reasonRequired: false
         resultRequired: true
       - id: rejected
         label: Return for correction
+        settlement: answered
         reasonRequired: true
+reviewProducers:
+  - id: requester
+    profile: requester
+    issuer: https://identity.example.test
+    subject: requester-service
+    sourceNamespaces: [standalone]
+    kinds: [decision]
+    recoveryDays: 30
 ```
 
-`queue` names the queue a submitted item lands in, and `decidingProfiles` names the profiles that may decide it.
-Only Staff and Supervisor profiles may decide: an Administrator holds directory and retention authority, and naming one here is refused.
+Each ordered stage names its queue, eligible human profiles, positive-decision threshold, and optional exclusions for the initiator or previous-stage reviewers.
+Only Staff and Supervisor profiles may decide.
+The policy identity, stages, context strategy, schemas, outcomes, clocks, and retention are covered by its digest and pinned once per request.
 
 `displaySchema` is a closed JSON Schema 2020-12 object, and closed is checked rather than assumed.
 The root carries `type: object` and `additionalProperties: false`, every nested object schema is closed the same way, every `$ref` points inside the same document, nesting stays within 16 levels, and the canonical schema stays under 64 KiB.
-A submitted display payload is validated against it and stays under 16 KiB, so the schema is the whole contract for what a Requester may send and what a person sees.
+A submitted snapshot is validated against it and stays under 16 KiB, so the schema is the whole contract for what the producer may send and what a person sees.
 
 `retention` sets two clocks over the same item.
-`terminalDays` is how long a decided item keeps its display payload, and `accountabilityDays` is how long the record of who decided what survives after that; `accountabilityDays` is at least `terminalDays`, and neither exceeds 3650.
+`terminalDays` is how long a terminal result remains available, and `accountabilityDays` is how long the protected record of who decided what survives after that; `accountabilityDays` is at least `terminalDays`, and neither exceeds 3650.
 
-Each entry in `outcomes` is a decision a deciding profile may record, and `reasonRequired: true` makes the free-text reason mandatory for that outcome.
-A kind declares at most 16 outcomes, and a project at most 64 hosted kinds.
+For an answer policy, each entry in `outcomes` maps a named choice to `answered` settlement, and `reasonRequired: true` makes the private reason mandatory.
+Approval policies use the built-in payload-free `approved` decision and may configure rejected or changes-requested outcomes.
 
 A kind may also declare what a decision records, not only what it displays.
 `resultSchema` is an optional closed JSON Schema 2020-12 object checked exactly like `displaySchema`, so the deciding person can hand back structured facts with the outcome, and `resultRequired: true` on an outcome refuses a decision for that outcome until a result is submitted.
 A kind without a `resultSchema` refuses a result and refuses constraints: the outcome stays a choice plus an optional reason, as on a kind that declares none.
-The result travels back to the Requester on the terminal item and survives as long as the display payload does; [Retain, erase, and settle](../../operate/casework-retention/) covers the clocks.
+The result travels back to the producer through polling, its result feed, or an optional authenticated completion destination; [Retain, erase, and settle](../../operate/casework-retention/) covers the clocks.
 
-The Requester that creates an item may narrow those result fields for that one item by sending `resultConstraints` beside the display.
-A constraint names one top-level property of `resultSchema` and admits only values the schema already admits, so a Requester can pick among the operator's choices or tighten a bound, and can never introduce a field, add a keyword, or widen a range.
+The producer may narrow those result fields for one request by sending `resultConstraints` beside the context.
+A constraint names one top-level property of `resultSchema` and admits only values the schema already admits, so a producer can pick among the operator's choices or tighten a bound, and can never introduce a field, add a keyword, or widen a range.
 Each constraint value may use only these keywords, and an unknown keyword is refused rather than ignored:
 
 | Keyword | Value | Applies when the property subschema declares |
@@ -200,12 +218,19 @@ Each constraint value may use only these keywords, and an unknown keyword is ref
 | `minimum`, `maximum` | number | `type: number` or `type: integer` inline |
 | `minLength`, `maxLength` | non-negative integer | `type: string` inline |
 
-Constraints are stored verbatim and folded into the create idempotency hash, so a replay under the same key with different constraints is a conflict rather than a silent change.
+Constraints are folded into the canonical submission digest, so a replay under the same key with different constraints is a conflict rather than a silent change.
 At decide time Casework validates the submitted result against the schema first and the constraints second, so a value outside the schema is reported as a schema error and a value inside the schema but outside the narrowing as a constraint error, each with the path of the offending field.
 
-{/* Evidence: crates/registry-casework-core/src/hosted.rs, HostedKindPolicy,
-    HostedRetentionPolicy, HostedOutcomePolicy, check_closed_object_schema(),
-    HostedCreateRequest.check(), and HostedDecisionRequest.check(). */}
+`reviewProducers` is separate from the human review policy.
+An entry admits one exact profile, issuer, and subject to a bounded source namespace and kind set.
+`recoveryDays` must fit within result retention.
+Omit `completion` for polling-only integrations; when present, it names a configured logical destination and recipient binding rather than an arbitrary URL.
+
+{/* Evidence: crates/registry-casework-core/src/review.rs, ReviewKindPolicy,
+    ReviewRetentionPolicy, and ReviewOutcomePolicy;
+    crates/registry-casework-core/src/config.rs, ReviewProducerPolicy;
+    crates/registry-review-protocol/src/lib.rs, ReviewCreateRequest;
+    crates/registry-casework/src/review.rs, ReviewTaskDecisionRequest. */}
 
 ## Local callers in `dev-clients.yaml`
 
@@ -399,7 +424,7 @@ Five commands read the project and touch no network and no database, so run them
 | `package` | What exactly would an operator receive? |
 
 `caseworkctl check` validates the project and prints the effective policy, including the values you did not write.
-For the standalone project it reports standalone mode, the resolved hosted kind with its schema and retention, and the inbox defaults.
+For the standalone project it reports standalone mode, the resolved review kind and producer admission with its schemas and retention, and the inbox defaults.
 For a project that declares a source it reports the request entity, the fallback queue, the routing rule count, and the state of the imported source description, which reads `pending_source_add` before you connect the source and `checked` after.
 
 ```sh
@@ -575,6 +600,6 @@ Tell them which queues need teams, since the inbox stays closed until every decl
 ## Next
 
 - [Deploy Registry Casework](../../operate/casework/) to serve the package you handed over.
-- [Retain, erase, and settle](../../operate/casework-retention/) for the retention windows your hosted kinds declare.
+- [Retain, erase, and settle](../../operate/casework-retention/) for the retention windows your review kinds declare.
 - [How Registry Casework works](../../explanation/how-casework-works/) for the model behind claims, attempts, and accountability.
 - [Registry Casework API](../../reference/apis/registry-casework/) for the routes a policy opens.

@@ -159,11 +159,10 @@ projection. Record identifiers are deliberately kept out of CloudEvents
 headers because infrastructure commonly logs headers.
 
 Lifecycle event data also requires a `request` object containing `proposalVersion`,
-`workflowRevision`, `transition`, `fromState`, `toState`, `stage`, `effectDigest`,
-`deduplicationKey`, and `reasonPresent`. `stage` and `effectDigest` may be null.
-For approve, reject, request-revision, and apply transitions, an explanation
-supplied by the deciding reviewer or by the applier appears unchanged as the
-optional `request.reason` string, bounded to 4096 Unicode characters. An absent
+`workflowRevision`, `transition`, `fromState`, `toState`, `effectDigest`,
+`deduplicationKey`, and `reasonPresent`. `effectDigest` may be null.
+For apply transitions, an explanation supplied by the applier appears unchanged
+as the optional `request.reason` string, bounded to 4096 Unicode characters. An absent
 explanation omits `reason` and sets `reasonPresent` to false. The event's
 compiled classification and destination authority govern delivery independently
 of a reader's `readableRequestFields`.

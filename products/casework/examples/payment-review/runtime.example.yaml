@@ -1,0 +1,33 @@
+apiVersion: registry.registrystack.org/casework-runtime/v1alpha1
+kind: CaseworkRuntimeConfig
+package:
+  root: /srv/registry-casework/payment-review
+listener:
+  bind: 127.0.0.1:8100
+  tlsTermination: development-loopback
+  networkExposure: private-address
+secretProviders:
+  file:
+    root: /run/secrets/registry-casework
+database:
+  runtimeUrlRef: secret:file/runtime-database-url
+  migrationUrlRef: secret:file/migration-database-url
+authentication:
+  oidc:
+    issuer: https://identity.example.test/realms/payments
+    audience: urn:example:casework
+    scopeClaim: scope
+    humanIdentity:
+      claim: registry_actor_kind
+      value: human
+audit:
+  path: /var/lib/registry-casework/audit.ndjson
+  hashKeyRef: secret:file/casework-audit-key
+sources: {}
+reviewCompletionDestinations:
+  payment-results:
+    url: https://payments.example.test/integrations/review-completed
+    bearerTokenRef: secret:file/payment-completion-token
+    timeoutMilliseconds: 5000
+    maximumAttempts: 12
+    retrySeconds: 30

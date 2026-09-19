@@ -376,15 +376,17 @@ def test_request_attachment_journey() -> None:
                                                  ("reviewer", "reviewer", version + 1)]:
             require(request("GET", attachment_path, role, profile=profile, version=requested_version)[0] == 404,
                     "Unauthorized or wrong-version download revealed attachment content")
-        document(action("approve_request", "reviewer", key="attachment-review"), 200, "Approve evidence")
-        document(action("apply_request", "applier", key="attachment-apply"), 200, "Apply reviewed request")
-        applied, _ = document(request("GET", f"/v1/records/records/{record_id}", "operator"), 200, "Read applied record")
-        require(applied["data"]["domainData"]["label"] == "Corrected label", "Reviewed correction was not applied")
-        print("Exact submitted evidence downloads, review and application passed.", flush=True)
+        unchanged, _ = document(request("GET", f"/v1/records/records/{record_id}", "operator"), 200,
+                                "Read target before external review completion")
+        require(unchanged["data"]["domainData"]["label"] == "Original label",
+                "Submission applied effects without accepted external review evidence")
+        document(action("cancel_request", "owner", key="attachment-cancel"), 200,
+                 "Cancel submitted external review")
+        print("Exact submitted evidence downloads, non-application and cancellation passed.", flush=True)
         listing = cli("retention-list", "request-retention", "list", "--runtime-config", runtime,
                       "--request-entity", "correction-request")
         require(any(item["requestId"] == request_id and item["eligibleForErasure"] for item in listing["requests"]),
-                "Applied request was not eligible for operator retention")
+                "Cancelled request was not eligible for operator retention")
         exact = ("--runtime-config", runtime, "--request-entity", "correction-request",
                  "--request-id", request_id, "--proposal-version", str(version))
         dry = cli("retention-dry-run", "request-retention", "dry-run", *exact)
@@ -402,7 +404,7 @@ def test_request_attachment_journey() -> None:
                 "Database storage unexpectedly retained external cleanup work")
         passed = True
         mode = " with asynchronous verification" if args.verification else ""
-        print(f"Request attachments{mode}: authoring, native schema-test/package/activation, draft refusal, storage failure recovery, HTTP upload, owner/reviewer/applier reads, review/apply and exact operator erasure passed.")
+        print(f"Request attachments{mode}: authoring, native schema-test/package/activation, draft refusal, storage failure recovery, HTTP upload, owner/reviewer/applier reads, external-review non-application, cancellation and exact operator erasure passed.")
     finally:
         verifier_release.set()
         if configured_process is not None:

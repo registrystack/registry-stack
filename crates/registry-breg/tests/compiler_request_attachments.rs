@@ -24,19 +24,16 @@ fn source() -> Value {
             "attachments":[slot()],
             "changeRequest":{
                 "effects":[{"id":"apply-label","target":{"fromField":"item"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-                "review":{"stages":[{"id":"review","approvals":1}]}
+                "review":{"authority":"casework-main","policyId":"attachment-review"},
+                "onApproved":{"mode":"manual"}
             }
         }],
         "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"principal","permissions":[{
                 "entity":"request",
-                "operations":["get","list","create","patch","submit_request","approve_request","reject_request","request_revision","apply_request"],
+                "operations":["get","list","create","patch","submit_request","apply_request"],
                 "readableFields":["item","label","supporting-file"],
                 "writableFields":["item","label","supporting-file"],
-                "reviewStages":[{"stage":"review","targets":[
-                    {"entity":"item","readableFields":["label"],"rowBoundaries":[]},
-                    {"entity":"request","readableFields":["supporting-file"],"rowBoundaries":[]}
-                ]}],
                 "applyTargets":[{"entity":"item","rowBoundaries":[]}],
                 "rowBoundaries":[]
             }]
@@ -83,15 +80,6 @@ fn request_slots_keep_field_authority_without_creating_scalar_query_columns() {
     assert!(entity.access_profiles["operator"]
         .writable_fields
         .contains(&slot.id));
-    assert!(entity
-        .change_request
-        .as_ref()
-        .unwrap()
-        .review_permissions
-        .iter()
-        .any(
-            |grant| grant.target_entity_id == "request" && grant.readable_fields.contains(&slot.id)
-        ));
     for query in &compiled.queries().operations {
         assert!(!query.projection_fields.contains(&slot.id));
         assert!(!query.processing_fields.contains(&slot.id));
@@ -136,8 +124,6 @@ fn every_slot_policy_member_changes_compiled_and_request_contract_identity() {
         json!(["item", "label", "replacement-file"]);
     renamed["accessProfiles"][0]["permissions"][0]["writableFields"] =
         json!(["item", "label", "replacement-file"]);
-    renamed["accessProfiles"][0]["permissions"][0]["reviewStages"][0]["targets"][1]
-        ["readableFields"] = json!(["replacement-file"]);
     let compiled = compile(&renamed).unwrap();
     assert_ne!(compiled.revision(), baseline.revision());
     assert_ne!(
@@ -159,10 +145,6 @@ fn absence_omits_attachment_members_from_source_and_compiled_contracts() {
         .remove("attachments");
     source["accessProfiles"][0]["permissions"][0]["readableFields"] = json!(["item", "label"]);
     source["accessProfiles"][0]["permissions"][0]["writableFields"] = json!(["item", "label"]);
-    source["accessProfiles"][0]["permissions"][0]["reviewStages"][0]["targets"]
-        .as_array_mut()
-        .unwrap()
-        .pop();
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     assert!(serde_json::to_value(&project).unwrap()["entities"][1]
         .get("attachments")

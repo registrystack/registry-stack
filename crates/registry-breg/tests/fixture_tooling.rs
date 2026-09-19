@@ -314,7 +314,7 @@ journeys:
 }
 
 #[test]
-fn fixture_tooling_request_actions_are_closed_and_get_precondition_bound() {
+fn fixture_tooling_source_request_actions_are_closed_and_get_precondition_bound() {
     let registry = compiled_request_fixture();
     let valid = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
 journeys:
@@ -348,7 +348,7 @@ journeys:
         claims: *submitter_claims
         request: {operation: submit_request, recordRef: before-submit, etagRef: before-submit}
         expect: {outcome: success, status: 200}
-      - id: get-before-approve
+      - id: get-before-revise
         entity: correction-request
         accessProfile: reviewer
         claims: *reviewer_claims
@@ -357,24 +357,12 @@ journeys:
           outcome: success
           status: 200
           fields: {target: 11111111-1111-1111-1111-111111111111, value: corrected}
-        capture: before-approve
-      - id: approve-request
-        entity: correction-request
-        accessProfile: reviewer
-        claims: *reviewer_claims
-        request:
-          operation: approve_request
-          stage: review
-          recordRef: before-approve
-          etagRef: before-approve
-          proposalVersionRef: before-approve
-          effectDigestRef: before-approve
-        expect: {outcome: success, status: 200}
+        capture: before-revise
       - id: revise-request
         entity: correction-request
         accessProfile: submitter
         claims: *submitter_claims
-        request: {operation: revise_request, recordRef: before-approve, etagRef: before-approve, rebase: true}
+        request: {operation: revise_request, recordRef: before-revise, etagRef: before-revise, rebase: true}
         expect: {outcome: success, status: 200}
 "#;
     validate_fixture_journeys(valid, &registry).expect("closed request action fixture validates");
@@ -387,23 +375,18 @@ journeys:
         ),
         (
             "missing revise rebase",
-            "request: {operation: revise_request, recordRef: before-approve, etagRef: before-approve, rebase: true}",
-            "request: {operation: revise_request, recordRef: before-approve, etagRef: before-approve}",
+            "request: {operation: revise_request, recordRef: before-revise, etagRef: before-revise, rebase: true}",
+            "request: {operation: revise_request, recordRef: before-revise, etagRef: before-revise}",
         ),
         (
             "action capture",
-            "expect: {outcome: success, status: 200}\n      - id: get-before-approve",
-            "expect: {outcome: success, status: 200}\n        capture: submitted-request\n      - id: get-before-approve",
+            "expect: {outcome: success, status: 200}\n      - id: get-before-revise",
+            "expect: {outcome: success, status: 200}\n        capture: submitted-request\n      - id: get-before-revise",
         ),
         (
             "create precondition",
             "request: {operation: submit_request, recordRef: before-submit, etagRef: before-submit}",
             "request: {operation: submit_request, recordRef: created-request, etagRef: created-request}",
-        ),
-        (
-            "uppercase digest",
-            "proposalVersionRef: before-approve\n          effectDigestRef: before-approve",
-            "proposalVersion: 1\n          effectDigest: sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         ),
     ] {
         let changed = String::from_utf8(valid.to_vec())
@@ -1114,27 +1097,6 @@ fn fixture_tooling_capture_results_refuses_other_request_lifecycle_steps() {
             ", rebase: true",
         ),
         ("cancel_request", "submitter", "submit", "registration", ""),
-        (
-            "approve_request",
-            "reviewer",
-            "review",
-            "review",
-            ", stage: review, proposalVersionRef: before-apply, effectDigestRef: before-apply",
-        ),
-        (
-            "reject_request",
-            "reviewer",
-            "review",
-            "review",
-            ", stage: review, proposalVersionRef: before-apply, effectDigestRef: before-apply",
-        ),
-        (
-            "request_revision",
-            "reviewer",
-            "review",
-            "review",
-            ", stage: review, proposalVersionRef: before-apply, effectDigestRef: before-apply",
-        ),
     ] {
         let step = format!(
             "      - id: lifecycle-capture\n        entity: register-household-contact-request\n        accessProfile: household-contact-{profile}\n        claims: {{principal: {profile}, scopes: [registry:household-contact:{scope}], purpose: household-contact-{purpose}}}\n        request: {{operation: {operation}, recordRef: before-apply, etagRef: before-apply{extra}}}\n        expect: {{outcome: success, status: 200}}\n"
@@ -1170,7 +1132,8 @@ fn compiled_request_fixture() -> registry_breg::CompiledRegistry {
             ],
             "changeRequest":{
               "effects":[{"target":{"fromField":"target"},"operation":"patch","set":{"label":{"fromField":"value"}}}],
-              "review":{"stages":[{"id":"review","approvals":1,"excludeSubmitter":true}]}
+              "review":{"authority":"casework-main","policyId":"correction-review"},
+              "onApproved":{"mode":"manual"}
             }
           }],
           "accessProfiles":[{
@@ -1180,8 +1143,7 @@ fn compiled_request_fixture() -> registry_breg::CompiledRegistry {
             }]
           },{
             "id":"reviewer","default":true,"principalClaim":"registry_principal","permissions":[{
-              "entity":"correction-request","operations":["get","list","approve_request","reject_request","request_revision"],"readableFields":["target","value"],
-              "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"],"rowBoundaries":[]}]}],
+              "entity":"correction-request","operations":["get","list"],"readableFields":["target","value"],
               "rowBoundaries": []
             }]
           },{

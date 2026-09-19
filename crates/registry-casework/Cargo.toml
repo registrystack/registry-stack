@@ -80,16 +80,6 @@ path = "tests/service_visibility.rs"
 required-features = ["postgres-test"]
 
 [[test]]
-name = "hosted_standalone"
-path = "tests/hosted_standalone.rs"
-required-features = ["postgres-test"]
-
-[[test]]
-name = "hosted_postgres"
-path = "tests/hosted_postgres.rs"
-required-features = ["postgres-test"]
-
-[[test]]
 name = "assignment_postgres"
 path = "tests/assignment_postgres.rs"
 required-features = ["postgres-test"]

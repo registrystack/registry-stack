@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import re
 import unittest
 from pathlib import Path
@@ -17,6 +18,18 @@ STANDALONE_FIXTURE = (
     / "products/casework/examples/standalone-decision/fixtures/standalone-decision.yaml"
 )
 BREG_EXAMPLE = ROOT / "products/casework/examples/professional-review/casework.yaml"
+PAYMENT_EXAMPLE = ROOT / "products/casework/examples/payment-review/casework.yaml"
+PAYMENT_FIXTURE = (
+    ROOT / "products/casework/examples/payment-review/fixtures/payment-review.yaml"
+)
+PAYMENT_RUNTIME = (
+    ROOT / "products/casework/examples/payment-review/runtime.example.yaml"
+)
+CASEWORK_RUNTIME_SCHEMA = (
+    ROOT / "products/casework/generated/runtime/runtime.schema.json"
+)
+BREG_RUNTIME_SCHEMA = ROOT / "products/breg/generated/runtime/runtime.schema.json"
+REVIEW_EXAMPLE_RUNNER = ROOT / "products/casework/scripts/check-review-examples.sh"
 MULTISTAGE_EXAMPLE = (
     ROOT / "products/casework/examples/multi-stage-routing-clocks/casework.yaml"
 )
@@ -75,13 +88,63 @@ class ProductContractTests(unittest.TestCase):
         breg = BREG_EXAMPLE.read_text(encoding="utf-8")
 
         self.assertNotRegex(standalone, r"(?m)^sources:")
-        self.assertRegex(standalone, r"(?m)^hostedKinds:")
+        self.assertRegex(standalone, r"(?m)^reviewKinds:")
+        self.assertRegex(standalone, r"(?m)^reviewProducers:")
         self.assertRegex(standalone, r"(?m)^\s+role: requester$")
-        self.assertRegex(standalone, r"(?m)^\s+kinds: \[decision\]$")
-        self.assertRegex(fixture, r"(?m)^hosted:$")
+        self.assertRegex(standalone, r"(?m)^\s+contextStrategy: submitted$")
+        self.assertRegex(fixture, r"(?m)^review:$")
         self.assertRegex(fixture, r"(?m)^\s+outcomes: \[confirmed, rejected\]$")
         self.assertRegex(breg, r"(?m)^sources:")
         self.assertNotRegex(breg, r"(?m)^hostedKinds:")
+
+    def test_payment_example_owns_completion_and_retention_without_breg(self):
+        policy = PAYMENT_EXAMPLE.read_text(encoding="utf-8")
+        fixture = PAYMENT_FIXTURE.read_text(encoding="utf-8")
+        runtime = PAYMENT_RUNTIME.read_text(encoding="utf-8")
+
+        self.assertNotRegex(policy, r"(?m)^sources:")
+        self.assertRegex(policy, r"(?m)^\s+- id: payment-batch$")
+        self.assertRegex(policy, r"(?m)^\s+terminalDays: 30$")
+        self.assertRegex(policy, r"(?m)^\s+recoveryDays: 7$")
+        self.assertRegex(policy, r"(?m)^\s+destinationId: payment-results$")
+        self.assertRegex(policy, r"(?m)^\s+recipientBinding: payment-processor-v1$")
+        self.assertRegex(fixture, r"(?m)^\s+kind: payment-batch$")
+        self.assertRegex(fixture, r"(?m)^\s+outcomes: \[\]$")
+        self.assertRegex(runtime, r"(?m)^reviewCompletionDestinations:$")
+        self.assertRegex(runtime, r"(?m)^\s+payment-results:$")
+        self.assertRegex(runtime, r"(?m)^\s+bearerTokenRef: secret:file/payment-completion-token$")
+
+    def test_review_runtime_schemas_own_both_sides_of_the_connection(self):
+        casework = json.loads(CASEWORK_RUNTIME_SCHEMA.read_text(encoding="utf-8"))
+        breg = json.loads(BREG_RUNTIME_SCHEMA.read_text(encoding="utf-8"))
+
+        self.assertIn("reviewCompletionDestinations", casework["properties"])
+        authority = breg["$defs"]["RawReviewAuthorityConfig"]
+        self.assertEqual(
+            set(authority["required"]),
+            {"endpoint", "profile", "producerId", "recoveryDays"},
+        )
+        for member in [
+            "tokenRef",
+            "privateKeyJwt",
+            "completionTokenRef",
+            "completionRecipient",
+        ]:
+            self.assertIn(member, authority["properties"])
+
+    def test_review_example_runner_aggregates_three_examples_without_app_kit(self):
+        runner = REVIEW_EXAMPLE_RUNNER.read_text(encoding="utf-8")
+        for proof in [
+            "asset-site-placement-change-requests",
+            "payment-review",
+            "standalone-decision",
+            "breg_review_journey",
+            "review_payment_fixture_postgres",
+            "standalone_structured_answers_support_polling_and_completion_modes",
+            "review_connection_retention_diagnostic_names_the_incompatible_pair",
+        ]:
+            self.assertIn(proof, runner)
+        self.assertNotRegex(runner, r"(?i)app[-_ ]?kit")
 
     def test_multistage_example_pins_routing_and_both_clock_contracts(self):
         policy = MULTISTAGE_EXAMPLE.read_text(encoding="utf-8")

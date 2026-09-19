@@ -210,17 +210,23 @@ fn metadata_for_request(
     if described["requestEntity"] != request.entity {
         bail!("source description request entity does not match casework.yaml");
     }
-    let stages = described["stages"]
-        .as_array()
-        .context("source description request stages are missing")?
-        .iter()
-        .map(|stage| {
-            stage["id"]
-                .as_str()
-                .map(str::to_owned)
-                .context("source description stage id is invalid")
+    let stages = described
+        .get("stages")
+        .map(|stages| {
+            stages
+                .as_array()
+                .context("source description request stages are invalid")?
+                .iter()
+                .map(|stage| {
+                    stage["id"]
+                        .as_str()
+                        .map(str::to_owned)
+                        .context("source description stage id is invalid")
+                })
+                .collect::<Result<Vec<_>>>()
         })
-        .collect::<Result<Vec<_>>>()?;
+        .transpose()?
+        .unwrap_or_default();
     let fields = serde_json::from_value::<Vec<RoutingFieldDescriptor>>(
         described
             .get("fields")

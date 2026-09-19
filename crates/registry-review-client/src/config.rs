@@ -14,6 +14,7 @@ const MAXIMUM_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 #[derive(Clone)]
 pub struct ReviewClientConfig {
     pub(crate) base_url: Url,
+    pub(crate) profile: Option<String>,
     pub(crate) request_timeout: Duration,
     pub(crate) connect_timeout: Duration,
     pub(crate) max_response_bytes: u64,
@@ -26,12 +27,21 @@ impl ReviewClientConfig {
     pub fn new(base_url: Url) -> Self {
         Self {
             base_url,
+            profile: None,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             max_response_bytes: DEFAULT_MAXIMUM_RESPONSE_BYTES,
             user_agent: None,
             trusted_root_certificates: None,
         }
+    }
+
+    /// Selects the Casework requester profile used for every authority
+    /// exchange. This is intentionally independent of the producer binding.
+    #[must_use]
+    pub fn with_profile(mut self, value: impl Into<String>) -> Self {
+        self.profile = Some(value.into());
+        self
     }
 
     #[must_use]
@@ -67,6 +77,20 @@ impl ReviewClientConfig {
     pub(crate) fn validate(&self) -> Result<ServiceBaseUrl, ReviewClientError> {
         let base_url = ServiceBaseUrl::new(self.base_url.clone())
             .map_err(|_| ReviewClientError::configuration("the service base URL is not usable"))?;
+        let profile = self
+            .profile
+            .as_deref()
+            .ok_or_else(|| ReviewClientError::configuration("the Casework profile is required"))?;
+        if profile.is_empty()
+            || profile.len() > 128
+            || !profile.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
+        {
+            return Err(ReviewClientError::configuration(
+                "the Casework profile is invalid",
+            ));
+        }
         if self.request_timeout.is_zero() || self.connect_timeout.is_zero() {
             return Err(ReviewClientError::configuration(
                 "client timeouts must be greater than zero",
@@ -95,6 +119,7 @@ impl fmt::Debug for ReviewClientConfig {
         formatter
             .debug_struct("ReviewClientConfig")
             .field("base_url", &"<validated service URL>")
+            .field("profile_present", &self.profile.is_some())
             .field("request_timeout", &self.request_timeout)
             .field("connect_timeout", &self.connect_timeout)
             .field("max_response_bytes", &self.max_response_bytes)
@@ -116,12 +141,28 @@ mod tests {
         let config = ReviewClientConfig::new(
             Url::parse("https://secret.example.invalid/private").expect("fixture URL"),
         )
+        .with_profile("secret-profile")
         .with_user_agent("secret-agent")
         .with_trusted_root_certificates(b"secret-certificate".to_vec());
         let debug = format!("{config:?}");
         assert!(!debug.contains("secret.example"));
         assert!(!debug.contains("private"));
         assert!(!debug.contains("secret-agent"));
+        assert!(!debug.contains("secret-profile"));
         assert!(!debug.contains("secret-certificate"));
+    }
+
+    #[test]
+    fn profile_is_required_and_bounded() {
+        let endpoint = Url::parse("https://casework.example.test/").unwrap();
+        for profile in [None, Some(String::new()), Some("x".repeat(129))] {
+            let mut config = ReviewClientConfig::new(endpoint.clone());
+            config.profile = profile;
+            assert!(config.validate().is_err());
+        }
+        assert!(ReviewClientConfig::new(endpoint)
+            .with_profile("integration-requester")
+            .validate()
+            .is_ok());
     }
 }

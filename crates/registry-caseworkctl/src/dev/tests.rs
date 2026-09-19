@@ -2841,9 +2841,10 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
         "apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1",
         "kind":"BRegCaseworkSourceDescription","origin":"bregctl explain change-requests","authority":"none",
         "sourceId":"source","sourceRevision":"sha256:source",
-        "request":{"requestEntity":"correction","requestRoute":"corrections","reviewMode":"staged",
-            "stages":[{"id":"review","approvals":1,"excludeSubmitter":true,"excludePreviousReviewers":false}],
-            "fields":[],"contractFingerprint":"sha256:contract","application":{"mode":"manual"}}
+        "request":{"requestEntity":"correction","requestRoute":"corrections",
+            "fields":[],"contractFingerprint":"sha256:contract",
+            "review":{"authority":"casework-main","policyId":"registry-correction"},
+            "onApproved":{"mode":"manual"},"application":{}}
     })).unwrap()).unwrap();
     let client_bytes = serde_norway::to_string(&clients).unwrap();
     assert!(capture_with_sources(&project, client_bytes.as_bytes(), &[], &BTreeMap::new()).is_ok());

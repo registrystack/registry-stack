@@ -23,6 +23,14 @@ sources:
     requests:
       - entity: scope-correction
         queue: corrections
+        # Only these current caller-authorized values may be released through
+        # the unified review-task context endpoint. The applicant's reason is
+        # intentionally excluded.
+        contextProjection:
+          - record
+          - licensed-activities
+          - authorization-conditions
+          - supporting-reference
         target:
           id: first-review-response
           after: {elapsed: PT48H}

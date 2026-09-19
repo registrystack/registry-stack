@@ -214,13 +214,13 @@ fn http(
     })
 }
 
-/// Create one hosted item as the Requester and return its identifier.
-fn create_hosted_item(session: &Session, report: &Value, reference: &str) -> String {
+/// Create one submitted-context review as the admitted producer.
+fn create_review_request(session: &Session, report: &Value, reference: &str) -> String {
     let token = session.token(report, "requester");
     let (status, body) = http(
         "POST",
         &format!(
-            "{}/v1/hosted-items",
+            "{}/v1/review-requests",
             report["caseworkUrl"].as_str().expect("a Casework URL")
         ),
         Some(&token),
@@ -230,26 +230,38 @@ fn create_hosted_item(session: &Session, report: &Value, reference: &str) -> Str
         ],
         Some(json!({
             "kind": "decision",
+            "subject": {
+                "source": "standalone",
+                "type": "batch",
+                "id": reference,
+                "version": "1",
+                "digest": format!("sha256:{:064x}", 1)
+            },
             "requesterReference": reference,
-            "display": {
-                "summary": "Confirm the prepared synthetic batch",
-                "reference": reference
+            "context": {
+                "strategy": "submitted",
+                "snapshot": {
+                    "summary": "Confirm the prepared synthetic batch",
+                    "reference": reference
+                }
             }
         })),
     );
     assert_eq!(status, 201, "{body:#}");
     assert_eq!(body["requesterReference"], reference);
-    assert_eq!(body["kind"], "decision");
-    body["itemId"].as_str().expect("an item ID").to_owned()
+    body["requestId"]
+        .as_str()
+        .expect("a review request ID")
+        .to_owned()
 }
 
-/// Every work item the Staff client sees in the seeded team's queue.
+/// Every unified review task the Staff client sees in the seeded team's queue.
 fn inbox(session: &Session, report: &Value) -> Vec<Value> {
     let token = session.token(report, "staff");
     let (status, body) = http(
         "GET",
         &format!(
-            "{}/v1/work-items?view=my_teams&queue=decisions&limit=25",
+            "{}/v1/review-tasks?limit=25",
             report["caseworkUrl"].as_str().expect("a Casework URL")
         ),
         Some(&token),
@@ -257,8 +269,10 @@ fn inbox(session: &Session, report: &Value) -> Vec<Value> {
         None,
     );
     assert_eq!(status, 200, "{body:#}");
-    assert_eq!(body["servedQueues"], json!(["decisions"]));
-    body["items"].as_array().expect("a work item page").clone()
+    body["items"]
+        .as_array()
+        .expect("a review task page")
+        .clone()
 }
 
 #[test]
@@ -310,15 +324,11 @@ fn dev_serves_a_tutorial_project_and_retains_its_records() {
     assert_eq!(doctor["checks"]["directory"], "ready", "{doctor:#}");
     assert_eq!(doctor["checks"]["secretFiles"], "ready", "{doctor:#}");
 
-    let item = create_hosted_item(&session, &first, "synthetic-batch-0042");
+    let request = create_review_request(&session, &first, "synthetic-batch-0042");
     let items = inbox(&session, &first);
     assert_eq!(items.len(), 1, "{items:#?}");
-    assert_eq!(items[0]["itemId"], item);
-    assert_eq!(items[0]["queueId"], "decisions");
-    assert_eq!(
-        items[0]["hosted"]["requesterReference"],
-        "synthetic-batch-0042"
-    );
+    assert_eq!(items[0]["requestId"], request);
+    assert_eq!(items[0]["queue"], "decisions");
 
     // A stopped session keeps its records: the same item is in the same inbox
     // after a restart, on the same retained ports.
@@ -326,15 +336,15 @@ fn dev_serves_a_tutorial_project_and_retains_its_records() {
     let second = session.start();
     let items = inbox(&session, &second);
     assert_eq!(items.len(), 1, "{items:#?}");
-    assert_eq!(items[0]["itemId"], item);
+    assert_eq!(items[0]["requestId"], request);
 
     // Removal discards them: the same project starts empty and serves again.
     assert_eq!(session.stop(&["--remove"])["status"], "stopped");
     let third = session.start();
     assert_eq!(third["directory"]["teams"], 1, "{third:#}");
     assert!(inbox(&session, &third).is_empty());
-    let replacement = create_hosted_item(&session, &third, "synthetic-batch-0043");
-    assert_ne!(replacement, item);
+    let replacement = create_review_request(&session, &third, "synthetic-batch-0043");
+    assert_ne!(replacement, request);
     assert_eq!(inbox(&session, &third).len(), 1);
 
     // The journal spans the retained session, not one start.

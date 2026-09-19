@@ -61,7 +61,7 @@
     },
     {
       "id": "reviewed-change",
-      "description": "Submit, inspect, approve or reject, apply, and inspect history. Approval alone changes no record.",
+      "description": "Submit and inspect a proposal, then apply it after its external review is approved, and inspect history.",
       "input": "examples/inputs/reviewed-change.json",
       "steps": [
         {
@@ -84,22 +84,6 @@
         {
           "id": "inspect",
           "operation": "get",
-          "entity": "scope-correction",
-          "client": "supervisor",
-          "accessProfile": "reviewer",
-          "record": "request"
-        },
-        {
-          "id": "approve",
-          "operation": "approve",
-          "entity": "scope-correction",
-          "client": "supervisor",
-          "accessProfile": "reviewer",
-          "record": "request"
-        },
-        {
-          "id": "reject",
-          "operation": "reject",
           "entity": "scope-correction",
           "client": "supervisor",
           "accessProfile": "reviewer",

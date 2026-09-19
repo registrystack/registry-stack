@@ -2677,6 +2677,147 @@ fn local_evidence_provider_copies_owner_secrets_and_renders_exact_binding() {
 }
 
 #[test]
+fn local_review_authority_uses_refreshing_logical_client_without_exposing_credentials() {
+    let (_temp, state, mut clients, files) = fixture();
+    let root = state.root();
+    let completion = state.project.join("review-completion-token");
+    private::create(&completion, b"synthetic-completion-token").unwrap();
+    clients.review_authorities.insert(
+        "casework-a".into(),
+        config::LocalReviewAuthority {
+            endpoint: "http://127.0.0.1:18096/reviews/".into(),
+            profile: "integration-requester".into(),
+            producer_id: "registry-producer".into(),
+            recovery_days: 7,
+            client: "operator".into(),
+            completion_token_file: Some(completion.clone()),
+            completion_recipient: Some("registry-breg".into()),
+        },
+    );
+    config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).unwrap();
+    initialize(&root, &state, &clients, &files).unwrap();
+
+    let runtime_bytes = fs::read(root.join("runtime-test.yaml")).unwrap();
+    let runtime: Value = serde_norway::from_slice(&runtime_bytes).unwrap();
+    let authority = &runtime["reviewAuthorities"]["casework-a"];
+    assert_eq!(authority["endpoint"], "http://127.0.0.1:18096/reviews/");
+    assert_eq!(authority["profile"], "integration-requester");
+    assert_eq!(authority["producerId"], "registry-producer");
+    assert_eq!(authority["recoveryDays"], 7);
+    let oauth = &authority["privateKeyJwt"];
+    assert_eq!(oauth["tokenEndpoint"], "http://127.0.0.1:8095/oauth2/token");
+    assert_eq!(oauth["assertionAudience"], "http://127.0.0.1:8095");
+    assert_eq!(oauth["resource"], state.audience());
+    assert_eq!(oauth["scopes"], json!(["registry:generic:operate"]));
+    assert_eq!(
+        oauth["clientIdRef"],
+        "secret:file/review-authority-casework-a-client-id"
+    );
+    assert_eq!(
+        oauth["clientAssertionKeyRef"],
+        "secret:file/review-authority-casework-a-client-assertion-key"
+    );
+    assert_eq!(
+        authority["completionTokenRef"],
+        "secret:file/review-completion-casework-a-token"
+    );
+    assert_eq!(authority["completionRecipient"], "registry-breg");
+    assert!(authority.get("tokenRef").is_none());
+
+    assert_eq!(
+        fs::read(root.join("secrets/review-authority-casework-a-client-id")).unwrap(),
+        fs::read(root.join("credentials/operator/client-id")).unwrap()
+    );
+    assert_eq!(
+        fs::read(root.join("secrets/review-authority-casework-a-client-assertion-key")).unwrap(),
+        fs::read(root.join("credentials/operator/assertion-key.jwk")).unwrap()
+    );
+    assert_eq!(
+        fs::read(root.join("secrets/review-completion-casework-a-token")).unwrap(),
+        b"synthetic-completion-token"
+    );
+    let rendered = String::from_utf8(runtime_bytes).unwrap();
+    assert!(!rendered.contains("synthetic-completion-token"));
+    assert!(!rendered.contains(completion.to_str().unwrap()));
+    registry_breg::runtime_config::load_runtime_config(&root.join("runtime-test.yaml")).unwrap();
+}
+
+#[test]
+fn local_review_authorities_are_closed_and_bounded() {
+    let (_temp, state, mut clients, _files) = fixture();
+    let binding = config::LocalReviewAuthority {
+        endpoint: "http://127.0.0.1:18096/".into(),
+        profile: "integration-requester".into(),
+        producer_id: "registry-producer".into(),
+        recovery_days: 7,
+        client: "operator".into(),
+        completion_token_file: None,
+        completion_recipient: None,
+    };
+    clients
+        .review_authorities
+        .insert("casework-a".into(), binding.clone());
+    config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).unwrap();
+
+    for endpoint in [
+        "https://casework.example/",
+        "http://127.0.0.1/",
+        "http://127.0.0.1:0/",
+        "http://secret@127.0.0.1:18096/",
+        "http://127.0.0.1:18096/?authority=other",
+    ] {
+        clients
+            .review_authorities
+            .get_mut("casework-a")
+            .unwrap()
+            .endpoint = endpoint.into();
+        assert!(config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).is_err());
+    }
+    clients
+        .review_authorities
+        .get_mut("casework-a")
+        .unwrap()
+        .endpoint = "http://127.0.0.1:18096/".into();
+    for invalid in [String::new(), "x".repeat(129), "bad profile".to_owned()] {
+        clients
+            .review_authorities
+            .get_mut("casework-a")
+            .unwrap()
+            .profile = invalid;
+        assert!(config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).is_err());
+    }
+    clients
+        .review_authorities
+        .get_mut("casework-a")
+        .unwrap()
+        .profile = "integration-requester".into();
+    clients
+        .review_authorities
+        .get_mut("casework-a")
+        .unwrap()
+        .client = "undeclared-producer".into();
+    assert!(config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).is_err());
+
+    clients.review_authorities.clear();
+    for index in 0..9 {
+        clients
+            .review_authorities
+            .insert(format!("casework-{index}"), binding.clone());
+    }
+    assert!(config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).is_err());
+
+    let completion = state.project.join("review-completion-token");
+    private::create(&completion, b"synthetic-completion-token").unwrap();
+    clients.review_authorities.clear();
+    let mut mismatched = binding;
+    mismatched.completion_token_file = Some(completion);
+    clients
+        .review_authorities
+        .insert("casework-a".into(), mismatched);
+    assert!(config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).is_err());
+}
+
+#[test]
 fn local_evidence_provider_ids_follow_the_governed_evidence_grammar() {
     // The map key names a provider the registry project declares, and the
     // governed Evidence identifier grammar admits an underscore. A key this

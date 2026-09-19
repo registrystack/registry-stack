@@ -1164,6 +1164,130 @@
       ],
       "type": "object"
     },
+    "RawReviewAuthorityConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "completionRecipient": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "completionTokenRef": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "privateKeyJwt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawReviewPrivateKeyJwtConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "producerId": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "recoveryDays": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tokenRef": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "endpoint",
+        "profile",
+        "producerId",
+        "recoveryDays"
+      ],
+      "type": "object"
+    },
+    "RawReviewExecutorConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "accessProfile": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "registryId": {
+          "type": "string"
+        },
+        "tokenRef": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "endpoint",
+        "tokenRef",
+        "registryId",
+        "accessProfile"
+      ],
+      "type": "object"
+    },
+    "RawReviewPrivateKeyJwtConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "assertionAudience": {
+          "type": "string"
+        },
+        "caBundleRef": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "clientAssertionKeyRef": {
+          "type": "string"
+        },
+        "clientIdRef": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tokenEndpoint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tokenEndpoint",
+        "clientIdRef",
+        "clientAssertionKeyRef",
+        "assertionAudience",
+        "resource",
+        "scopes"
+      ],
+      "type": "object"
+    },
     "RawSecretProvidersConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1381,6 +1505,20 @@
     },
     "package": {
       "$ref": "#/$defs/RawPackageConfig"
+    },
+    "reviewAuthorities": {
+      "additionalProperties": {
+        "$ref": "#/$defs/RawReviewAuthorityConfig"
+      },
+      "default": {},
+      "type": "object"
+    },
+    "reviewExecutors": {
+      "additionalProperties": {
+        "$ref": "#/$defs/RawReviewExecutorConfig"
+      },
+      "default": {},
+      "type": "object"
     },
     "secretProviders": {
       "$ref": "#/$defs/RawSecretProvidersConfig"

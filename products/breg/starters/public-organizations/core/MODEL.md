@@ -12,13 +12,13 @@ review these boundaries before production deployment.
 | --- | --- | --- |
 | Reader | Get and list accepted records, including references | No access |
 | Editor | Create, get, list and inspect history; PATCH only where the entity is not controlled | Create and edit own drafts; submit, revise or cancel own requests |
-| Reviewer | Get, list and inspect history | Read proposed fields and target fields, approve, reject, request revision and apply |
+| Maintainer | Get, list and inspect history | Read proposed fields and external review status; apply an exactly approved proposal |
 
 Every operation absent from the authored permissions is denied, including deletion.
 The full PATCH operation on PublicOrganization and InstitutionalRelationship is controlled. The correction changes
-only `name`; it cannot change identity or holder/link endpoints. A reviewer is
-also the authorized applier. Review excludes the submitting principal, even
-if that person acquires a reviewer role. Approval leaves the target unchanged.
+only `name`; it cannot change identity or holder/link endpoints. A maintainer is
+the authorized source applier. Registry Casework independently owns reviewer
+eligibility and separation from the submitter. External approval leaves the target unchanged.
 Application uses the native frozen effect and expected target revision. A stale
 target requires the native revision/rebase and review path.
 

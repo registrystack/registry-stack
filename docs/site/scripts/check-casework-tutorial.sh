@@ -199,30 +199,20 @@ load_spec() {
 		SPEC_STEPS=(
 			"run:Create a project"
 			"run:Start Casework"
-			"run:Submit a request as the Requester"
-			"run:Open the inbox as Staff"
-			"run:Claim the item"
-			"run:Decide the item"
-			"run:Read the outcome as the Requester"
-			"run:See who decided, as the Supervisor"
-			"run:Requests Casework refuses"
+			"run:Create the review request"
+			"run:Claim and answer the task"
+			"run:Poll the result"
 			"run:Stop Casework"
 		)
-		# Every documented refusal on this page is read with curl --write-out
-		# and no --fail-with-body, so the fence exits zero whether Casework
-		# refuses or answers. A profile boundary that stopped refusing, a
-		# version check that stopped being enforced, a decision that stopped
-		# reaching a terminal state, or an accountability record that stopped
-		# naming the profile behind it would leave the whole journey green.
-		# These are the assertions that catch it.
+		# The HTTP exchanges use curl --write-out and no --fail-with-body, so
+		# the fences exit zero even if Casework answers with the wrong status.
+		# The result is printed after polling, so retain its terminal status and
+		# configured outcome as well as the create and decision status codes.
 		SPEC_ASSERTS=(
-			"HTTP 412"
-			"precondition.failed"
-			"operation.not-authorized"
-			"profile.not-authorized"
-			"request.invalid"
-			'"state": "completed"'
-			'"profileId": "staff"'
+			"HTTP 201"
+			"HTTP 204"
+			'"status": "answered"'
+			'"outcome": "confirmed"'
 		)
 		;;
 	tutorials/review-breg-changes-in-casework)

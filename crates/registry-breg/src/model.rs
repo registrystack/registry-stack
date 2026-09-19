@@ -900,8 +900,6 @@ pub struct CompiledRoute {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision_kind: Option<CompiledRevisionKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_stage: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub maximum_records: Option<u16>,
     pub access_profiles: Vec<String>,
     /// Absent when callers must explicitly select among multiple eligible profiles.

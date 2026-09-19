@@ -886,8 +886,15 @@ async fn finish_prepared_server(
     let review_authorities = config
         .activate_review_authorities(&registry)
         .map_err(StartupError::RuntimeConfig)?;
+    let review_executors = config
+        .activate_review_executors(&registry)
+        .map_err(StartupError::RuntimeConfig)?;
     let review_worker = review_authorities.as_ref().map(|authorities| {
-        crate::review_store::ReviewWorker::new(pool.clone(), Arc::clone(authorities))
+        crate::review_store::ReviewWorker::new(
+            pool.clone(),
+            Arc::clone(authorities),
+            review_executors,
+        )
     });
     let review_completion_receiver = review_authorities.as_ref().map(|authorities| {
         Arc::new(crate::review_store::ReviewCompletionReceiver::new(
