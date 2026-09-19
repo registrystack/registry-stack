@@ -211,6 +211,28 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
         }),
     )
     .await;
+    // A sealed batch body: the data members hold tagged envelope values while
+    // the snapshot and the item's id and revision stay outside them. The
+    // tombstone scan must still find it through those positions, which is why
+    // sealed bodies need no referenced-records sidecar.
+    insert_idempotency_response(
+        &transaction,
+        "batch-sealed-key",
+        "batch-sealed-binding",
+        "batch",
+        None,
+        None,
+        Some(1),
+        json!({
+            "snapshot": first_commit.reference.to_string(),
+            "results": [{
+                "id": record_id.to_string(),
+                "revision": 1,
+                "data": {"household": {"__bregEncryptedV1": "c2VhbGVkLWNhY2hlZC12YWx1ZQ"}}
+            }]
+        }),
+    )
+    .await;
     transaction.commit().await.expect("history commits");
 
     let outcome = erase_record_history(
@@ -237,7 +259,7 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
     assert_eq!(outcome.erased_commit_member_count, 1);
     assert_eq!(outcome.scrubbed_change_context_count, 1);
     assert_eq!(outcome.scrubbed_outbox_payload_count, 1);
-    assert_eq!(outcome.scrubbed_cached_response_count, 3);
+    assert_eq!(outcome.scrubbed_cached_response_count, 4);
     assert_eq!(outcome.removed_descriptor_count, 1);
 
     let erased_response_body = b"{\"kind\":\"erased\"}".as_slice();
@@ -285,7 +307,7 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
     assert_eq!(state.get::<_, i64>(4), 0);
     assert_eq!(state.get::<_, i64>(5), 1);
     assert_eq!(state.get::<_, i64>(6), 1);
-    assert_eq!(state.get::<_, i64>(7), 3);
+    assert_eq!(state.get::<_, i64>(7), 4);
 
     let transaction = migration
         .transaction()

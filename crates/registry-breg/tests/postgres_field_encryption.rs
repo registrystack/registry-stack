@@ -102,6 +102,7 @@ entities:
     mutationMode: mutable
     tombstone: true
     classification: restricted
+    batch: {maximumItems: 10, maximumBytes: 65536}
     selectorProfiles:
       - {id: by-secret, fields: [secret]}
     fields:
@@ -145,10 +146,10 @@ entities:
       - {id: evidence, required: true, maximumBytes: 1024, contentTypes: [application/octet-stream], classification: restricted}
     changeRequest:
       effects:
-        - id: correct-code
+        - id: correct-label
           target: {fromField: dossier}
           operation: patch
-          set: {code: {fromField: code}}
+          set: {label: {fromField: reason}}
       review:
         stages:
           - {id: review, approvals: 1}
@@ -160,7 +161,7 @@ accessProfiles:
     requiredPurposes: [case-management]
     permissions:
       - entity: holder
-        operations: [create, get, list, patch, lookup, revisions, snapshot]
+        operations: [create, get, list, patch, batch, lookup, revisions, snapshot]
         revisionAccess: true
         allowCount: true
         readableFields: [jurisdiction, label, secret, code, big]
@@ -1262,6 +1263,165 @@ async fn encrypted_fields_round_trip_and_store_only_envelopes() {
     assert!(!snapshot.contains("gamma-seven"));
     assert!(!snapshot.contains("ABC-1234"));
 
+    // The idempotency cache stores the sealed body the replay path serves
+    // from: no plaintext member ever lands in registry_idempotency.
+    let cached = cached_response_body(&server, "record").await;
+    assert!(
+        cached.contains("__bregEncryptedV1"),
+        "the cached create response keeps the tagged member: {cached}"
+    );
+    assert!(!cached.contains("gamma-seven"));
+    assert!(!cached.contains("ABC-1234"));
+
+    server.shutdown().await;
+}
+
+/// The single stored idempotency body of one result kind, as UTF-8 text.
+async fn cached_response_body(server: &LiveServer, result_kind: &str) -> String {
+    let rows = server
+        .booted
+        .database
+        .admin
+        .query(
+            "SELECT convert_from(response_body, 'UTF8')
+               FROM registry_internal.registry_idempotency
+              WHERE result_kind = $1",
+            &[&result_kind],
+        )
+        .await
+        .expect("cached responses read");
+    assert_eq!(
+        rows.len(),
+        1,
+        "exactly one {result_kind} response is cached"
+    );
+    rows.first().expect("row exists").get(0)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sealed_idempotency_bodies_serve_plaintext_and_replay_exactly() {
+    let server = boot_live_server().await;
+
+    // Direct mutation: the served create opens the sealed members while the
+    // cached row keeps them tagged.
+    let (status, created, etag) = create_holder(
+        &server,
+        "sealed-idempotency-create",
+        json!({
+            "jurisdiction": "area-a",
+            "label": "sealed-create",
+            "secret": "omega-three",
+            "code": "QRS-7777",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["data"]["domainData"]["secret"], "omega-three");
+    assert_eq!(created["data"]["domainData"]["code"], "QRS-7777");
+    let record_id = created["data"]["recordIdentifier"]
+        .as_str()
+        .expect("record identifier is present")
+        .to_owned();
+    let cached_create = cached_response_body(&server, "record").await;
+    assert!(
+        cached_create.contains("__bregEncryptedV1"),
+        "the cached create keeps the tagged member: {cached_create}"
+    );
+    assert!(!cached_create.contains("omega-three"));
+    assert!(!cached_create.contains("QRS-7777"));
+
+    // The replay serves the identical opened plaintext from that sealed row.
+    let replayed = send(
+        &server,
+        Method::POST,
+        "/v1/records/holders",
+        &[
+            ("content-type", "application/json".to_owned()),
+            ("idempotency-key", "sealed-idempotency-create".to_owned()),
+        ],
+        Some(json!({ "data": {
+            "jurisdiction": "area-a",
+            "label": "sealed-create",
+            "secret": "omega-three",
+            "code": "QRS-7777",
+        }})),
+    )
+    .await;
+    assert_eq!(replayed.status(), StatusCode::CREATED);
+    assert_eq!(body_json(replayed).await, created);
+    assert_eq!(
+        cached_response_body(&server, "record").await,
+        cached_create,
+        "the replay does not rewrite the cached sealed body"
+    );
+
+    // Batch import: the same contract over the batch body, whose snapshot and
+    // per-item id and revision sit beside the sealed data members.
+    let batch_body = json!({
+        "changeContext": {
+            "kind": "correction",
+            "reasonCode": "holder-corrected",
+            "sourceReferences": ["holder:sealed"]
+        },
+        "items": [
+            {"operation": "create", "data": {
+                "jurisdiction": "area-a",
+                "label": "sealed-batch-created",
+                "secret": "sigma-five",
+                "code": "TUV-8888"
+            }},
+            {"operation": "patch", "recordId": record_id,
+             "ifMatch": etag.expect("the create carries an ETag"),
+             "patch": [{"op": "replace", "path": "/data/secret", "value": "omega-four"}]}
+        ]
+    });
+    let batch = send(
+        &server,
+        Method::POST,
+        "/v1/records/holders:batch",
+        &[
+            ("content-type", "application/json".to_owned()),
+            ("idempotency-key", "sealed-idempotency-batch".to_owned()),
+        ],
+        Some(batch_body.clone()),
+    )
+    .await;
+    assert_eq!(batch.status(), StatusCode::OK);
+    let batch_served = body_bytes(batch).await;
+    let batch_json: Value = serde_json::from_slice(&batch_served).expect("batch response is JSON");
+    assert!(batch_json["snapshot"]
+        .as_str()
+        .is_some_and(|snapshot| !snapshot.is_empty()));
+    assert_eq!(batch_json["results"][0]["operation"], "create");
+    assert_eq!(batch_json["results"][0]["data"]["secret"], "sigma-five");
+    assert_eq!(batch_json["results"][0]["data"]["code"], "TUV-8888");
+    assert_eq!(batch_json["results"][1]["operation"], "patch");
+    assert_eq!(batch_json["results"][1]["id"], json!(record_id));
+    assert_eq!(batch_json["results"][1]["data"]["secret"], "omega-four");
+    let cached_batch = cached_response_body(&server, "batch").await;
+    assert!(
+        cached_batch.contains("__bregEncryptedV1"),
+        "the cached batch keeps the tagged members: {cached_batch}"
+    );
+    assert!(!cached_batch.contains("sigma-five"));
+    assert!(!cached_batch.contains("TUV-8888"));
+    assert!(!cached_batch.contains("omega-four"));
+
+    // The batch replay serves byte-identical opened plaintext.
+    let batch_replay = send(
+        &server,
+        Method::POST,
+        "/v1/records/holders:batch",
+        &[
+            ("content-type", "application/json".to_owned()),
+            ("idempotency-key", "sealed-idempotency-batch".to_owned()),
+        ],
+        Some(batch_body),
+    )
+    .await;
+    assert_eq!(batch_replay.status(), StatusCode::OK);
+    assert_eq!(body_bytes(batch_replay).await, batch_served);
+
     server.shutdown().await;
 }
 
@@ -1934,7 +2094,7 @@ async fn submitted_dossier_request(server: &LiveServer, dossier_id: &str) -> Str
         ],
         Some(json!({ "data": {
             "jurisdiction": "area-a",
-            "reason": "correct the code",
+            "reason": "correct the label",
             "dossier": dossier_id,
             "code": "XYZ-9999",
             "secret": "delta-nine",
@@ -2059,7 +2219,11 @@ async fn review_snapshot_opens_target_before_for_the_reviewer() {
         target["before"]["code"], "ABC-1234",
         "the captured before row opens for the reviewer"
     );
-    assert_eq!(target["after"]["code"], "XYZ-9999");
+    // Phase 1 refuses encrypted change-request targets, so the effect changes
+    // the plaintext label; the encrypted code member travels sealed in both
+    // captured rows and opens here unchanged.
+    assert_eq!(target["after"]["label"], "correct the label");
+    assert_eq!(target["after"]["code"], "ABC-1234");
 
     // The stored target reference keeps the tagged member.
     let base_snapshot: String = server
