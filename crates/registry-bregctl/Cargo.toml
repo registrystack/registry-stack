@@ -17,6 +17,7 @@ path = "src/main.rs"
 workspace = true
 
 [features]
+default = ["wasm"]
 # Forwarded so a `wasm`-feature build of the compiler can also run through
 # bregctl; bregctl itself adds no WASM surface of its own.
 wasm = ["registry-breg/wasm"]

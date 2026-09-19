@@ -156,7 +156,7 @@
       "type": "object"
     },
     "ActionHandlerKindSource": {
-      "description": "The authored action-handler backend. The wasm backend is admitted when\nthis build of the compiler carries the non-default `wasm` cargo feature,\nwhich validates a declared WASM handler module against the platform guest\nABI at compile time; without that feature a declared WASM handler is\nrefused with the pinned `action.handler.wasm_build_unsupported`\ndiagnostic.",
+      "description": "The authored action-handler backend. The wasm backend is admitted when\nthis build of the compiler carries the `wasm` cargo feature, which\nvalidates a declared WASM handler module against the platform guest\nABI at compile time; without that feature a declared WASM handler is\nrefused with the pinned `action.handler.wasm_build_unsupported`\ndiagnostic.",
       "enum": [
         "rhai",
         "wasm"
@@ -2660,6 +2660,13 @@
         "phase": {
           "$ref": "#/$defs/HookPhase",
           "description": "When the hook runs relative to the triggering transaction."
+        },
+        "principal": {
+          "description": "The access profile a proposal from this hook is applied under.\nOptional: a hook that declares none is a non-proposing hook, and a\nproposal from one is refused and dead-lettered at delivery time.\nDeclaring none is not an authoring error.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "projection": {
           "description": "Declared field identifiers to include in `values`. System event metadata is included separately.",
