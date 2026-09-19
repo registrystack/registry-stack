@@ -36,7 +36,8 @@ use registry_breg::model::CompiledRegistry;
 use registry_breg::mutation::{MutationBody, MutationCoordinator, MutationPlan, MutationRequest};
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
-    RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext, RuntimePool,
+    ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
+    RuntimePool,
 };
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_breg::webhook::{WebhookDeliveryError, WebhookDeliveryService, WebhookWorkOutcome};
@@ -360,6 +361,7 @@ struct Setup {
     database: TestDatabase,
     compiled: CompiledRegistry,
     pool: RuntimePool,
+    identity: ExpectedRegistryIdentity,
     coordinator: MutationCoordinator,
     service: WebhookDeliveryService,
     // Kept alive for the deployment's lifetime, not read: the activated
@@ -373,7 +375,16 @@ async fn setup(
     receiver: &HttpsReceiver,
     with_destinations: bool,
 ) -> Setup {
-    let database = TestDatabase::create(8).await;
+    setup_with_pool_size(compiled, receiver, with_destinations, 8).await
+}
+
+async fn setup_with_pool_size(
+    compiled: CompiledRegistry,
+    receiver: &HttpsReceiver,
+    with_destinations: bool,
+    pool_size: usize,
+) -> Setup {
+    let database = TestDatabase::create(pool_size).await;
     let (migration, migration_task) = database.connect_migration().await;
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
@@ -427,6 +438,7 @@ async fn setup(
         database,
         compiled,
         pool,
+        identity,
         coordinator,
         service,
         fixture,
@@ -434,6 +446,27 @@ async fn setup(
 }
 
 impl Setup {
+    fn service_for_identity(&self, identity: ExpectedRegistryIdentity) -> WebhookDeliveryService {
+        let destinations = Arc::new(self.fixture.activate(&self.compiled));
+        let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
+            .expect("test owns a keyed audit profile");
+        let lock_key = RegistryLockKey::derive("hook-proposal-registry")
+            .expect("test lock identity is bounded");
+        WebhookDeliveryService::new(
+            self.pool.clone(),
+            destinations,
+            Arc::new(HookHandlerRegistry::new(
+                &self.compiled,
+                &identity.package_revision,
+            )),
+            Arc::new(self.compiled.clone()),
+            identity,
+            lock_key,
+            Duration::from_secs(2),
+            audit_profile,
+        )
+    }
+
     /// Release the deployment. Tests that own the loopback receiver stop it
     /// themselves, so several legs can share one.
     async fn teardown(self) {
@@ -1246,6 +1279,99 @@ async fn real_postgres_a_changed_answer_cannot_reapply_one_delivery() {
     receiver.stop().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_same_answer_replays_after_a_compatible_package_upgrade() {
+    const SUCCESSOR_PACKAGE_REVISION: &str =
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    let receiver = HttpsReceiver::start().await;
+    let url_registry = compile_proposal_registry(
+        &format!(
+            "[{}]",
+            hook_json(
+                "case-created",
+                true,
+                r#"{"kind":"url","destinationId":"case-operations"}"#,
+            )
+        ),
+        "[]",
+        &[],
+    );
+    let setup = setup(url_registry, &receiver, true).await;
+    let mut mutation_client = setup
+        .pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+    let event = create_case(&setup, &mut mutation_client, "successor-replay").await;
+    let delivery_id = single_delivery(&event).to_owned();
+    let payload = outbox_payload(&setup, &event).await;
+    drop(mutation_client);
+
+    receiver
+        .enqueue(ResponsePlan::Answer {
+            body: HOOK_PROPOSAL_MESSAGE.to_vec(),
+        })
+        .await;
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered)
+    );
+    assert_eq!(record_count(&setup, "followup").await, 1);
+    rewind_to_crashed_lease(&setup, &event, &delivery_id, &payload).await;
+
+    let mut successor_identity = setup.identity.clone();
+    successor_identity.package_revision = SUCCESSOR_PACKAGE_REVISION.to_owned();
+    successor_identity.package_sequence += 1;
+    let changed = setup
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_state
+             SET active_package_revision = $1, package_sequence = $2
+             WHERE singleton",
+            &[
+                &successor_identity.package_revision,
+                &successor_identity.package_sequence,
+            ],
+        )
+        .await
+        .expect("administrator activates the compatible successor identity");
+    assert_eq!(changed, 1);
+    let successor_service = setup.service_for_identity(successor_identity);
+
+    assert_eq!(
+        successor_service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Idle),
+        "the successor reaps the predecessor delivery to a scheduled retry"
+    );
+    wait_until_delivery_is_due(&setup, &event, &delivery_id).await;
+    receiver
+        .enqueue(ResponsePlan::Answer {
+            body: HOOK_PROPOSAL_MESSAGE.to_vec(),
+        })
+        .await;
+    assert_eq!(
+        successor_service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered),
+        "the exact committed answer replays before successor-package validation"
+    );
+    let replayed = delivery_row(&setup, event.event_id, &delivery_id).await;
+    assert_eq!(replayed.state, "delivered");
+    assert_eq!(replayed.attempt, 2);
+    assert_eq!(replayed.disposition.as_deref(), Some("applied"));
+    assert_eq!(replayed.resulting_revision, Some(1));
+    assert_eq!(
+        record_count(&setup, "followup").await,
+        1,
+        "the committed proposal is returned, not applied a second time"
+    );
+
+    drop(successor_service);
+    setup.teardown().await;
+    receiver.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn real_postgres_receipt_recovery_waits_for_an_in_flight_application() {
     const PROPOSAL_WRITE_LOCK: i64 = 819_275;
@@ -1446,7 +1572,7 @@ async fn real_postgres_final_expired_lease_recovers_a_committed_proposal() {
         "[]",
         &[],
     );
-    let setup = setup(url_registry, &receiver, true).await;
+    let setup = setup_with_pool_size(url_registry, &receiver, true, 1).await;
     let mut mutation_client = setup
         .pool
         .get_for_test()

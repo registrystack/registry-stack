@@ -123,6 +123,20 @@ pub trait DeliverySeams: Send + Sync + 'static {
         recovery: ProposalReceiptRecovery<'_>,
     ) -> Result<Option<ProposalOutcome>, DeliveryError>;
 
+    /// Recover a proposal while the worker already holds its delivery
+    /// transaction.
+    ///
+    /// The product must use `transaction` for the serialized receipt lookup.
+    /// In particular, it must not check out another pooled connection while
+    /// the delivery row is locked: a valid single-connection deployment has
+    /// no second connection to lend, and final lease recovery must still make
+    /// progress there.
+    async fn recover_proposal_receipt_in_transaction(
+        &self,
+        transaction: &Transaction<'_>,
+        recovery: ProposalReceiptRecovery<'_>,
+    ) -> Result<Option<ProposalOutcome>, DeliveryError>;
+
     /// Record one neutral delivery-audit event in the product's audit
     /// journal, inside the transaction the worker is about to commit. Every
     /// audited occurrence and every audited field of the moved worker arrives

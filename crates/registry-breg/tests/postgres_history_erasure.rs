@@ -321,6 +321,7 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
             binding_reference: "record-binding".to_owned(),
             principal_reference: "principal".to_owned(),
             record_reference: format!("{ENTITY}:{record_id}"),
+            handler_answer_digest: None,
         },
     )
     .await;

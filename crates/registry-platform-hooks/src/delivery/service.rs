@@ -588,10 +588,13 @@ impl<S: DeliverySeams> DeliveryService<S> {
         // all-null proposal disposition.
         let proposal = if dead_lettered {
             self.seams
-                .recover_proposal_receipt(ProposalReceiptRecovery {
-                    event_id,
-                    compiled_delivery_id: &compiled_delivery_id,
-                })
+                .recover_proposal_receipt_in_transaction(
+                    transaction,
+                    ProposalReceiptRecovery {
+                        event_id,
+                        compiled_delivery_id: &compiled_delivery_id,
+                    },
+                )
                 .await?
         } else {
             None
@@ -1941,6 +1944,14 @@ mod tests {
         ) -> Result<Option<ProposalOutcome>, DeliveryError> {
             Err(DeliveryError::Unavailable)
         }
+
+        async fn recover_proposal_receipt_in_transaction(
+            &self,
+            _transaction: &Transaction<'_>,
+            _recovery: ProposalReceiptRecovery<'_>,
+        ) -> Result<Option<ProposalOutcome>, DeliveryError> {
+            Err(DeliveryError::Unavailable)
+        }
     }
 
     const STORED_EVENT_ID: &str = "4e2f6d6c-6f0a-4c2f-9c1a-2d0f7a8b6c51";
@@ -2418,6 +2429,21 @@ mod tests {
 
         async fn recover_proposal_receipt(
             &self,
+            recovery: ProposalReceiptRecovery<'_>,
+        ) -> Result<Option<ProposalOutcome>, DeliveryError> {
+            self.recoveries
+                .lock()
+                .expect("recoveries lock")
+                .push(RecordedRecovery {
+                    event_id: recovery.event_id,
+                    compiled_delivery_id: recovery.compiled_delivery_id.to_owned(),
+                });
+            self.recovery.clone()
+        }
+
+        async fn recover_proposal_receipt_in_transaction(
+            &self,
+            _transaction: &Transaction<'_>,
             recovery: ProposalReceiptRecovery<'_>,
         ) -> Result<Option<ProposalOutcome>, DeliveryError> {
             self.recoveries

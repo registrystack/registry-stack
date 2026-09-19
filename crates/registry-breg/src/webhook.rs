@@ -264,13 +264,55 @@ impl DeliverySeams for BregDeliverySeams {
         .await?;
         let outcome = coordinator
             .recover_hook_proposal_receipt(
-                application_lock.client(),
+                &***application_lock.client(),
                 recovery.event_id,
                 recovery.compiled_delivery_id,
             )
             .await;
         application_lock.release(&coordinator).await?;
         let outcome = outcome.map_err(|_| DeliveryError::Unavailable)?;
+        Ok(outcome.map(|outcome| match outcome {
+            HookProposalOutcome::Applied(resulting_revision) => {
+                ProposalOutcome::Applied { resulting_revision }
+            }
+            HookProposalOutcome::Refused { code, summary } => ProposalOutcome::Refused {
+                code: proposal_code(code),
+                summary: proposal_summary(summary),
+            },
+            HookProposalOutcome::DeadLettered { code, summary } => ProposalOutcome::DeadLettered {
+                code: proposal_code(code),
+                summary: proposal_summary(summary),
+            },
+        }))
+    }
+
+    async fn recover_proposal_receipt_in_transaction(
+        &self,
+        transaction: &Transaction<'_>,
+        recovery: ProposalReceiptRecovery<'_>,
+    ) -> Result<Option<ProposalOutcome>, DeliveryError> {
+        let coordinator = MutationCoordinator::new_with_event_destinations(
+            self.lock_key,
+            self.lock_timeout,
+            self.expected.clone(),
+            self.audit_profile.clone(),
+            Some(Arc::clone(&self.destinations)),
+        );
+        let key_reference = coordinator
+            .hook_proposal_key_reference(recovery.event_id, recovery.compiled_delivery_id)
+            .map_err(|_| DeliveryError::Unavailable)?;
+        coordinator
+            .acquire_hook_proposal_transaction_lock(transaction, &key_reference)
+            .await
+            .map_err(|_| DeliveryError::Unavailable)?;
+        let outcome = coordinator
+            .recover_hook_proposal_receipt(
+                transaction,
+                recovery.event_id,
+                recovery.compiled_delivery_id,
+            )
+            .await
+            .map_err(|_| DeliveryError::Unavailable)?;
         Ok(outcome.map(|outcome| match outcome {
             HookProposalOutcome::Applied(resulting_revision) => {
                 ProposalOutcome::Applied { resulting_revision }
