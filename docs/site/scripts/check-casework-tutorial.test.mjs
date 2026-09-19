@@ -64,10 +64,9 @@ async function spec(slug) {
 }
 
 const caseworkSpec = () => spec('tutorials/first-casework');
-const reviewSpec = () => spec('tutorials/review-breg-changes-in-casework');
 
 // Split the gate's report into one block per tutorial, keyed by slug, so a
-// test can ask about one tutorial's fences without the other's in the way.
+// test can ask about one tutorial's fences without unrelated output in the way.
 function reportBlocks(output) {
   const blocks = new Map();
   let current = null;
@@ -90,8 +89,7 @@ test('the dry-run gate resolves every registered Registry Casework tutorial', as
   const { code, output } = await runGate();
   assert.equal(code, 0, output);
   assert.match(output, /tutorials\/first-casework: \d+ sh fences, \d+ executed/u);
-  assert.match(output, /tutorials\/review-breg-changes-in-casework: \d+ sh fences, \d+ executed/u);
-  assert.match(output, /Checked 2 tutorials\./u);
+  assert.match(output, /Checked 1 tutorial\./u);
 });
 
 // The unexecuted surface is information a reviewer needs, not a rule. The
@@ -106,12 +104,6 @@ test('the gate names the sh fences it did not execute', async () => {
       .map((line) => line.match(/not executed: fence \d+ under "([^"]+)"/u)?.[1])
       .filter(Boolean);
   assert.deepEqual(unexecutedUnder('tutorials/first-casework'), ['Install Registry Casework'], output);
-  const review = unexecutedUnder('tutorials/review-breg-changes-in-casework');
-  assert.ok(review.length > 0, output);
-  assert.ok(
-    review.every((heading) => heading === 'Install both products'),
-    output,
-  );
 });
 
 // The journey has to start the runtime the page leaves running and stop it
@@ -138,52 +130,6 @@ test('the registered journey runs every unified review leg the page teaches', as
     'run:Poll the result',
   ]) {
     assert.ok(steps.includes(step), `${step} must stay in the journey`);
-  }
-});
-
-// The two-product journey has to start the registry before Casework can bind
-// and reconcile its source, and it has to stop both at the end: a replay that
-// stopped only one would hold a database container after the gate exits.
-test('the two-product journey starts the registry first and stops both sessions', async () => {
-  const steps = extractBashArray(await reviewSpec(), 'SPEC_STEPS').map((step) =>
-    step.replaceAll('"', ''),
-  );
-  assert.equal(steps[0], 'run:Create the two projects');
-  assert.ok(steps.indexOf('run:Start the registry') < steps.indexOf('run:Start Casework'));
-  assert.equal(steps.at(-1), 'run:Stop both sessions');
-});
-
-// The point of the two-product journey is one change request moving from a
-// registry submission through a Casework review and application back into the
-// registry, so each leg has to stay in it.
-test('the two-product journey runs every leg the page teaches', async () => {
-  const steps = extractBashArray(await reviewSpec(), 'SPEC_STEPS').map((step) =>
-    step.replaceAll('"', ''),
-  );
-  for (const step of [
-    'run:Connect the registry to Casework',
-    'run:Submit a change request',
-    'run:Open the inbox as Staff',
-    'run:Approve the review',
-    'run:Apply the change',
-    'run:Verify the registry',
-  ]) {
-    assert.ok(steps.includes(step), `${step} must stay in the journey`);
-  }
-});
-
-// The two Casework decisions and the registry's own view of the result are
-// read with curl --write-out and a human-readable example runner, so a review
-// that stopped reaching the source, or an application that stopped changing
-// the registry, would leave every command exiting zero.
-test('the two-product journey retains the outcomes the page teaches', async () => {
-  const branch = await reviewSpec();
-  for (const expected of [
-    '"resultingState": "approved"',
-    '"resultingState": "applied"',
-    '"bregState": "applied"',
-  ]) {
-    assert.ok(branch.includes(expected), `${expected} must stay asserted`);
   }
 });
 
@@ -224,8 +170,9 @@ async function runPrepareToolset() {
   }
 }
 
-// The two-product page calls `bregctl` and `breg` by name beside the Casework
-// binaries, so the shim directory has to serve all four.
+// Keep the cross-product toolset coherent even while the current BReg boundary
+// guide has no executable shell journey, so future registration cannot fall
+// back to ambient BReg binaries.
 test('the toolset serves the Base Registry Engine binaries beside the Casework ones', async () => {
   const { code, output, names } = await runPrepareToolset();
   assert.equal(code, 0, output);

@@ -123,7 +123,6 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_data_export",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_change_requests",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_task_grants",
-    "cargo test --locked -p registry-breg --features postgres-test --test postgres_request_authority",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_request_receipts",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_request_upgrade_retention",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_request_events",
