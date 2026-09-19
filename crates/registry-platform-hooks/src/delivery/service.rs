@@ -26,6 +26,7 @@ use super::seams::{
     DeliveryAuditDisposition, DeliveryAuditOutcome, DeliveryAuditPhase, DeliveryAuditRecord,
     DeliveryError, DeliveryOperationalEvent, DeliverySeams, DeliverySignatureFields,
     DeliveryTransitionCode, DestinationAnswer, HookDestination, HookHandler, HookHandlerBinding,
+    ProposalApplication, ProposalOutcome,
 };
 use crate::delivery_schema;
 use crate::envelope::{EnvelopeLimits, HookEnvelope};
@@ -87,12 +88,15 @@ impl<S: DeliverySeams> DeliveryService<S> {
         }
     }
 
-    /// Claim, audit, send, and finalize at most one due delivery.
+    /// Claim, audit, send, settle, and finalize at most one due delivery.
     ///
     /// The pre-egress audit and lease commit before request rendering or
     /// destination policy execution. Delivery is therefore explicitly
     /// at-least-once when a process stops after network I/O and before CAS
-    /// finalization.
+    /// finalization. An accepted answer that is a proposal is applied
+    /// through the product's apply seam between the answer and
+    /// finalization; an uncertain apply leaves the lease for expiry
+    /// recovery rather than recording a disposition.
     pub async fn deliver_once(&self) -> Result<DeliveryOutcome, DeliveryError> {
         let Some(claim) = self.claim().await? else {
             return Ok(DeliveryOutcome::Idle);
@@ -777,6 +781,9 @@ impl<S: DeliverySeams> DeliveryService<S> {
         let Ok(signature) = signature else {
             return Ok(DeliveryAuditOutcome::DestinationPolicyRefused.into());
         };
+        // The envelope bytes outlive the request: a proposal answer hands
+        // them to the product's apply seam after the send returns.
+        let envelope = material.body.clone();
         let request = match destination.render_delivery(
             EventDeliveryHeaders {
                 id: event_id.as_bytes(),
@@ -811,8 +818,12 @@ impl<S: DeliverySeams> DeliveryService<S> {
         match destination.send_delivery(request, remaining).await {
             // The destination answered: its bounded body is the handler
             // message, read under the same ceiling and the same canonical
-            // rule a local answer is read under.
-            Ok(DestinationAnswer::Delivered { body }) => Ok(accepted_answer_result(&body)),
+            // rule a local answer is read under. A proposal in that message
+            // is applied through the product's seam before finalize.
+            Ok(DestinationAnswer::Delivered { body }) => {
+                let result = accepted_answer_result(&body);
+                self.settle_answer(claim, &envelope, result).await
+            }
             Ok(DestinationAnswer::NonSuccess { .. }) => {
                 Ok(DeliveryAuditOutcome::HttpNonSuccess.into())
             }
@@ -871,9 +882,48 @@ impl<S: DeliverySeams> DeliveryService<S> {
             return Ok(DeliveryAuditOutcome::handler_failure(ErrorCategory::Deadline).into());
         }
         match handler.run(&material.body, remaining).await {
-            Ok(answer) => Ok(accepted_answer_result(&answer)),
+            Ok(answer) => {
+                let result = accepted_answer_result(&answer);
+                self.settle_answer(claim, &material.body, result).await
+            }
             Err(failure) => Ok(DeliveryAuditOutcome::handler_failure(failure.category).into()),
         }
+    }
+
+    /// Hand an accepted proposal to the product's apply seam.
+    ///
+    /// The settle step runs after the answer is accepted and before the
+    /// finalize transaction, so the disposition the row records is the one
+    /// the apply produced and the two can never disagree. An answer that is
+    /// not a proposal never reaches the seam. An uncertain apply (`Err`)
+    /// propagates: the row keeps its lease and expiry recovery retries, and
+    /// the retry relies on the seam's idempotent application identity so the
+    /// same answer applies once.
+    async fn settle_answer(
+        &self,
+        claim: &DeliveryClaim,
+        envelope: &[u8],
+        mut result: AttemptResult,
+    ) -> Result<AttemptResult, DeliveryError> {
+        let Some(answer) = result.answer.as_ref() else {
+            return Ok(result);
+        };
+        if !matches!(answer.message, HookMessage::Proposal { .. }) {
+            return Ok(result);
+        }
+        let outcome = self
+            .seams
+            .apply_proposal(ProposalApplication {
+                event_id: claim.event_id,
+                compiled_delivery_id: &claim.compiled_delivery_id,
+                package_revision: &claim.package_revision,
+                envelope,
+                answer: &answer.bytes,
+                answer_digest: &answer.digest,
+            })
+            .await?;
+        result.proposal = Some(outcome);
+        Ok(result)
     }
 
     async fn reload_material(
@@ -1033,11 +1083,26 @@ impl<S: DeliverySeams> DeliveryService<S> {
         claim: &DeliveryClaim,
         attempt: AttemptResult,
     ) -> Result<DeliveryOutcome, DeliveryError> {
-        let AttemptResult { outcome, answer } = attempt;
+        let AttemptResult {
+            outcome,
+            answer,
+            proposal,
+        } = attempt;
         let mut client = self.seams.connection().await?;
         let transaction = client.transaction().await?;
         self.seams.verify_transaction(&transaction).await?;
-        let (disposition, work_outcome) = if outcome == DeliveryAuditOutcome::Delivered {
+        let (disposition, work_outcome) = if proposal
+            .as_ref()
+            .is_some_and(|proposal| matches!(proposal, ProposalOutcome::DeadLettered { .. }))
+        {
+            // A dead-lettered proposal is deterministic: retrying the
+            // delivery cannot apply it, so the row is terminal now regardless
+            // of the attempts it has left.
+            (
+                DeliveryAuditDisposition::DeadLettered,
+                DeliveryOutcome::DeadLettered,
+            )
+        } else if outcome == DeliveryAuditOutcome::Delivered {
             (
                 DeliveryAuditDisposition::Delivered,
                 DeliveryOutcome::Delivered,
@@ -1070,12 +1135,24 @@ impl<S: DeliverySeams> DeliveryService<S> {
             .await?;
         let changed = match work_outcome {
             DeliveryOutcome::Delivered => {
-                self.update_terminal_state(&transaction, claim, "delivered", answer.as_ref())
-                    .await?
+                self.update_terminal_state(
+                    &transaction,
+                    claim,
+                    "delivered",
+                    answer.as_ref(),
+                    proposal.as_ref(),
+                )
+                .await?
             }
             DeliveryOutcome::DeadLettered => {
-                self.update_terminal_state(&transaction, claim, "dead_lettered", None)
-                    .await?
+                self.update_terminal_state(
+                    &transaction,
+                    claim,
+                    "dead_lettered",
+                    None,
+                    proposal.as_ref(),
+                )
+                .await?
             }
             DeliveryOutcome::RetryScheduled => {
                 let delay_ms = scheduled_retry_delay(&claim.retry_delays_ms, claim.attempt)?;
@@ -1138,12 +1215,14 @@ impl<S: DeliverySeams> DeliveryService<S> {
         claim: &DeliveryClaim,
         state: &str,
         answer: Option<&AcceptedAnswer>,
+        proposal: Option<&ProposalOutcome>,
     ) -> Result<u64, DeliveryError> {
         let timestamp_column = match state {
             "delivered" => "delivered_at",
             "dead_lettered" => "dead_lettered_at",
             _ => return Err(DeliveryError::Unavailable),
         };
+        let columns = proposal_columns(state, proposal)?;
         let message = answer.map(|answer| answer.bytes.clone());
         let message_digest = answer.map(|answer| answer.digest.to_vec());
         transaction
@@ -1157,6 +1236,10 @@ impl<S: DeliverySeams> DeliveryService<S> {
                          lease_token = NULL,
                          handler_message = $6,
                          handler_message_digest = $7,
+                         proposal_disposition = $8,
+                         proposal_resulting_revision = $9,
+                         proposal_code = $10,
+                         proposal_summary = $11,
                          {timestamp_column} = transaction_timestamp(),
                          updated_at = transaction_timestamp()
                      WHERE event_id = $1
@@ -1175,6 +1258,10 @@ impl<S: DeliverySeams> DeliveryService<S> {
                     &claim.lease_token,
                     &message,
                     &message_digest,
+                    &columns.disposition,
+                    &columns.resulting_revision,
+                    &columns.code,
+                    &columns.summary,
                 ],
             )
             .await
@@ -1262,11 +1349,16 @@ enum MaterialLoadError {
     PayloadRefused,
 }
 
-/// What one attempt produced: its audited outcome and, when the handler
-/// answered, the accepted message to record with it.
+/// What one attempt produced: its audited outcome, the accepted message to
+/// record with it when the handler answered, and, when that message carried
+/// a proposal, what became of it.
 struct AttemptResult {
     outcome: DeliveryAuditOutcome,
     answer: Option<AcceptedAnswer>,
+    /// The settled outcome of the proposal the answer carried, set once the
+    /// product's apply seam has answered. Always `None` for an answer that
+    /// proposed nothing.
+    proposal: Option<ProposalOutcome>,
 }
 
 impl From<DeliveryAuditOutcome> for AttemptResult {
@@ -1274,6 +1366,7 @@ impl From<DeliveryAuditOutcome> for AttemptResult {
         Self {
             outcome,
             answer: None,
+            proposal: None,
         }
     }
 }
@@ -1282,6 +1375,7 @@ impl From<DeliveryAuditOutcome> for AttemptResult {
 /// recorded for it.
 #[derive(Debug)]
 struct AcceptedAnswer {
+    message: HookMessage,
     bytes: Vec<u8>,
     digest: [u8; 32],
 }
@@ -1306,6 +1400,7 @@ fn accepted_answer_result(body: &[u8]) -> AttemptResult {
         Ok(answer) => AttemptResult {
             outcome: DeliveryAuditOutcome::Delivered,
             answer: Some(answer),
+            proposal: None,
         },
         Err(category) => DeliveryAuditOutcome::handler_failure(category).into(),
     }
@@ -1337,7 +1432,75 @@ fn accept_handler_answer(body: &[u8]) -> Result<AcceptedAnswer, ErrorCategory> {
         .to_canonical_json(&limits)
         .map_err(|error| error.category())?;
     let digest = Sha256::digest(&bytes).into();
-    Ok(AcceptedAnswer { bytes, digest })
+    Ok(AcceptedAnswer {
+        message,
+        bytes,
+        digest,
+    })
+}
+
+/// The proposal bookkeeping values one terminal UPDATE writes: the
+/// disposition the answer's proposal earned, the revision an applied
+/// proposal produced, or the bounded reason a proposal was refused or
+/// dead-lettered.
+///
+/// A delivered row always states one of `none`, `applied`, or `refused`. A
+/// row the proposal path dead-letters states `dead_lettered` with its
+/// reason. A row that dead-letters without accepting an answer keeps the
+/// all-null legacy shape: it never had a proposal to settle.
+fn proposal_columns<'a>(
+    state: &str,
+    proposal: Option<&'a ProposalOutcome>,
+) -> Result<ProposalColumns<'a>, DeliveryError> {
+    match (state, proposal) {
+        ("delivered", None) => Ok(ProposalColumns {
+            disposition: Some("none"),
+            resulting_revision: None,
+            code: None,
+            summary: None,
+        }),
+        ("delivered", Some(ProposalOutcome::Applied { resulting_revision })) => {
+            Ok(ProposalColumns {
+                disposition: Some("applied"),
+                resulting_revision: Some(*resulting_revision),
+                code: None,
+                summary: None,
+            })
+        }
+        ("delivered", Some(ProposalOutcome::Refused { code, summary })) => Ok(ProposalColumns {
+            disposition: Some("refused"),
+            resulting_revision: None,
+            code: Some(code.as_str()),
+            summary: Some(summary.as_str()),
+        }),
+        ("dead_lettered", Some(ProposalOutcome::DeadLettered { code, summary })) => {
+            Ok(ProposalColumns {
+                disposition: Some("dead_lettered"),
+                resulting_revision: None,
+                code: Some(code.as_str()),
+                summary: Some(summary.as_str()),
+            })
+        }
+        ("dead_lettered", None) => Ok(ProposalColumns {
+            disposition: None,
+            resulting_revision: None,
+            code: None,
+            summary: None,
+        }),
+        // A settled outcome the finalize routing never pairs with this
+        // state: an applied or refused proposal delivers, a dead-lettered
+        // one never does.
+        _ => Err(DeliveryError::Unavailable),
+    }
+}
+
+/// The proposal columns one terminal UPDATE writes, borrowed from the
+/// settled outcome they record.
+struct ProposalColumns<'a> {
+    disposition: Option<&'a str>,
+    resulting_revision: Option<i64>,
+    code: Option<&'a str>,
+    summary: Option<&'a str>,
 }
 
 /// What the delivery row and the worker's own configuration say the stored
@@ -1679,6 +1842,13 @@ mod tests {
 
         fn operational_event(&self, event: DeliveryOperationalEvent) {
             self.events.lock().expect("events lock").push(event);
+        }
+
+        async fn apply_proposal(
+            &self,
+            _application: ProposalApplication<'_>,
+        ) -> Result<ProposalOutcome, DeliveryError> {
+            Err(DeliveryError::Unavailable)
         }
     }
 
@@ -2077,5 +2247,263 @@ mod tests {
             Sha256::digest(body).to_vec(),
             "the recorded digest covers exactly the recorded message bytes"
         );
+    }
+
+    /// A seam set that records every proposal it is handed and answers with a
+    /// programmed outcome. Every method the delivery path before the apply
+    /// step uses still refuses, so nothing but the apply seam is reachable.
+    struct ProposalSeams {
+        applications: Arc<Mutex<Vec<RecordedApplication>>>,
+        answer: Result<ProposalOutcome, DeliveryError>,
+    }
+
+    struct RecordedApplication {
+        event_id: Uuid,
+        compiled_delivery_id: String,
+        package_revision: String,
+        envelope: Vec<u8>,
+        answer: Vec<u8>,
+        answer_digest: [u8; 32],
+    }
+
+    #[async_trait::async_trait]
+    impl DeliverySeams for ProposalSeams {
+        type Destination = UnusedDestination;
+        type Handler = UnusedHandler;
+
+        async fn connection(&self) -> Result<DeliveryConnection, DeliveryError> {
+            Err(DeliveryError::Unavailable)
+        }
+
+        async fn verify_transaction(
+            &self,
+            _transaction: &Transaction<'_>,
+        ) -> Result<(), DeliveryError> {
+            Err(DeliveryError::Unavailable)
+        }
+
+        fn destination(&self, _logical_destination_id: &str) -> Option<Self::Destination> {
+            None
+        }
+
+        fn handler(&self, _binding: HookHandlerBinding<'_>) -> Option<Self::Handler> {
+            None
+        }
+
+        async fn record_audit(
+            &self,
+            _transaction: &Transaction<'_>,
+            _record: DeliveryAuditRecord<'_>,
+        ) -> Result<(), DeliveryError> {
+            Err(DeliveryError::Unavailable)
+        }
+
+        fn operational_event(&self, _event: DeliveryOperationalEvent) {}
+
+        async fn apply_proposal(
+            &self,
+            application: ProposalApplication<'_>,
+        ) -> Result<ProposalOutcome, DeliveryError> {
+            self.applications
+                .lock()
+                .expect("applications lock")
+                .push(RecordedApplication {
+                    event_id: application.event_id,
+                    compiled_delivery_id: application.compiled_delivery_id.to_owned(),
+                    package_revision: application.package_revision.to_owned(),
+                    envelope: application.envelope.to_vec(),
+                    answer: application.answer.to_vec(),
+                    answer_digest: *application.answer_digest,
+                });
+            self.answer.clone()
+        }
+    }
+
+    fn proposal_claim() -> DeliveryClaim {
+        DeliveryClaim {
+            event_id: Uuid::parse_str(STORED_EVENT_ID).expect("event id"),
+            compiled_delivery_id: "events.permit.granted.webhook".to_owned(),
+            generation: 1,
+            attempt: 1,
+            attempt_started_at: SystemTime::UNIX_EPOCH + Duration::from_secs(1_000),
+            lease_token: Uuid::new_v4(),
+            deployed_maximum_attempts: 2,
+            retry_delays_ms: vec![1_000],
+            package_revision:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            handler_kind: HookHandlerKind::Rhai,
+        }
+    }
+
+    fn proposal_service(
+        applications: Arc<Mutex<Vec<RecordedApplication>>>,
+        answer: Result<ProposalOutcome, DeliveryError>,
+    ) -> DeliveryService<ProposalSeams> {
+        DeliveryService::new(
+            ProposalSeams {
+                applications,
+                answer,
+            },
+            DeliveryConfig {
+                schema: "hooks_delivery_proposal_test".to_owned(),
+                idempotency_domain: b"hooks-delivery-proposal-test-v1".to_vec(),
+                delivery_source: STORED_SOURCE.to_owned(),
+            },
+        )
+    }
+
+    fn stored_envelope_bytes() -> Vec<u8> {
+        stored_envelope()
+            .to_canonical_bytes(&EnvelopeLimits::default())
+            .expect("envelope bytes")
+    }
+
+    #[tokio::test]
+    async fn an_accepted_proposal_is_handed_to_the_product_seam() {
+        let applications = Arc::new(Mutex::new(Vec::new()));
+        let service = proposal_service(
+            Arc::clone(&applications),
+            Ok(ProposalOutcome::Applied {
+                resulting_revision: 7,
+            }),
+        );
+        let claim = proposal_claim();
+        let envelope = stored_envelope_bytes();
+        let answer = br#"{"answer":"proposal","document":{"kind":"action-outcome"}}"#;
+        let settled = service
+            .settle_answer(&claim, &envelope, accepted_answer_result(answer))
+            .await
+            .expect("the apply seam answers");
+        assert!(matches!(
+            settled.proposal,
+            Some(ProposalOutcome::Applied {
+                resulting_revision: 7
+            })
+        ));
+        let recorded = applications.lock().expect("applications lock");
+        assert_eq!(recorded.len(), 1, "exactly one application per proposal");
+        assert_eq!(recorded[0].event_id, claim.event_id);
+        assert_eq!(recorded[0].compiled_delivery_id, claim.compiled_delivery_id);
+        assert_eq!(recorded[0].package_revision, claim.package_revision);
+        assert_eq!(recorded[0].envelope, envelope);
+        assert_eq!(recorded[0].answer, answer.to_vec());
+        let expected_digest: [u8; 32] = Sha256::digest(answer).into();
+        assert_eq!(
+            recorded[0].answer_digest, expected_digest,
+            "the application identity is the digest of exactly the recorded answer bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_uncertain_apply_fails_closed_before_any_finalization() {
+        // The seam's error means the apply may have committed and the worker
+        // cannot know: the attempt result must not become a delivered row, so
+        // the error propagates and the lease is left for expiry recovery.
+        let applications = Arc::new(Mutex::new(Vec::new()));
+        let service = proposal_service(Arc::clone(&applications), Err(DeliveryError::Unavailable));
+        let claim = proposal_claim();
+        let envelope = stored_envelope_bytes();
+        let answer = br#"{"answer":"proposal","document":{"kind":"action-outcome"}}"#;
+        let settled = service
+            .settle_answer(&claim, &envelope, accepted_answer_result(answer))
+            .await;
+        assert!(
+            matches!(settled, Err(DeliveryError::Unavailable)),
+            "an uncertain apply never reaches finalize as a settled outcome"
+        );
+        assert_eq!(
+            applications.lock().expect("applications lock").len(),
+            1,
+            "the seam was asked exactly once before the uncertainty"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_answer_that_proposes_nothing_never_reaches_the_apply_seam() {
+        let applications = Arc::new(Mutex::new(Vec::new()));
+        let service = proposal_service(
+            Arc::clone(&applications),
+            Ok(ProposalOutcome::Applied {
+                resulting_revision: 7,
+            }),
+        );
+        let claim = proposal_claim();
+        let envelope = stored_envelope_bytes();
+        for body in [
+            b"".as_slice(),
+            br#"{"answer":"none"}"#.as_slice(),
+            br#"{"answer":"refusal","code":"permit.expired","summary":"The permit lapsed."}"#
+                .as_slice(),
+        ] {
+            let settled = service
+                .settle_answer(&claim, &envelope, accepted_answer_result(body))
+                .await
+                .expect("an answer without a proposal settles without the seam");
+            assert!(
+                settled.proposal.is_none(),
+                "a none or refusal answer carries no proposal to apply"
+            );
+        }
+        assert!(
+            applications.lock().expect("applications lock").is_empty(),
+            "the apply seam is only asked for a proposal answer"
+        );
+    }
+
+    #[test]
+    fn the_terminal_transition_writes_the_disposition_it_earned() {
+        let applied = ProposalOutcome::Applied {
+            resulting_revision: 3,
+        };
+        let refused = ProposalOutcome::Refused {
+            code: crate::BoundedText::try_from("hook.proposal.outcome_refused")
+                .expect("within the code bound"),
+            summary: crate::BoundedText::try_from("the proposal failed validation")
+                .expect("within the summary bound"),
+        };
+        let dead_lettered = ProposalOutcome::DeadLettered {
+            code: crate::BoundedText::try_from("hook.proposal.no_principal")
+                .expect("within the code bound"),
+            summary: crate::BoundedText::try_from("the hook declares no principal")
+                .expect("within the summary bound"),
+        };
+
+        let none = proposal_columns("delivered", None).expect("delivered always states one");
+        assert_eq!(none.disposition, Some("none"));
+        assert_eq!(none.resulting_revision, None);
+        assert_eq!(none.code, None);
+        assert_eq!(none.summary, None);
+
+        let applied_columns =
+            proposal_columns("delivered", Some(&applied)).expect("applied is recorded");
+        assert_eq!(applied_columns.disposition, Some("applied"));
+        assert_eq!(applied_columns.resulting_revision, Some(3));
+        assert_eq!(applied_columns.code, None);
+        assert_eq!(applied_columns.summary, None);
+
+        let refused_columns =
+            proposal_columns("delivered", Some(&refused)).expect("a refusal is recorded");
+        assert_eq!(refused_columns.disposition, Some("refused"));
+        assert_eq!(refused_columns.resulting_revision, None);
+        assert_eq!(refused_columns.code, Some("hook.proposal.outcome_refused"));
+        assert_eq!(
+            refused_columns.summary,
+            Some("the proposal failed validation")
+        );
+
+        let dead_columns = proposal_columns("dead_lettered", Some(&dead_lettered))
+            .expect("a dead-lettered proposal is recorded");
+        assert_eq!(dead_columns.disposition, Some("dead_lettered"));
+        assert_eq!(dead_columns.resulting_revision, None);
+        assert_eq!(dead_columns.code, Some("hook.proposal.no_principal"));
+        assert_eq!(dead_columns.summary, Some("the hook declares no principal"));
+
+        // A row that dead-letters without accepting an answer keeps the
+        // legacy all-null shape: it never had a proposal to settle.
+        let exhausted = proposal_columns("dead_lettered", None).expect("legacy shape holds");
+        assert_eq!(exhausted.disposition, None);
+        assert_eq!(exhausted.resulting_revision, None);
+        assert_eq!(exhausted.code, None);
+        assert_eq!(exhausted.summary, None);
     }
 }

@@ -21,7 +21,10 @@
 //! handler for the row's binding and reads the answer back from it; the
 //! reviewed program, the engine, and its budgets stay with the product. The
 //! answer is the same [`crate::HookMessage`] either way: bounded, canonical,
-//! digested, and recorded in the delivery state.
+//! digested, and recorded in the delivery state. An answer that proposes
+//! hands the proposal to the product's apply seam between the answer and
+//! finalization, and the row records what became of it: nothing proposed,
+//! applied, refused, or dead-lettered.
 //!
 //! Everything product-owned enters through [`DeliverySeams`]: the signing
 //! scheme and its key material, the idempotency domain, the audit journal and
@@ -39,7 +42,8 @@ pub use seams::{
     DeliveryAuditDisposition, DeliveryAuditOutcome, DeliveryAuditPhase, DeliveryAuditRecord,
     DeliveryConnection, DeliveryError, DeliveryOperationalEvent, DeliverySeams,
     DeliverySignatureFields, DeliverySignatureRefused, DeliveryTransitionCode, DestinationAnswer,
-    HandlerRunFailure, HookDestination, HookHandler, HookHandlerBinding,
+    HandlerRunFailure, HookDestination, HookHandler, HookHandlerBinding, ProposalApplication,
+    ProposalCode, ProposalOutcome, ProposalSummary,
 };
 pub use service::{
     DeliveryConfig, DeliveryOutcome, DeliveryService, DeliveryStatus, DeliveryStatusKind,
