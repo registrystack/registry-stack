@@ -104,7 +104,9 @@ pub struct Causation {
     /// event identity on the envelope.
     pub root: String,
     /// The id of the event whose handler proposed the change that produced
-    /// this one. Absent for a root event. A UUID when present.
+    /// this one. Absent for a root event, never spelled `null` on the wire:
+    /// the decoder refuses bytes a re-encode cannot reproduce. A UUID when
+    /// present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     /// 0 for a root event, parent hop + 1 otherwise.
@@ -239,9 +241,7 @@ impl HookEnvelope {
         limits: &EnvelopeLimits,
     ) -> Result<Vec<u8>, HookEnvelopeError> {
         validate_envelope(self)?;
-        let value = serde_json::to_value(self)
-            .map_err(|error| HookEnvelopeError::Shape(redacted_message(&error.to_string())))?;
-        let bytes = canonicalize_json(&value).map_err(HookEnvelopeError::Canonical)?;
+        let bytes = self.typed_canonical_bytes()?;
         if bytes.len() > limits.max_envelope_bytes {
             return Err(HookEnvelopeError::PayloadTooLarge {
                 size: bytes.len(),
@@ -249,6 +249,15 @@ impl HookEnvelope {
             });
         }
         Ok(bytes)
+    }
+
+    /// The canonical bytes of this envelope's typed value: the one
+    /// serialization the encoder emits and the decoder's round-trip check
+    /// holds the accepted bytes to.
+    fn typed_canonical_bytes(&self) -> Result<Vec<u8>, HookEnvelopeError> {
+        let value = serde_json::to_value(self)
+            .map_err(|error| HookEnvelopeError::Shape(redacted_message(&error.to_string())))?;
+        canonicalize_json(&value).map_err(HookEnvelopeError::Canonical)
     }
 
     /// Decode from untrusted envelope bytes.
@@ -261,13 +270,16 @@ impl HookEnvelope {
     /// the producer's contract, so a decoder that accepted a second spelling
     /// of the same envelope would accept bytes whose digest no producer can
     /// reproduce. For the same reason `time` must arrive in the normalized
-    /// wire form the encoder writes.
+    /// wire form the encoder writes, and the decoded envelope must re-encode
+    /// to the bytes it arrived as, so a member the encoder omits (a `parent`
+    /// null) cannot be spelled in input.
     ///
     /// # Errors
     ///
     /// Returns [`HookEnvelopeError`] when the bytes exceed the ceiling, are not
-    /// strict or canonical JSON, violate the envelope shape, or carry a refused
-    /// identity, revision, time spelling, or causation chain.
+    /// strict or canonical JSON, violate the envelope shape, carry a refused
+    /// identity, revision, time spelling, or causation chain, or do not
+    /// re-encode from their decoded value.
     pub fn from_canonical_bytes(
         bytes: &[u8],
         limits: &EnvelopeLimits,
@@ -294,6 +306,15 @@ impl HookEnvelope {
             .map_err(|error| HookEnvelopeError::Shape(redacted_message(&error.to_string())))?;
         validate_normalized_time(&spelled_time, envelope.time)?;
         validate_envelope(&envelope)?;
+        // The exact-wire guarantee, enforced rather than promised: the
+        // decoded envelope must re-encode to the bytes it arrived as, so a
+        // spelling the encoder never writes (a `parent` null, which decodes
+        // to the `None` the encoder omits) is refused with the canonicality
+        // error instead of being accepted as bytes whose digest no producer
+        // can reproduce.
+        if envelope.typed_canonical_bytes()?.as_slice() != bytes {
+            return Err(HookEnvelopeError::NotCanonical);
+        }
         Ok(envelope)
     }
 }
@@ -656,6 +677,29 @@ mod tests {
             decoded.to_canonical_bytes(&limits).expect("re-encodes"),
             bytes
         );
+    }
+
+    #[test]
+    fn a_null_parent_spelling_is_refused_not_decoded() {
+        // Assembled by hand, not by the encoder: the root envelope the
+        // golden-bytes test pins, with `parent` spelled as JSON null. Serde
+        // decodes that null to the same `None` the encoder omits, so without
+        // the round-trip check the decoder would accept bytes no producer can
+        // emit and whose digest could never be reproduced.
+        let raw = concat!(
+            r#"{"causation":{"hop":0,"parent":null,"root":"019934b2-1f2e-7c3a-9d4b-6f1e2a3b4c5d"},"#,
+            r#""data":{"entity":"person","values":{"familyName":"Kalanni"}},"#,
+            r#""dataschema":"https://breg.example.gov/schemas/person/v3","#,
+            r#""id":"019934b2-1f2e-7c3a-9d4b-6f1e2a3b4c5d","#,
+            r#""source":"/products/breg/deployments/prod","#,
+            r#""subject":{"recordReference":"breg/person/42","recordRevision":7},"#,
+            r#""time":"2026-09-18T12:00:00Z","#,
+            r#""type":"birth-registered-followup"}"#,
+        );
+        let error = HookEnvelope::from_canonical_bytes(raw.as_bytes(), &EnvelopeLimits::default())
+            .expect_err("a null parent is not a spelling any producer emits");
+        assert!(matches!(error, HookEnvelopeError::NotCanonical));
+        assert_eq!(error.code(), "hook.envelope.not_canonical");
     }
 
     #[test]
