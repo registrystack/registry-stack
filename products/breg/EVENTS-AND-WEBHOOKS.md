@@ -66,10 +66,10 @@ hooks:
 - `handler` declares either `kind: url` with the logical `destinationId`, or
   one of the local kinds: `kind: rhai` with a reviewed `script` path, or
   `kind: wasm` with a reviewed `module` path. A url handler delivers to a bound
-  destination; a local handler runs its program in the post-commit worker and
-  records its answer on the delivery. One event has at most one handler. A
-  project that needs fanout uses an external event gateway until native fanout
-  is justified.
+  destination; a local handler runs its program in the post-commit worker. The
+  delivery row records the settled answer's digest, and never the answer
+  bytes. One event has at most one handler. A project that needs fanout uses
+  an external event gateway until native fanout is justified.
 - Production compilation rejects an event without a handler because Version 1
   has no supported outbox consumer API.
 
@@ -204,12 +204,15 @@ audit and delivery-state transition commit together after the outcome. Audit
 failure prevents the send or terminal transition rather than creating an
 unaccounted delivery.
 
-The payload is erased immediately after successful delivery. Pending and
-dead-letter payloads have a deployment-selectable retention period capped at
-30 days. After expiry, replay is impossible. Digests and value-free operational
-metadata follow the normal audit retention policy. Audit and operational logs
-contain no projected values, raw record ids, destination URLs, or secrets.
-Payload erasure and its terminal audit record commit atomically.
+The payload and the raw handler answer bytes are erased immediately after
+successful delivery. The delivered row retains the answer's digest, its
+proposal disposition, and the bounded value-free summary, never the answer
+itself. Pending and dead-letter payloads have a deployment-selectable
+retention period capped at 30 days. After expiry, replay is impossible.
+Digests and value-free operational metadata follow the normal audit
+retention policy. Audit and operational logs contain no projected values,
+raw record ids, destination URLs, or secrets. Payload erasure and its
+terminal audit record commit atomically.
 
 The public record API exposes no outbox, payload, delivery, or replay route.
 

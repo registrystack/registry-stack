@@ -4,7 +4,8 @@
 //!
 //! A WASM handler declares a project-local module path instead of a Rhai
 //! script path. This module owns the authored-path discipline, the module
-//! byte ceilings, and (in a build with the non-default `wasm` feature)
+//! byte ceilings, and (in a build with the `wasm` cargo feature, on by
+//! default)
 //! compile-time structural validation against the platform guest ABI, so a
 //! package either carries a module the runtime could prepare, or the compiler
 //! refuses it with a diagnostic naming the violation. Admission never
