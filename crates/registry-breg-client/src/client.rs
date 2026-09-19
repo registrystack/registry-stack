@@ -22,7 +22,7 @@ use crate::query::{breg_encoded_query, MAX_BREG_REQUEST_URI_BYTES};
 use crate::transport::{exact_media_type, Transport};
 use crate::*;
 
-const APPLICATION_JSON: &str = "application/json";
+pub(crate) const APPLICATION_JSON: &str = "application/json";
 const ANY_MEDIA_TYPE: &str = "*/*";
 const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const MAXIMUM_PROBLEM_BYTES: usize = 4 * 1024;
@@ -1422,9 +1422,63 @@ impl BaseRegistryClient {
         }
         builder = self.authorize(builder, Credential::Optional).await?;
         let response = self.transport.send(builder).await?;
-        let wire = self.bound_json_wire(response).await?;
+        let wire = self.bound_json_wire(response, StatusCode::OK).await?;
         crate::strict_json::from_slice(&wire.body)
             .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
+        Ok(BRegComplete {
+            value: BRegRawDocument::new(wire.media_type, wire.body),
+            metadata: wire.metadata,
+        })
+    }
+
+    /// GET one fixed ingestion-run JSON document without retry or link
+    /// following. Ingestion routes are authenticated reads with no entity tag,
+    /// profile link, or location.
+    pub(crate) async fn ingestion_get_json(
+        &self,
+        segments: &[&str],
+        pairs: &[(String, String)],
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        let wire = self
+            .get(
+                segments,
+                pairs,
+                APPLICATION_JSON,
+                Credential::Optional,
+                EntityTagExpectation::Forbidden,
+            )
+            .await?;
+        Ok(BRegComplete {
+            value: BRegRawDocument::new(wire.media_type, wire.body),
+            metadata: wire.metadata,
+        })
+    }
+
+    /// POST one fixed ingestion-run JSON exchange without retry or link
+    /// following. Ingestion routes carry no Idempotency-Key header: a resubmitted
+    /// chunk is bound by the run's announced digests instead. A `content_type`
+    /// of `None` sends no body and no Content-Type header at all, which the
+    /// cancel route requires.
+    pub(crate) async fn ingestion_post_json(
+        &self,
+        segments: &[&str],
+        body: Vec<u8>,
+        content_type: Option<&'static str>,
+        expected_status: StatusCode,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        let url = self.url_with_query(segments, &[])?;
+        let mut builder = self
+            .transport
+            .http
+            .request(Method::POST, url)
+            .header(ACCEPT, APPLICATION_JSON);
+        if let Some(media_type) = content_type {
+            builder = builder.header(CONTENT_TYPE, media_type);
+        }
+        let builder = builder.body(body);
+        let builder = self.authorize(builder, Credential::Optional).await?;
+        let response = self.transport.send(builder).await?;
+        let wire = self.bound_json_wire(response, expected_status).await?;
         Ok(BRegComplete {
             value: BRegRawDocument::new(wire.media_type, wire.body),
             metadata: wire.metadata,
@@ -1592,9 +1646,10 @@ impl BaseRegistryClient {
     async fn bound_json_wire(
         &self,
         response: Response,
+        expected_status: StatusCode,
     ) -> Result<BRegWire, BaseRegistryClientError> {
         let status = response.status();
-        if status != StatusCode::OK {
+        if status != expected_status {
             if status.is_success() {
                 return Err(BaseRegistryClientError::protocol(
                     status.as_u16(),
@@ -2052,11 +2107,11 @@ fn access_profile_query(
     Ok(pairs)
 }
 
-fn validate_entity_route(value: &str) -> Result<(), BaseRegistryClientError> {
+pub(crate) fn validate_entity_route(value: &str) -> Result<(), BaseRegistryClientError> {
     validate_breg_identifier(value, "the Base Registry Engine entity route is invalid")
 }
 
-fn validate_breg_identifier(
+pub(crate) fn validate_breg_identifier(
     value: &str,
     reason: &'static str,
 ) -> Result<(), BaseRegistryClientError> {
@@ -2066,7 +2121,7 @@ fn validate_breg_identifier(
     Ok(())
 }
 
-fn valid_breg_identifier(value: &str) -> bool {
+pub(crate) fn valid_breg_identifier(value: &str) -> bool {
     let mut bytes = value.bytes();
     let Some(first) = bytes.next() else {
         return false;

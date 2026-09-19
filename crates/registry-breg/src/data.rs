@@ -23,6 +23,8 @@ use crate::contract::{
     valid_crs84_point, valid_decimal_value, valid_structured_value, FieldTypeSource, MutationMode,
     Operation,
 };
+#[cfg(feature = "runtime")]
+use crate::model::CompiledRoute;
 use crate::model::{
     CompiledEntity, CompiledQueryKind, CompiledRegistry, CompiledStoredField, HttpMethod,
 };
@@ -474,7 +476,7 @@ impl DataImportPlan {
     }
 }
 
-fn resolve_import_binding<'a>(
+pub(crate) fn resolve_import_binding<'a>(
     registry: &'a CompiledRegistry,
     entity_id: &str,
     operation: DataImportOperation,
@@ -768,6 +770,58 @@ fn plan_chunks(
     Ok(chunks)
 }
 
+/// The chunk-planning algorithm a durable ingestion run must be announced
+/// with. The run refuses any other algorithm so remaining source bytes are
+/// never reinterpreted under a different chunking contract.
+#[cfg(feature = "runtime")]
+pub(crate) const RUN_CHUNK_ALGORITHM_VERSION: &str = CHUNK_ALGORITHM_VERSION;
+
+/// The compiled batch route one ingestion run drives, under the same route
+/// lookup resolve_import_binding uses to admit a client-side plan.
+#[cfg(feature = "runtime")]
+pub(crate) fn ingestion_batch_route<'a>(
+    registry: &'a CompiledRegistry,
+    entity_id: &str,
+    profile_id: &str,
+) -> Option<&'a CompiledRoute> {
+    registry.routes().routes.iter().find(|route| {
+        route.entity_id == entity_id
+            && route.operation == Operation::Batch
+            && route.method == HttpMethod::Post
+            && route.access_profiles.iter().any(|id| id == profile_id)
+    })
+}
+
+/// Canonical batch body and digest for the items of one chunk. A durable run
+/// binds and stores exactly these bytes, and a submission must announce the
+/// digest this canonical body hashes to.
+#[cfg(feature = "runtime")]
+pub(crate) fn canonical_chunk_body(items: &[Value]) -> Result<(Vec<u8>, String), DataError> {
+    let body = canonicalize_json(&json!({ "items": items })).map_err(|_| DataError::InvalidItem)?;
+    let digest = sha256_hex(&body);
+    Ok((body, digest))
+}
+
+/// The server-derived idempotency key for one ingestion-run chunk attempt.
+/// Mirrors the client-side checkpoint derivation exactly, so a resubmitted
+/// chunk replays the same attempt whether the client or the run API drove it.
+pub(crate) fn ingestion_chunk_idempotency_key(
+    import_id: &str,
+    input_digest: &str,
+    chunk_index: u64,
+    chunk_digest: &str,
+) -> Result<String, DataError> {
+    let binding = canonicalize_json(&json!({
+        "domain": IDEMPOTENCY_DOMAIN,
+        "importId": import_id,
+        "inputDigest": input_digest,
+        "chunkIndex": chunk_index,
+        "chunkDigest": chunk_digest,
+    }))
+    .map_err(|_| DataError::InvalidBinding)?;
+    Ok(format!("breg-data-v1-{}", sha256_hex(&binding)))
+}
+
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DataImportCheckpoint {
@@ -936,15 +990,12 @@ impl DataImportCheckpoint {
             .chunks
             .get(usize::try_from(chunk_index).map_err(|_| DataError::InvalidBinding)?)
             .ok_or(DataError::InvalidBinding)?;
-        let binding = canonicalize_json(&json!({
-            "domain": IDEMPOTENCY_DOMAIN,
-            "importId": self.import_id,
-            "inputDigest": self.input_digest,
-            "chunkIndex": chunk_index,
-            "chunkDigest": chunk.digest,
-        }))
-        .map_err(|_| DataError::InvalidBinding)?;
-        Ok(format!("breg-data-v1-{}", sha256_hex(&binding)))
+        ingestion_chunk_idempotency_key(
+            &self.import_id,
+            &self.input_digest,
+            chunk_index,
+            &chunk.digest,
+        )
     }
 
     pub fn commit_chunk(

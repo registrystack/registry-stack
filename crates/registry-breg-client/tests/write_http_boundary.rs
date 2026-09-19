@@ -1526,8 +1526,10 @@ fn problem_title(status: u16) -> &'static str {
     match status {
         400 => "Bad Request",
         401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         409 => "Conflict",
+        410 => "Gone",
         412 => "Precondition Failed",
         415 => "Unsupported Media Type",
         422 => "Unprocessable Entity",
@@ -1548,6 +1550,17 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         Code::ActionRefused => REFUSAL_LABEL,
         Code::AuthenticationRefused => "The bearer credential is missing or refused.",
         Code::IdempotencyConflict => "The idempotency key is bound to another request.",
+        Code::IngestionChunkMismatch => "The chunk does not match the run's announced digest plan.",
+        Code::IngestionProfileMismatch => {
+            "The ingestion run does not belong to the selected access profile."
+        }
+        Code::IngestionReceiptErased => {
+            "The chunk receipt was erased with the record history it described."
+        }
+        Code::IngestionRunBlocked => {
+            "The ingestion run is blocked because the active package changed."
+        }
+        Code::IngestionRunNotOpen => "The ingestion run is not open for chunk submissions.",
         Code::LookupUnresolved => "The lookup did not resolve exactly one record.",
         Code::MutationConflict => "The mutation conflicts with current state.",
         Code::PreconditionFailed => "The mutation precondition failed.",

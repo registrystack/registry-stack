@@ -98,6 +98,38 @@ committed chunk, so the rerun starts after it.
     crates/registry-bregctl/src/lib.rs, DataImportArgs;
     crates/registry-bregctl/tests/cli.rs. */}
 
+## Resume a load through a durable ingestion run
+
+The checkpoint of an import is a file beside the client, so the process that resumes must reach
+the file the process that started wrote. When that is wrong for your recovery story, drive the
+same chunking as a durable ingestion run over the API instead: the server holds the checkpoint,
+and any caller with the access token and the source file continues it. A run stores no source
+rows; reading one returns operational metadata and bounded failure classifications only.
+
+One run covers one input file. Create it on the entity's `ingestion-runs` route: the create or
+patch operation, the profile, the package revision and schema fingerprint, the input length, and
+the item and chunk counts are what `data validate` reports for the same input; the run also
+needs the source digest and the chunking algorithm `greedy-canonical-http-batch-v1`. Submit each
+chunk in order, naming its index, its digest, and the digest of the source prefix it ends at.
+Every submission rechecks the profile against the entity's batch route, so a run id alone grants
+nothing.
+
+A run is `open` while chunks are due, `complete` when the last chunk commits, `cancelled` after
+an explicit cancel, and `blocked` once the active package no longer matches its binding. Each
+failure has one recovery:
+
+| Failure | Next move |
+| --- | --- |
+| A response is lost | Reread the run, then submit the same chunk again. An exact replay returns the original receipt and writes nothing new. |
+| The transport drops a submission | Resubmit the chunk the run's `nextChunkIndex` names. |
+| A chunk holds an invalid item or a business refusal | The checkpoint stays where it is. Start a successor run for the remainder; skipping the refused rows is never a default recovery. |
+| Authorization is lost | Progress refuses until the selected profile satisfies the batch route again. |
+| The package or schema changed | The run reports `blocked` with reason `active_package_changed` and stays inspectable. Start a successor run under the new binding. |
+| You stop the load on purpose | Cancel the run. Its counts and audit are preserved. |
+
+{/* Evidence: crates/registry-breg/src/ingestion_store.rs, IngestionRunStatus, IngestionBlockedReason, and IngestionAttemptOutcome;
+    crates/registry-breg/src/data.rs, RUN_CHUNK_ALGORITHM_VERSION and ingestion_chunk_idempotency_key(). */}
+
 ## Export with a checkpoint
 
 An export appends one bounded page at a time to the output file, then records the output length,
@@ -142,11 +174,12 @@ server response is bounded at 2 MiB.
 | An export refuses to start | Exactly one of the output and checkpoint files exists, or the existing output no longer matches its checkpoint. Keep both files together and unedited, or start both afresh. |
 | `data export` is refused with `data.export.checkpoint.refused` | The output file and its checkpoint no longer describe one another: the output is shorter than the checkpoint, its checkpointed prefix changed, more than one page follows the checkpoint, or the checkpoint belongs to another export. Keep both files and resume from copies you trust. A rerun discards at most the single page an interrupted run left unrecorded. |
 | The report says the run is incomplete | `--max-chunks` or `--max-pages` bounded it. Run the same command again to continue. |
+| A durable ingestion run reports `blocked` | The active package no longer matches the binding the run was created under. Read the run, then start a successor run under the new package; the blocked run stays inspectable. |
 
 ## Next
 
 - [Base Registry Engine API reference](../../reference/breg-api/) for the batch and list routes
-  these commands drive and the problems they return.
+  these commands drive, the durable ingestion-run routes, and the problems they return.
 - [Query a registry from Python and Node](../../tutorials/query-breg-client/) for the client
   library that reads the same routes one request at a time.
 - [Control access per profile](../../configure/breg-access/) for the profile grants an import or

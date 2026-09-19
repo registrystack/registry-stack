@@ -6,6 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use registry_platform_audit::AuditProfile;
+use serde_json::{json, Value};
+use uuid::Uuid;
 
 use crate::api::{
     ActionTargetConditionsInput, AuthorizedActionContext, AuthorizedRequestContext,
@@ -13,13 +15,16 @@ use crate::api::{
     ImmediateActionInput, RowBoundaryOperator as ApiRowBoundaryOperator, VerifiedRowBoundary,
 };
 use crate::audit::{record_http_refusal_audit, HttpRefusalAudit};
+use crate::correlation::RequestCorrelation;
 use crate::event_destination::ActivatedEventDestinationRegistry;
+use crate::ingestion_store::{self, IngestionAttemptOutcome, IngestionRunStatus};
 use crate::model::CompiledRegistry;
 #[cfg(feature = "postgres-test")]
 use crate::mutation::MutationFaultPoint;
 use crate::mutation::{
-    BatchMutationRequest, MutationBody, MutationCoordinator, MutationError, MutationOutcome,
-    MutationPlan, MutationRequest, PatchOperation,
+    valid_strong_etag, BatchMutationItem, BatchMutationRequest, IngestionChunkBinding,
+    MutationBody, MutationCoordinator, MutationError, MutationOutcome, MutationPlan,
+    MutationRequest, PatchOperation,
 };
 
 use super::{
@@ -43,6 +48,56 @@ pub struct PostgresRecordMutationService {
     evidence_timeout: Duration,
     evidence_evaluator: Option<Arc<crate::action_evidence::ActionEvidenceEvaluator>>,
     fault: MutationFaultControl,
+}
+
+/// One durable ingestion-run creation as the authenticated surface admits it.
+/// The caller keeps the source file and the derived counts; the run keeps the
+/// binding and refuses every divergence from it.
+pub struct IngestionRunCreateInput {
+    pub entity_id: String,
+    pub operation: String,
+    pub profile_id: String,
+    pub package_revision: String,
+    pub schema_fingerprint: String,
+    pub input_digest: String,
+    pub input_length: i64,
+    pub item_count: i64,
+    pub chunk_count: i64,
+    pub chunk_algorithm_version: String,
+}
+
+/// One chunk submission against the next expected chunk of a run.
+pub struct IngestionChunkSubmitInput {
+    pub run_id: Uuid,
+    pub entity_id: String,
+    pub chunk_index: i64,
+    pub items: Vec<Value>,
+    pub digest: String,
+    pub prefix_digest: String,
+}
+
+/// The bounded, creator-scoped listing one caller can see.
+pub struct IngestionRunListQuery {
+    pub entity_id: String,
+    pub status: Option<String>,
+    pub input_digest: Option<String>,
+    pub after_run_id: Option<Uuid>,
+    pub limit: i64,
+}
+
+/// The closed refusal vocabulary of the ingestion-run service. It is bounded
+/// and value-free: no chunk bytes, row values, or bearer material appear.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IngestionServiceError {
+    RequestInvalid,
+    PreconditionFailed,
+    NotFound,
+    ProfileMismatch,
+    RunNotOpen,
+    RunBlocked,
+    ChunkMismatch,
+    ReceiptErased,
+    Unavailable,
 }
 
 impl PostgresRecordMutationService {
@@ -640,6 +695,7 @@ impl PostgresRecordMutationService {
             response_fields: input.response_fields,
             body_bytes: input.body_bytes,
             correlation: input.correlation.clone(),
+            ingestion: None,
         };
         #[cfg(feature = "postgres-test")]
         if let MutationFaultControl::At(fault) = self.fault {
@@ -649,6 +705,667 @@ impl PostgresRecordMutationService {
                 .await;
         }
         self.coordinator.execute_batch(&mut client, request).await
+    }
+
+    /// Parse one chunk item exactly as the compiled batch route parses its
+    /// own item members, so a run chunk and a direct batch submission of the
+    /// same bytes execute the same mutation.
+    fn parse_ingestion_item(item: &Value) -> Option<BatchMutationItem> {
+        let object = item.as_object()?;
+        match object.get("operation").and_then(Value::as_str) {
+            Some("create")
+                if object.len() == 2 && object.get("data").is_some_and(Value::is_object) =>
+            {
+                Some(BatchMutationItem::Create(
+                    object.get("data")?.as_object()?.clone(),
+                ))
+            }
+            Some("patch")
+                if object.len() == 4
+                    && object.contains_key("recordId")
+                    && object.contains_key("ifMatch")
+                    && object.contains_key("patch") =>
+            {
+                let record_id = object.get("recordId")?.as_str()?;
+                let expected_etag = object.get("ifMatch")?.as_str()?;
+                if !Uuid::parse_str(record_id).is_ok_and(|id| id.to_string() == record_id)
+                    || !valid_strong_etag(expected_etag)
+                {
+                    return None;
+                }
+                let patch =
+                    crate::mutation::parse_json_patch_document(object.get("patch")?.clone())
+                        .ok()?;
+                Some(BatchMutationItem::Patch {
+                    record_id: record_id.to_owned(),
+                    expected_etag: expected_etag.to_owned(),
+                    patch,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// The creator-scoped principal reference of one ingestion caller. The
+    /// scope is deliberately revision independent, so a run stays visible to
+    /// its creator across a package change instead of silently disappearing.
+    fn ingestion_principal_reference(
+        &self,
+        principal: &str,
+    ) -> Result<String, IngestionServiceError> {
+        self.audit_profile
+            .key_hasher()
+            .audit_reference_hash("breg-ingestion-principal-v1", "", principal)
+            .map_err(|_| IngestionServiceError::Unavailable)
+    }
+
+    async fn client(&self) -> Result<deadpool_postgres::Client, IngestionServiceError> {
+        self.pool
+            .get()
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)
+    }
+
+    /// Load one run its creator asks about. Anything else, including a run id
+    /// belonging to another caller or entity, answers not found: possession
+    /// of a run id grants nothing.
+    async fn visible_run(
+        &self,
+        client: &impl tokio_postgres::GenericClient,
+        context: &AuthorizedRequestContext,
+        entity_id: &str,
+        run_id: Uuid,
+    ) -> Result<ingestion_store::IngestionRunRecord, IngestionServiceError> {
+        let claims = strict_claim_context(&self.registry, context, entity_id)
+            .map_err(|_| IngestionServiceError::RequestInvalid)?;
+        let Some(principal) = claims.principal() else {
+            return Err(IngestionServiceError::RequestInvalid);
+        };
+        let principal_reference = self.ingestion_principal_reference(principal)?;
+        let run = ingestion_store::load_run(client, run_id)
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?
+            .ok_or(IngestionServiceError::NotFound)?;
+        if run.entity_id != entity_id || run.created_principal_reference != principal_reference {
+            return Err(IngestionServiceError::NotFound);
+        }
+        Ok(run)
+    }
+
+    /// Record the bounded outcome of one refused attempt. The refusal itself
+    /// is audited at the HTTP mutation boundary, so a failure to persist this
+    /// operational hint is dropped rather than masking the original answer.
+    async fn record_ingestion_attempt(
+        &self,
+        client: &impl tokio_postgres::GenericClient,
+        run_id: Uuid,
+        outcome: IngestionAttemptOutcome,
+        chunk_index: i64,
+    ) {
+        let _ = ingestion_store::record_attempt(client, run_id, outcome, chunk_index).await;
+    }
+
+    fn run_response(&self, run: &ingestion_store::IngestionRunRecord) -> Value {
+        run.response_json(
+            &self.expected.package_revision,
+            &self.expected.schema_fingerprint,
+        )
+    }
+
+    /// Create a durable ingestion run bound to the active package revision,
+    /// schema fingerprint, entity, profile, operation, input digest, chunking
+    /// algorithm, and announced counts.
+    pub async fn create_ingestion_run(
+        &self,
+        context: &AuthorizedRequestContext,
+        correlation: &RequestCorrelation,
+        input: IngestionRunCreateInput,
+    ) -> Result<Value, IngestionServiceError> {
+        if !crate::audit::profile_is_keyed(&self.audit_profile) {
+            return Err(IngestionServiceError::Unavailable);
+        }
+        let claims = strict_claim_context(&self.registry, context, &input.entity_id)
+            .map_err(|_| IngestionServiceError::RequestInvalid)?;
+        let Some(principal) = claims.principal() else {
+            return Err(IngestionServiceError::RequestInvalid);
+        };
+        if input.profile_id != claims.access_profile() {
+            return Err(IngestionServiceError::ProfileMismatch);
+        }
+        if input.package_revision != self.expected.package_revision
+            || input.schema_fingerprint != self.expected.schema_fingerprint
+        {
+            // The caller planned against a different active package; the run
+            // is refused before it exists rather than blocked after.
+            return Err(IngestionServiceError::PreconditionFailed);
+        }
+        if input.chunk_algorithm_version != crate::data::RUN_CHUNK_ALGORITHM_VERSION {
+            return Err(IngestionServiceError::RequestInvalid);
+        }
+        if crate::data::ingestion_batch_route(&self.registry, &input.entity_id, &input.profile_id)
+            .is_none()
+        {
+            return Err(IngestionServiceError::RequestInvalid);
+        }
+        let entity = self
+            .registry
+            .entities()
+            .get(&input.entity_id)
+            .ok_or(IngestionServiceError::RequestInvalid)?;
+        let batch = entity
+            .batch
+            .as_ref()
+            .ok_or(IngestionServiceError::RequestInvalid)?;
+        let run = ingestion_store::NewIngestionRun {
+            created_principal_reference: self.ingestion_principal_reference(principal)?,
+            package_revision: input.package_revision,
+            schema_fingerprint: input.schema_fingerprint,
+            entity_id: input.entity_id,
+            operation: input.operation,
+            profile_id: input.profile_id,
+            input_digest: input.input_digest,
+            input_length: input.input_length,
+            item_count: input.item_count,
+            chunk_count: input.chunk_count,
+            chunk_algorithm_version: input.chunk_algorithm_version,
+            maximum_items: i64::from(batch.maximum_items),
+            maximum_bytes: i64::from(batch.maximum_bytes),
+        };
+        ingestion_store::validate_new_run(&run)
+            .map_err(|_| IngestionServiceError::RequestInvalid)?;
+        let mut client = self.client().await?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+        let tx: &tokio_postgres::Transaction<'_> = &transaction;
+        let record = ingestion_store::insert_run(tx, &run)
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+        ingestion_store::append_run_audit(
+            tx,
+            &self.audit_profile,
+            ingestion_store::run_audit_record(
+                "created",
+                &record,
+                &self.expected.package_revision,
+                &record.created_principal_reference,
+                Some(&correlation.request_id().to_string()),
+            ),
+        )
+        .await
+        .map_err(|_| IngestionServiceError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+        Ok(self.run_response(&record))
+    }
+
+    /// List the bounded page of runs one caller created for one entity.
+    pub async fn list_ingestion_runs(
+        &self,
+        context: &AuthorizedRequestContext,
+        query: IngestionRunListQuery,
+    ) -> Result<Value, IngestionServiceError> {
+        let claims = strict_claim_context(&self.registry, context, &query.entity_id)
+            .map_err(|_| IngestionServiceError::RequestInvalid)?;
+        let Some(principal) = claims.principal() else {
+            return Err(IngestionServiceError::RequestInvalid);
+        };
+        let principal_reference = self.ingestion_principal_reference(principal)?;
+        let limit = if query.limit == 0 {
+            ingestion_store::DEFAULT_RUN_PAGE_SIZE
+        } else {
+            query.limit
+        };
+        if !(0..=ingestion_store::MAX_RUN_PAGE_SIZE).contains(&limit) {
+            return Err(IngestionServiceError::RequestInvalid);
+        }
+        let status = match query.status.as_deref() {
+            None | Some("") => None,
+            Some(value) => Some(
+                IngestionRunStatus::parse(value).ok_or(IngestionServiceError::RequestInvalid)?,
+            ),
+        };
+        let client = self.client().await?;
+        let after = match query.after_run_id {
+            None => None,
+            Some(run_id) => {
+                let cursor = ingestion_store::load_run(&**client, run_id)
+                    .await
+                    .map_err(|_| IngestionServiceError::Unavailable)?
+                    .filter(|run| {
+                        run.created_principal_reference == principal_reference
+                            && run.entity_id == query.entity_id
+                    })
+                    .ok_or(IngestionServiceError::RequestInvalid)?;
+                Some((cursor.created_at, cursor.run_id))
+            }
+        };
+        let (runs, has_more) = ingestion_store::list_runs(
+            &**client,
+            &ingestion_store::IngestionRunListFilter {
+                principal_reference: &principal_reference,
+                entity_id: Some(&query.entity_id),
+                profile_id: None,
+                status,
+                input_digest: query.input_digest.as_deref(),
+                after,
+                limit,
+            },
+        )
+        .await
+        .map_err(|_| IngestionServiceError::Unavailable)?;
+        let next_after = if has_more {
+            runs.last()
+                .map(|run| json!(run.run_id.to_string()))
+                .unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        };
+        Ok(json!({
+            "runs": runs
+                .iter()
+                .map(|run| self.run_response(run))
+                .collect::<Vec<_>>(),
+            "hasMore": has_more,
+            "nextAfter": next_after,
+        }))
+    }
+
+    /// Read one run and its next expected chunk index.
+    pub async fn read_ingestion_run(
+        &self,
+        context: &AuthorizedRequestContext,
+        entity_id: &str,
+        run_id: Uuid,
+    ) -> Result<Value, IngestionServiceError> {
+        let client = self.client().await?;
+        let run = self
+            .visible_run(&**client, context, entity_id, run_id)
+            .await?;
+        Ok(self.run_response(&run))
+    }
+
+    /// Cancel an open or blocked run, preserving the committed prefix, the
+    /// counts, and the audit trail.
+    pub async fn cancel_ingestion_run(
+        &self,
+        context: &AuthorizedRequestContext,
+        correlation: &RequestCorrelation,
+        entity_id: &str,
+        run_id: Uuid,
+    ) -> Result<Value, IngestionServiceError> {
+        if !crate::audit::profile_is_keyed(&self.audit_profile) {
+            return Err(IngestionServiceError::Unavailable);
+        }
+        let mut client = self.client().await?;
+        let run = self
+            .visible_run(&**client, context, entity_id, run_id)
+            .await?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+        let tx: &tokio_postgres::Transaction<'_> = &transaction;
+        let cancelled =
+            ingestion_store::cancel_run(tx, run.run_id, IngestionAttemptOutcome::Refused)
+                .await
+                .map_err(|_| IngestionServiceError::Unavailable)?
+                .ok_or(IngestionServiceError::RunNotOpen)?;
+        ingestion_store::append_run_audit(
+            tx,
+            &self.audit_profile,
+            ingestion_store::run_audit_record(
+                "cancelled",
+                &cancelled,
+                &self.expected.package_revision,
+                &cancelled.created_principal_reference,
+                Some(&correlation.request_id().to_string()),
+            ),
+        )
+        .await
+        .map_err(|_| IngestionServiceError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+        Ok(self.run_response(&cancelled))
+    }
+
+    /// Submit the next exact chunk of one run. The server derives the
+    /// idempotency key from the run binding, so an interrupted submission
+    /// replays the original receipt without a duplicate mutation.
+    pub async fn submit_ingestion_chunk(
+        &self,
+        context: &AuthorizedRequestContext,
+        correlation: &RequestCorrelation,
+        input: IngestionChunkSubmitInput,
+    ) -> Result<Value, IngestionServiceError> {
+        let claims = strict_claim_context(&self.registry, context, &input.entity_id)
+            .map_err(|_| IngestionServiceError::RequestInvalid)?;
+        let Some(principal) = claims.principal() else {
+            return Err(IngestionServiceError::RequestInvalid);
+        };
+        if input.chunk_index < 0
+            || !valid_digest(&input.digest)
+            || !valid_digest(&input.prefix_digest)
+        {
+            return Err(IngestionServiceError::RequestInvalid);
+        }
+        let principal_reference = self.ingestion_principal_reference(principal)?;
+        let client = self.client().await?;
+        let run = ingestion_store::load_run(&**client, input.run_id)
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?
+            .filter(|run| {
+                run.entity_id == input.entity_id
+                    && run.created_principal_reference == principal_reference
+            })
+            .ok_or(IngestionServiceError::NotFound)?;
+        if run.profile_id != claims.access_profile() {
+            return Err(IngestionServiceError::ProfileMismatch);
+        }
+        if !run.active_binding_matches(
+            &self.expected.package_revision,
+            &self.expected.schema_fingerprint,
+        ) {
+            let mut writer = self.client().await?;
+            let transaction = writer
+                .transaction()
+                .await
+                .map_err(|_| IngestionServiceError::Unavailable)?;
+            let tx: &tokio_postgres::Transaction<'_> = &transaction;
+            ingestion_store::mark_blocked(
+                tx,
+                run.run_id,
+                ingestion_store::IngestionBlockedReason::ActivePackageChanged,
+            )
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+            ingestion_store::record_attempt(
+                tx,
+                run.run_id,
+                IngestionAttemptOutcome::BindingChanged,
+                input.chunk_index,
+            )
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+            if crate::audit::profile_is_keyed(&self.audit_profile) {
+                ingestion_store::append_run_audit(
+                    tx,
+                    &self.audit_profile,
+                    ingestion_store::run_audit_record(
+                        "blocked",
+                        &run,
+                        &self.expected.package_revision,
+                        &run.created_principal_reference,
+                        Some(&correlation.request_id().to_string()),
+                    ),
+                )
+                .await
+                .map_err(|_| IngestionServiceError::Unavailable)?;
+            }
+            transaction
+                .commit()
+                .await
+                .map_err(|_| IngestionServiceError::Unavailable)?;
+            return Err(IngestionServiceError::RunBlocked);
+        }
+        if input.chunk_index < run.next_chunk_index {
+            // The checkpoint already covers this chunk, so the caller is
+            // recovering a lost response: return the stored receipt, never a
+            // second mutation. This holds for every terminal status too,
+            // because the committed prefix and its receipts survive
+            // completion and cancellation.
+            let stored = ingestion_store::load_chunk(&**client, run.run_id, input.chunk_index)
+                .await
+                .map_err(|_| IngestionServiceError::Unavailable)?
+                .ok_or(IngestionServiceError::Unavailable)?;
+            let replayed = stored.chunk_digest == input.digest;
+            self.record_ingestion_attempt(
+                &**client,
+                run.run_id,
+                if replayed {
+                    IngestionAttemptOutcome::Replayed
+                } else {
+                    IngestionAttemptOutcome::ChunkMismatch
+                },
+                input.chunk_index,
+            )
+            .await;
+            if !replayed {
+                return Err(IngestionServiceError::ChunkMismatch);
+            }
+            if stored.erased && stored.receipt.is_some() {
+                // Erasure and the receipt bytes must agree; a row holding
+                // both is corruption, and erased material never replays.
+                return Err(IngestionServiceError::Unavailable);
+            }
+            if !stored.committed_shape_is_valid() {
+                return Err(IngestionServiceError::Unavailable);
+            }
+            let Some(receipt) = stored.receipt else {
+                return Err(IngestionServiceError::ReceiptErased);
+            };
+            let batch: Value =
+                serde_json::from_slice(&receipt).map_err(|_| IngestionServiceError::Unavailable)?;
+            return Ok(json!({
+                "run": self.run_response(&run),
+                "receipt": receipt_json(input.chunk_index, &input.digest, true, false, batch),
+            }));
+        }
+
+        match run.status {
+            IngestionRunStatus::Blocked => return Err(IngestionServiceError::RunBlocked),
+            IngestionRunStatus::Complete | IngestionRunStatus::Cancelled => {
+                return Err(IngestionServiceError::RunNotOpen);
+            }
+            IngestionRunStatus::Open => {}
+        }
+        if input.chunk_index > run.next_chunk_index || input.chunk_index >= run.chunk_count {
+            self.record_ingestion_attempt(
+                &**client,
+                run.run_id,
+                IngestionAttemptOutcome::ChunkMismatch,
+                input.chunk_index,
+            )
+            .await;
+            return Err(IngestionServiceError::ChunkMismatch);
+        }
+        let items = input
+            .items
+            .iter()
+            .map(Self::parse_ingestion_item)
+            .collect::<Option<Vec<_>>>()
+            .ok_or(IngestionServiceError::RequestInvalid)?;
+        if items.is_empty() {
+            return Err(IngestionServiceError::RequestInvalid);
+        }
+        let (canonical_body, canonical_digest) = crate::data::canonical_chunk_body(&input.items)
+            .map_err(|_| IngestionServiceError::RequestInvalid)?;
+        if canonical_digest != input.digest || canonical_body.len() > run.maximum_bytes as usize {
+            self.record_ingestion_attempt(
+                &**client,
+                run.run_id,
+                IngestionAttemptOutcome::ChunkMismatch,
+                input.chunk_index,
+            )
+            .await;
+            return Err(IngestionServiceError::ChunkMismatch);
+        }
+        let idempotency_key = crate::data::ingestion_chunk_idempotency_key(
+            &run.run_id.to_string(),
+            &run.input_digest,
+            u64::try_from(input.chunk_index).map_err(|_| IngestionServiceError::RequestInvalid)?,
+            &input.digest,
+        )
+        .map_err(|_| IngestionServiceError::RequestInvalid)?;
+        let route =
+            crate::data::ingestion_batch_route(&self.registry, &run.entity_id, &run.profile_id)
+                .ok_or(IngestionServiceError::Unavailable)?;
+        let plan = MutationPlan::from_compiled(&self.registry, &route.id)
+            .map_err(|_| IngestionServiceError::RequestInvalid)?;
+        let response_fields = plan_readable_fields(&self.registry, &run.entity_id, &run.profile_id)
+            .ok_or(IngestionServiceError::RequestInvalid)?;
+        let chunk_binding = IngestionChunkBinding {
+            run_id: run.run_id,
+            chunk_index: input.chunk_index,
+            chunk_digest: input.digest.clone(),
+            prefix_digest: input.prefix_digest.clone(),
+            item_count: i64::try_from(items.len())
+                .map_err(|_| IngestionServiceError::RequestInvalid)?,
+            created_principal_reference: run.created_principal_reference.clone(),
+        };
+        let request = BatchMutationRequest {
+            plan: &plan,
+            idempotency_key: &idempotency_key,
+            claims: &claims,
+            change_context: None,
+            items,
+            response_fields,
+            body_bytes: canonical_body.len(),
+            correlation: correlation.clone(),
+            ingestion: Some(&chunk_binding),
+        };
+        let mut writer = self.client().await?;
+        #[cfg(feature = "postgres-test")]
+        if let MutationFaultControl::At(fault) = self.fault {
+            return self
+                .finish_ingestion_submission(
+                    context,
+                    &input,
+                    self.coordinator
+                        .execute_batch_with_fault(&mut writer, request, fault)
+                        .await,
+                )
+                .await;
+        }
+        self.finish_ingestion_submission(
+            context,
+            &input,
+            self.coordinator.execute_batch(&mut writer, request).await,
+        )
+        .await
+    }
+
+    /// Render the submission answer from the mutation outcome, mapping every
+    /// refusal to the closed run vocabulary and recording the attempt.
+    async fn finish_ingestion_submission(
+        &self,
+        context: &AuthorizedRequestContext,
+        input: &IngestionChunkSubmitInput,
+        outcome: Result<MutationOutcome, MutationError>,
+    ) -> Result<Value, IngestionServiceError> {
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let client = self.client().await?;
+                let (outcome_hint, refusal) = match error {
+                    MutationError::IngestionRefusal(refusal) => match refusal {
+                        crate::mutation::IngestionRefusal::RunNotOpen => (
+                            IngestionAttemptOutcome::RunNotOpen,
+                            Some(IngestionServiceError::RunNotOpen),
+                        ),
+                        crate::mutation::IngestionRefusal::ChunkMismatch => (
+                            IngestionAttemptOutcome::ChunkMismatch,
+                            Some(IngestionServiceError::ChunkMismatch),
+                        ),
+                        crate::mutation::IngestionRefusal::BindingChanged => (
+                            IngestionAttemptOutcome::BindingChanged,
+                            Some(IngestionServiceError::RunBlocked),
+                        ),
+                        crate::mutation::IngestionRefusal::ReceiptErased => (
+                            IngestionAttemptOutcome::Replayed,
+                            Some(IngestionServiceError::ReceiptErased),
+                        ),
+                    },
+                    MutationError::InvalidRequest => (
+                        IngestionAttemptOutcome::InvalidItem,
+                        Some(IngestionServiceError::RequestInvalid),
+                    ),
+                    MutationError::PreconditionFailed | MutationError::Conflict => (
+                        IngestionAttemptOutcome::Refused,
+                        Some(IngestionServiceError::PreconditionFailed),
+                    ),
+                    MutationError::IdempotencyConflict
+                    | MutationError::Unavailable
+                    | MutationError::RetryableConflict
+                    | MutationError::PlannerFailure(_)
+                    | MutationError::ActionHandlerFailure(_)
+                    | MutationError::ActionEvidenceFailure { .. }
+                    | MutationError::ActionRefusal(_)
+                    | MutationError::FieldPatternViolation { .. } => {
+                        (IngestionAttemptOutcome::Unavailable, None)
+                    }
+                };
+                self.record_ingestion_attempt(
+                    &**client,
+                    input.run_id,
+                    outcome_hint,
+                    input.chunk_index,
+                )
+                .await;
+                return Err(refusal.unwrap_or(IngestionServiceError::Unavailable));
+            }
+        };
+        let batch: Value = serde_json::from_slice(outcome.response().body())
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+        let client = self.client().await?;
+        let run = self
+            .visible_run(&**client, context, &input.entity_id, input.run_id)
+            .await?;
+        Ok(json!({
+            "run": self.run_response(&run),
+            "receipt": receipt_json(
+                input.chunk_index,
+                &input.digest,
+                outcome.replayed(),
+                false,
+                batch,
+            ),
+        }))
+    }
+
+    /// Recover the stored receipt of one committed chunk after a lost
+    /// response. The receipt is erased with the record history it describes.
+    pub async fn ingestion_chunk_receipt(
+        &self,
+        context: &AuthorizedRequestContext,
+        entity_id: &str,
+        run_id: Uuid,
+        chunk_index: i64,
+    ) -> Result<Value, IngestionServiceError> {
+        if chunk_index < 0 {
+            return Err(IngestionServiceError::RequestInvalid);
+        }
+        let client = self.client().await?;
+        let run = self
+            .visible_run(&**client, context, entity_id, run_id)
+            .await?;
+        let stored = ingestion_store::load_chunk(&**client, run.run_id, chunk_index)
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?
+            .ok_or(IngestionServiceError::NotFound)?;
+        if stored.erased {
+            return Err(IngestionServiceError::ReceiptErased);
+        }
+        if !stored.committed_shape_is_valid() {
+            return Err(IngestionServiceError::Unavailable);
+        }
+        let Some(receipt) = stored.receipt else {
+            return Err(IngestionServiceError::ReceiptErased);
+        };
+        let batch: Value =
+            serde_json::from_slice(&receipt).map_err(|_| IngestionServiceError::Unavailable)?;
+        Ok(receipt_json(
+            stored.chunk_index,
+            &stored.chunk_digest,
+            true,
+            false,
+            batch,
+        ))
     }
 
     pub async fn tombstone(
@@ -863,4 +1580,45 @@ fn api_boundary(boundary: &VerifiedRowBoundary) -> Result<RowBoundaryContext, Mu
             values: boundary.values().clone(),
         }),
     }
+}
+
+/// The readable projection bound to the run profile, so the receipt carries
+/// exactly the fields the profile may read and nothing wider.
+fn plan_readable_fields(
+    registry: &CompiledRegistry,
+    entity_id: &str,
+    profile_id: &str,
+) -> Option<std::collections::BTreeSet<String>> {
+    Some(
+        registry
+            .entities()
+            .get(entity_id)?
+            .access_profiles
+            .get(profile_id)?
+            .readable_fields
+            .clone(),
+    )
+}
+
+fn valid_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn receipt_json(
+    chunk_index: i64,
+    digest: &str,
+    replayed: bool,
+    erased: bool,
+    batch: Value,
+) -> Value {
+    json!({
+        "chunkIndex": chunk_index,
+        "digest": digest,
+        "replayed": replayed,
+        "erased": erased,
+        "batch": batch,
+    })
 }

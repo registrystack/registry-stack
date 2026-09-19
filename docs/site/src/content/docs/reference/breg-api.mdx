@@ -62,8 +62,9 @@ therefore cannot distinguish a record that does not exist from one it may not se
 ## Routes
 
 `{route}` is the entity's `route` value. `{readPath}` is the `route` of one of the entity's
-`readPaths`. `{stage}` is a review stage identifier, and `{action}` under `/v1/actions` is an
-immediate action identifier. An unknown path or a method the route does not accept returns the
+`readPaths`. `{stage}` is a review stage identifier, `{action}` under `/v1/actions` is an
+immediate action identifier, `{runId}` is an ingestion-run identifier, and `{chunkIndex}` is a
+chunk position. An unknown path or a method the route does not accept returns the
 same concealed 404 as an unauthorized request.
 
 <ApiReferenceTable id="routes" />
@@ -267,6 +268,141 @@ response without writing again. The same key with a different request returns
     crates/registry-breg/src/postgres/mutation.rs;
     crates/registry-breg/src/artifacts.rs, batch_response_schema;
     crates/registry-breg/tests/postgres_temporal_corrections.rs. */}
+
+## Ingestion runs
+
+An ingestion run is the durable account of one bulk import that the client drives one bounded
+chunk at a time. The client keeps the source file; the run keeps the checkpoint. A run binds the
+active package revision, schema fingerprint, entity, selected access profile, create-or-patch
+operation, input digest, chunking algorithm, and the expected item and chunk counts. No server
+worker advances a run: only a chunk submission moves the checkpoint, and every operation rechecks
+the caller's authority against the compiled batch route. A run identifier locates a run and
+grants nothing. Runs are visible to the caller that created them, and another caller's run and
+an unknown run are the same concealed 404.
+
+A run response carries operational metadata and bounded failure classifications only: never
+source rows, committed record values, or chunk bodies.
+
+{/* Evidence: crates/registry-breg/src/ingestion_store.rs, IngestionRunStatus and IngestionRefusal;
+    crates/registry-breg/src/data.rs, ingestion_batch_route() and ingestion_chunk_idempotency_key();
+    crates/registry-breg/src/api/mod.rs, router(). */}
+
+### Create a run
+
+`POST /v1/records/{route}/ingestion-runs` with the binding:
+
+```json
+{
+  "operation": "create",
+  "profileId": "operator",
+  "packageRevision": "sha256:9f2c…",
+  "schemaFingerprint": "sha256:1a7b…",
+  "inputDigest": "5e8d…",
+  "inputLength": 48211,
+  "itemCount": 12000,
+  "chunkCount": 13,
+  "chunkAlgorithmVersion": "greedy-canonical-http-batch-v1"
+}
+```
+
+The response is `201 Created` with the run document. `inputDigest` is the SHA-256 of the whole
+source as 64 lowercase hexadecimal characters. The chunking contract is
+`greedy-canonical-http-batch-v1`; a run refuses any other algorithm, so its remaining source
+bytes are never reinterpreted under a different chunking contract.
+
+### The run document
+
+Every run response is one document:
+
+| Member | Meaning |
+| --- | --- |
+| `runId` | The run identifier. |
+| `status` | `open`, `complete`, `cancelled`, or `blocked`. |
+| `blockedReason` | Present when the run is `blocked`: `activePackageChanged`. |
+| `entityId`, `operation`, `profileId` | The bound entity, its create-or-patch operation, and the selected profile. |
+| `packageRevision`, `schemaFingerprint` | The binding the run was created under. |
+| `inputDigest`, `inputLength`, `itemCount`, `chunkCount` | The announced source: digest, byte length, item count, and chunk count. |
+| `chunkAlgorithmVersion` | The chunking contract the chunks follow. |
+| `maximumItems`, `maximumBytes` | The compiled batch bounds every chunk stays inside. |
+| `nextChunkIndex` | The checkpoint: the chunk index the next submission must name. |
+| `committedItems`, `committedPrefixDigest` | The items committed so far and the digest of the source prefix they cover. |
+| `lastAttempt` | `null` before the first attempt, otherwise `{"outcome", "chunkIndex"}`. |
+| `createdAt`, `updatedAt` | RFC 3339 timestamps. |
+| `complete` | `true` when `status` is `complete`. |
+
+An open run whose binding no longer matches the active package reports `blocked` with
+`blockedReason` `activePackageChanged`. A blocked run is retained and inspectable, and it
+never reinterprets its remaining bytes under a new binding: continue in a successor run created
+under the new package.
+
+`lastAttempt.outcome` classifies the last submission as `committed`, `replayed`, `invalidItem`,
+`refused`, `bindingChanged`, `chunkMismatch`, `runNotOpen`, or `unavailable`. `invalidItem` and
+`refused` leave the checkpoint where it was; the corrective move is a successor run, not a retry
+with different bytes and not a skipped row.
+
+{/* Evidence: crates/registry-breg/src/ingestion_store.rs, IngestionRunRecord and IngestionAttemptOutcome;
+    crates/registry-breg/src/data.rs, RUN_CHUNK_ALGORITHM_VERSION. */}
+
+### Submit chunks
+
+`POST /v1/records/{route}/ingestion-runs/{runId}/chunks` submits the chunk the run's
+`nextChunkIndex` names:
+
+| Member | Meaning |
+| --- | --- |
+| `chunkIndex` | The chunk position, which must equal `nextChunkIndex`. |
+| `items` | The chunk's items, canonicalized into one batch body. |
+| `digest` | The SHA-256 of that canonical batch body, 64 lowercase hexadecimal characters. |
+| `prefixDigest` | The SHA-256 of every source byte through the end of the chunk, 64 lowercase hexadecimal characters. |
+
+These members must match the run's committed prefix exactly: a divergent chunk index, chunk
+digest, prefix digest, or binding is refused, and nothing is written. The ingestion routes take
+no `Idempotency-Key` header because the server derives the attempt key from the run id, the
+input digest, the chunk index, and the chunk digest, so resubmitting the exact chunk is safe
+whether the first response was lost or the transport dropped it. A chunk's records, revisions,
+audit, receipt, and the checkpoint advance commit in one transaction.
+
+{/* Evidence: crates/registry-breg/src/ingestion_store.rs, IngestionChunkBinding and IngestionChunkCommit;
+    crates/registry-breg/src/data.rs, canonical_chunk_body() and ingestion_chunk_idempotency_key(). */}
+
+### List and read runs
+
+`GET /v1/records/{route}/ingestion-runs` lists the caller's runs: `limit` (default 25, at most
+100), keyset `after` a run id, and optional `status` and `inputDigest` filters.
+`GET /v1/records/{route}/ingestion-runs/{runId}` returns one run document with `nextChunkIndex`,
+so a restarting client rebuilds its plan from API state alone and never resends a committed
+chunk.
+
+{/* Evidence: crates/registry-breg/src/ingestion_store.rs, MAX_RUN_PAGE_SIZE and DEFAULT_RUN_PAGE_SIZE. */}
+
+### Cancel and recover
+
+`POST /v1/records/{route}/ingestion-runs/{runId}/cancel` cancels an open or blocked run. The
+counts, the committed prefix, and the audit stay exactly as they were.
+
+`GET /v1/records/{route}/ingestion-runs/{runId}/chunks/{chunkIndex}/receipt` returns the stored
+batch response the named chunk's commit produced, so a lost response is recoverable without
+re-sending the chunk. A receipt is erased with the record history it describes; a later read
+then answers `410 ingestion.receipt_erased`, and the chunk's counts stay in the run.
+
+{/* Evidence: crates/registry-breg/src/ingestion_store.rs, StoredChunkReceipt and IngestionBlockedReason;
+    crates/registry-breg/src/data.rs, ingestion_batch_route(). */}
+
+### Recovery
+
+| Failure | Recovery |
+| --- | --- |
+| Response lost after a chunk commit | Reread the run and submit the same chunk again. An exact replay returns the original receipt and writes nothing new. |
+| Transport interruption | Resubmit the chunk `nextChunkIndex` names. |
+| An invalid item or a business refusal | The checkpoint stays where it is. Start a successor run for the remainder. Row skipping is never a default recovery. |
+| Authorization lost | Progress refuses: every operation rechecks the selected profile against the compiled batch route. |
+| Package or schema binding changed | The run reports `blocked` with reason `activePackageChanged` and stays inspectable. Start a successor run under the new binding. |
+| Operator stop | Cancel the open or blocked run. Counts and audit are preserved. |
+
+A run drives the same compiled batch route one chunk at a time, so an existing direct batch
+client keeps its contract unchanged.
+
+{/* Evidence: crates/registry-breg/src/data.rs, ingestion_batch_route(). */}
 
 ## History reads
 

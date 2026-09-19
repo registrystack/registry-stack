@@ -51,6 +51,10 @@ use crate::idempotency::{
     HeldResponse, IdempotencyBinding, IdempotencyError, PermittedResponseHeader,
     StoredResultMetadata, MAX_IMMEDIATE_ACTION_RESULTS,
 };
+use crate::ingestion_store::{
+    record_attempt, IngestionAttemptOutcome, IngestionChunkCommit, IngestionRunStatus,
+};
+pub use crate::ingestion_store::{IngestionChunkBinding, IngestionRefusal};
 use crate::model::{
     ActionRouteKind, CompiledAction, CompiledActionEffect, CompiledActionMutation,
     CompiledActionTargetBinding, CompiledActionValue, CompiledEntity, CompiledEventDelivery,
@@ -400,6 +404,9 @@ pub async fn install_mutation_schema(
         .await
         .map_err(|_| MutationError::Unavailable)?;
     crate::request_store::install(migration, runtime_role).await?;
+    crate::ingestion_store::install(migration, runtime_role)
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
     install_history_commit_schema(migration, runtime_role)
         .await
         .map_err(MutationError::from)?;
@@ -742,6 +749,9 @@ pub struct BatchMutationRequest<'a> {
     pub response_fields: BTreeSet<String>,
     pub body_bytes: usize,
     pub correlation: RequestCorrelation,
+    /// The durable run binding when this batch drives one ingestion chunk.
+    /// `None` is the ordinary batch route, which existing clients keep.
+    pub ingestion: Option<&'a IngestionChunkBinding>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1114,6 +1124,7 @@ impl MutationCoordinator {
             response_fields: request.response_fields.clone(),
             body_bytes: request.body_bytes,
             correlation: request.correlation.clone(),
+            ingestion: request.ingestion,
         };
         if let Err(error) = validate_batch_request(&request, &self.expected) {
             self.record_batch_boundary_audit(client, &request, PreIoAuditKind::Refusal)
@@ -1570,6 +1581,159 @@ impl MutationCoordinator {
         .await
         .map_err(|_| MutationError::Unavailable)?;
 
+        // A durable ingestion-run chunk executes under the run row lock this
+        // transaction already holds: the checkpoint decides replay, the bound
+        // digest refuses divergent bytes, and a changed active package blocks
+        // the run instead of reinterpreting the remaining source bytes.
+        let mut ingestion_run = None;
+        if let Some(chunk_binding) = request.ingestion {
+            if !chunk_binding.shape_is_valid() {
+                return Err(MutationError::InvalidRequest);
+            }
+            let run =
+                crate::ingestion_store::lock_run(transaction.transaction(), chunk_binding.run_id)
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?
+                    .ok_or(MutationError::InvalidRequest)?;
+            if !run.active_binding_matches(
+                &self.expected.package_revision,
+                &self.expected.schema_fingerprint,
+            ) {
+                crate::ingestion_store::mark_blocked(
+                    transaction.transaction(),
+                    chunk_binding.run_id,
+                    crate::ingestion_store::IngestionBlockedReason::ActivePackageChanged,
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+                record_attempt(
+                    transaction.transaction(),
+                    chunk_binding.run_id,
+                    IngestionAttemptOutcome::BindingChanged,
+                    chunk_binding.chunk_index,
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+                crate::ingestion_store::append_run_audit(
+                    transaction.transaction(),
+                    &self.audit_profile,
+                    crate::ingestion_store::run_audit_record(
+                        "blocked",
+                        &run,
+                        &self.expected.package_revision,
+                        &run.created_principal_reference,
+                        Some(&request.correlation.request_id().to_string()),
+                    ),
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+                // The blocked marking and its audit must outlive the refusal,
+                // so the refusal returns only after an explicit commit.
+                transaction
+                    .commit()
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?;
+                return Err(MutationError::IngestionRefusal(
+                    IngestionRefusal::BindingChanged,
+                ));
+            }
+            if chunk_binding.chunk_index < run.next_chunk_index {
+                // The checkpoint already covers this chunk: an exact replay
+                // returns the stored receipt without any further mutation,
+                // and anything else is refused without moving the checkpoint.
+                let stored = crate::ingestion_store::load_chunk(
+                    transaction.transaction(),
+                    chunk_binding.run_id,
+                    chunk_binding.chunk_index,
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?
+                .ok_or(MutationError::Unavailable)?;
+                let replayed = stored.chunk_digest == chunk_binding.chunk_digest;
+                record_attempt(
+                    transaction.transaction(),
+                    chunk_binding.run_id,
+                    if replayed {
+                        IngestionAttemptOutcome::Replayed
+                    } else {
+                        IngestionAttemptOutcome::ChunkMismatch
+                    },
+                    chunk_binding.chunk_index,
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+                transaction
+                    .commit()
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?;
+                if !replayed {
+                    return Err(MutationError::IngestionRefusal(
+                        IngestionRefusal::ChunkMismatch,
+                    ));
+                }
+                if stored.erased && stored.receipt.is_some() {
+                    // Erasure and the receipt bytes must agree; a row holding
+                    // both is corruption an operator must see, not a replay.
+                    return Err(MutationError::Unavailable);
+                }
+                let Some(receipt) = stored.receipt else {
+                    // The exact chunk did commit; its receipt was erased under
+                    // the record-history erasure contract and cannot return.
+                    return Err(MutationError::IngestionRefusal(
+                        IngestionRefusal::ReceiptErased,
+                    ));
+                };
+                let body: Value =
+                    serde_json::from_slice(&receipt).map_err(|_| MutationError::Unavailable)?;
+                let held = HeldResponse::from_json(
+                    200,
+                    &body,
+                    BTreeMap::from([(
+                        PermittedResponseHeader::ContentType,
+                        b"application/json".to_vec(),
+                    )]),
+                )?;
+                return Ok(MutationOutcome {
+                    response: held,
+                    replayed: true,
+                });
+            }
+            let announced_items =
+                i64::try_from(request.items.len()).map_err(|_| MutationError::Unavailable)?;
+            let not_open = run.status != IngestionRunStatus::Open;
+            if not_open
+                || chunk_binding.chunk_index != run.next_chunk_index
+                || chunk_binding.chunk_index >= run.chunk_count
+                || announced_items != chunk_binding.item_count
+                || announced_items > run.maximum_items
+                || run.committed_items + announced_items > run.item_count
+                || canonical_chunk_digest(&request.items)? != chunk_binding.chunk_digest
+            {
+                record_attempt(
+                    transaction.transaction(),
+                    chunk_binding.run_id,
+                    if not_open {
+                        IngestionAttemptOutcome::RunNotOpen
+                    } else {
+                        IngestionAttemptOutcome::ChunkMismatch
+                    },
+                    chunk_binding.chunk_index,
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+                transaction
+                    .commit()
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?;
+                return Err(MutationError::IngestionRefusal(if not_open {
+                    IngestionRefusal::RunNotOpen
+                } else {
+                    IngestionRefusal::ChunkMismatch
+                }));
+            }
+            ingestion_run = Some(run);
+        }
+
         if let Some(stored) = lock_and_load(transaction.transaction(), &binding).await? {
             let StoredResultMetadata::Batch { result_count } = stored.metadata else {
                 return Err(MutationError::Unavailable);
@@ -1596,6 +1760,26 @@ impl MutationCoordinator {
                 },
             )
             .await?;
+            if let (Some(chunk_binding), Some(run)) = (request.ingestion, ingestion_run.as_ref()) {
+                // An idempotent replay under a run still owes the checkpoint
+                // its row, so the receipt and the checkpoint cannot diverge
+                // even on this path.
+                crate::ingestion_store::commit_chunk(
+                    transaction.transaction(),
+                    &IngestionChunkCommit {
+                        run_id: chunk_binding.run_id,
+                        chunk_index: chunk_binding.chunk_index,
+                        chunk_digest: chunk_binding.chunk_digest.clone(),
+                        prefix_digest: chunk_binding.prefix_digest.clone(),
+                        item_count: chunk_binding.item_count,
+                        end_item: run.committed_items + chunk_binding.item_count,
+                        receipt: stored.response.body().to_vec(),
+                    },
+                    IngestionAttemptOutcome::Replayed,
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            }
             transaction
                 .commit()
                 .await
@@ -1801,6 +1985,45 @@ impl MutationCoordinator {
                 version,
             )
             .await?;
+        }
+        if let (Some(chunk_binding), Some(run)) = (request.ingestion, ingestion_run.as_ref()) {
+            // The chunk receipt, its record links, and the checkpoint advance
+            // join the mutation transaction itself, so the committed prefix
+            // and the mutated rows can never disagree.
+            crate::ingestion_store::commit_chunk(
+                transaction.transaction(),
+                &IngestionChunkCommit {
+                    run_id: chunk_binding.run_id,
+                    chunk_index: chunk_binding.chunk_index,
+                    chunk_digest: chunk_binding.chunk_digest.clone(),
+                    prefix_digest: chunk_binding.prefix_digest.clone(),
+                    item_count: chunk_binding.item_count,
+                    end_item: run.committed_items + chunk_binding.item_count,
+                    receipt: held.body().to_vec(),
+                },
+                IngestionAttemptOutcome::Committed,
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+            let mut audited_run = run.clone();
+            audited_run.committed_items += chunk_binding.item_count;
+            audited_run.next_chunk_index = chunk_binding.chunk_index + 1;
+            if audited_run.next_chunk_index == run.chunk_count {
+                audited_run.status = IngestionRunStatus::Complete;
+            }
+            crate::ingestion_store::append_run_audit(
+                transaction.transaction(),
+                &self.audit_profile,
+                crate::ingestion_store::run_audit_record(
+                    "committed",
+                    &audited_run,
+                    &self.expected.package_revision,
+                    &chunk_binding.created_principal_reference,
+                    Some(&request.correlation.request_id().to_string()),
+                ),
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
         }
         fault.fail_at(MutationFaultPoint::BeforeCommit)?;
         transaction
@@ -2037,6 +2260,11 @@ pub enum MutationError {
     ActionRefusal(crate::action_handler::ActionHandlerRefusal),
     #[error("field does not conform to its declared storage pattern")]
     FieldPatternViolation { entity_id: String, field_id: String },
+    /// A durable ingestion run refused the chunk under its own invariants.
+    /// The refusal kind travels with the error so the HTTP surface answers
+    /// with the closed run vocabulary, never with chunk bytes or row values.
+    #[error("ingestion run refused the chunk")]
+    IngestionRefusal(IngestionRefusal),
 }
 
 #[cfg(feature = "postgres-test")]
@@ -3334,6 +3562,20 @@ fn canonical_batch_request_digest(
     Ok(Sha256::digest(canonical).into())
 }
 
+/// The canonical chunk digest an ingestion run binds for these items. It is
+/// the same derivation the announcing client made over its own item array, so
+/// a submission can never bind a digest the mutation body does not hash to.
+fn canonical_chunk_digest(items: &[BatchMutationItem]) -> Result<String, MutationError> {
+    let canonical = canonicalize_json(&json!({
+        "items": items
+            .iter()
+            .map(BatchMutationItem::canonical_json)
+            .collect::<Vec<_>>(),
+    }))
+    .map_err(|_| MutationError::InvalidRequest)?;
+    Ok(hex_bytes(&Sha256::digest(canonical)))
+}
+
 impl MutationBody {
     fn submitted_fields(&self) -> Result<Vec<String>, MutationError> {
         match self {
@@ -3385,7 +3627,7 @@ fn mutation_body_json(body: &MutationBody) -> Value {
     }
 }
 
-fn valid_strong_etag(value: &str) -> bool {
+pub(crate) fn valid_strong_etag(value: &str) -> bool {
     value.len() > 7
         && value.len() <= 256
         && value.starts_with("\"breg-")
