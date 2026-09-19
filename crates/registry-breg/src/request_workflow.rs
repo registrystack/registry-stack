@@ -2624,6 +2624,123 @@ mod source_owned_review_tests {
         );
     }
 
+    #[test]
+    fn proposal_v3_digest_binds_frozen_application_contract_and_values() {
+        let preconditions = FrozenApplicationPreconditions {
+            contract: crate::model::CompiledChangeRequestPreconditions {
+                request: vec![crate::model::CompiledChangeRequestPredicate {
+                    field: "valid-through".to_owned(),
+                    expected: crate::model::CompiledChangeRequestPredicateExpected::CurrentDate {
+                        relation: crate::model::CompiledCurrentDateRelation::OnOrAfter,
+                    },
+                }],
+                targets: Vec::new(),
+                evidence: Vec::new(),
+            },
+            request_values: BTreeMap::from([("valid-through".to_owned(), json!("2026-09-12"))]),
+            targets: Vec::new(),
+        };
+        let submitted = workflow()
+            .submit(
+                context("submitter", "2026-09-19T00:00:00Z"),
+                proposal(required_review())
+                    .with_application_preconditions(preconditions)
+                    .expect("preconditions freeze"),
+            )
+            .expect("submit")
+            .into_workflow();
+        let snapshot = submitted.current_proposal().expect("proposal");
+        snapshot
+            .verify_digest(submitted.request())
+            .expect("digest verifies");
+        let mut tampered = snapshot.clone();
+        tampered
+            .application_preconditions
+            .as_mut()
+            .expect("preconditions")
+            .request_values
+            .insert("valid-through".to_owned(), json!("2099-01-01"));
+        assert_eq!(
+            tampered.verify_digest(submitted.request()),
+            Err(WorkflowError::DigestMismatch)
+        );
+    }
+
+    #[test]
+    fn proposal_digest_binds_attachment_hash_type_size_and_slot() {
+        let manifest = BTreeMap::from([(
+            "evidence".to_owned(),
+            AttachmentManifestEntry {
+                verification_policy: None,
+                sha256: "a".repeat(64),
+                content_type: "application/pdf".to_owned(),
+                byte_size: 10,
+            },
+        )]);
+        let prepared = proposal(required_review());
+        let frozen = workflow()
+            .submit(
+                context("submitter", "2026-09-19T00:00:00Z"),
+                prepared
+                    .clone()
+                    .with_attachments(manifest.clone())
+                    .expect("attachments freeze"),
+            )
+            .expect("submit")
+            .into_workflow();
+        let snapshot = frozen.current_proposal().expect("proposal");
+        snapshot
+            .verify_digest(frozen.request())
+            .expect("digest verifies");
+        assert_eq!(snapshot.attachments(), &manifest);
+        let original = snapshot.effect_digest().clone();
+        for mutation in 0..5 {
+            let mut changed = manifest.clone();
+            match mutation {
+                0 => changed.get_mut("evidence").expect("slot").sha256 = "b".repeat(64),
+                1 => {
+                    changed.get_mut("evidence").expect("slot").content_type =
+                        "image/png".to_owned();
+                }
+                2 => changed.get_mut("evidence").expect("slot").byte_size = 11,
+                3 => {
+                    changed
+                        .get_mut("evidence")
+                        .expect("slot")
+                        .verification_policy = Some("policy-a".to_owned());
+                }
+                _ => {
+                    let entry = changed.remove("evidence").expect("slot");
+                    changed.insert("other".to_owned(), entry);
+                }
+            }
+            let result = workflow()
+                .submit(
+                    context("submitter", "2026-09-19T00:00:00Z"),
+                    prepared
+                        .clone()
+                        .with_attachments(changed)
+                        .expect("attachments freeze"),
+                )
+                .expect("submit")
+                .into_workflow();
+            assert_ne!(
+                result.current_proposal().expect("proposal").effect_digest(),
+                &original
+            );
+        }
+        let mut tampered = snapshot.clone();
+        tampered
+            .attachments
+            .get_mut("evidence")
+            .expect("slot")
+            .sha256 = "c".repeat(64);
+        assert_eq!(
+            tampered.verify_digest(frozen.request()),
+            Err(WorkflowError::DigestMismatch)
+        );
+    }
+
     #[cfg(feature = "runtime")]
     #[test]
     fn occupied_local_approval_states_require_explicit_migration() {

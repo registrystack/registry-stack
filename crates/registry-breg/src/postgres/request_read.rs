@@ -1827,7 +1827,17 @@ mod tests {
     }
 
     #[test]
-    fn application_reason_disclosure_requires_selected_profile_permission_and_authentication() {
+    fn application_reason_bounds_and_disclosure_require_current_authority() {
+        assert!(crate::request_workflow::valid_application_reason(
+            &"文".repeat(crate::request_workflow::MAX_APPLICATION_REASON_CHARS)
+        ));
+        assert!(!crate::request_workflow::valid_application_reason(
+            &"文".repeat(crate::request_workflow::MAX_APPLICATION_REASON_CHARS + 1)
+        ));
+        assert!(!crate::request_workflow::valid_application_reason(
+            "unsafe\0reason"
+        ));
+
         let compiled = compiled_product_fixture(include_bytes!(
             "../../../../products/breg/acceptance/asset-site-placement-change-requests/registry.yaml"
         ));

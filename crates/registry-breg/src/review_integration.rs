@@ -347,11 +347,39 @@ mod tests {
         let accepted = accepted();
         assert_eq!(accepted.correlate("casework-main", &result()), Ok(()));
 
+        assert_eq!(
+            accepted.correlate("casework-secondary", &result()),
+            Err(CorrelationError::Authority)
+        );
+        let mut mismatched = result();
+        mismatched.request_id = Uuid::from_u128(2);
+        assert_eq!(
+            accepted.correlate("casework-main", &mismatched),
+            Err(CorrelationError::Request)
+        );
+        let mut mismatched = result();
+        mismatched.subject.version = "8".to_owned();
+        assert_eq!(
+            accepted.correlate("casework-main", &mismatched),
+            Err(CorrelationError::Subject)
+        );
         let mut mismatched = result();
         mismatched.policy.version = "8".to_owned();
         assert_eq!(
             accepted.correlate("casework-main", &mismatched),
             Err(CorrelationError::Policy)
+        );
+        let mut mismatched = result();
+        mismatched.submission_digest = format!("sha256:{}", "d".repeat(64));
+        assert_eq!(
+            accepted.correlate("casework-main", &mismatched),
+            Err(CorrelationError::SubmissionDigest)
+        );
+        let mut mismatched = result();
+        mismatched.status = TerminalReviewStatus::Rejected;
+        assert_eq!(
+            AcceptedReviewEvidence::from_approved("casework-main", &accepted, &mismatched),
+            Err(CorrelationError::Status)
         );
     }
 
