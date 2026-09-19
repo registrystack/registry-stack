@@ -727,7 +727,11 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("casework", selected)
         self.assertTrue(product["casework_postgres"])
         core = classify(self.workspace, ("crates/registry-casework-core/src/adapter.rs",))
-        self.assertLessEqual(CASEWORK_PACKAGES, set(core["rust_packages"]))
+        shared_review_packages = {"registry-review-client", "registry-review-protocol"}
+        self.assertLessEqual(
+            CASEWORK_PACKAGES - shared_review_packages,
+            set(core["rust_packages"]),
+        )
         self.assertTrue(core["casework_postgres"])
         python = classify(
             self.workspace,
@@ -735,6 +739,20 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertIn("registry-casework-client-py", python["rust_packages"])
         self.assertTrue(python["casework_postgres"])
+
+    def test_shared_review_protocol_selects_casework_and_breg_consumers(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-review-protocol/src/lib.rs",),
+        )
+        selected = set(outputs["rust_packages"])
+        self.assertIn("registry-review-protocol", selected)
+        self.assertIn("registry-review-client", selected)
+        self.assertIn("registry-casework-core", selected)
+        self.assertIn("registry-casework", selected)
+        self.assertIn("registry-breg", selected)
+        self.assertTrue(outputs["casework_postgres"])
+        self.assertTrue(outputs["breg_contracts"])
 
     def test_breg_paths_select_its_shard_and_product_gate(self) -> None:
         for path in (
