@@ -235,6 +235,7 @@ static RUNTIME: RwLock<Option<Arc<WasmHandlerRuntime>>> = RwLock::new(None);
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum RuntimeOwnership {
     Vacant,
+    #[cfg(feature = "runtime")]
     Configured,
     PersistentDefault,
 }
@@ -362,6 +363,7 @@ fn install_persistent(
         .expect("wasm runtime ownership lock");
     match *ownership {
         RuntimeOwnership::PersistentDefault => return Ok(()),
+        #[cfg(feature = "runtime")]
         RuntimeOwnership::Configured => return Err(WasmRuntimeStartError::LifecycleActive),
         RuntimeOwnership::Vacant => {}
     }

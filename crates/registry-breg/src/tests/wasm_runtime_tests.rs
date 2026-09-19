@@ -19,9 +19,11 @@ use crate::contract::{parse_project_json, ModuleAssetSource};
 use crate::model::{CompiledAction, CompiledActionHandler, CompiledActionHandlerKind};
 use crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES;
 use crate::wasm_runtime::{
-    install, install_configured, install_default, installed, shutdown, WasmExecutionBudgets,
-    WasmHandlerRuntime, MAXIMUM_RETAINED_PREPARED_MODULES,
+    install, installed, shutdown, WasmExecutionBudgets, WasmHandlerRuntime,
+    MAXIMUM_RETAINED_PREPARED_MODULES,
 };
+#[cfg(feature = "runtime")]
+use crate::wasm_runtime::{install_configured, install_default};
 
 /// The process runtime is global; serialize every test that touches it.
 static INSTALL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

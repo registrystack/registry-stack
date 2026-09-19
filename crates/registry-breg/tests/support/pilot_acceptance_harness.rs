@@ -41,8 +41,12 @@ use super::postgres_harness::TestDatabase;
 
 const AUDIENCE: &str = "urn:breg:pilot-acceptance";
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+// Every harness in one integration-test process shares the configured WASM
+// executor, so the lock follows the complete prepared-server lifetime.
+static WASM_RUNTIME_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub struct PilotHarness {
+    runtime_guard: tokio::sync::MutexGuard<'static, ()>,
     pub database: TestDatabase,
     pub registry: Arc<CompiledRegistry>,
     prepared: PreparedServer,
@@ -88,6 +92,7 @@ impl Drop for PilotHttpServer {
 
 impl PilotHarness {
     pub async fn start(fixture_name: &str) -> Self {
+        let runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
         let sources = FixtureSources::load(fixture_name);
         let identity = sources
             .project
@@ -224,6 +229,7 @@ impl PilotHarness {
         .expect("existing startup seam accepts the exact package, database, audit, and MockIdp");
 
         Self {
+            runtime_guard,
             database,
             registry: Arc::new(sources.compiled),
             prepared,
@@ -340,6 +346,7 @@ impl PilotHarness {
 
     pub async fn finish(self) {
         let Self {
+            runtime_guard,
             database,
             registry,
             prepared,
@@ -351,6 +358,7 @@ impl PilotHarness {
         idp.stop().await;
         database.cleanup().await;
         drop(scratch);
+        drop(runtime_guard);
     }
 }
 
