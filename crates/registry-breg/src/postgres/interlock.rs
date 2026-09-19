@@ -1496,7 +1496,7 @@ impl DedicatedApplyConnection {
         // Refuse before maintenance or ledger state can start: otherwise a
         // successor could add new flip rows while an erase lifecycle is using
         // the current durable flip manifest for crash-resumable correlation.
-        verify_complete_history_coverage(&transaction).await?;
+        verify_history_coverage_can_begin_successor(&transaction).await?;
         verify_retained_webhook_delivery_bindings(
             &transaction,
             event_destination_compatibility_inventory,
@@ -2075,6 +2075,28 @@ async fn verify_complete_history_coverage(
         )
         .await?
         .is_some_and(|row| row.get::<_, bool>(0));
+    if !complete {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    Ok(())
+}
+
+/// Permit a legacy registry with no commit head to enter the successor path
+/// that establishes its first baseline. Once a head exists, incomplete
+/// coverage means an erase lifecycle is active and must freeze successors.
+async fn verify_history_coverage_can_begin_successor(
+    client: &impl tokio_postgres::GenericClient,
+) -> Result<()> {
+    let complete = client
+        .query_opt(
+            "SELECT coverage_ready AND unavailable_after_position IS NULL
+               FROM registry_internal.registry_commit_head
+              WHERE singleton
+              FOR UPDATE",
+            &[],
+        )
+        .await?
+        .is_none_or(|row| row.get::<_, bool>(0));
     if !complete {
         return Err(PostgresKernelError::RegistryUnavailable);
     }
