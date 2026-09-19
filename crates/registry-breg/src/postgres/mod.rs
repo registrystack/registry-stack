@@ -44,9 +44,12 @@ pub use history_read::SnapshotReadFaultPoint;
 pub use interlock::DedicatedApplyConnection;
 pub use interlock::RegistryLockKey;
 pub(crate) use interlock::{
-    set_force_row_security, DedicatedApplyConnection as VerifiedPackageApplyConnection,
+    covered_field_encryption_fields, field_plaintext_string, prior_plaintext_projection,
+    recursive_member_path, set_force_row_security,
+    DedicatedApplyConnection as VerifiedPackageApplyConnection, FieldEncryptionCoveredField,
     MaintenanceAuditRecord, MaintenanceSnapshot, MaintenanceTransition, PackageDdlStatement,
-    ReviewedExecutionOutcome, ReviewedMigrationProgress, ReviewedPackageExecutionRequest,
+    ReviewedExecutionOutcome, ReviewedFieldEncryptionContext, ReviewedMigrationProgress,
+    ReviewedPackageExecutionRequest,
 };
 pub(crate) use migration_ledger::{
     statement_checksum, MigrationArtifactBinding, MigrationLedgerEntry, MigrationLedgerStep,
@@ -176,6 +179,12 @@ pub enum PostgresKernelError {
     FieldPatternSyntax { entity_id: String, field_id: String },
     #[error("existing rows do not conform to a persisted field pattern")]
     FieldPatternExistingRows { entity_id: String, field_id: String },
+    /// Authored record identifiers only; field values never cross this boundary.
+    #[error("field-encryption backfill would collide blind indexes of existing records")]
+    FieldEncryptionBlindCollision {
+        entity_id: String,
+        record_ids: Vec<String>,
+    },
     #[error("PostgreSQL connection failed")]
     Connection,
     #[error("PostgreSQL pool operation failed")]

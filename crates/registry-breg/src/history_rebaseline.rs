@@ -53,7 +53,8 @@ pub struct HistoryRebaselineRequest<'a> {
     pub registry: &'a CompiledRegistry,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HistoryRebaselineOutcome {
     pub baseline_position: i64,
     pub verified_entity_count: u64,

@@ -44,6 +44,7 @@ mod data_lifecycle;
 mod dev;
 mod doctor;
 mod field_encryption;
+mod field_encryption_lifecycle;
 mod history_erasure_lifecycle;
 mod history_rebaseline_lifecycle;
 mod init_from_model;
@@ -63,6 +64,11 @@ use apply_lifecycle::{ApplyLifecycleError, ApplyLifecycleRequest};
 use audit_lifecycle::{AuditCliError, AuditExportOutcome, AuditPruneOutcome, AuditVerifyOutcome};
 use data_lifecycle::{
     DataExportRequest, DataImportRequest, DataLifecycleError, DataValidateRequest, ExportPairState,
+};
+use field_encryption_lifecycle::{
+    FieldEncryptionEraseHistoryLifecycleError, FieldEncryptionEraseHistoryLifecycleOutcome,
+    FieldEncryptionEraseHistoryLifecycleRequest, FieldEncryptionPreflightLifecycleError,
+    FieldEncryptionPreflightLifecycleOutcome, FieldEncryptionPreflightLifecycleRequest,
 };
 use history_erasure_lifecycle::{
     HistoryErasureLifecycleError, HistoryErasureLifecycleOutcome, HistoryErasureLifecycleRequest,
@@ -179,6 +185,16 @@ enum FieldEncryptionCommand {
     /// Write one fresh base64 data key for the local-file provider. The key
     /// never reaches standard output and an existing file is never overwritten.
     Keygen(FieldEncryptionKeygenArgs),
+
+    /// Report what one reviewed backfill apply would do, before running it:
+    /// value-free counts per covered field, the descriptor's explicit history
+    /// choice, and the record names a unique blind index would refuse.
+    Preflight(FieldEncryptionPreflightArgs),
+
+    /// Erase the retained plaintext history of flips that declared
+    /// erase-and-rebaseline, then restore snapshot coverage with one
+    /// rebaseline. Runs only after the flip's package is active.
+    EraseHistory(FieldEncryptionEraseHistoryArgs),
 }
 
 #[derive(Debug, Args)]
@@ -186,6 +202,33 @@ struct FieldEncryptionKeygenArgs {
     /// Absolute output path for the base64 data key (written 0600, parents 0700).
     #[arg(long, alias = "out")]
     output: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct FieldEncryptionPreflightArgs {
+    /// Absolute Base Registry Engine runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Absolute directory of the verified successor package the operator
+    /// plans to apply.
+    #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+    package: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct FieldEncryptionEraseHistoryArgs {
+    /// Absolute Base Registry Engine runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Absolute owner-only JSON erase-history request file.
+    ///
+    /// Read through the parent directory this path resolves to, so a `..`
+    /// component is refused. The file must carry no group or other permission
+    /// bits, because it authorizes destroying retained history.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    request_file: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -1119,6 +1162,7 @@ enum DiagnosticArtifact {
     AuditJournal,
     HistoryErasure,
     HistoryRebaseline,
+    FieldEncryption,
     PlannerTest,
 }
 
@@ -1168,6 +1212,8 @@ enum SuggestedAction {
     PrepareHistoryErasureRequest,
     PrepareHistoryRebaselineRequest,
     ReviewRetainedHistory,
+    ReviewFieldEncryptionBackfill,
+    PrepareFieldEncryptionEraseRequest,
     CorrectPlannerTestInput,
     CorrectActionHandler,
     RunSchemaTest,
@@ -1227,6 +1273,24 @@ struct HistoryRebaselineSuccessReport {
     command: &'static str,
     #[serde(flatten)]
     outcome: HistoryRebaselineLifecycleOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FieldEncryptionPreflightSuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: FieldEncryptionPreflightLifecycleOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FieldEncryptionEraseHistorySuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: FieldEncryptionEraseHistoryLifecycleOutcome,
 }
 
 #[derive(Serialize)]
@@ -1979,6 +2043,22 @@ where
                         ),
                     }
                 }
+                FieldEncryptionCommand::Preflight(args) => {
+                    match field_encryption_preflight(&args) {
+                        Ok(report) => write_field_encryption_preflight_success(
+                            &report, format, stdout, stderr,
+                        ),
+                        Err(failure) => write_failure(&failure, format, stdout, stderr),
+                    }
+                }
+                FieldEncryptionCommand::EraseHistory(args) => {
+                    match field_encryption_erase_history(&args) {
+                        Ok(report) => write_field_encryption_erase_history_success(
+                            &report, format, stdout, stderr,
+                        ),
+                        Err(failure) => write_failure(&failure, format, stdout, stderr),
+                    }
+                }
             };
         }
     };
@@ -2417,6 +2497,410 @@ fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) 
     FailureReport {
         ok: false,
         command: "history rebaseline",
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(code, path, message),
+            artifact,
+            action,
+        )],
+    }
+}
+
+fn field_encryption_preflight(
+    args: &FieldEncryptionPreflightArgs,
+) -> Result<FieldEncryptionPreflightSuccessReport, FailureReport> {
+    let outcome =
+        field_encryption_lifecycle::run_preflight(FieldEncryptionPreflightLifecycleRequest {
+            runtime_config: &args.runtime_config,
+            package: &args.package,
+        })
+        .map_err(field_encryption_preflight_failure)?;
+    // A collision the apply-side preflight would refuse is reported here as a
+    // failed preflight, naming the authored record identifiers only.
+    let collisions = outcome
+        .report
+        .steps
+        .iter()
+        .flat_map(|step| {
+            step.fields
+                .iter()
+                .filter(|field| !field.duplicate_record_ids.is_empty())
+                .map(|field| {
+                    (
+                        step.entity_id.clone(),
+                        field.field_id.clone(),
+                        field.duplicate_record_ids.clone(),
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+    if !collisions.is_empty() {
+        return Err(field_encryption_duplicate_failure(collisions));
+    }
+    Ok(FieldEncryptionPreflightSuccessReport {
+        ok: true,
+        command: "field-encryption preflight",
+        outcome,
+    })
+}
+
+fn field_encryption_duplicate_failure(
+    collisions: Vec<(String, String, Vec<String>)>,
+) -> FailureReport {
+    let diagnostics = collisions
+        .into_iter()
+        .map(|(entity_id, field_id, record_ids)| {
+            tool_diagnostic(
+                diagnostic(
+                    "field_encryption.preflight.duplicate_records",
+                    "preflight",
+                    &format!(
+                        "entity {entity_id} field {field_id}: {} normalize onto one unique \
+                         blind index, so the apply will refuse them; the records are {}",
+                        record_ids.len(),
+                        record_ids.join(", ")
+                    ),
+                ),
+                DiagnosticArtifact::FieldEncryption,
+                SuggestedAction::ReviewFieldEncryptionBackfill,
+            )
+        })
+        .collect();
+    FailureReport {
+        ok: false,
+        command: "field-encryption preflight",
+        diagnostics,
+    }
+}
+
+fn field_encryption_preflight_failure(
+    error: FieldEncryptionPreflightLifecycleError,
+) -> FailureReport {
+    let error = match error {
+        FieldEncryptionPreflightLifecycleError::RuntimeConfig(error) => {
+            return runtime_config_failure(
+                "field-encryption preflight",
+                "field_encryption.preflight",
+                error,
+            );
+        }
+        error => error,
+    };
+    let (code, path, message, artifact, action) = match error {
+        FieldEncryptionPreflightLifecycleError::RuntimeConfigPath => (
+            "field_encryption.preflight.runtime_config.path_invalid",
+            "runtimeConfig",
+            "the runtime configuration path must be absolute",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
+        FieldEncryptionPreflightLifecycleError::PackagePath => (
+            "field_encryption.preflight.package.path_invalid",
+            "package",
+            "the successor package path must be absolute",
+            DiagnosticArtifact::VerifiedPackage,
+            SuggestedAction::VerifyPackagePath,
+        ),
+        FieldEncryptionPreflightLifecycleError::NoBackfillSteps => (
+            "field_encryption.preflight.plan.no_backfill",
+            "package",
+            "the package plans no field-encryption backfill step to preflight",
+            DiagnosticArtifact::FieldEncryption,
+            SuggestedAction::ReviewFieldEncryptionBackfill,
+        ),
+        FieldEncryptionPreflightLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
+        FieldEncryptionPreflightLifecycleError::PredecessorPackage(error) => {
+            let action = match error {
+                PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
+                PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
+                PackageError::Signature => SuggestedAction::VerifyPackageTrust,
+                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                _ => SuggestedAction::VerifyPackageIntegrity,
+            };
+            (
+                "field_encryption.preflight.predecessor_package.refused",
+                "package",
+                "the active runtime package was refused",
+                DiagnosticArtifact::VerifiedPackage,
+                action,
+            )
+        }
+        FieldEncryptionPreflightLifecycleError::TargetPackage(error) => {
+            let action = match error {
+                PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
+                PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
+                PackageError::Signature => SuggestedAction::VerifyPackageTrust,
+                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                _ => SuggestedAction::VerifyPackageIntegrity,
+            };
+            (
+                "field_encryption.preflight.package.refused",
+                "package",
+                "the successor package was refused",
+                DiagnosticArtifact::VerifiedPackage,
+                action,
+            )
+        }
+        FieldEncryptionPreflightLifecycleError::DatabaseConfiguration
+        | FieldEncryptionPreflightLifecycleError::TimeoutConfiguration => (
+            "field_encryption.preflight.database_configuration.refused",
+            "database",
+            "the migration database configuration was refused",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        FieldEncryptionPreflightLifecycleError::Runtime => (
+            "field_encryption.preflight.runtime.unavailable",
+            "runtime",
+            "the field-encryption preflight runtime is unavailable",
+            DiagnosticArtifact::FieldEncryption,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        FieldEncryptionPreflightLifecycleError::Preflight(error) => match error {
+            registry_breg::field_encryption_backfill::FieldEncryptionBackfillPreflightError::InvalidInput => (
+                "field_encryption.preflight.request.refused",
+                "package",
+                "the reviewed plan and the predecessor baseline do not agree on one field-encryption backfill",
+                DiagnosticArtifact::FieldEncryption,
+                SuggestedAction::ReviewFieldEncryptionBackfill,
+            ),
+            registry_breg::field_encryption_backfill::FieldEncryptionBackfillPreflightError::MigrationAuthority => (
+                "field_encryption.preflight.migration_authority.refused",
+                "database",
+                "field-encryption preflight requires the configured migration authority",
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::VerifyMigrationAuthority,
+            ),
+            registry_breg::field_encryption_backfill::FieldEncryptionBackfillPreflightError::Unavailable => (
+                "field_encryption.preflight.unavailable",
+                "database",
+                "field-encryption preflight storage is unavailable",
+                DiagnosticArtifact::FieldEncryption,
+                SuggestedAction::VerifyMigrationAuthority,
+            ),
+        },
+    };
+    FailureReport {
+        ok: false,
+        command: "field-encryption preflight",
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(code, path, message),
+            artifact,
+            action,
+        )],
+    }
+}
+
+fn field_encryption_erase_history(
+    args: &FieldEncryptionEraseHistoryArgs,
+) -> Result<FieldEncryptionEraseHistorySuccessReport, FailureReport> {
+    let outcome = field_encryption_lifecycle::run_erase_history(
+        FieldEncryptionEraseHistoryLifecycleRequest {
+            runtime_config: &args.runtime_config,
+            request_file: &args.request_file,
+        },
+    )
+    .map_err(field_encryption_erase_history_failure)?;
+    Ok(FieldEncryptionEraseHistorySuccessReport {
+        ok: true,
+        command: "field-encryption erase-history",
+        outcome,
+    })
+}
+
+fn field_encryption_erase_history_failure(
+    error: FieldEncryptionEraseHistoryLifecycleError,
+) -> FailureReport {
+    let error = match error {
+        FieldEncryptionEraseHistoryLifecycleError::RuntimeConfig(error) => {
+            return runtime_config_failure(
+                "field-encryption erase-history",
+                "field_encryption.erase_history",
+                error,
+            );
+        }
+        error => error,
+    };
+    let (code, path, message, artifact, action) = match error {
+        FieldEncryptionEraseHistoryLifecycleError::RuntimeConfigPath => (
+            "field_encryption.erase_history.runtime_config.path_invalid",
+            "runtimeConfig",
+            "the runtime configuration path must be absolute",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
+        FieldEncryptionEraseHistoryLifecycleError::RequestFile => (
+            "field_encryption.erase_history.request_file.refused",
+            "requestFile",
+            "the erase-history request file must be absolute, owner-only, and bounded",
+            DiagnosticArtifact::FieldEncryption,
+            SuggestedAction::PrepareFieldEncryptionEraseRequest,
+        ),
+        FieldEncryptionEraseHistoryLifecycleError::RequestDocument => (
+            "field_encryption.erase_history.request.refused",
+            "requestFile",
+            "the erase-history request document was refused",
+            DiagnosticArtifact::FieldEncryption,
+            SuggestedAction::PrepareFieldEncryptionEraseRequest,
+        ),
+        FieldEncryptionEraseHistoryLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
+        FieldEncryptionEraseHistoryLifecycleError::ActivePackage(error) => {
+            let action = match error {
+                PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
+                PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
+                PackageError::Signature => SuggestedAction::VerifyPackageTrust,
+                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                _ => SuggestedAction::VerifyPackageIntegrity,
+            };
+            (
+                "field_encryption.erase_history.package.refused",
+                "package",
+                "the active runtime package was refused",
+                DiagnosticArtifact::VerifiedPackage,
+                action,
+            )
+        }
+        FieldEncryptionEraseHistoryLifecycleError::DatabaseConfiguration
+        | FieldEncryptionEraseHistoryLifecycleError::TimeoutConfiguration => (
+            "field_encryption.erase_history.database_configuration.refused",
+            "database",
+            "the migration database configuration was refused",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        FieldEncryptionEraseHistoryLifecycleError::Runtime => (
+            "field_encryption.erase_history.runtime.unavailable",
+            "runtime",
+            "the field-encryption erase-history runtime is unavailable",
+            DiagnosticArtifact::FieldEncryption,
+            SuggestedAction::VerifyMigrationAuthority,
+        ),
+        FieldEncryptionEraseHistoryLifecycleError::Erase(error) => match error {
+            registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureError::InvalidInput => (
+                "field_encryption.erase_history.request.refused",
+                "requestFile",
+                "the erase-history request document was refused",
+                DiagnosticArtifact::FieldEncryption,
+                SuggestedAction::PrepareFieldEncryptionEraseRequest,
+            ),
+            registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureError::MigrationAuthority => (
+                "field_encryption.erase_history.migration_authority.refused",
+                "database",
+                "field-encryption history erasure requires the configured migration authority",
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::VerifyMigrationAuthority,
+            ),
+            registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureError::NoPendingPlaintextHistory => (
+                "field_encryption.erase_history.no_pending_plaintext",
+                "history",
+                "no retained plaintext history matches an erase-and-rebaseline flip, so there is nothing to erase",
+                DiagnosticArtifact::FieldEncryption,
+                SuggestedAction::ReviewFieldEncryptionBackfill,
+            ),
+            registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureError::Erasure(
+                error,
+            ) => match error {
+                registry_breg::history_erasure::HistoryErasureError::InvalidInput
+                | registry_breg::history_erasure::HistoryErasureError::TargetUnavailable => (
+                    "field_encryption.erase_history.target.refused",
+                    "history",
+                    "a pending per-record erasure was refused; the record that exceeded a bound \
+                     is not named, and already-erased records stay erased, so the lifecycle can \
+                     be re-run after the cause is addressed",
+                    DiagnosticArtifact::FieldEncryption,
+                    SuggestedAction::ReviewRetainedHistory,
+                ),
+                registry_breg::history_erasure::HistoryErasureError::MigrationAuthority => (
+                    "field_encryption.erase_history.migration_authority.refused",
+                    "database",
+                    "field-encryption history erasure requires the configured migration authority",
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::VerifyMigrationAuthority,
+                ),
+                registry_breg::history_erasure::HistoryErasureError::CachedResponseUnreadable => (
+                    "field_encryption.erase_history.cached_response.invalid",
+                    "history",
+                    "field-encryption history erasure found a cached response no JSON reader accepts",
+                    DiagnosticArtifact::FieldEncryption,
+                    SuggestedAction::VerifyMigrationAuthority,
+                ),
+                registry_breg::history_erasure::HistoryErasureError::HistoryNotReady
+                | registry_breg::history_erasure::HistoryErasureError::Unavailable => (
+                    "field_encryption.erase_history.unavailable",
+                    "history",
+                    "field-encryption history erasure storage is unavailable",
+                    DiagnosticArtifact::FieldEncryption,
+                    SuggestedAction::VerifyMigrationAuthority,
+                ),
+            },
+            registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureError::Rebaseline(
+                error,
+            ) => match error {
+                registry_breg::history_rebaseline::HistoryRebaselineError::InvalidInput => (
+                    "field_encryption.erase_history.request.refused",
+                    "requestFile",
+                    "the erase-history request document was refused",
+                    DiagnosticArtifact::FieldEncryption,
+                    SuggestedAction::PrepareFieldEncryptionEraseRequest,
+                ),
+                registry_breg::history_rebaseline::HistoryRebaselineError::MigrationAuthority => (
+                    "field_encryption.erase_history.migration_authority.refused",
+                    "database",
+                    "the closing rebaseline requires the configured migration authority",
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::VerifyMigrationAuthority,
+                ),
+                registry_breg::history_rebaseline::HistoryRebaselineError::CoverageComplete => (
+                    "field_encryption.erase_history.rebaseline.coverage_complete",
+                    "history",
+                    "snapshot coverage was already complete after the erasures, so no rebaseline ran",
+                    DiagnosticArtifact::FieldEncryption,
+                    SuggestedAction::ReviewRetainedHistory,
+                ),
+                registry_breg::history_rebaseline::HistoryRebaselineError::UnindexedRevisions => (
+                    "field_encryption.erase_history.rebaseline.revisions_unindexed",
+                    "history",
+                    "the closing rebaseline requires every retained journal head to be indexed by a commit",
+                    DiagnosticArtifact::FieldEncryption,
+                    SuggestedAction::ReviewRetainedHistory,
+                ),
+                registry_breg::history_rebaseline::HistoryRebaselineError::LiveHistoryMismatch => (
+                    "field_encryption.erase_history.rebaseline.live_rows_unverified",
+                    "history",
+                    "the closing rebaseline requires the retained journal head to reproduce every live \
+                     row; the first record that disagrees is not named, so compare the live rows with \
+                     their revisions to find it",
+                    DiagnosticArtifact::FieldEncryption,
+                    SuggestedAction::ReviewRetainedHistory,
+                ),
+                registry_breg::history_rebaseline::HistoryRebaselineError::LiveRowBudgetExceeded => (
+                    "field_encryption.erase_history.rebaseline.live_rows_budget_exceeded",
+                    "history",
+                    "the closing rebaseline verifies at most 1000 live rows in one transaction and this \
+                     registry holds more, so retrying cannot restore snapshot coverage",
+                    DiagnosticArtifact::FieldEncryption,
+                    SuggestedAction::ReviewRetainedHistory,
+                ),
+                registry_breg::history_rebaseline::HistoryRebaselineError::HistoryNotReady
+                | registry_breg::history_rebaseline::HistoryRebaselineError::Unavailable => (
+                    "field_encryption.erase_history.rebaseline.unavailable",
+                    "history",
+                    "the closing rebaseline storage is unavailable",
+                    DiagnosticArtifact::FieldEncryption,
+                    SuggestedAction::VerifyMigrationAuthority,
+                ),
+            },
+            registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureError::Unavailable => (
+                "field_encryption.erase_history.unavailable",
+                "history",
+                "field-encryption history erasure storage is unavailable",
+                DiagnosticArtifact::FieldEncryption,
+                SuggestedAction::VerifyMigrationAuthority,
+            ),
+        },
+    };
+    FailureReport {
+        ok: false,
+        command: "field-encryption erase-history",
         diagnostics: vec![tool_diagnostic(
             diagnostic(code, path, message),
             artifact,
@@ -3532,6 +4016,29 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                     ),
                     DiagnosticArtifact::DatabaseMigration,
                     SuggestedAction::ReconcileFailedMigration,
+                );
+            }
+            registry_breg::migration::MigrationError::FieldEncryptionLookupCollision {
+                entity_id,
+                record_ids,
+            } => {
+                return source_failure(
+                    "apply",
+                    diagnostic(
+                        "field_encryption.lookup.collision",
+                        &format!("entities[{entity_id}]"),
+                        &format!(
+                            "Existing records normalize onto one unique blind index, so the \
+                             field-encryption backfill refused before sealing anything. The exact \
+                             target remains pinned in maintenance; repair the colliding values of \
+                             the {} named records through operator recovery and retry the exact \
+                             pinned target: {}",
+                            record_ids.len(),
+                            record_ids.join(", ")
+                        ),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::ReviewFieldEncryptionBackfill,
                 );
             }
             registry_breg::migration::MigrationError::PackageBinding
@@ -9272,6 +9779,185 @@ fn write_field_encryption_keygen_success(
     }
 }
 
+fn write_field_encryption_preflight_success(
+    report: &FieldEncryptionPreflightSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        {
+            let mut lines = report::Lines::new();
+            let covered: u64 = report
+                .outcome
+                .report
+                .steps
+                .iter()
+                .flat_map(|step| step.fields.iter().map(|field| field.plaintext_row_count))
+                .sum();
+            lines.lead(&format!(
+                "Preflighted the field-encryption backfill. {} to seal.",
+                report::counted_total(covered, "plaintext value")
+            ));
+            let mut pairs = vec![(
+                "package revision".to_owned(),
+                report.outcome.package_revision.clone(),
+            )];
+            for step in &report.outcome.report.steps {
+                let choice = match step.history_choice {
+                    registry_breg::migration_plan::ReviewedFieldEncryptionHistory::EraseAndRebaseline => {
+                        "erase-and-rebaseline"
+                    }
+                    registry_breg::migration_plan::ReviewedFieldEncryptionHistory::RetainPlaintextHistory => {
+                        "retain-plaintext-history"
+                    }
+                };
+                pairs.push((format!("entity {}", step.entity_id), choice.to_owned()));
+                for field in &step.fields {
+                    pairs.push((
+                        format!("entity {} field {}", step.entity_id, field.api_name),
+                        format!(
+                            "{} plaintext, {} journal, {} request targets, {} proposals, {} cached \
+                             responses, {} outbox payloads",
+                            field.plaintext_row_count,
+                            field.journal_row_count,
+                            field.request_target_row_count,
+                            field.request_proposal_row_count,
+                            field.idempotency_row_count,
+                            field.outbox_row_count
+                        ),
+                    ));
+                }
+            }
+            let borrowed = pairs
+                .iter()
+                .map(|(label, value)| (label.as_str(), value.clone()))
+                .collect::<Vec<_>>();
+            lines.pairs(&borrowed);
+            stdout.write_all(lines.finish().as_bytes())
+        }
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_) => {
+            let _ = writeln!(stderr, "bregctl: output could not be written");
+            ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+        }
+    }
+}
+
+fn write_field_encryption_erase_history_success(
+    report: &FieldEncryptionEraseHistorySuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        render_report(
+            &format!(
+                "Erased the flip's retained plaintext history. {} covered again.",
+                report::counted_total(
+                    report.outcome.outcome.rebaseline.verified_record_count,
+                    "record"
+                )
+            ),
+            &[
+                ("package revision", report.outcome.package_revision.clone()),
+                (
+                    "erased records",
+                    report.outcome.outcome.erased_record_count.to_string(),
+                ),
+                (
+                    "erased revisions",
+                    report.outcome.outcome.erased_revision_count.to_string(),
+                ),
+                (
+                    "erased commit members",
+                    report
+                        .outcome
+                        .outcome
+                        .erased_commit_member_count
+                        .to_string(),
+                ),
+                (
+                    "scrubbed change contexts",
+                    report
+                        .outcome
+                        .outcome
+                        .scrubbed_change_context_count
+                        .to_string(),
+                ),
+                (
+                    "scrubbed outbox payloads",
+                    report
+                        .outcome
+                        .outcome
+                        .scrubbed_outbox_payload_count
+                        .to_string(),
+                ),
+                (
+                    "scrubbed cached responses",
+                    report
+                        .outcome
+                        .outcome
+                        .scrubbed_cached_response_count
+                        .to_string(),
+                ),
+                (
+                    "scrubbed request targets",
+                    report
+                        .outcome
+                        .outcome
+                        .scrubbed_request_target_count
+                        .to_string(),
+                ),
+                (
+                    "scrubbed request proposals",
+                    report
+                        .outcome
+                        .outcome
+                        .scrubbed_request_proposal_count
+                        .to_string(),
+                ),
+                (
+                    "coverage baseline position",
+                    report
+                        .outcome
+                        .outcome
+                        .rebaseline
+                        .baseline_position
+                        .to_string(),
+                ),
+                (
+                    "verified records",
+                    report
+                        .outcome
+                        .outcome
+                        .rebaseline
+                        .verified_record_count
+                        .to_string(),
+                ),
+            ],
+            stdout,
+        )
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_) => {
+            let _ = writeln!(stderr, "bregctl: output could not be written");
+            ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+        }
+    }
+}
+
 /// One key-generation refusal. Every message is value free: the operator
 /// already named the output path on the command line, and the key material
 /// itself never exists in a message.
@@ -9646,6 +10332,14 @@ fn write_history_erase_success(
                 (
                     "scrubbed cached responses",
                     report.outcome.scrubbed_cached_response_count.to_string(),
+                ),
+                (
+                    "scrubbed request targets",
+                    report.outcome.scrubbed_request_target_count.to_string(),
+                ),
+                (
+                    "scrubbed request proposals",
+                    report.outcome.scrubbed_request_proposal_count.to_string(),
                 ),
                 (
                     "removed descriptors",
@@ -11665,6 +12359,8 @@ mod tests {
                 scrubbed_change_context_count: 1,
                 scrubbed_outbox_payload_count: 1,
                 scrubbed_cached_response_count: 1,
+                scrubbed_request_target_count: 1,
+                scrubbed_request_proposal_count: 0,
                 removed_descriptor_count: 0,
             },
         };
@@ -12559,5 +13255,200 @@ mod field_encryption_keygen_tests {
             !rendered.contains(contents.trim_ascii()),
             "the data key never reaches the machine report"
         );
+    }
+}
+
+#[cfg(test)]
+mod field_encryption_lifecycle_cli_tests {
+    use super::*;
+
+    #[test]
+    fn field_encryption_preflight_takes_only_the_runtime_config_and_package() {
+        let parsed = Cli::try_parse_from([
+            "bregctl",
+            "field-encryption",
+            "preflight",
+            "--runtime-config",
+            "/tmp/runtime.yaml",
+            "--package",
+            "/tmp/successor-package",
+        ])
+        .expect("field-encryption preflight parses");
+        let Command::FieldEncryption(args) = parsed.command else {
+            panic!("field-encryption command parsed");
+        };
+        let FieldEncryptionCommand::Preflight(args) = args.command else {
+            panic!("field-encryption preflight command parsed");
+        };
+        assert_eq!(args.runtime_config, PathBuf::from("/tmp/runtime.yaml"));
+        assert_eq!(args.package, PathBuf::from("/tmp/successor-package"));
+        // The preflight names no records: its scope is the plan itself, and a
+        // request file belongs to the erase-history command alone.
+        assert!(Cli::try_parse_from([
+            "bregctl",
+            "field-encryption",
+            "preflight",
+            "--runtime-config",
+            "/tmp/runtime.yaml",
+            "--package",
+            "/tmp/successor-package",
+            "--request-file",
+            "/tmp/request.json",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn field_encryption_erase_history_requires_request_file_not_inline_targets() {
+        let parsed = Cli::try_parse_from([
+            "bregctl",
+            "field-encryption",
+            "erase-history",
+            "--runtime-config",
+            "/tmp/runtime.yaml",
+            "--request-file",
+            "/tmp/request.json",
+        ])
+        .expect("field-encryption erase-history parses");
+        let Command::FieldEncryption(args) = parsed.command else {
+            panic!("field-encryption command parsed");
+        };
+        let FieldEncryptionCommand::EraseHistory(args) = args.command else {
+            panic!("field-encryption erase-history command parsed");
+        };
+        assert_eq!(args.runtime_config, PathBuf::from("/tmp/runtime.yaml"));
+        assert_eq!(args.request_file, PathBuf::from("/tmp/request.json"));
+        assert!(Cli::try_parse_from([
+            "bregctl",
+            "field-encryption",
+            "erase-history",
+            "--runtime-config",
+            "/tmp/runtime.yaml",
+            "--record-id",
+            "018feaa0-68f9-4a45-b9e3-58436df07af7",
+        ])
+        .is_err());
+    }
+
+    fn sample_preflight_report() -> FieldEncryptionPreflightSuccessReport {
+        FieldEncryptionPreflightSuccessReport {
+            ok: true,
+            command: "field-encryption preflight",
+            outcome: FieldEncryptionPreflightLifecycleOutcome {
+                package_revision: "pkg-1".to_owned(),
+                report: registry_breg::field_encryption_backfill::FieldEncryptionBackfillPreflightReport {
+                    steps: vec![
+                        registry_breg::field_encryption_backfill::FieldEncryptionBackfillStepPreflight {
+                            entity_id: "membership".to_owned(),
+                            history_choice:
+                                registry_breg::migration_plan::ReviewedFieldEncryptionHistory::EraseAndRebaseline,
+                            fields: vec![
+                                registry_breg::field_encryption_backfill::FieldEncryptionBackfillFieldPreflight {
+                                    field_id: "secret".to_owned(),
+                                    api_name: "secret".to_owned(),
+                                    unique_blind_index: true,
+                                    plaintext_row_count: 3,
+                                    journal_row_count: 5,
+                                    request_target_row_count: 2,
+                                    request_proposal_row_count: 1,
+                                    idempotency_row_count: 1,
+                                    outbox_row_count: 1,
+                                    duplicate_record_ids: vec![
+                                        "018feaa0-68f9-4a45-b9e3-58436df07af7".to_owned(),
+                                    ],
+                                },
+                            ],
+                        },
+                    ],
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn field_encryption_preflight_report_carries_counts_and_record_names_only() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            write_field_encryption_preflight_success(
+                &sample_preflight_report(),
+                OutputFormat::Json,
+                &mut stdout,
+                &mut stderr,
+            ),
+            ExitCode::SUCCESS
+        );
+        let rendered = String::from_utf8(stdout).expect("json is UTF-8");
+        assert!(rendered.contains("\"command\": \"field-encryption preflight\""));
+        assert!(rendered.contains("\"historyChoice\": \"erase-and-rebaseline\""));
+        assert!(rendered.contains("\"plaintextRowCount\": 3"));
+        assert!(rendered.contains("\"duplicateRecordIds\": ["));
+        // Record identifiers are authored identifiers and are named by design;
+        // neither the human nor machine rendering carries anything else.
+        assert!(rendered.contains("018feaa0-68f9-4a45-b9e3-58436df07af7"));
+        assert!(!rendered.to_lowercase().contains("operator"));
+        assert!(!rendered.to_lowercase().contains("reason"));
+
+        let mut plain_stdout = Vec::new();
+        let mut plain_stderr = Vec::new();
+        assert_eq!(
+            write_field_encryption_preflight_success(
+                &sample_preflight_report(),
+                OutputFormat::Human,
+                &mut plain_stdout,
+                &mut plain_stderr,
+            ),
+            ExitCode::SUCCESS
+        );
+        let rendered = String::from_utf8(plain_stdout).expect("plain output is UTF-8");
+        assert!(rendered.contains("erase-and-rebaseline"));
+        assert!(rendered.contains("3 plaintext"));
+    }
+
+    #[test]
+    fn field_encryption_erase_history_report_is_value_free() {
+        let report = FieldEncryptionEraseHistorySuccessReport {
+            ok: true,
+            command: "field-encryption erase-history",
+            outcome: FieldEncryptionEraseHistoryLifecycleOutcome {
+                package_revision: "pkg-1".to_owned(),
+                outcome:
+                    registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureOutcome {
+                        erased_record_count: 2,
+                        erased_revision_count: 4,
+                        erased_commit_member_count: 2,
+                        scrubbed_change_context_count: 1,
+                        scrubbed_outbox_payload_count: 1,
+                        scrubbed_cached_response_count: 1,
+                        scrubbed_request_target_count: 2,
+                        scrubbed_request_proposal_count: 1,
+                        removed_descriptor_count: 0,
+                        rebaseline: registry_breg::history_rebaseline::HistoryRebaselineOutcome {
+                            baseline_position: 3,
+                            verified_entity_count: 1,
+                            verified_record_count: 2,
+                            previous_coverage_baseline_position: 0,
+                            previous_unavailable_after_position: Some(1),
+                        },
+                    },
+            },
+        };
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            write_field_encryption_erase_history_success(
+                &report,
+                OutputFormat::Json,
+                &mut stdout,
+                &mut stderr,
+            ),
+            ExitCode::SUCCESS
+        );
+        let rendered = String::from_utf8(stdout).expect("json is UTF-8");
+        assert!(rendered.contains("\"command\": \"field-encryption erase-history\""));
+        assert!(rendered.contains("\"scrubbedRequestTargetCount\": 2"));
+        assert!(rendered.contains("\"baselinePosition\": 3"));
+        assert!(!rendered.to_lowercase().contains("operator"));
+        assert!(!rendered.to_lowercase().contains("reason"));
     }
 }

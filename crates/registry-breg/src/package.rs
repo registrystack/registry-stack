@@ -3689,6 +3689,11 @@ fn reviewed_migration_inspection_summary(
                 chunk_size,
                 max_total_rows,
                 ..
+            }
+            | ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
+                chunk_size,
+                max_total_rows,
+                ..
             } => {
                 chunked_step_count += 1;
                 minimum_chunk_size = Some(
