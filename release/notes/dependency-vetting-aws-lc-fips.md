@@ -20,10 +20,17 @@ for these operations.
 
 `aws-lc-rs` already sat in the graph as the default crypto backend of
 `jsonwebtoken` 10.4.0, linked against the non-FIPS `aws-lc-sys`. Enabling
-the `fips` feature on the single workspace dependency declaration unifies
-every consumer onto `aws-lc-fips-sys`, so the AES-256-GCM used by field
-encryption is provided by the AWS-LC FIPS module and no build variant
-silently falls back to the non-validated module.
+the `fips` feature on the workspace dependency declaration turns that
+feature on for every `aws-lc-rs` consumer in the unified build, and
+`aws-lc-rs` selects its backend module by that feature, so every runtime
+path through `aws-lc-rs` (the field-encryption AEAD, HKDF, and HMAC, and
+the JWT verification in `jsonwebtoken`) binds `aws-lc-fips-sys`; no
+runtime path selects the non-validated module. The non-FIPS `aws-lc-sys`
+0.45.0 nevertheless remains activated in the build graph, because
+`jsonwebtoken`'s dependency edge enables `aws-lc-rs` default features and
+this workspace cannot disable another crate's feature request. It is
+compiled but unreferenced by `aws-lc-rs` code paths, and it stays
+supply-chain relevant: advisories against it still apply to review.
 
 The seal path uses `aead::RandomizedNonceKey`, the API the binding
 documents for FIPS operation; the open path supplies the envelope nonce
@@ -105,7 +112,10 @@ The residual risk is accepted under these controls:
   `RandomizedNonceKey` on the seal path;
 - derive per-value keys with the HKDF domain-separation labels defined in
   `registry-platform-crypto`; never reuse a data key across registries;
-- hold data keys only in zeroizing allocations;
+- hold the returned data keys, their extracted base64 form, and the decoded
+  intermediates in zeroizing allocations; the Transit HTTP response buffer
+  and the rest of the parsed response tree are parser allocations the
+  client does not control, and no zeroizing-only claim is made about them;
 - fail closed on every envelope defect with value-free errors; and
 - do not add another direct runtime consumer without re-reviewing the
   dependency and its feature graph.
