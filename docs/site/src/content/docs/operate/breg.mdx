@@ -673,6 +673,86 @@ runtime file for each activation. Store secrets separately.
     crates/registry-breg/src/api/mod.rs;
     crates/registry-breg/src/startup.rs. */}
 
+## Turn encryption on over existing plaintext
+
+A successor package can turn `encrypted: true` on a field the registry already holds in
+plaintext. The apply seals the stored values through the engine-executed backfill the package's
+reviewed migration declares, and the history choice the project authored in that migration
+decides what happens to the plaintext the database retains. The two choices and their trade-offs
+are in
+[Field encryption for restricted fields](../../explanation/breg-field-encryption/); this section
+is the operator path around the apply, which [Change an active registry](../breg-changes/)
+prepares and applies.
+
+Run the preflight before you apply, while the runtime file still names the active package:
+
+```sh
+bregctl field-encryption preflight \
+  --runtime-config /etc/breg/runtime.yaml \
+  --package /srv/registry/build-2/package
+```
+
+The preflight is read-only and value-free. It binds the same predecessor package an apply binds,
+refuses when the active revision is anything else, and reports counts per covered field: the live
+rows still carrying plaintext, the retained journal revisions that carry the field member, and
+the retained change-request snapshots, cached idempotency responses, and event payloads that
+mention the field. When a covered field declares a unique blind index, the preflight refuses when
+two of those plaintext values would normalize onto one index entry, naming the authored record
+identifiers, capped at 64, and never a value. Correct one of the named records and run the
+preflight again; the apply refuses the same collision before it seals anything.
+
+:::danger[Erase-and-rebaseline destroys retained record history]
+When the authored history choice is `erase-and-rebaseline`, the retained history of every record
+still carrying pre-flip plaintext is erased and snapshot coverage is restored with one
+rebaseline. Erasure is whole-record, so retained history beyond the encrypted field is destroyed
+with it, and nothing restores it. The erasure does not run as part of the apply: it waits until
+the flip's package is active, and you run it. Backups taken before the flip stay plaintext until
+you retire or re-encrypt them yourself. When the choice is `retain-plaintext-history`, nothing is
+erased and pre-flip revision snapshots keep serving as written, so the database-read guarantee
+does not hold for them.
+:::
+
+After the successor package is active, write an owner-only JSON request file (mode `0600`)
+carrying the operator reference and the reason alone:
+
+```json
+{
+  "operatorReference": "approved-maintenance-003",
+  "reason": "flip declared erase-and-rebaseline"
+}
+```
+
+Then run the erase-history lifecycle:
+
+```sh
+bregctl field-encryption erase-history \
+  --runtime-config /etc/breg/runtime.yaml \
+  --request-file /srv/registry/private/erase-history.json
+```
+
+The request file names no record, entity, or field: the scope is the recorded
+`erase-and-rebaseline` flips themselves, so a document that names records or fields is refused
+rather than reinterpreted, and a request file that is not owner-only is refused before any
+connection is opened. For every record still holding pre-flip plaintext, the lifecycle erases its
+retained history through the same path
+[`history erase`](../breg-retention/#erase-retained-history) uses and restores snapshot coverage
+with one rebaseline, then writes one audit record that carries counts, not values.
+
+`bregctl field-encryption keygen --output <absolute-file>` writes one fresh base64 data key for
+the local file provider with owner-only permissions, never prints it, and refuses to overwrite an
+existing file.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, FieldEncryptionCommand,
+    FieldEncryptionPreflightArgs, FieldEncryptionEraseHistoryArgs, and
+    FieldEncryptionKeygenArgs; crates/registry-bregctl/src/field_encryption_lifecycle.rs,
+    run_preflight(), run_erase_history(), RawFieldEncryptionEraseRequest, and
+    read_owner_only_request_file(); crates/registry-breg/src/field_encryption_backfill.rs,
+    FieldEncryptionBackfillPreflightReport, MAX_NAMED_DUPLICATE_RECORDS, and
+    pending_erase_targets(); crates/registry-breg/src/postgres/interlock.rs,
+    field_encryption_duplicate_preflight(); crates/registry-breg/src/migration_plan.rs,
+    ReviewedFieldEncryptionHistory; crates/registry-bregctl/src/field_encryption.rs,
+    keygen(). */}
+
 ## Serve the container image
 
 The release image carries the `breg` binary alone, so the runtime document you activated with is
