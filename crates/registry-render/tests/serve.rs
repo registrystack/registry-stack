@@ -45,6 +45,12 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn physical_tempdir() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().canonicalize().expect("physical tempdir path");
+    (dir, path)
+}
+
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .expect("bind for port discovery")
@@ -69,21 +75,22 @@ fn copy_dir(from: &Path, to: &Path) {
 /// Build a deployment home: sealed receipt bundle, key files, audit dir,
 /// runtime.yaml. Returns (home, runtime_path, port).
 fn deployment(limits: &str, bundle_source: &Path) -> (PathBuf, PathBuf, u16) {
-    let home = tempfile::tempdir().expect("deployment home");
-    let bundle = home.path().join("bundle");
+    let (home_guard, home) = physical_tempdir();
+    let bundle = home.join("bundle");
     copy_dir(bundle_source, &bundle);
-    write_secret(&home.path().join("api.key"), API_KEY);
-    write_secret(&home.path().join("audit.key"), AUDIT_KEY);
-    std::fs::create_dir(home.path().join("audit")).unwrap();
+    write_secret(&home.join("api.key"), API_KEY);
+    write_secret(&home.join("audit.key"), AUDIT_KEY);
+    std::fs::create_dir(home.join("audit")).unwrap();
     let port = free_port();
     let runtime = format!(
         "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nserver:\n  bind: 127.0.0.1:{port}\n  shutdownGraceSeconds: 5\nbundle:\n  path: {}\nauth:\n  apiKeyRef: secret:file/api.key\n{limits}audit:\n  directory: {}\n  integrityKeyRef: secret:file/audit.key\n",
         bundle.display(),
-        home.path().join("audit").display()
+        home.join("audit").display()
     );
-    let runtime_path = home.path().join("runtime.yaml");
+    let runtime_path = home.join("runtime.yaml");
     std::fs::write(&runtime_path, runtime).unwrap();
-    (home.keep(), runtime_path, port)
+    let _ = home_guard.keep();
+    (home, runtime_path, port)
 }
 
 fn start_server(runtime_path: &Path) -> Server {
@@ -269,17 +276,17 @@ fn relative_runtime_paths_anchor_to_the_runtime_files_directory() {
     // runtime file is relative to it, so the file works from any working
     // directory — before anchoring, a relative audit directory killed serve
     // at startup and a relative bundle path silently depended on the CWD.
-    let home = tempfile::tempdir().expect("deployment home");
-    let bundle = home.path().join("bundle");
+    let (_home_guard, home) = physical_tempdir();
+    let bundle = home.join("bundle");
     copy_dir(
         &repo_root().join("products/render/bundles/receipt"),
         &bundle,
     );
-    let deploy = home.path().join("deploy");
+    let deploy = home.join("deploy");
     std::fs::create_dir_all(&deploy).unwrap();
     write_secret(&deploy.join("api.key"), API_KEY);
     write_secret(&deploy.join("audit.key"), AUDIT_KEY);
-    std::fs::create_dir(home.path().join("audit")).unwrap();
+    std::fs::create_dir(home.join("audit")).unwrap();
     let port = free_port();
     std::fs::write(
         deploy.join("runtime.yaml"),
@@ -309,7 +316,7 @@ fn relative_runtime_paths_anchor_to_the_runtime_files_directory() {
         String::from_utf8_lossy(&reply.body)
     );
     drop(server);
-    let lines = audit_lines(home.path());
+    let lines = audit_lines(&home);
     assert!(
         lines.iter().any(|l| l.contains("\"outcome\":\"rendered\"")),
         "the render was audited into the anchored audit directory: {lines:?}"
@@ -946,8 +953,7 @@ fn wrong_method_on_render_is_a_problem_and_audited() {
 fn slow_renders_are_killed_and_the_service_recovers() {
     // A compute-heavy bundle and a one-second budget: the supervisor kills
     // the worker, the refusal is audited, and the very next render works.
-    let heavy = tempfile::tempdir().unwrap();
-    let bundle = heavy.path();
+    let (_heavy, bundle) = physical_tempdir();
     std::fs::write(
         bundle.join("manifest.yaml"),
         "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: heavy\n    version: 1\n    entry: templates/heavy.typ\n",
@@ -975,7 +981,7 @@ fn slow_renders_are_killed_and_the_service_recovers() {
 
     let (home, runtime, _) = deployment(
         "limits:\n  renderTimeoutSeconds: 2\n  maxOutputBytes: 8388608\n  maxRequestBodyBytes: 8388608\n  maxConcurrency: 2\n",
-        bundle,
+        &bundle,
     );
     let server = start_server(&runtime);
     let slow = request(
@@ -1037,8 +1043,7 @@ fn shutdown_is_bounded_by_grace_even_with_renders_in_flight() {
     // bounded window — the drain holds the door for grace, connection
     // teardown gets grace, then stragglers are abandoned and their workers
     // killed. Waiting for the render itself would take tens of seconds.
-    let heavy = tempfile::tempdir().unwrap();
-    let bundle = heavy.path();
+    let (_heavy, bundle) = physical_tempdir();
     std::fs::write(
         bundle.join("manifest.yaml"),
         "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: heavy\n    version: 1\n    entry: templates/heavy.typ\n",
@@ -1066,7 +1071,7 @@ fn shutdown_is_bounded_by_grace_even_with_renders_in_flight() {
 
     let (home, runtime, port) = deployment(
         "limits:\n  renderTimeoutSeconds: 120\n  maxOutputBytes: 8388608\n  maxRequestBodyBytes: 8388608\n  maxConcurrency: 2\n",
-        bundle,
+        &bundle,
     );
     // Tighten the grace: the deployment default is 5s.
     let text = std::fs::read_to_string(&runtime).unwrap();

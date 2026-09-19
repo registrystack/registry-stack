@@ -18,6 +18,12 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn physical_tempdir() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().canonicalize().expect("physical tempdir path");
+    (dir, path)
+}
+
 struct Case {
     name: &'static str,
     bundle: PathBuf,
@@ -258,15 +264,15 @@ fn issued_at_changes_bytes_and_is_the_only_knob() {
 #[test]
 fn tampered_sealed_bundle_is_refused() {
     let case = cases().into_iter().find(|c| c.name == "receipt").unwrap();
-    let copy = tempfile::tempdir().unwrap();
-    copy_bundle(&case.bundle, copy.path());
+    let (_copy, copy) = physical_tempdir();
+    copy_bundle(&case.bundle, &copy);
     // Tamper with a governed file after sealing.
-    let labels = copy.path().join("labels/ar.yaml");
+    let labels = copy.join("labels/ar.yaml");
     let mut text = std::fs::read_to_string(&labels).unwrap();
     text.push_str("extra: tampered\n");
     std::fs::write(&labels, text).unwrap();
-    let problem = registry_render::Bundle::load_sealed(copy.path())
-        .expect_err("tampered bundle must be refused");
+    let problem =
+        registry_render::Bundle::load_sealed(&copy).expect_err("tampered bundle must be refused");
     assert_eq!(
         problem.kind,
         registry_render::ProblemKind::BundleTampered,
@@ -280,8 +286,7 @@ fn tampered_sealed_bundle_is_refused() {
 
 #[test]
 fn sealed_template_and_package_bytes_are_bound_to_the_loaded_snapshot() {
-    let dir = tempfile::tempdir().unwrap();
-    let bundle_dir = dir.path();
+    let (_dir, bundle_dir) = physical_tempdir();
     for sub in [
         "templates",
         "fonts",
@@ -308,8 +313,8 @@ fn sealed_template_and_package_bytes_are_bound_to_the_loaded_snapshot() {
     let package_path = bundle_dir.join("packages/preview/notice/0.1.0/src/lib.typ");
     std::fs::write(&package_path, package).unwrap();
 
-    registry_render::Bundle::seal(bundle_dir).expect("bundle seals");
-    let bundle = registry_render::Bundle::load_sealed(bundle_dir).expect("sealed bundle loads");
+    registry_render::Bundle::seal(&bundle_dir).expect("bundle seals");
+    let bundle = registry_render::Bundle::load_sealed(&bundle_dir).expect("sealed bundle loads");
     let document = bundle.document("notice").unwrap().clone();
     let request = registry_render::RenderRequest {
         locale: None,
@@ -356,18 +361,18 @@ fn unsealed_bundle_is_refused_for_serving() {
         .into_iter()
         .find(|c| c.name == "certificate")
         .unwrap();
-    let copy = tempfile::tempdir().unwrap();
-    copy_bundle(&case.bundle, copy.path());
-    let manifest_path = copy.path().join("manifest.yaml");
+    let (_copy, copy) = physical_tempdir();
+    copy_bundle(&case.bundle, &copy);
+    let manifest_path = copy.join("manifest.yaml");
     let manifest = std::fs::read_to_string(&manifest_path).unwrap();
     // Strip the hashes block: everything from `hashes:` to EOF.
     let stripped = manifest.split("hashes:").next().unwrap().to_owned();
     std::fs::write(&manifest_path, stripped).unwrap();
-    let problem = registry_render::Bundle::load_sealed(copy.path())
+    let problem = registry_render::Bundle::load_sealed(&copy)
         .expect_err("unsealed bundle must be refused for serve");
     assert_eq!(problem.kind, registry_render::ProblemKind::BundleUnsealed);
     // But plain compile loading still works unsealed.
-    registry_render::Bundle::load(copy.path()).expect("compile accepts unsealed");
+    registry_render::Bundle::load(&copy).expect("compile accepts unsealed");
 }
 
 #[test]
@@ -468,8 +473,7 @@ fn wrong_media_type_and_oversize_assets_are_refused() {
 fn data_paths_cannot_escape_the_bundle() {
     // A reviewed template that passes a data-controlled path to image()
     // must still be contained: path safety is world-enforced.
-    let dir = tempfile::tempdir().unwrap();
-    let bundle = dir.path();
+    let (_dir, bundle) = physical_tempdir();
     std::fs::write(
         bundle.join("manifest.yaml"),
         "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: leak\n    version: 1\n    entry: templates/leak.typ\n",
@@ -486,7 +490,7 @@ fn data_paths_cannot_escape_the_bundle() {
         "#let payload = json(bytes(sys.inputs.data))\n#image(payload.data.path, width: 5mm)\n",
     )
     .unwrap();
-    let loaded = registry_render::Bundle::load(bundle).expect("bundle loads");
+    let loaded = registry_render::Bundle::load(&bundle).expect("bundle loads");
     let document = loaded.document("leak").unwrap().clone();
     let request = registry_render::RenderRequest {
         locale: None,
@@ -511,8 +515,7 @@ fn data_paths_cannot_escape_the_bundle() {
 
 #[test]
 fn unvendored_package_import_fails_without_network() {
-    let dir = tempfile::tempdir().unwrap();
-    let bundle = dir.path();
+    let (_dir, bundle) = physical_tempdir();
     std::fs::write(
         bundle.join("manifest.yaml"),
         "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: x\n    version: 1\n    entry: templates/x.typ\n",
@@ -527,7 +530,7 @@ fn unvendored_package_import_fails_without_network() {
         "#import \"@preview/never-vendored:9.9.9\": does-not-exist\nHello",
     )
     .unwrap();
-    let loaded = registry_render::Bundle::load(bundle).unwrap();
+    let loaded = registry_render::Bundle::load(&bundle).unwrap();
     let document = loaded.document("x").unwrap().clone();
     let request = registry_render::RenderRequest {
         locale: None,
@@ -546,8 +549,7 @@ fn compile_diagnostics_report_virtual_paths_only() {
     // `image("missing.png")` on a nonexistent file must fail naming the
     // VIRTUAL path; the host location of the bundle is deployment detail
     // that never belongs in a caller-visible problem document.
-    let dir = tempfile::tempdir().unwrap();
-    let bundle = dir.path();
+    let (_dir, bundle) = physical_tempdir();
     std::fs::write(
         bundle.join("manifest.yaml"),
         "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: missing\n    version: 1\n    entry: templates/missing.typ\n",
@@ -561,7 +563,7 @@ fn compile_diagnostics_report_virtual_paths_only() {
         "#image(\"missing.png\", width: 5mm)\n",
     )
     .unwrap();
-    let loaded = registry_render::Bundle::load(bundle).unwrap();
+    let loaded = registry_render::Bundle::load(&bundle).unwrap();
     let document = loaded.document("missing").unwrap().clone();
     let request = registry_render::RenderRequest {
         locale: None,

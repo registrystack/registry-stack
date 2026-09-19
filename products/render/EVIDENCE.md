@@ -357,7 +357,9 @@ end-to-end, 17 scaffold/CLI), all green with `--locked`.
 ## Immutable bundle snapshot hardening (2026-09-19)
 
 Sealed loads now capture the complete bundle through held directory
-descriptors, refusing symlinks and non-regular files without a pathname reopen.
+descriptors, opening every component in the configured root spelling and every
+descendant with `NOFOLLOW`, and refusing symlinks and non-regular files without
+a pathname reopen.
 The manifest hash map is verified over those captured bytes, and the same
 immutable snapshot supplies the manifest, labels, schemas, fonts, templates,
 package sources, and other project/package files consumed by Typst.
@@ -367,13 +369,15 @@ Executable proof covers both sides of the former verified/use gap:
 - `bundle::tests::assembly_uses_captured_bytes` changes the manifest, entry,
   labels, schema, and font paths after capture; assembly still consumes the
   captured bytes.
+- `bundle::tests::bundle_root_and_ancestor_symlinks_are_refused_for_every_spelling`
+  covers a root symlink with a trailing slash and a symlinked ancestor.
 - `golden::sealed_template_and_package_bytes_are_bound_to_the_loaded_snapshot`
   replaces the template, a package source, and a non-source file after sealed
   load; every render remains byte-identical under the original bundle hash.
 - The existing per-render serve drift test still refuses drift present before
   a worker captures its snapshot.
 
-On the hardened revision, all 73 Registry Render tests pass (23 unit, 14
+On the hardened revision, all 75 Registry Render tests pass (25 unit, 14
 golden, 19 serve end-to-end, 17 scaffold/CLI), along with locked all-target
 check, clippy with warnings denied, and formatting.
 

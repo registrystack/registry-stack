@@ -113,18 +113,62 @@ fn capture_bundle_files(
     root: &Path,
     files: &mut BTreeMap<String, Bytes>,
 ) -> Result<(), RenderProblem> {
-    let descriptor = rustix::fs::open(root, SNAPSHOT_DIRECTORY_FLAGS, rustix::fs::Mode::empty())
-        .map_err(|err| {
-            RenderProblem::new(
-                ProblemKind::ManifestInvalid,
-                format!(
-                    "cannot open bundle directory {} without following links: {err}",
-                    root.display()
-                ),
-            )
-        })?;
-    let directory = std::fs::File::from(descriptor);
+    let directory = open_bundle_root(root)?;
     capture_bundle_directory(&directory, Path::new(""), root, files)
+}
+
+/// Open each spelling component relative to the descriptor for its parent.
+/// `O_NOFOLLOW` only protects the final component of a single `open`, so an
+/// absolute call for the complete root would still follow ancestor symlinks
+/// and a trailing slash could make the kernel follow a symlink at the root.
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+fn open_bundle_root(root: &Path) -> Result<std::fs::File, RenderProblem> {
+    use std::ffi::OsStr;
+
+    use rustix::fs::{open, openat, Mode};
+
+    if root.as_os_str().is_empty() {
+        return Err(RenderProblem::new(
+            ProblemKind::ManifestInvalid,
+            "bundle directory path must not be empty",
+        ));
+    }
+
+    let anchor = if root.is_absolute() { "/" } else { "." };
+    let descriptor = open(anchor, SNAPSHOT_DIRECTORY_FLAGS, Mode::empty()).map_err(|err| {
+        RenderProblem::new(
+            ProblemKind::ManifestInvalid,
+            format!("cannot open bundle path anchor {anchor}: {err}"),
+        )
+    })?;
+    let mut directory = std::fs::File::from(descriptor);
+
+    for component in root.components() {
+        let name = match component {
+            Component::RootDir | Component::CurDir => continue,
+            Component::ParentDir => OsStr::new(".."),
+            Component::Normal(name) => name,
+            Component::Prefix(_) => {
+                return Err(RenderProblem::new(
+                    ProblemKind::ManifestInvalid,
+                    format!("bundle directory path is unsupported: {}", root.display()),
+                ));
+            }
+        };
+        let descriptor = openat(&directory, name, SNAPSHOT_DIRECTORY_FLAGS, Mode::empty())
+            .map_err(|err| {
+                RenderProblem::new(
+                    ProblemKind::ManifestInvalid,
+                    format!(
+                        "cannot open bundle directory {} without following links: {err}",
+                        root.display()
+                    ),
+                )
+            })?;
+        directory = std::fs::File::from(descriptor);
+    }
+
+    Ok(directory)
 }
 
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
@@ -534,10 +578,35 @@ fn relative_path_key(path: &Path) -> Result<String, RenderProblem> {
 mod tests {
     use super::*;
 
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    #[test]
+    fn bundle_root_and_ancestor_symlinks_are_refused_for_every_spelling() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+
+        let direct_target = base.join("direct-target");
+        std::fs::create_dir(&direct_target).unwrap();
+        let direct_link = base.join("current");
+        symlink(&direct_target, &direct_link).unwrap();
+        let trailing_slash = PathBuf::from(format!("{}/", direct_link.display()));
+        let error = BundleSnapshot::load(&trailing_slash).unwrap_err();
+        assert_eq!(error.kind, ProblemKind::ManifestInvalid);
+
+        let ancestor_target = base.join("ancestor-target");
+        std::fs::create_dir_all(ancestor_target.join("bundle")).unwrap();
+        let ancestor_link = base.join("deploy");
+        symlink(&ancestor_target, &ancestor_link).unwrap();
+        let error = BundleSnapshot::load(&ancestor_link.join("bundle")).unwrap_err();
+        assert_eq!(error.kind, ProblemKind::ManifestInvalid);
+    }
+
     #[test]
     fn assembly_uses_captured_bytes() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
+        let root_path = dir.path().canonicalize().unwrap();
+        let root = root_path.as_path();
         for sub in ["templates", "labels", "schemas", "fonts"] {
             std::fs::create_dir_all(root.join(sub)).unwrap();
         }
@@ -586,7 +655,8 @@ mod tests {
     #[test]
     fn accepted_manifest_path_spellings_render_from_snapshot() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
+        let root_path = dir.path().canonicalize().unwrap();
+        let root = root_path.as_path();
         std::fs::create_dir_all(root.join("templates")).unwrap();
         std::fs::create_dir_all(root.join("schemas")).unwrap();
         std::fs::write(

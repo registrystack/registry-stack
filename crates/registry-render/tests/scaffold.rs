@@ -11,7 +11,11 @@ fn render_bin() -> Command {
 }
 
 fn tempdir() -> PathBuf {
-    tempfile::tempdir().expect("tempdir").keep()
+    tempfile::tempdir()
+        .expect("tempdir")
+        .keep()
+        .canonicalize()
+        .expect("physical tempdir path")
 }
 
 fn run(args: &[&str]) -> Output {
@@ -573,7 +577,11 @@ fn write_secret(path: &Path, contents: &str) {
 }
 
 fn serve_deployment() -> (PathBuf, PathBuf, u16) {
-    let home = tempfile::tempdir().unwrap().keep();
+    let home = tempfile::tempdir()
+        .unwrap()
+        .keep()
+        .canonicalize()
+        .expect("physical deployment path");
     let bundle = home.join("bundle");
     copy_dir(
         &repo_root().join("products/render/bundles/receipt"),
