@@ -74,6 +74,11 @@ allow = [
     # Allowed workspace-wide; the motivating dependency is `smartstring`,
     # pulled in transitively by the `rhai` script runtime.
     "MPL-2.0",
+    # The OpenSSL License covers OpenSSL-derived code vendored inside the
+    # AWS-LC FIPS module (`aws-lc-fips-sys`), the always-on FIPS cryptography
+    # behind field-level encryption. Review:
+    # release/notes/dependency-vetting-aws-lc-fips.md
+    "OpenSSL",
     "Unicode-3.0",
     "Unlicense",
     "Zlib",
