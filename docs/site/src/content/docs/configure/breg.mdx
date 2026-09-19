@@ -255,15 +255,13 @@ any comparison other than equality, a change request that targets it, derived SQ
 event projection of it. Declare a `lookup` block when the registry must find records by the field's
 exact value.
 
-{/* TODO[evidence]: the encrypted member, the allowed types and classification, the closed
-    normalization vocabulary in declared order, the unique index, the pre-seal pattern
-    enforcement, and the refusal summary are Phase 1 behavior of registry-stack issue #1108,
-    whose implementation is not yet in this tree, so no anchor resolves today. When the
-    field-encryption milestone lands, anchor this section against the field contract in
-    crates/registry-breg/src/contract.rs, the compiler refusals in
-    crates/registry-breg/src/compiler.rs, and the authoring schema under
-    products/breg/generated/authoring/. Until then the claims in this section are written at
-    the strength of the approved contract, not of code this checkout holds. */}
+{/* Evidence: products/breg/generated/authoring/registry-project.schema.json;
+    crates/registry-breg/src/contract.rs, FieldSource, FieldLookupSource, and
+    NormalizationStep; crates/registry-breg/src/compiler.rs,
+    field.encrypted.classification_invalid and field.encrypted.type_unsupported;
+    crates/registry-breg/src/change_request.rs, change_request.effect.field_encrypted;
+    crates/registry-breg/src/derived_sql.rs, refuse_encrypted_columns();
+    crates/registry-breg/src/mutation.rs, enforce_field_pattern(). */}
 
 ## Related records
 

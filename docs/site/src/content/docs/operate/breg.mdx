@@ -253,11 +253,23 @@ configured prefix and never derive their authority from request headers.
 | `audit` and `cursor` | The key that chains the audit journal and the secret that signs pagination cursors. Loss of either key invalidates existing chains or cursors. |
 | `eventDestinations` and `eventDelivery` | One binding per webhook destination the package declares, and payload retention; see [Bind webhook receivers](../breg-webhooks/). |
 | `evidenceProviders` | One binding per Evidence provider the package declares, keyed by provider ID: `baseUrl`, `trustBindingId`, `trustedJwksRef`, `revokedKeyIds`, optional `caBundleRef`, and exactly one of `tokenRef` or a refreshing `privateKeyJwt` credential. The script cannot replace these bindings; see [Governed registry actions](../../explanation/governed-registry-actions/). |
-| `fieldEncryption` | Key custody for encrypted fields: the Transit binding over a Unix socket path, with its mount, key name, and unwrap timeout, or the local file provider, which is for local assurance only. Declare it when the project encrypts a field; the model and its limits are in [Field encryption for restricted fields](../../explanation/breg-field-encryption/). |
+| `fieldEncryption` | Key custody for encrypted fields; declare it when the project encrypts a field. The optional `provider` binding's `kind` member selects the custodian. `kind: transit` requires `unixSocketPath`, `mount`, and `keyName`, with an optional `timeoutMilliseconds` (default 5000, at most 30000). `kind: localFile` requires `dekRef`, a `secret:file/<name>` reference to one base64 data-key file, and is for local assurance only. The model and its limits are in [Field encryption for restricted fields](../../explanation/breg-field-encryption/). |
 | `attachmentStorage` | PostgreSQL by default, or an operator-bound S3-compatible backend for request attachments; see [Attachment storage](../../reference/breg-configuration/#attachment-storage). |
 | `attachmentVerification` | Optional asynchronous HTTP verifier; content stays quarantined until approved. Configure it before the first attachment upload; see [External attachment verification](../../reference/breg-configuration/#external-attachment-verification). |
 | `operationalTimeouts` | Optional HTTP request, record lock, migration lock, migration statement, and shutdown grace bounds. |
 | `metricsListener` | Optional second binding, private to the operator, that serves `GET /metrics`; see [Scrape metrics](#scrape-metrics). |
+
+The `fieldEncryption` block is optional; its `provider` binding names the custodian:
+
+```yaml
+fieldEncryption:
+  provider:
+    kind: transit
+    unixSocketPath: /var/run/vault/transit.sock
+    mount: transit
+    keyName: breg-field-dek
+    timeoutMilliseconds: 5000
+```
 
 An encrypted field moves part of the registry's availability into key custody, so plan the Transit
 binding's custody before the first encrypted field is activated:
@@ -267,16 +279,18 @@ Fields the project declares `encrypted` are sealed under a data-encryption key t
 and only Transit unwraps. If the key is lost, or the `fieldEncryption` binding cannot reach it,
 entities with encrypted fields fail closed: reads and writes answer HTTP `503` with the
 `runtime.field_encryption.unavailable` problem, and entities without encrypted fields keep
-serving. Base Registry Engine holds no unwrapped copy and offers no recovery, so escrow the Transit
-key before enabling. The local file provider is local-only, and `bregctl check --production`
-refuses a candidate that names it.
+serving. Base Registry Engine stores only the wrapped key and offers no recovery, so escrow the
+Transit key before enabling. The local file provider is development custody: startup refuses it
+unless the runtime file's `identity.databaseInitializationEnvironment` is `local`, and
+`bregctl doctor --runtime-config <absolute-file>` reports the same refusal.
 :::
 
-{/* TODO[evidence]: the fieldEncryption binding, the fail-closed 503 problem, and the
-    production refusal of the local-file DEK are Phase 1 behavior of registry-stack issue
-    #1108, whose implementation is not yet in this tree. When the milestone lands, anchor them
-    against crates/registry-breg/src/runtime_config.rs, the DEK provider, and the production
-    check, and fold them into the Evidence block below. */}
+{/* Evidence: crates/registry-breg/src/field_encryption.rs, RawFieldEncryptionConfig,
+    RawFieldEncryptionProvider, FieldEncryptionConfig::from_raw(), and
+    FieldEncryptionService::initialize(); crates/registry-breg/src/problem.rs,
+    RuntimeFieldEncryptionUnavailable; crates/registry-breg/src/api/mod.rs,
+    field_encryption_refusal(); crates/registry-breg/src/startup.rs, FieldEncryptionCustody;
+    crates/registry-bregctl/src/doctor.rs, startup_diagnostic(). */}
 
 `leewayMilliseconds` must be a whole number of seconds and at most 300000. Static keys load at
 startup; rotate them through a configuration change and restart:
