@@ -1270,6 +1270,7 @@ struct DataImportSuccessReport {
     entity_id: String,
     profile_id: String,
     operation: DataOperationArg,
+    run_id: String,
     input_length: u64,
     item_count: u64,
     completed_chunk_count: u64,
@@ -2528,6 +2529,7 @@ fn data_import(args: &DataImportArgs) -> Result<DataImportSuccessReport, Failure
         entity_id: outcome.entity_id,
         profile_id: outcome.profile_id,
         operation: operation_arg(outcome.operation),
+        run_id: outcome.run_id,
         input_length: outcome.input_length,
         item_count: outcome.item_count,
         completed_chunk_count: outcome.completed_chunk_count,
@@ -2635,6 +2637,27 @@ fn data_lifecycle_failure(
             "checkpoint",
             "the data checkpoint was refused",
             DiagnosticArtifact::DataCheckpoint,
+            SuggestedAction::VerifyDataCheckpoint,
+        ),
+        DataLifecycleError::LegacyImportCheckpoint => (
+            format!("{prefix}.checkpoint.legacy"),
+            "checkpoint",
+            "the data checkpoint predates ingestion runs and cannot be resumed safely: resending its committed items under a new run id would duplicate mutations; start a new import with a fresh checkpoint path",
+            DiagnosticArtifact::DataCheckpoint,
+            SuggestedAction::VerifyDataCheckpoint,
+        ),
+        DataLifecycleError::ImportRunBlocked => (
+            format!("{prefix}.ingestion_run.blocked"),
+            "ingestionRun",
+            "the ingestion run is blocked because the active package changed; the run stays inspectable, and a new import under the active package needs a fresh checkpoint path",
+            DiagnosticArtifact::DataOperation,
+            SuggestedAction::VerifyDataCheckpoint,
+        ),
+        DataLifecycleError::ImportRunCancelled => (
+            format!("{prefix}.ingestion_run.cancelled"),
+            "ingestionRun",
+            "the ingestion run was cancelled and refuses new chunks; start a new import with a fresh checkpoint path",
+            DiagnosticArtifact::DataOperation,
             SuggestedAction::VerifyDataCheckpoint,
         ),
         DataLifecycleError::Output => (
@@ -9664,6 +9687,7 @@ fn write_data_import_success(
                     "operation",
                     data_operation_name(report.operation).to_owned(),
                 ),
+                ("ingestion run", report.run_id.clone()),
                 ("input bytes", report.input_length.to_string()),
                 ("items", report.item_count.to_string()),
                 ("completed chunks", report.completed_chunk_count.to_string()),
@@ -10293,6 +10317,38 @@ fn write_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_import_success_names_the_ingestion_run_it_drove() {
+        let report = DataImportSuccessReport {
+            ok: true,
+            command: "data import",
+            package_revision: "package-revision".to_owned(),
+            schema_fingerprint: "schema-fingerprint".to_owned(),
+            entity_id: "record".to_owned(),
+            profile_id: "operator".to_owned(),
+            operation: DataOperationArg::Create,
+            run_id: "00000000-0000-4000-8000-000000000001".to_owned(),
+            input_length: 128,
+            item_count: 3,
+            completed_chunk_count: 2,
+            committed_items: 3,
+            complete: true,
+        };
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        write_data_import_success(&report, OutputFormat::Json, &mut stdout, &mut stderr);
+        let rendered = serde_json::from_slice::<serde_json::Value>(&stdout).unwrap();
+        assert_eq!(rendered["runId"], "00000000-0000-4000-8000-000000000001");
+        assert_eq!(rendered["complete"], true);
+
+        stdout.clear();
+        write_data_import_success(&report, OutputFormat::Human, &mut stdout, &mut stderr);
+        let rendered = String::from_utf8(stdout).unwrap();
+        assert!(rendered.contains("ingestion run"));
+        assert!(rendered.contains("00000000-0000-4000-8000-000000000001"));
+    }
 
     #[test]
     fn init_template_conflicts_with_every_flag_that_shapes_a_derived_project() {
