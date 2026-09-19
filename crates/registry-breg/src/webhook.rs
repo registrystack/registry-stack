@@ -570,6 +570,7 @@ pub struct WebhookDeliveryService {
 
 impl WebhookDeliveryService {
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool: RuntimePool,
         destinations: Arc<ActivatedEventDestinationRegistry>,
