@@ -135,6 +135,133 @@ async fn a_renamed_encrypted_member_drops_from_the_released_receipt() {
     );
 }
 
+/// A successor package that retires a field and introduces a different
+/// logical field reusing its api name must not have the stored receipt carry
+/// the retired field's value across the identity change: the member was
+/// committed under the retired field's id, which the current package no
+/// longer reads, so every release of the stored answer drops it, while a run
+/// created under the successor serves the new field's own values normally.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_reused_api_name_does_not_carry_a_stored_member_across_field_identities() {
+    let harness = IngestionHarness::from_registry(plain_serial_registry()).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&serial_member_items("identity-reuse", 1), 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let fresh: Value =
+        serde_json::from_slice(&body_bytes(committed).await).expect("fresh answer is JSON");
+    assert_eq!(
+        fresh["receipt"]["batch"]["results"][0]["data"]["serialNumber"], "SN-0000",
+        "the fresh answer serves the field the producing package granted"
+    );
+
+    // The successor retires the committed field and introduces another
+    // logical field reusing its api name, which the profile reads. The new
+    // field's physical column arrives the way a package activation's schema
+    // migration adds one.
+    let successor_registry = reused_api_name_registry();
+    add_successor_column(&harness, &successor_registry).await;
+    let successor = harness.restart_with_registry(successor_registry).await;
+
+    // The stored receipt's member was committed under the retired field's
+    // id, so the replay drops it instead of serving the old value under the
+    // reused name.
+    let replay = successor
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replayed: Value =
+        serde_json::from_slice(&body_bytes(replay).await).expect("replay answer is JSON");
+    assert_eq!(replayed["receipt"]["replayed"], true);
+    let replayed_data = &replayed["receipt"]["batch"]["results"][0]["data"];
+    assert!(
+        replayed_data.get("serialNumber").is_none(),
+        "the retired member does not serve under the reused api name: {replayed_data}"
+    );
+    assert_eq!(replayed_data["jurisdiction"], "zone-a");
+    assert_eq!(replayed_data["label"], "identity-reuse-0");
+
+    let recovered = successor
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::OK);
+    let recovered: Value =
+        serde_json::from_slice(&body_bytes(recovered).await).expect("recovery answer is JSON");
+    let recovered_data = &recovered["batch"]["results"][0]["data"];
+    assert!(
+        recovered_data.get("serialNumber").is_none(),
+        "the retired member does not serve under the reused api name: {recovered_data}"
+    );
+    assert_eq!(recovered_data["label"], "identity-reuse-0");
+
+    // The positive neighbor: a run created under the successor package
+    // commits and serves the new field's own values under the same api name.
+    let successor_chunks = plan_chunks(&serial_member_items("identity-successor", 1), 2);
+    let mut successor_body = harness.run_body("create", &successor_chunks);
+    successor_body["packageRevision"] = json!("package-ingestion-2");
+    let created = successor
+        .post_json(
+            "/v1/records/widgets/ingestion-runs",
+            &claims,
+            successor_body,
+        )
+        .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let successor_run = body_json(created).await["run"]["runId"]
+        .as_str()
+        .expect("run id")
+        .to_owned();
+    let fresh_successor = successor
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{successor_run}/chunks"),
+            &claims,
+            chunk_body(&successor_chunks, 0),
+        )
+        .await;
+    assert_eq!(fresh_successor.status(), StatusCode::OK);
+    let fresh_successor: Value =
+        serde_json::from_slice(&body_bytes(fresh_successor).await).expect("fresh answer is JSON");
+    assert_eq!(
+        fresh_successor["receipt"]["batch"]["results"][0]["data"]["serialNumber"], "SN-0000",
+        "the new field's own value serves under the reused api name"
+    );
+    let replayed_successor = successor
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{successor_run}/chunks"),
+            &claims,
+            chunk_body(&successor_chunks, 0),
+        )
+        .await;
+    assert_eq!(replayed_successor.status(), StatusCode::OK);
+    let replayed_successor: Value =
+        serde_json::from_slice(&body_bytes(replayed_successor).await).expect("replay is JSON");
+    assert_eq!(replayed_successor["receipt"]["replayed"], true);
+    assert_eq!(
+        replayed_successor["receipt"]["batch"]["results"][0]["data"]["serialNumber"], "SN-0000",
+        "the successor's own receipt keeps serving the new field"
+    );
+
+    assert_eq!(
+        durable_widget_count(&harness).await,
+        2,
+        "each run commits its item exactly once"
+    );
+}
+
 /// A successor package that retires encryption from the field entirely leaves
 /// the stored envelope under a member the active entity no longer treats as
 /// encrypted, so the opening pass would skip it. The release must still fail
@@ -787,6 +914,118 @@ fn readability_revoked_registry() -> Arc<registry_breg::CompiledRegistry> {
     )
 }
 
+/// A plaintext fixture with one readable string field whose api name a
+/// successor reuses for a different logical field id, so the field identity
+/// a stored receipt member was committed under is otherwise invisible at
+/// release time.
+fn plain_serial_fixture() -> String {
+    format!("{FIXTURE_HEAD}{FIXTURE_TAIL}")
+        .replacen(
+            concat!(
+                r#"      {"id":"quantity","type":"int64","required":true,"classification":"public"}"#,
+                "\n",
+            ),
+            concat!(
+                r#"      {"id":"quantity","type":"int64","required":true,"classification":"public"},"#,
+                "\n",
+                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maxLength":64,"classification":"public"}"#,
+                "\n",
+            ),
+            1,
+        )
+        .replace(
+            r#""readableFields":["jurisdiction","label","quantity"]"#,
+            r#""readableFields":["jurisdiction","label","quantity","serial-number"]"#,
+        )
+        .replace(
+            r#""writableFields":["jurisdiction","label","quantity"]"#,
+            r#""writableFields":["jurisdiction","label","quantity","serial-number"]"#,
+        )
+}
+
+fn plain_serial_registry() -> Arc<registry_breg::CompiledRegistry> {
+    let project =
+        parse_project_json(plain_serial_fixture().as_bytes()).expect("the plain fixture parses");
+    Arc::new(
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("the plain fixture compiles to trusted inventories"),
+    )
+}
+
+/// The same plaintext fixture under a successor package that retires that
+/// field and introduces a different logical field reusing its api name, which
+/// the profile reads: the old member name now belongs to a field identity the
+/// producing package never committed under.
+fn reused_api_name_registry() -> Arc<registry_breg::CompiledRegistry> {
+    let fixture = plain_serial_fixture()
+        .replacen(
+            concat!(
+                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maxLength":64,"classification":"public"}"#,
+                "\n",
+            ),
+            concat!(
+                r#"      {"id":"batch-code","apiName":"serialNumber","type":"string","maxLength":64,"classification":"public"}"#,
+                "\n",
+            ),
+            1,
+        )
+        .replace(
+            r#""readableFields":["jurisdiction","label","quantity","serial-number"]"#,
+            r#""readableFields":["jurisdiction","label","quantity","batch-code"]"#,
+        )
+        .replace(
+            r#""writableFields":["jurisdiction","label","quantity","serial-number"]"#,
+            r#""writableFields":["jurisdiction","label","quantity","batch-code"]"#,
+        );
+    let project = parse_project_json(fixture.as_bytes()).expect("the reused fixture parses");
+    Arc::new(
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("the reused fixture compiles to trusted inventories"),
+    )
+}
+
+/// Items carrying the reusable serial member, over either fixture: the member
+/// shape is the caller's, independent of how the active package stores it.
+fn serial_member_items(label_prefix: &str, count: i64) -> Vec<Value> {
+    (0..count)
+        .map(|index| {
+            json!({"operation":"create", "data": {
+                "jurisdiction": "zone-a",
+                "label": format!("{label_prefix}-{index}"),
+                "quantity": index,
+                "serialNumber": format!("SN-{index:04}")
+            }})
+        })
+        .collect()
+}
+
+/// Add the successor field's physical column the way a package activation's
+/// schema migration would, so a run created under the successor can commit
+/// the reused api name's values.
+async fn add_successor_column(
+    harness: &IngestionHarness,
+    successor: &registry_breg::CompiledRegistry,
+) {
+    let entity = &successor.entities()["widget"];
+    let field = entity
+        .stored_fields
+        .iter()
+        .find(|field| field.logical.id == "batch-code")
+        .expect("the successor field compiles");
+    let (migration, migration_task) = harness.database.connect_migration().await;
+    migration
+        .execute(
+            &format!(
+                "ALTER TABLE registry_data.\"{}\" ADD COLUMN IF NOT EXISTS \"{}\" varchar(64)",
+                entity.physical_table, field.physical_name
+            ),
+            &[],
+        )
+        .await
+        .expect("the successor column migrates");
+    migration_task.abort();
+}
+
 /// The encrypted fixture with one more plain structured field added, whose
 /// legitimate caller values can carry the envelope tag shape.
 fn tag_shaped_member_registry() -> Arc<registry_breg::CompiledRegistry> {
@@ -834,6 +1073,12 @@ struct IngestionHarness {
 }
 
 impl IngestionHarness {
+    /// Build the harness around one caller-chosen compiled registry, so a
+    /// test can pin authored shapes the encrypted fixtures do not carry.
+    async fn from_registry(registry: Arc<registry_breg::CompiledRegistry>) -> Self {
+        Self::from_registry_with_secrets(registry, None).await
+    }
+
     /// The harness with local-file field-encryption key state activated, so
     /// chunks over the encrypted field seal at rest under the key this
     /// harness holds for every restart that keeps it.
@@ -850,6 +1095,13 @@ impl IngestionHarness {
             &secrets_root.path().join("field-dek"),
             BASE64.encode([0x71_u8; 32]).as_bytes(),
         );
+        Self::from_registry_with_secrets(registry, Some(secrets_root)).await
+    }
+
+    async fn from_registry_with_secrets(
+        registry: Arc<registry_breg::CompiledRegistry>,
+        secrets_root: Option<tempfile::TempDir>,
+    ) -> Self {
         let database = TestDatabase::create(8).await;
         let (migration, migration_task) = database.connect_migration().await;
         install_compiled_schema(&migration, &registry, &database.runtime_role)
@@ -870,21 +1122,26 @@ impl IngestionHarness {
         )
         .await
         .expect("active package identity is initialized");
-        let dek_ref = SecretReference::parse("secret:file/field-dek")
-            .expect("local-file key reference parses");
-        let secrets = SecretResolver::new([SecretProvider::File], secrets_root.path())
-            .expect("local-file secret resolver builds");
-        let field_encryption = Some(Arc::new(
-            FieldEncryptionService::activate(
-                &FieldEncryptionProvider::LocalFile { dek_ref },
-                registry.registry_id(),
-                PACKAGE_REVISION,
-                &secrets,
-                &migration,
-            )
-            .await
-            .expect("field-encryption key state activates"),
-        ));
+        let field_encryption = match &secrets_root {
+            Some(root) => {
+                let dek_ref = SecretReference::parse("secret:file/field-dek")
+                    .expect("local-file key reference parses");
+                let secrets = SecretResolver::new([SecretProvider::File], root.path())
+                    .expect("local-file secret resolver builds");
+                Some(Arc::new(
+                    FieldEncryptionService::activate(
+                        &FieldEncryptionProvider::LocalFile { dek_ref },
+                        registry.registry_id(),
+                        PACKAGE_REVISION,
+                        &secrets,
+                        &migration,
+                    )
+                    .await
+                    .expect("field-encryption key state activates"),
+                ))
+            }
+            None => None,
+        };
         migration_task.abort();
         let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
         let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
@@ -908,7 +1165,7 @@ impl IngestionHarness {
             lock_key,
             audit_profile,
             field_encryption,
-            secrets_root: Some(secrets_root),
+            secrets_root,
             app,
         }
     }

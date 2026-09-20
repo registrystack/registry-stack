@@ -1256,13 +1256,25 @@ impl PostgresRecordMutationService {
             let Some(receipt) = stored.receipt else {
                 return Err(IngestionServiceError::ReceiptErased);
             };
+            // A committed receipt always carries the member identities it
+            // was produced under; a live row without that map is stored
+            // corruption, answered as an outage rather than released.
+            let Some(field_bindings) = stored.field_bindings else {
+                return Err(IngestionServiceError::Unavailable);
+            };
             let mut batch: Value =
                 serde_json::from_slice(&receipt).map_err(|_| IngestionServiceError::Unavailable)?;
             // The stored answer answers to the projection the current
             // registry grants the run's profile before any release step runs:
-            // a successor that revoked a readable field must not have the
-            // retained receipt keep serving that member.
-            self.project_receipt_readability(&input.entity_id, &run.profile_id, &mut batch)?;
+            // each member is retained only when the field identity it was
+            // committed under is still a readable field of the current
+            // package under the same api name.
+            self.project_receipt_readability(
+                &input.entity_id,
+                &run.profile_id,
+                &field_bindings,
+                &mut batch,
+            )?;
             // The stored answer opens its sealed members before any release
             // step runs, so a process without key state refuses here instead
             // of writing a disclosure record for an answer it cannot serve.
@@ -1485,16 +1497,21 @@ impl PostgresRecordMutationService {
     /// database no longer holds active, the only situation where a member
     /// that still parses as a sealed envelope can be retired ciphertext
     /// rather than plaintext the caller wrote.
-    /// Project a released answer's data members through the readable set the
-    /// current registry grants the run's profile: a successor that revokes a
-    /// readable field must not have a receipt keep serving that member, and a
-    /// renamed member no longer names a readable field, so it drops too.
-    /// Answer members are keyed by API name, so the allowed set renders the
-    /// current profile's readable field ids into their current API names.
+    /// Project a released answer's data members through what the current
+    /// registry grants the run's profile, decided on the field identity each
+    /// member was committed under: the stored bindings map every member to
+    /// the logical field id that produced it, and a member is retained only
+    /// when that field id is still one the current profile reads and still
+    /// names the same member in the current entity. A successor that revokes
+    /// a readable field therefore drops the member, and a successor that
+    /// retires a field while reusing its api name for a different logical
+    /// field cannot have the stored answer serve the old value under the
+    /// new field's name.
     fn project_receipt_readability(
         &self,
         entity_id: &str,
         profile_id: &str,
+        bindings: &std::collections::BTreeMap<String, String>,
         batch: &mut Value,
     ) -> Result<(), IngestionServiceError> {
         let Some(entity) = self.registry.entities().get(entity_id) else {
@@ -1505,11 +1522,10 @@ impl PostgresRecordMutationService {
         let Some(readable) = plan_readable_fields(&self.registry, entity_id, profile_id) else {
             return Err(IngestionServiceError::Unavailable);
         };
-        let readable_members: std::collections::BTreeSet<String> = entity
+        let api_names: std::collections::BTreeMap<&str, &str> = entity
             .stored_fields
             .iter()
-            .filter(|field| readable.contains(field.logical.id.as_str()))
-            .map(|field| field.logical.api_name.clone())
+            .map(|field| (field.logical.id.as_str(), field.logical.api_name.as_str()))
             .collect();
         let Some(results) = batch.get_mut("results").and_then(Value::as_array_mut) else {
             // A stored answer with no results array carries no domain data to
@@ -1518,7 +1534,12 @@ impl PostgresRecordMutationService {
         };
         for result in results {
             if let Some(data) = result.get_mut("data").and_then(Value::as_object_mut) {
-                data.retain(|member, _| readable_members.contains(member));
+                data.retain(|member, _| {
+                    bindings.get(member).is_some_and(|field_id| {
+                        readable.contains(field_id)
+                            && api_names.get(field_id.as_str()) == Some(&member.as_str())
+                    })
+                });
             }
         }
         Ok(())
@@ -1610,6 +1631,20 @@ impl PostgresRecordMutationService {
         };
         let mut batch: Value = serde_json::from_slice(outcome.response().body())
             .map_err(|_| IngestionServiceError::Unavailable)?;
+        let entity = self
+            .registry
+            .entities()
+            .get(&input.entity_id)
+            .ok_or(IngestionServiceError::Unavailable)?;
+        // The member identities are bound where the receipt is finalized,
+        // from the same answer the chunk commit stores, so every later
+        // release of the stored answer can re-check each member against the
+        // package that then reads it.
+        let field_bindings = ingestion_store::parse_field_bindings(
+            &ingestion_store::receipt_field_bindings(entity, outcome.response().body())
+                .ok_or(IngestionServiceError::Unavailable)?,
+        )
+        .ok_or(IngestionServiceError::Unavailable)?;
         let client = self.client().await?;
         let run = self
             .visible_run(&**client, context, &input.entity_id, input.run_id)
@@ -1624,7 +1659,12 @@ impl PostgresRecordMutationService {
         // answers. The admission gate above already refused a run the active
         // package no longer matches, so the receipt cannot carry retired
         // ciphertext.
-        self.project_receipt_readability(&input.entity_id, &run.profile_id, &mut batch)?;
+        self.project_receipt_readability(
+            &input.entity_id,
+            &run.profile_id,
+            &field_bindings,
+            &mut batch,
+        )?;
         self.open_receipt_members(
             &input.entity_id,
             !run.active_binding_matches(&active.0, &active.1),
@@ -1690,13 +1730,20 @@ impl PostgresRecordMutationService {
         let Some(receipt) = stored.receipt else {
             return Err(IngestionServiceError::ReceiptErased);
         };
+        // A committed receipt always carries the member identities it was
+        // produced under; a live row without that map is stored corruption,
+        // answered as an outage rather than released.
+        let Some(field_bindings) = stored.field_bindings else {
+            return Err(IngestionServiceError::Unavailable);
+        };
         let mut batch: Value =
             serde_json::from_slice(&receipt).map_err(|_| IngestionServiceError::Unavailable)?;
         // The stored answer answers to the projection the current registry
-        // grants the run's profile before any release step runs: a successor
-        // that revoked a readable field must not have the retained receipt
-        // keep serving that member.
-        self.project_receipt_readability(entity_id, &run.profile_id, &mut batch)?;
+        // grants the run's profile before any release step runs: each member
+        // is retained only when the field identity it was committed under is
+        // still a readable field of the current package under the same api
+        // name.
+        self.project_receipt_readability(entity_id, &run.profile_id, &field_bindings, &mut batch)?;
         // The stored answer opens its sealed members before any release step
         // runs, so a process without key state refuses here instead of writing
         // a disclosure record for an answer it cannot serve. The receipt was

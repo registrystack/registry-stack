@@ -1860,6 +1860,11 @@ impl MutationCoordinator {
                         item_count: chunk_binding.item_count,
                         end_item: run.committed_items + chunk_binding.item_count,
                         receipt: stored.response.body().to_vec(),
+                        receipt_field_bindings: crate::ingestion_store::receipt_field_bindings(
+                            &request.plan.entity,
+                            stored.response.body(),
+                        )
+                        .ok_or(MutationError::Unavailable)?,
                     },
                     IngestionAttemptOutcome::Replayed,
                 )
@@ -2087,6 +2092,11 @@ impl MutationCoordinator {
                     item_count: chunk_binding.item_count,
                     end_item: run.committed_items + chunk_binding.item_count,
                     receipt: held.body().to_vec(),
+                    receipt_field_bindings: crate::ingestion_store::receipt_field_bindings(
+                        &request.plan.entity,
+                        held.body(),
+                    )
+                    .ok_or(MutationError::Unavailable)?,
                 },
                 IngestionAttemptOutcome::Committed,
             )

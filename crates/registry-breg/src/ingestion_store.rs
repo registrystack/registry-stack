@@ -36,6 +36,10 @@ pub(crate) const INGESTION_TABLES: &[(&str, &[&str])] = &[
 /// One chunk receipt is the batch answer for one bounded chunk, so it holds
 /// no more than the idempotency cache it accompanies.
 const MAX_RECEIPT_BYTES: usize = crate::idempotency::MAX_HELD_BODY_BYTES;
+/// The member-to-field-identity map stored beside a receipt: one short
+/// identifier pair per committed answer member, negligible beside the
+/// receipt ceiling it is bounded under.
+pub(crate) const MAX_FIELD_BINDINGS_BYTES: usize = 16 * 1024;
 /// Runs are operator-driven and few; one page stays explicitly bounded.
 pub(crate) const MAX_RUN_PAGE_SIZE: i64 = 100;
 pub(crate) const DEFAULT_RUN_PAGE_SIZE: i64 = 25;
@@ -318,6 +322,11 @@ pub(crate) struct IngestionChunkCommit {
     /// ordinary batch route answers the same authorized caller with and is
     /// erased with the record history it describes.
     pub(crate) receipt: Vec<u8>,
+    /// The canonical JSON map binding each receipt data member to the logical
+    /// field id that produced it, derived from the same answer the receipt
+    /// stores. Every later release of the stored answer re-checks each member
+    /// against the field identity it was committed under.
+    pub(crate) receipt_field_bindings: String,
 }
 
 /// One stored chunk receipt, either live or erased.
@@ -328,6 +337,10 @@ pub(crate) struct StoredChunkReceipt {
     pub(crate) item_count: i64,
     pub(crate) end_item: i64,
     pub(crate) receipt: Option<Vec<u8>>,
+    /// The stored member-to-field-identity map of the committed answer.
+    /// Value-free metadata: it survives receipt erasure, and a live receipt
+    /// without it is stored corruption.
+    pub(crate) field_bindings: Option<std::collections::BTreeMap<String, String>>,
     pub(crate) erased: bool,
 }
 
@@ -465,6 +478,14 @@ pub(crate) async fn install(
                  item_count bigint NOT NULL CHECK (item_count > 0),
                  end_item bigint NOT NULL CHECK (end_item > 0),
                  receipt bytea,
+                 receipt_field_bindings text
+                     CONSTRAINT registry_ingestion_run_chunks_field_bindings_shape CHECK (
+                         receipt IS NULL OR (
+                             receipt_field_bindings IS NOT NULL
+                             AND octet_length(receipt_field_bindings) > 0
+                             AND octet_length(receipt_field_bindings)
+                                 <= {MAX_FIELD_BINDINGS_BYTES})
+                     ),
                  erased_at timestamptz,
                  committed_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
                  PRIMARY KEY (run_id, chunk_index),
@@ -895,7 +916,7 @@ pub(crate) async fn load_chunk(
     let row = client
         .query_opt(
             "SELECT chunk_index, chunk_digest, prefix_digest, item_count, end_item, receipt,
-                    erased_at
+                    receipt_field_bindings, erased_at
                FROM registry_internal.registry_ingestion_run_chunks
               WHERE run_id = $1
                 AND chunk_index = $2",
@@ -914,6 +935,14 @@ pub(crate) async fn load_chunk(
         item_count: row.get("item_count"),
         end_item: row.get("end_item"),
         receipt: row.try_get("receipt").ok(),
+        // A malformed stored map reads as absent, so the release refuses the
+        // receipt as stored corruption instead of trusting a partial map.
+        field_bindings: row
+            .try_get::<_, Option<String>>("receipt_field_bindings")
+            .ok()
+            .flatten()
+            .as_deref()
+            .and_then(parse_field_bindings),
         erased: erased_at.is_some(),
     }))
 }
@@ -932,6 +961,9 @@ pub(crate) async fn commit_chunk(
         || commit.receipt.is_empty()
         || commit.receipt.len() > MAX_RECEIPT_BYTES
         || !valid_receipt(&commit.receipt)
+        || commit.receipt_field_bindings.is_empty()
+        || commit.receipt_field_bindings.len() > MAX_FIELD_BINDINGS_BYTES
+        || parse_field_bindings(&commit.receipt_field_bindings).is_none()
     {
         return Err(IngestionStoreError::InvalidInput);
     }
@@ -939,8 +971,8 @@ pub(crate) async fn commit_chunk(
         .execute(
             "INSERT INTO registry_internal.registry_ingestion_run_chunks
                  (run_id, chunk_index, chunk_digest, prefix_digest, item_count, end_item,
-                  receipt, erased_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)",
+                  receipt, receipt_field_bindings, erased_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)",
             &[
                 &commit.run_id,
                 &commit.chunk_index,
@@ -949,6 +981,7 @@ pub(crate) async fn commit_chunk(
                 &commit.item_count,
                 &commit.end_item,
                 &commit.receipt,
+                &commit.receipt_field_bindings,
             ],
         )
         .await
@@ -1018,6 +1051,52 @@ fn receipt_records(receipt: &[u8]) -> Option<Vec<(Uuid, i64)>> {
 fn valid_receipt(receipt: &[u8]) -> bool {
     parse_json_strict(receipt)
         .is_ok_and(|value| value.get("snapshot").is_some_and(Value::is_string))
+}
+
+/// The canonical member-to-field-identity map one batch answer was produced
+/// under: every data member is keyed by a stored field's api name, so the
+/// map binds each member to the logical field id that produced it. A member
+/// the active entity does not store refuses the derivation, because a
+/// receipt the runtime built never carries one.
+pub(crate) fn receipt_field_bindings(
+    entity: &crate::model::CompiledEntity,
+    receipt: &[u8],
+) -> Option<String> {
+    let value = parse_json_strict(receipt).ok()?;
+    let results = value.get("results")?.as_array()?;
+    let mut bindings = serde_json::Map::new();
+    for result in results {
+        let data = result.get("data")?.as_object()?;
+        for member in data.keys() {
+            let field = entity
+                .stored_fields
+                .iter()
+                .find(|field| field.logical.api_name == *member)
+                .map(|field| field.logical.id.clone())?;
+            bindings.insert(member.clone(), Value::String(field));
+        }
+    }
+    let canonical =
+        registry_platform_canonical_json::canonicalize_json(&Value::Object(bindings)).ok()?;
+    String::from_utf8(canonical).ok()
+}
+
+/// The stored member-to-field-identity map of one committed answer, parsed
+/// strictly: a non-empty object of non-empty string field ids, nothing else.
+pub(crate) fn parse_field_bindings(
+    raw: &str,
+) -> Option<std::collections::BTreeMap<String, String>> {
+    let value = parse_json_strict(raw.as_bytes()).ok()?;
+    let object = value.as_object()?;
+    let mut bindings = std::collections::BTreeMap::new();
+    for (member, field) in object {
+        let field = field.as_str()?;
+        if member.is_empty() || field.is_empty() {
+            return None;
+        }
+        bindings.insert(member.clone(), field.to_owned());
+    }
+    Some(bindings)
 }
 
 /// Tombstone every chunk receipt that describes one erased revision of the
@@ -1279,11 +1358,114 @@ mod tests {
             item_count: 1,
             end_item: 1,
             receipt: br#"{"snapshot":"ref"}"#.to_vec(),
+            receipt_field_bindings: "{}".to_owned(),
         };
         assert_eq!(
             receipt_records(&commit.receipt),
             None,
             "a receipt without results carries no record links and is refused"
+        );
+    }
+
+    fn bindings_registry() -> crate::model::CompiledRegistry {
+        let fixture = r#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"bindings-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "entities":[{
+            "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
+            "fields":[
+              {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+              {"id":"serial-code","apiName":"serialNumber","type":"string","maxLength":64,"classification":"internal"}
+            ]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"registry_principal",
+            "requiredPurposes":["review"],
+            "permissions":[{
+              "entity":"entry","operations":["create"],
+              "readableFields":["tenant","serial-code"],
+              "writableFields":["tenant","serial-code"],
+              "rowBoundaries":[]
+            }]
+          }]
+        }"#;
+        let project =
+            crate::contract::parse_project_json(fixture.as_bytes()).expect("the fixture parses");
+        crate::compiler::compile_project(&project, &[], crate::compiler::CompileProfile::Authoring)
+            .expect("the fixture compiles")
+    }
+
+    #[test]
+    fn a_receipt_derives_the_field_identities_its_members_were_committed_under() {
+        let registry = bindings_registry();
+        let entity = registry.entities().get("entry").expect("fixture entity");
+        let receipt = br#"{"results":[
+            {"id":"11111111-1111-4111-8111-111111111111","revision":1,
+             "data":{"serialNumber":"SN-1","tenant":"a"}}]}"#;
+        let bindings = receipt_field_bindings(entity, receipt).expect("the map derives");
+        assert_eq!(
+            bindings, r#"{"serialNumber":"serial-code","tenant":"tenant"}"#,
+            "each member binds to the logical field id that produced it"
+        );
+        assert_eq!(
+            parse_field_bindings(&bindings).expect("the derived map parses"),
+            std::collections::BTreeMap::from([
+                ("serialNumber".to_owned(), "serial-code".to_owned()),
+                ("tenant".to_owned(), "tenant".to_owned()),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_member_the_entity_does_not_store_refuses_the_derivation() {
+        let registry = bindings_registry();
+        let entity = registry.entities().get("entry").expect("fixture entity");
+        assert_eq!(
+            receipt_field_bindings(
+                entity,
+                br#"{"results":[{"id":"11111111-1111-4111-8111-111111111111",
+                     "revision":1,"data":{"ghost":"x"}}]}"#,
+            ),
+            None,
+            "a member no stored field produces cannot be bound"
+        );
+        assert_eq!(
+            receipt_field_bindings(entity, br#"{"snapshot":"ref"}"#),
+            None,
+            "an answer without results carries no members to bind"
+        );
+    }
+
+    #[test]
+    fn a_field_bindings_map_parses_strictly() {
+        assert_eq!(
+            parse_field_bindings(r#"{"serialNumber":"serial-code"}"#),
+            Some(std::collections::BTreeMap::from([(
+                "serialNumber".to_owned(),
+                "serial-code".to_owned()
+            )]))
+        );
+        assert_eq!(parse_field_bindings("{"), None, "malformed JSON refuses");
+        assert_eq!(
+            parse_field_bindings(r#"["serialNumber"]"#),
+            None,
+            "a non-object refuses"
+        );
+        assert_eq!(
+            parse_field_bindings(r#"{"serialNumber":7}"#),
+            None,
+            "a non-string field id refuses"
+        );
+        assert_eq!(
+            parse_field_bindings(r#"{"":"serial-code"}"#),
+            None,
+            "an empty member name refuses"
+        );
+        assert_eq!(
+            parse_field_bindings(r#"{"serialNumber":""}"#),
+            None,
+            "an empty field id refuses"
         );
     }
 
