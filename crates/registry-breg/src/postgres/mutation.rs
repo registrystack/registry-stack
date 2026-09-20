@@ -982,6 +982,7 @@ impl PostgresRecordMutationService {
             return Err(IngestionServiceError::RequestInvalid);
         };
         let principal_reference = self.ingestion_principal_reference(principal)?;
+        let context_reference = self.ingestion_context_reference(&claims)?;
         let limit = if query.limit == 0 {
             ingestion_store::DEFAULT_RUN_PAGE_SIZE
         } else {
@@ -1005,6 +1006,7 @@ impl PostgresRecordMutationService {
                     .map_err(|_| IngestionServiceError::Unavailable)?
                     .filter(|run| {
                         run.created_principal_reference == principal_reference
+                            && run.bound_context_reference == context_reference
                             && run.entity_id == query.entity_id
                     })
                     .ok_or(IngestionServiceError::RequestInvalid)?;
@@ -1015,6 +1017,7 @@ impl PostgresRecordMutationService {
             &**client,
             &ingestion_store::IngestionRunListFilter {
                 principal_reference: &principal_reference,
+                bound_context_reference: &context_reference,
                 entity_id: Some(&query.entity_id),
                 profile_id: None,
                 status,

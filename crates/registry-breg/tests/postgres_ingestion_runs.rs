@@ -2161,6 +2161,55 @@ async fn listing_runs_filters_by_the_effective_status_after_a_package_change() {
     }
 }
 
+/// The listing answers on the access context the caller presents, not the
+/// principal alone: the same principal under changed row-boundary claims sees
+/// none of the runs another context created, and a cursor naming another
+/// context's run is refused rather than paging past it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn listing_runs_filters_by_the_callers_bound_access_context() {
+    let harness = IngestionHarness::create().await;
+    let zone_a = operator_claims(PRINCIPAL, "zone-a");
+    let zone_b = operator_claims(PRINCIPAL, "zone-b");
+    let plan = plan_chunks(&announce_items("context-listing", 2), 3);
+    let run_id = harness.create_run(&zone_a, &plan).await;
+
+    let same_context = harness
+        .get_json("/v1/records/widgets/ingestion-runs", &zone_a)
+        .await;
+    assert_eq!(same_context.status(), StatusCode::OK);
+    let runs = body_json(same_context).await["runs"]
+        .as_array()
+        .expect("runs")
+        .clone();
+    assert_eq!(runs.len(), 1, "the creating context lists its run");
+    assert_eq!(runs[0]["runId"], run_id.as_str());
+
+    let other_context = harness
+        .get_json("/v1/records/widgets/ingestion-runs", &zone_b)
+        .await;
+    assert_eq!(other_context.status(), StatusCode::OK);
+    let runs = body_json(other_context).await["runs"]
+        .as_array()
+        .expect("runs")
+        .clone();
+    assert!(
+        runs.is_empty(),
+        "a changed row-boundary context lists none of another context's runs"
+    );
+
+    let cross_context_cursor = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs?after={run_id}"),
+            &zone_b,
+        )
+        .await;
+    assert_eq!(
+        cross_context_cursor.status(),
+        StatusCode::BAD_REQUEST,
+        "a cursor naming another context's run is refused"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn erasing_through_revision_one_keeps_the_revision_two_receipt() {
     let harness = IngestionHarness::create().await;

@@ -83,10 +83,13 @@ keeps its counts and its audit. The last attempt is classified as
 
 Run list and read responses carry operational metadata and bounded failure
 classifications only: no source rows, no committed record values, and no chunk
-bodies. The listing's status filter answers on the status a run document
-renders: after a successor package activation, `status=blocked` finds the
-stored-open runs the durable binding retired, and `status=open` returns only
-runs that still match the active binding. Problem codes are
+bodies. The listing answers on the access context the caller presents, the
+same bound context every per-run operation enforces, so a changed profile,
+purpose, row-boundary, or grant context lists none of another context's runs
+even under the same principal. Its status filter answers on the status a run
+document renders: after a successor package activation, `status=blocked` finds
+the stored-open runs the durable binding retired, and `status=open` returns
+only runs that still match the active binding. Problem codes are
 `ingestion.profile_mismatch`,
 `ingestion.run_not_open`, `ingestion.run_blocked`, `ingestion.chunk_mismatch`,
 and `ingestion.receipt_erased`, alongside the ordinary `request.invalid`,

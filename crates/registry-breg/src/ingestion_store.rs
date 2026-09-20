@@ -715,6 +715,11 @@ pub(crate) async fn lock_run(
 /// The filters one bounded, principal-scoped run listing accepts.
 pub(crate) struct IngestionRunListFilter<'a> {
     pub(crate) principal_reference: &'a str,
+    /// The keyed reference of the access context the listing caller presents.
+    /// A run appears only to the context that created it, so the listing
+    /// exposes no more than the per-run surfaces already answer that same
+    /// context with.
+    pub(crate) bound_context_reference: &'a str,
     pub(crate) entity_id: Option<&'a str>,
     pub(crate) profile_id: Option<&'a str>,
     pub(crate) status: Option<IngestionRunStatus>,
@@ -731,6 +736,7 @@ pub(crate) async fn list_runs(
     filter: &IngestionRunListFilter<'_>,
 ) -> Result<(Vec<IngestionRunRecord>, bool), IngestionStoreError> {
     if filter.principal_reference.is_empty()
+        || filter.bound_context_reference.is_empty()
         || filter.limit <= 0
         || filter.limit > MAX_RUN_PAGE_SIZE
         || filter.input_digest.is_some_and(|digest| {
@@ -761,6 +767,7 @@ pub(crate) async fn list_runs(
                         WHERE singleton
                    ) AS active
                   WHERE created_principal_reference = $1
+                    AND bound_context_reference = $9
                     AND ($2::text IS NULL OR entity_id = $2)
                     AND ($3::text IS NULL OR profile_id = $3)
                     AND ($4::text IS NULL OR $4 = CASE
@@ -784,6 +791,7 @@ pub(crate) async fn list_runs(
                 &(filter.limit + 1),
                 &after_created_at,
                 &after_run_id,
+                &filter.bound_context_reference,
             ],
         )
         .await
