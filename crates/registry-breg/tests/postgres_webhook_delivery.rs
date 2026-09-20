@@ -785,9 +785,13 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     )
     .await;
     let terminal_egress_before = receiver.count().await;
+    let terminal_response_release = Arc::new(Notify::new());
 
     receiver
-        .enqueue(ResponsePlan::Delay(Duration::from_millis(50), 204))
+        .enqueue(ResponsePlan::Gate(
+            Arc::clone(&terminal_response_release),
+            204,
+        ))
         .await;
     let terminal_audit_refused = create_event(
         &database,
@@ -803,6 +807,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     let attempt = tokio::spawn(async move { service_for_terminal_fault.deliver_once().await });
     receiver.wait_for_count(terminal_egress_before + 1).await;
     revoke_audit_insert(&database).await;
+    terminal_response_release.notify_one();
     assert_eq!(
         attempt.await.expect("terminal audit fault task joins"),
         Err(WebhookDeliveryError::Unavailable)
@@ -2292,6 +2297,7 @@ fn write_secret(path: &std::path::Path, value: &[u8]) {
 enum ResponsePlan {
     Status(u16),
     Delay(Duration, u16),
+    Gate(Arc<Notify>, u16),
     /// A 2xx that answers with the exact body a remote hook handler returns.
     Answer {
         body: Vec<u8>,
@@ -2374,6 +2380,10 @@ impl HttpsReceiver {
                     let (delay, status, body) = match plan {
                         ResponsePlan::Status(status) => (Duration::ZERO, status, Vec::new()),
                         ResponsePlan::Delay(delay, status) => (delay, status, Vec::new()),
+                        ResponsePlan::Gate(release, status) => {
+                            release.notified().await;
+                            (Duration::ZERO, status, Vec::new())
+                        }
                         ResponsePlan::Answer { body } => (Duration::ZERO, 200, body),
                         ResponsePlan::Break => {
                             let _ = stream.shutdown().await;

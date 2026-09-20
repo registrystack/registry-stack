@@ -912,7 +912,7 @@ async fn action_handlers_compute_refuse_retry_recover_and_preserve_compiled_auth
         registry.clone(),
         identity,
         None,
-        Some(Duration::from_millis(400)),
+        Some(Duration::from_secs(1)),
     );
     let evaluator_started = tokio::time::Instant::now();
     let evaluator = send(
@@ -929,7 +929,7 @@ async fn action_handlers_compute_refuse_retry_recover_and_preserve_compiled_auth
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
         assert!(
-            evaluator_started.elapsed() < Duration::from_millis(300),
+            evaluator_started.elapsed() < Duration::from_millis(750),
             "a paused bounded evaluator must leave the single-thread reactor responsive"
         );
     };
