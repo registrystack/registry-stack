@@ -6,25 +6,27 @@
 use std::sync::Arc;
 
 use breg_client_sdk::{
-    BRegActionInvocationRequest, BRegActionTargetConditions, BRegActionTargetConditionsRequest,
-    BRegAsOfContinuation, BRegAsOfContinuationProjection, BRegAsOfListRequest,
-    BRegAttachmentSlot as CoreAttachmentSlot, BRegAttachmentSlotValue, BRegAttachmentState,
-    BRegAttachmentUpload as CoreAttachmentUpload, BRegAttachmentVerificationStatus,
-    BRegBatchBinding, BRegBatchBuilder, BRegBoundingBox, BRegChangeContext, BRegComplete,
-    BRegContinuation, BRegContinuationProjection, BRegCreateBinding, BRegCreateRequest,
-    BRegCurrentContinuation, BRegCurrentContinuationProjection, BRegCurrentListRequest,
-    BRegDirectWrite, BRegEtag, BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection,
-    BRegGeoJsonListRequest, BRegGeoJsonOptions, BRegIdempotencyKey, BRegImmediateActionBinding,
-    BRegLifecycleAction as CoreLifecycleAction, BRegLifecycleActionReceipt, BRegLifecycleAuthority,
-    BRegLifecyclePromotionError, BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata,
-    BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding,
-    BRegPatchRequest, BRegPreparedCreate as CorePreparedCreate,
-    BRegPreparedLifecycle as CorePreparedLifecycle, BRegProblemCode, BRegProtocolFailure,
-    BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
-    BRegRelationshipContinuationProjection, BRegRelationshipListRequest,
-    BRegRequestApplicationDisposition, BRegRequestMetadata, BRegRequestProposal,
-    BRegRequestResultReference as CoreRequestResultReference, BRegRequestReview,
-    BRegRequestReviewMode, BRegRequestState,
+    ingestion_prefix_digest, BRegActionInvocationRequest, BRegActionTargetConditions,
+    BRegActionTargetConditionsRequest, BRegAsOfContinuation, BRegAsOfContinuationProjection,
+    BRegAsOfListRequest, BRegAttachmentSlot as CoreAttachmentSlot, BRegAttachmentSlotValue,
+    BRegAttachmentState, BRegAttachmentUpload as CoreAttachmentUpload,
+    BRegAttachmentVerificationStatus, BRegBatchBinding, BRegBatchBuilder, BRegBoundingBox,
+    BRegChangeContext, BRegComplete, BRegContinuation, BRegContinuationProjection,
+    BRegCreateBinding, BRegCreateRequest, BRegCurrentContinuation,
+    BRegCurrentContinuationProjection, BRegCurrentListRequest, BRegDirectWrite, BRegEtag,
+    BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest,
+    BRegGeoJsonOptions, BRegIdempotencyKey, BRegImmediateActionBinding,
+    BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError, BRegIngestionRunListQuery,
+    BRegIngestionRunRequest, BRegLifecycleAction as CoreLifecycleAction,
+    BRegLifecycleActionReceipt, BRegLifecycleAuthority, BRegLifecyclePromotionError,
+    BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata, BRegMetadataSelectionError,
+    BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding, BRegPatchRequest,
+    BRegPreparedCreate as CorePreparedCreate, BRegPreparedLifecycle as CorePreparedLifecycle,
+    BRegProblemCode, BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
+    BRegRelationshipContinuation, BRegRelationshipContinuationProjection,
+    BRegRelationshipListRequest, BRegRequestApplicationDisposition, BRegRequestMetadata,
+    BRegRequestProposal, BRegRequestResultReference as CoreRequestResultReference,
+    BRegRequestReview, BRegRequestReviewMode, BRegRequestState,
     BRegRetainedRequestHistoryPage as CoreRetainedRequestHistoryPage,
     BRegRetainedRequestProposal as CoreRetainedRequestProposal, BRegSnapshotContinuation,
     BRegSnapshotContinuationProjection, BRegSnapshotListRequest, BRegTombstoneBinding,
@@ -650,6 +652,239 @@ fn batch_request(
     builder
         .build()
         .map_err(|error| invalid(py, error.to_string()))
+}
+
+fn ingestion_error(py: Python<'_>, error: BRegIngestionError) -> PyErr {
+    invalid(py, error.to_string())
+}
+
+fn ingestion_run_field(
+    py: Python<'_>,
+    value: &mut serde_json::Map<String, Value>,
+    field: &str,
+) -> PyResult<String> {
+    value
+        .remove(field)
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .ok_or_else(|| invalid(py, format!("run request requires {field}")))
+}
+
+fn ingestion_run_count(
+    py: Python<'_>,
+    value: &mut serde_json::Map<String, Value>,
+    field: &str,
+    message: &'static str,
+) -> PyResult<u64> {
+    value
+        .remove(field)
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| invalid(py, message))
+}
+
+fn ingestion_run_request(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<BRegIngestionRunRequest> {
+    let value =
+        python_to_json(value).map_err(|error| conversion_error(py, "invalid_request", error))?;
+    let Value::Object(mut value) = value else {
+        return Err(invalid(py, "run request must be a mapping"));
+    };
+    if value.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "operation"
+                | "profile_id"
+                | "package_revision"
+                | "schema_fingerprint"
+                | "input_digest"
+                | "input_length"
+                | "item_count"
+                | "chunk_count"
+                | "chunk_algorithm_version"
+        )
+    }) {
+        return Err(invalid(py, "run request contains an unsupported field"));
+    }
+    let operation = ingestion_run_field(py, &mut value, "operation")?;
+    let operation = match operation.as_str() {
+        "create" => breg_client_sdk::BRegBatchOperation::Create,
+        "patch" => breg_client_sdk::BRegBatchOperation::Patch,
+        _ => return Err(invalid(py, "run request operation must be create or patch")),
+    };
+    let builder = BRegIngestionRunRequest::builder().operation(operation);
+    let builder = builder
+        .profile(ingestion_run_field(py, &mut value, "profile_id")?)
+        .map_err(|error| ingestion_error(py, error))?;
+    let builder = builder
+        .package_revision(ingestion_run_field(py, &mut value, "package_revision")?)
+        .map_err(|error| ingestion_error(py, error))?;
+    let builder = builder
+        .schema_fingerprint(ingestion_run_field(py, &mut value, "schema_fingerprint")?)
+        .map_err(|error| ingestion_error(py, error))?;
+    let builder = builder
+        .input_digest(ingestion_run_field(py, &mut value, "input_digest")?)
+        .map_err(|error| ingestion_error(py, error))?;
+    let builder = builder.input_length(ingestion_run_count(
+        py,
+        &mut value,
+        "input_length",
+        "run request input_length must be a non-negative integer",
+    )?);
+    let builder = builder
+        .item_count(ingestion_run_count(
+            py,
+            &mut value,
+            "item_count",
+            "run request item_count must be a positive integer",
+        )?)
+        .map_err(|error| ingestion_error(py, error))?;
+    let builder = builder
+        .chunk_count(ingestion_run_count(
+            py,
+            &mut value,
+            "chunk_count",
+            "run request chunk_count must be a positive integer",
+        )?)
+        .map_err(|error| ingestion_error(py, error))?;
+    let builder = builder
+        .chunk_algorithm_version(ingestion_run_field(
+            py,
+            &mut value,
+            "chunk_algorithm_version",
+        )?)
+        .map_err(|error| ingestion_error(py, error))?;
+    builder.build().map_err(|error| ingestion_error(py, error))
+}
+
+fn ingestion_run_list_query(
+    py: Python<'_>,
+    limit: Option<u32>,
+    after: Option<String>,
+    status: Option<String>,
+    input_digest: Option<String>,
+) -> PyResult<BRegIngestionRunListQuery> {
+    let mut query = BRegIngestionRunListQuery::default();
+    if let Some(limit) = limit {
+        query = query
+            .limit(limit)
+            .map_err(|error| ingestion_error(py, error))?;
+    }
+    if let Some(after) = after {
+        query = query
+            .after(after)
+            .map_err(|error| ingestion_error(py, error))?;
+    }
+    if let Some(status) = status {
+        let status = match status.as_str() {
+            "open" => breg_client_sdk::BRegIngestionRunStatus::Open,
+            "complete" => breg_client_sdk::BRegIngestionRunStatus::Complete,
+            "cancelled" => breg_client_sdk::BRegIngestionRunStatus::Cancelled,
+            "blocked" => breg_client_sdk::BRegIngestionRunStatus::Blocked,
+            _ => return Err(invalid(py, "run list query status is unsupported")),
+        };
+        query = query.status(status);
+    }
+    if let Some(input_digest) = input_digest {
+        query = query
+            .input_digest(input_digest)
+            .map_err(|error| ingestion_error(py, error))?;
+    }
+    Ok(query)
+}
+
+fn ingestion_run_identifier(py: Python<'_>, run_id: &str) -> PyResult<uuid::Uuid> {
+    uuid::Uuid::parse_str(run_id).map_err(|_| invalid(py, "run_id must be a UUID"))
+}
+
+/// One bounded, digest-bound chunk of an ingestion run. The chunk digest is
+/// derived in Rust from the exact canonical batch body the items hash to.
+#[pyclass(name = "BRegIngestionChunk", module = "registry_breg_client", frozen)]
+struct IngestionChunk {
+    inner: Arc<CoreIngestionChunk>,
+}
+
+#[pymethods]
+impl IngestionChunk {
+    #[getter]
+    fn chunk_index(&self) -> u64 {
+        self.inner.chunk_index()
+    }
+    #[getter]
+    fn item_count(&self) -> usize {
+        self.inner.item_count()
+    }
+    /// The derived lowercase SHA-256 of the chunk's canonical batch body.
+    #[getter]
+    fn digest(&self) -> String {
+        self.inner.digest().to_owned()
+    }
+    #[getter]
+    fn prefix_digest(&self) -> String {
+        self.inner.prefix_digest().to_owned()
+    }
+
+    fn __repr__(&self) -> &'static str {
+        "BRegIngestionChunk(<redacted>)"
+    }
+}
+
+/// Encode one ingestion chunk submission: derive its digest in Rust and bind
+/// the announced prefix digest into the exact wire body. `items` are the same
+/// batch items the entity's atomic batch route executes; `prefix_digest` is the
+/// lowercase SHA-256 of the complete raw source input through the end of this
+/// chunk, which `BRegIngestionPrefixDigest` accumulates.
+#[pyfunction]
+fn encode_ingestion_chunk(
+    py: Python<'_>,
+    chunk_index: u64,
+    items: &Bound<'_, PyAny>,
+    prefix_digest: String,
+) -> PyResult<IngestionChunk> {
+    let items =
+        python_to_json(items).map_err(|error| conversion_error(py, "invalid_request", error))?;
+    let Value::Array(items) = items else {
+        return Err(invalid(py, "items must be a sequence"));
+    };
+    CoreIngestionChunk::new(chunk_index, items, prefix_digest)
+        .map(|inner| IngestionChunk {
+            inner: Arc::new(inner),
+        })
+        .map_err(|error| ingestion_error(py, error))
+}
+
+/// Accumulate the raw source bytes of one ingestion input and derive the
+/// prefix digest the run binds: the lowercase SHA-256 of everything absorbed
+/// through the end of the current chunk. The digest of an empty accumulation
+/// is `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+/// The digest is never a chain over chunk digests: the server stores it as an
+/// opaque value and cannot re-derive the raw bytes.
+#[pyclass(name = "BRegIngestionPrefixDigest", module = "registry_breg_client")]
+#[derive(Default)]
+struct IngestionPrefixDigest {
+    bytes: Vec<u8>,
+}
+
+#[pymethods]
+impl IngestionPrefixDigest {
+    #[new]
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Absorb the next raw source bytes, typically one chunk's source extent.
+    fn update(&mut self, data: Vec<u8>) {
+        self.bytes.extend_from_slice(&data);
+    }
+
+    /// The lowercase SHA-256 of every raw source byte absorbed so far.
+    fn digest(&self) -> String {
+        ingestion_prefix_digest(&self.bytes)
+    }
+
+    fn __repr__(&self) -> &'static str {
+        "BRegIngestionPrefixDigest(<redacted>)"
+    }
 }
 
 fn record_value(
@@ -2548,6 +2783,125 @@ impl BaseRegistryClient {
         complete_value(py, &value.value, &value.metadata)
     }
 
+    /// Announce one whole input and open a durable ingestion run for it.
+    fn create_ingestion_run<'py>(
+        &self,
+        py: Python<'py>,
+        entity_route: &str,
+        request: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let request = Arc::new(ingestion_run_request(py, request)?);
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .create_ingestion_run(entity_route, request.as_ref()),
+                )
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &value.value, &value.metadata)
+    }
+
+    /// Read one bounded page of ingestion runs for one entity route.
+    #[pyo3(signature = (entity_route, *, limit=None, after=None, status=None, input_digest=None))]
+    fn list_ingestion_runs<'py>(
+        &self,
+        py: Python<'py>,
+        entity_route: &str,
+        limit: Option<u32>,
+        after: Option<String>,
+        status: Option<String>,
+        input_digest: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let query = ingestion_run_list_query(py, limit, after, status, input_digest)?;
+        let value = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.list_ingestion_runs(entity_route, &query))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &value.value, &value.metadata)
+    }
+
+    /// Read the current durable state of one ingestion run.
+    fn read_ingestion_run<'py>(
+        &self,
+        py: Python<'py>,
+        entity_route: &str,
+        run_id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let run_id = ingestion_run_identifier(py, run_id)?;
+        let value = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.read_ingestion_run(entity_route, run_id))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &value.value, &value.metadata)
+    }
+
+    /// Submit one bounded chunk of an open ingestion run. A resubmitted chunk
+    /// replays its retained receipt instead of executing twice.
+    fn submit_ingestion_chunk<'py>(
+        &self,
+        py: Python<'py>,
+        entity_route: &str,
+        run_id: &str,
+        chunk: PyRef<'_, IngestionChunk>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let run_id = ingestion_run_identifier(py, run_id)?;
+        let chunk = Arc::clone(&chunk.inner);
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.submit_ingestion_chunk(
+                    entity_route,
+                    run_id,
+                    chunk.as_ref(),
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &value.value, &value.metadata)
+    }
+
+    /// Cancel an open ingestion run. Committed chunks stay committed.
+    fn cancel_ingestion_run<'py>(
+        &self,
+        py: Python<'py>,
+        entity_route: &str,
+        run_id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let run_id = ingestion_run_identifier(py, run_id)?;
+        let value = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.cancel_ingestion_run(entity_route, run_id))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &value.value, &value.metadata)
+    }
+
+    /// Read the retained receipt of one committed chunk. An erased receipt
+    /// answers with the `ingestion.receipt_erased` problem instead.
+    fn ingestion_chunk_receipt<'py>(
+        &self,
+        py: Python<'py>,
+        entity_route: &str,
+        run_id: &str,
+        chunk_index: u64,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let run_id = ingestion_run_identifier(py, run_id)?;
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.ingestion_chunk_receipt(
+                    entity_route,
+                    run_id,
+                    chunk_index,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &value.value, &value.metadata)
+    }
+
     /// Replace one governed attachment slot with exact bytes. The prepared
     /// upload already satisfies the slot's served size and content-type policy.
     #[pyo3(signature = (slot, record_identifier, etag, upload, idempotency_key, *, format="json"))]
@@ -2817,6 +3171,8 @@ fn registry_breg_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<CreateBinding>()?;
     module.add_class::<PatchBinding>()?;
     module.add_class::<ImmediateActionBinding>()?;
+    module.add_class::<IngestionChunk>()?;
+    module.add_class::<IngestionPrefixDigest>()?;
     module.add_class::<TombstoneBinding>()?;
     module.add_class::<BatchBinding>()?;
     module.add_class::<ActionTargetConditions>()?;
@@ -2835,6 +3191,7 @@ fn registry_breg_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
         "BaseRegistryClientError",
         module.py().get_type::<BaseRegistryClientError>(),
     )?;
+    module.add_function(pyo3::wrap_pyfunction!(encode_ingestion_chunk, module)?)?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

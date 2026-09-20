@@ -8,24 +8,25 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use napi::{bindgen_prelude::Buffer, Error as NapiError, Result};
 use napi_derive::napi;
 use registry_breg_client::{
-    verify_webhook_delivery as verify_core_webhook_delivery, BRegActionInvocationRequest,
-    BRegActionTargetConditions as CoreActionTargetConditions, BRegActionTargetConditionsRequest,
-    BRegAsOfContinuation, BRegAsOfContinuationProjection, BRegAsOfListRequest,
-    BRegAttachmentSlot as CoreAttachmentSlot, BRegAttachmentSlotValue, BRegAttachmentState,
-    BRegAttachmentUpload as CoreAttachmentUpload, BRegAttachmentVerificationStatus,
-    BRegBatchBinding, BRegBatchBuilder, BRegBatchRequest, BRegBoundingBox, BRegChangeContext,
-    BRegComplete, BRegContinuation, BRegContinuationProjection, BRegCreateBinding,
-    BRegCreateRequest, BRegCurrentContinuation, BRegCurrentContinuationProjection,
-    BRegCurrentListRequest, BRegDirectWrite, BRegEtag, BRegGeoJsonContinuation,
-    BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest, BRegGeoJsonOptions,
-    BRegImmediateActionBinding, BRegLifecycleAction as CoreLifecycleAction,
-    BRegLifecycleActionReceipt, BRegLifecycleAuthority, BRegLifecyclePromotionError,
-    BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata, BRegMetadataSelectionError,
-    BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding, BRegPatchRequest,
-    BRegPreparedCreate as CorePreparedCreate, BRegPreparedLifecycle as CorePreparedLifecycle,
-    BRegProblemCode, BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
-    BRegRelationshipContinuation, BRegRelationshipContinuationProjection,
-    BRegRelationshipListRequest, BRegRequestMetadata,
+    ingestion_prefix_digest, verify_webhook_delivery as verify_core_webhook_delivery,
+    BRegActionInvocationRequest, BRegActionTargetConditions as CoreActionTargetConditions,
+    BRegActionTargetConditionsRequest, BRegAsOfContinuation, BRegAsOfContinuationProjection,
+    BRegAsOfListRequest, BRegAttachmentSlot as CoreAttachmentSlot, BRegAttachmentSlotValue,
+    BRegAttachmentState, BRegAttachmentUpload as CoreAttachmentUpload,
+    BRegAttachmentVerificationStatus, BRegBatchBinding, BRegBatchBuilder, BRegBatchRequest,
+    BRegBoundingBox, BRegChangeContext, BRegComplete, BRegContinuation, BRegContinuationProjection,
+    BRegCreateBinding, BRegCreateRequest, BRegCurrentContinuation,
+    BRegCurrentContinuationProjection, BRegCurrentListRequest, BRegDirectWrite, BRegEtag,
+    BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest,
+    BRegGeoJsonOptions, BRegImmediateActionBinding, BRegIngestionChunk as CoreIngestionChunk,
+    BRegIngestionError, BRegIngestionRunListQuery, BRegIngestionRunRequest,
+    BRegLifecycleAction as CoreLifecycleAction, BRegLifecycleActionReceipt, BRegLifecycleAuthority,
+    BRegLifecyclePromotionError, BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata,
+    BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding,
+    BRegPatchRequest, BRegPreparedCreate as CorePreparedCreate,
+    BRegPreparedLifecycle as CorePreparedLifecycle, BRegProblemCode, BRegProtocolFailure,
+    BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
+    BRegRelationshipContinuationProjection, BRegRelationshipListRequest, BRegRequestMetadata,
     BRegRequestResultReference as CoreRequestResultReference, BRegRequestReview, BRegRequestState,
     BRegRetainedRequestHistoryPage as CoreRetainedRequestHistoryPage,
     BRegRetainedRequestProposal as CoreRetainedRequestProposal, BRegSnapshotContinuation,
@@ -1728,6 +1729,298 @@ fn batch_request(binding: &BRegBatchBinding, value: Value) -> Result<BRegBatchRe
         .map_err(|error| binding_error("invalid_request", error.to_string()))
 }
 
+fn ingestion_error(error: BRegIngestionError) -> NapiError {
+    binding_error("invalid_request", error.to_string())
+}
+
+const INGESTION_RUN_REQUEST_FIELDS: [&str; 9] = [
+    "operation",
+    "profileId",
+    "packageRevision",
+    "schemaFingerprint",
+    "inputDigest",
+    "inputLength",
+    "itemCount",
+    "chunkCount",
+    "chunkAlgorithmVersion",
+];
+
+fn ingestion_run_request(value: Value) -> Result<BRegIngestionRunRequest> {
+    let object = input_object(value, "run request must be an object")?;
+    only_fields(
+        &object,
+        &INGESTION_RUN_REQUEST_FIELDS,
+        "invalid_request",
+        "run request contains an unsupported field",
+    )?;
+    let operation = match required_string(
+        &object,
+        "operation",
+        "invalid_request",
+        "run request requires operation",
+    )?
+    .as_str()
+    {
+        "create" => registry_breg_client::BRegBatchOperation::Create,
+        "patch" => registry_breg_client::BRegBatchOperation::Patch,
+        _ => {
+            return Err(binding_error(
+                "invalid_request",
+                "run request operation must be create or patch",
+            ))
+        }
+    };
+    let builder = BRegIngestionRunRequest::builder().operation(operation);
+    let builder = builder
+        .profile(required_string(
+            &object,
+            "profileId",
+            "invalid_request",
+            "run request requires profileId",
+        )?)
+        .map_err(ingestion_error)?;
+    let builder = builder
+        .package_revision(required_string(
+            &object,
+            "packageRevision",
+            "invalid_request",
+            "run request requires packageRevision",
+        )?)
+        .map_err(ingestion_error)?;
+    let builder = builder
+        .schema_fingerprint(required_string(
+            &object,
+            "schemaFingerprint",
+            "invalid_request",
+            "run request requires schemaFingerprint",
+        )?)
+        .map_err(ingestion_error)?;
+    let builder = builder
+        .input_digest(required_string(
+            &object,
+            "inputDigest",
+            "invalid_request",
+            "run request requires inputDigest",
+        )?)
+        .map_err(ingestion_error)?;
+    let input_length = safe_integer(
+        object
+            .get("inputLength")
+            .ok_or_else(|| binding_error("invalid_request", "run request requires inputLength"))?,
+        0,
+        MAXIMUM_JAVASCRIPT_SAFE_INTEGER,
+        "invalid_request",
+        "run request inputLength must be a safe integer",
+    )?;
+    let builder = builder.input_length(u64::try_from(input_length).map_err(|_| {
+        binding_error(
+            "invalid_request",
+            "run request inputLength must be a safe integer",
+        )
+    })?);
+    let item_count = safe_integer(
+        object
+            .get("itemCount")
+            .ok_or_else(|| binding_error("invalid_request", "run request requires itemCount"))?,
+        1,
+        MAXIMUM_JAVASCRIPT_SAFE_INTEGER,
+        "invalid_request",
+        "run request itemCount must be a positive safe integer",
+    )?;
+    let chunk_count = safe_integer(
+        object
+            .get("chunkCount")
+            .ok_or_else(|| binding_error("invalid_request", "run request requires chunkCount"))?,
+        1,
+        MAXIMUM_JAVASCRIPT_SAFE_INTEGER,
+        "invalid_request",
+        "run request chunkCount must be a positive safe integer",
+    )?;
+    let builder = builder
+        .item_count(item_count as u64)
+        .map_err(ingestion_error)?;
+    let builder = builder
+        .chunk_count(chunk_count as u64)
+        .map_err(ingestion_error)?;
+    let builder = builder
+        .chunk_algorithm_version(required_string(
+            &object,
+            "chunkAlgorithmVersion",
+            "invalid_request",
+            "run request requires chunkAlgorithmVersion",
+        )?)
+        .map_err(ingestion_error)?;
+    builder.build().map_err(ingestion_error)
+}
+
+fn ingestion_run_list_query(value: Option<&Value>) -> Result<BRegIngestionRunListQuery> {
+    let Some(value) = value else {
+        return Ok(BRegIngestionRunListQuery::default());
+    };
+    let object = input_object(value.clone(), "run list query must be an object")?;
+    only_fields(
+        &object,
+        &["limit", "after", "status", "inputDigest"],
+        "invalid_request",
+        "run list query contains an unsupported field",
+    )?;
+    let mut query = BRegIngestionRunListQuery::default();
+    if let Some(limit) = object.get("limit") {
+        let limit = safe_integer(
+            limit,
+            1,
+            MAXIMUM_JAVASCRIPT_SAFE_INTEGER,
+            "invalid_request",
+            "run list query limit must be a positive safe integer",
+        )?;
+        let limit = u32::try_from(limit).map_err(|_| {
+            binding_error(
+                "invalid_request",
+                "run list query limit must be a positive safe integer",
+            )
+        })?;
+        query = query.limit(limit).map_err(ingestion_error)?;
+    }
+    if let Some(after) = optional_string(
+        &object,
+        "after",
+        "invalid_request",
+        "run list query after must be a string",
+    )? {
+        query = query.after(after).map_err(ingestion_error)?;
+    }
+    if let Some(status) = optional_string(
+        &object,
+        "status",
+        "invalid_request",
+        "run list query status must be a string",
+    )? {
+        let status = match status.as_str() {
+            "open" => registry_breg_client::BRegIngestionRunStatus::Open,
+            "complete" => registry_breg_client::BRegIngestionRunStatus::Complete,
+            "cancelled" => registry_breg_client::BRegIngestionRunStatus::Cancelled,
+            "blocked" => registry_breg_client::BRegIngestionRunStatus::Blocked,
+            _ => {
+                return Err(binding_error(
+                    "invalid_request",
+                    "run list query status is unsupported",
+                ))
+            }
+        };
+        query = query.status(status);
+    }
+    if let Some(input_digest) = optional_string(
+        &object,
+        "inputDigest",
+        "invalid_request",
+        "run list query inputDigest must be a string",
+    )? {
+        query = query.input_digest(input_digest).map_err(ingestion_error)?;
+    }
+    Ok(query)
+}
+
+fn ingestion_run_identifier(value: String) -> Result<uuid::Uuid> {
+    uuid::Uuid::parse_str(&value)
+        .map_err(|_| binding_error("invalid_request", "runId must be a UUID"))
+}
+
+fn ingestion_chunk_index(value: i64, message: &'static str) -> Result<u64> {
+    if !(0..=MAXIMUM_JAVASCRIPT_SAFE_INTEGER).contains(&value) {
+        return Err(binding_error("invalid_request", message));
+    }
+    Ok(value as u64)
+}
+
+/// One bounded, digest-bound chunk of an ingestion run. The chunk digest is
+/// derived in Rust from the exact canonical batch body the items hash to.
+#[napi(js_name = "BRegIngestionChunk")]
+pub struct IngestionChunk {
+    inner: Arc<CoreIngestionChunk>,
+}
+
+#[napi]
+impl IngestionChunk {
+    #[napi(getter)]
+    pub fn chunk_index(&self) -> i64 {
+        i64::try_from(self.inner.chunk_index()).unwrap_or(MAXIMUM_JAVASCRIPT_SAFE_INTEGER)
+    }
+
+    #[napi(getter)]
+    pub fn item_count(&self) -> i64 {
+        i64::try_from(self.inner.item_count()).unwrap_or(MAXIMUM_JAVASCRIPT_SAFE_INTEGER)
+    }
+
+    /// The derived lowercase SHA-256 of the chunk's canonical batch body.
+    #[napi(getter)]
+    pub fn digest(&self) -> String {
+        self.inner.digest().to_owned()
+    }
+
+    #[napi(getter)]
+    pub fn prefix_digest(&self) -> String {
+        self.inner.prefix_digest().to_owned()
+    }
+}
+
+/// Encode one ingestion chunk submission: derive its digest in Rust and bind
+/// the announced prefix digest into the exact wire body. `items` are the same
+/// batch items the entity's atomic batch route executes; `prefixDigest` is the
+/// lowercase SHA-256 of the complete raw source input through the end of this
+/// chunk, which `BRegIngestionPrefixDigest` accumulates.
+#[napi]
+pub fn encode_ingestion_chunk(
+    chunk_index: i64,
+    items: Value,
+    prefix_digest: String,
+) -> Result<IngestionChunk> {
+    let chunk_index = ingestion_chunk_index(
+        chunk_index,
+        "chunkIndex must be a non-negative safe integer",
+    )?;
+    let items = items
+        .as_array()
+        .cloned()
+        .ok_or_else(|| binding_error("invalid_request", "items must be an array"))?;
+    CoreIngestionChunk::new(chunk_index, items, prefix_digest)
+        .map(|inner| IngestionChunk {
+            inner: Arc::new(inner),
+        })
+        .map_err(ingestion_error)
+}
+
+/// Accumulate the raw source bytes of one ingestion input and derive the
+/// prefix digest the run binds: the lowercase SHA-256 of everything absorbed
+/// through the end of the current chunk. The digest of an empty accumulation
+/// is `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+/// The digest is never a chain over chunk digests: the server stores it as an
+/// opaque value and cannot re-derive the raw bytes.
+#[napi(js_name = "BRegIngestionPrefixDigest")]
+#[derive(Default)]
+pub struct IngestionPrefixDigest {
+    bytes: Vec<u8>,
+}
+
+#[napi]
+impl IngestionPrefixDigest {
+    #[napi(constructor)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Absorb the next raw source bytes, typically one chunk's source extent.
+    #[napi]
+    pub fn update(&mut self, data: Buffer) {
+        self.bytes.extend_from_slice(data.as_ref());
+    }
+
+    /// The lowercase SHA-256 of every raw source byte absorbed so far.
+    #[napi]
+    pub fn digest(&self) -> String {
+        ingestion_prefix_digest(&self.bytes)
+    }
+}
+
 fn parse_record(
     value: Value,
     format: BRegRecordFormat,
@@ -2892,6 +3185,111 @@ impl BaseRegistryClient {
         let BRegComplete { value, metadata } = self
             .inner
             .batch_records(&binding.inner, &request, &key)
+            .await
+            .map_err(client_error)?;
+        complete_value(value, metadata)
+    }
+
+    /// Announce one whole input and open a durable ingestion run for it.
+    #[napi]
+    pub async fn create_ingestion_run(
+        &self,
+        entity_route: String,
+        request: Value,
+    ) -> Result<CompleteOutcome> {
+        let request = ingestion_run_request(request)?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .create_ingestion_run(&entity_route, &request)
+            .await
+            .map_err(client_error)?;
+        complete_value(value, metadata)
+    }
+
+    /// Read one bounded page of ingestion runs for one entity route.
+    #[napi]
+    pub async fn list_ingestion_runs(
+        &self,
+        entity_route: String,
+        query: Option<Value>,
+    ) -> Result<CompleteOutcome> {
+        let query = ingestion_run_list_query(query.as_ref())?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .list_ingestion_runs(&entity_route, &query)
+            .await
+            .map_err(client_error)?;
+        complete_value(value, metadata)
+    }
+
+    /// Read the current durable state of one ingestion run.
+    #[napi]
+    pub async fn read_ingestion_run(
+        &self,
+        entity_route: String,
+        run_id: String,
+    ) -> Result<CompleteOutcome> {
+        let run_id = ingestion_run_identifier(run_id)?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .read_ingestion_run(&entity_route, run_id)
+            .await
+            .map_err(client_error)?;
+        complete_value(value, metadata)
+    }
+
+    /// Submit one bounded chunk of an open ingestion run. A resubmitted chunk
+    /// replays its retained receipt instead of executing twice.
+    #[napi]
+    pub async fn submit_ingestion_chunk(
+        &self,
+        entity_route: String,
+        run_id: String,
+        chunk: &IngestionChunk,
+    ) -> Result<CompleteOutcome> {
+        let run_id = ingestion_run_identifier(run_id)?;
+        let chunk = Arc::clone(&chunk.inner);
+        let BRegComplete { value, metadata } = self
+            .inner
+            .submit_ingestion_chunk(&entity_route, run_id, chunk.as_ref())
+            .await
+            .map_err(client_error)?;
+        complete_value(value, metadata)
+    }
+
+    /// Cancel an open ingestion run. Committed chunks stay committed.
+    #[napi]
+    pub async fn cancel_ingestion_run(
+        &self,
+        entity_route: String,
+        run_id: String,
+    ) -> Result<CompleteOutcome> {
+        let run_id = ingestion_run_identifier(run_id)?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .cancel_ingestion_run(&entity_route, run_id)
+            .await
+            .map_err(client_error)?;
+        complete_value(value, metadata)
+    }
+
+    /// Read the retained receipt of one committed chunk. An erased receipt
+    /// answers with the `ingestion.receipt_erased` problem instead.
+    #[napi]
+    pub async fn ingestion_chunk_receipt(
+        &self,
+        entity_route: String,
+        run_id: String,
+        chunk_index: i64,
+    ) -> Result<CompleteOutcome> {
+        let run_id = ingestion_run_identifier(run_id)?;
+        let chunk_index = ingestion_chunk_index(
+            chunk_index,
+            "chunkIndex must be a non-negative safe integer",
+        )?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .ingestion_chunk_receipt(&entity_route, run_id, chunk_index)
             .await
             .map_err(client_error)?;
         complete_value(value, metadata)

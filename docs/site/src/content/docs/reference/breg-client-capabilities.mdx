@@ -1,11 +1,11 @@
 ---
 title: Base Registry Engine client capabilities
-description: Native spatial, temporal, relationship, action, batch, tombstone, and recovery contracts in the unified Registry Stack clients.
+description: Native spatial, temporal, relationship, action, batch, ingestion, tombstone, and recovery contracts in the unified Registry Stack clients.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-10"
+last_reviewed: "2026-09-20"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -162,6 +162,35 @@ Record ETags and lifecycle ETags are distinct.
     crates/registry-breg/tests/postgres_client_capabilities.rs,
     crates/registry-breg/tests/postgres_immediate_actions.rs,
     crates/registry-breg/tests/postgres_action_handlers.rs */}
+
+## Durable ingestion runs
+
+An ingestion run moves one whole source input through bounded, individually
+committed chunks. Announce the input with the entity route and a run request:
+operation, profile, package revision, schema fingerprint, input digest, input
+length, item count, chunk count, and chunk algorithm version. The run stays
+open across many calls, so a long input survives process restarts without one
+atomic request.
+
+Submit one chunk at a time with the run identifier. The chunk digest is derived
+in Rust from the exact canonical batch body the items hash to, and the
+submitted body carries the announced prefix digest: the lowercase SHA-256 of
+the complete raw source input through the end of that chunk. Rust owns that
+derivation; Node accumulates raw bytes with `BRegIngestionPrefixDigest` and
+encodes a chunk with `encodeIngestionChunk`, and Python uses
+`BRegIngestionPrefixDigest` and `encode_ingestion_chunk`.
+A resubmitted chunk replays its retained receipt instead of executing twice.
+
+Read the run state, one bounded page of runs, or one retained chunk receipt at
+any time. Receipts are durable but not permanent: an erased receipt answers
+with the `ingestion.receipt_erased` problem instead of its batch result.
+Cancelling an open run stops further submissions; committed chunks stay
+committed.
+
+{/* Evidence: crates/registry-breg-client/src/ingestion.rs,
+    crates/registry-breg-client/tests/write_http_boundary.rs,
+    crates/registry-breg-client-node/__test__/ingestion.test.js,
+    crates/registry-breg-client-py/tests/python/test_ingestion_runs.py */}
 
 ## Recovery after a process restart
 

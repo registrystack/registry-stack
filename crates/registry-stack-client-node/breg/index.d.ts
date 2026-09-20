@@ -41,6 +41,24 @@ export declare class BaseRegistryClient {
   patchRecord(binding: BRegPatchBinding, recordIdentifier: string, etag: string, operations: any, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
   /** Execute one metadata-selected atomic batch without automatic retry. */
   batchRecords(binding: BRegBatchBinding, request: any, idempotencyKey: string): Promise<CompleteOutcome>
+  /** Announce one whole input and open a durable ingestion run for it. */
+  createIngestionRun(entityRoute: string, request: any): Promise<CompleteOutcome>
+  /** Read one bounded page of ingestion runs for one entity route. */
+  listIngestionRuns(entityRoute: string, query?: any | undefined | null): Promise<CompleteOutcome>
+  /** Read the current durable state of one ingestion run. */
+  readIngestionRun(entityRoute: string, runId: string): Promise<CompleteOutcome>
+  /**
+   * Submit one bounded chunk of an open ingestion run. A resubmitted chunk
+   * replays its retained receipt instead of executing twice.
+   */
+  submitIngestionChunk(entityRoute: string, runId: string, chunk: BRegIngestionChunk): Promise<CompleteOutcome>
+  /** Cancel an open ingestion run. Committed chunks stay committed. */
+  cancelIngestionRun(entityRoute: string, runId: string): Promise<CompleteOutcome>
+  /**
+   * Read the retained receipt of one committed chunk. An erased receipt
+   * answers with the `ingestion.receipt_erased` problem instead.
+   */
+  ingestionChunkReceipt(entityRoute: string, runId: string, chunkIndex: number): Promise<CompleteOutcome>
   /** Tombstone one record against its current strong ETag. */
   tombstoneRecord(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
   /**
@@ -155,6 +173,36 @@ export declare class BRegImmediateActionBinding {
 
 }
 export type ImmediateActionBinding = BRegImmediateActionBinding
+
+/**
+ * One bounded, digest-bound chunk of an ingestion run. The chunk digest is
+ * derived in Rust from the exact canonical batch body the items hash to.
+ */
+export declare class BRegIngestionChunk {
+  get chunkIndex(): number
+  get itemCount(): number
+  /** The derived lowercase SHA-256 of the chunk's canonical batch body. */
+  get digest(): string
+  get prefixDigest(): string
+}
+export type IngestionChunk = BRegIngestionChunk
+
+/**
+ * Accumulate the raw source bytes of one ingestion input and derive the
+ * prefix digest the run binds: the lowercase SHA-256 of everything absorbed
+ * through the end of the current chunk. The digest of an empty accumulation
+ * is `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+ * The digest is never a chain over chunk digests: the server stores it as an
+ * opaque value and cannot re-derive the raw bytes.
+ */
+export declare class BRegIngestionPrefixDigest {
+  constructor()
+  /** Absorb the next raw source bytes, typically one chunk's source extent. */
+  update(data: Buffer): void
+  /** The lowercase SHA-256 of every raw source byte absorbed so far. */
+  digest(): string
+}
+export type IngestionPrefixDigest = BRegIngestionPrefixDigest
 
 export declare class BRegLifecycleAction {
   withReason(reason: string): BRegLifecycleAction
@@ -295,6 +343,15 @@ export interface CompleteOutcome {
   etag?: string
   location?: string
 }
+
+/**
+ * Encode one ingestion chunk submission: derive its digest in Rust and bind
+ * the announced prefix digest into the exact wire body. `items` are the same
+ * batch items the entity's atomic batch route executes; `prefixDigest` is the
+ * lowercase SHA-256 of the complete raw source input through the end of this
+ * chunk, which `BRegIngestionPrefixDigest` accumulates.
+ */
+export declare function encodeIngestionChunk(chunkIndex: number, items: any, prefixDigest: string): BRegIngestionChunk
 
 /** Validated product result serialized before the JavaScript number boundary. */
 export interface JsonOutcome {
