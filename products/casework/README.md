@@ -61,8 +61,9 @@ JSON Schema:
 ```
 
 It cannot select an actor, team, outcome vocabulary, callback, URL to fetch,
-or human/service classification. A typed hosted validation failure keeps the
-six-field problem body value-free and may add the paired
+or human/service classification. A typed hosted validation failure returns
+HTTP 400 `request.invalid`, keeps the six-field problem body value-free, and
+may add the paired
 `Registry-Casework-Validation-Path` and
 `Registry-Casework-Validation-Reason` response headers. The path is bounded to
 256 characters, the reason comes from a closed enum, and neither header echoes

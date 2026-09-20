@@ -1031,6 +1031,10 @@ fn check_constraint_bounds(
         if !declares_type(&["number", "integer"]) || !plain_inline_bounds(subschema) {
             return Err(constraint_invalid(field_path));
         }
+        // The aggregate canonicalization above rejects integer Values that
+        // are not exactly representable as binary64. Fractional and exponent
+        // forms have already been decoded to finite binary64 values, so this
+        // conversion cannot collapse two accepted JSON numbers.
         let minimum = minimum
             .filter(|value| value.is_number())
             .and_then(Value::as_f64);
@@ -1198,11 +1202,29 @@ fn is_scalar(value: &Value) -> bool {
 /// A bounded field path for validation headers, falling back to the payload
 /// root when a field name is not a header-safe path segment.
 fn result_field_path(prefix: &str, field: &str) -> String {
-    if field.len() + prefix.len() < 256 && field.bytes().all(valid_path_byte) {
-        format!("{prefix}/{field}")
-    } else {
-        prefix.to_owned()
+    if !field.bytes().all(valid_path_byte) {
+        return prefix.to_owned();
     }
+    let escaped_len = field.bytes().try_fold(0usize, |length, byte| {
+        length.checked_add(if matches!(byte, b'/' | b'~') { 2 } else { 1 })
+    });
+    if escaped_len
+        .and_then(|length| prefix.len().checked_add(length + 1))
+        .is_none_or(|length| length > 256)
+    {
+        return prefix.to_owned();
+    }
+    let mut path = String::with_capacity(prefix.len() + escaped_len.unwrap_or_default() + 1);
+    path.push_str(prefix);
+    path.push('/');
+    for byte in field.bytes() {
+        match byte {
+            b'~' => path.push_str("~0"),
+            b'/' => path.push_str("~1"),
+            _ => path.push(char::from(byte)),
+        }
+    }
+    path
 }
 
 fn constraint_invalid(path: impl Into<String>) -> HostedValidationError {
@@ -1842,6 +1864,59 @@ mod tests {
             .expect_err("bound behind allOf");
         assert_eq!(error.reason, HostedValidationReason::ConstraintInvalid);
         assert_eq!(error.path, "$.resultConstraints/note");
+    }
+
+    #[test]
+    fn numeric_constraints_reject_inexact_binary64_integers_before_comparison() {
+        let mut policy = standalone_decision_starter_kind();
+        policy.result_schema = Some(json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["largeInteger"],
+            "properties": {
+                "largeInteger": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740992_u64
+                }
+            }
+        }));
+        policy.outcomes[0].result_required = true;
+        let inexact = 9007199254740993_u64;
+        let constraint_error = result_constraints_request(json!({
+            "largeInteger": {"minimum": inexact}
+        }))
+        .check(&policy)
+        .expect_err("an inexact integer constraint is refused before bound comparison");
+        assert_eq!(
+            constraint_error.reason,
+            HostedValidationReason::MaximumBytesExceeded
+        );
+
+        let snapshot = policy.snapshot().expect("large-integer policy snapshots");
+        let result_error = HostedDecisionRequest {
+            outcome: "confirmed".to_owned(),
+            reason: None,
+            result: Some(json!({"largeInteger": inexact})),
+        }
+        .check(&snapshot, None)
+        .expect_err("an inexact integer result is refused before schema comparison");
+        assert_eq!(
+            result_error.reason,
+            HostedValidationReason::MaximumBytesExceeded
+        );
+    }
+
+    #[test]
+    fn result_paths_escape_json_pointer_segments() {
+        assert_eq!(
+            result_field_path(RESULT_PATH, "path/segment"),
+            "$.result/path~1segment"
+        );
+        assert_eq!(
+            result_field_path(RESULT_CONSTRAINTS_PATH, "tilde~segment"),
+            "$.resultConstraints/tilde~0segment"
+        );
     }
 
     #[test]
