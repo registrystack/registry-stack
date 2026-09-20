@@ -32,6 +32,7 @@ for image in "${images[@]}"; do
   cp "${true_binary}" "${context_dir}/dist/image-bin/${image}"
 done
 cp "${repo_root}/LICENSE" "${context_dir}/LICENSE"
+cp "${repo_root}/THIRD_PARTY_NOTICES" "${context_dir}/THIRD_PARTY_NOTICES"
 cp \
   "${repo_root}/release/scripts/install-runtime-libc6.sh" \
   "${context_dir}/release/scripts/install-runtime-libc6.sh"
@@ -101,7 +102,8 @@ for image in "${images[@]}"; do
   second_layout="${tmp_root}/correct-${image}-second"
   touch -t 200001010101 \
     "${context_dir}/dist/image-bin/${image}" \
-    "${context_dir}/LICENSE"
+    "${context_dir}/LICENSE" \
+    "${context_dir}/THIRD_PARTY_NOTICES"
   build_layout "${image}" "${first_layout}" "${revision_label}" "${version_label}"
   python3 "${checker}" "oci-layout://${first_layout}" \
     --source "${source_label}" \
@@ -112,7 +114,8 @@ for image in "${images[@]}"; do
   # layers. The exporter also normalizes inherited layers to the fixed epoch.
   touch -t 203001010101 \
     "${context_dir}/dist/image-bin/${image}" \
-    "${context_dir}/LICENSE"
+    "${context_dir}/LICENSE" \
+    "${context_dir}/THIRD_PARTY_NOTICES"
   build_layout "${image}" "${second_layout}" "${revision_label}" "${version_label}"
   python3 "${layout_comparator}" "${first_layout}" "${second_layout}"
 done
