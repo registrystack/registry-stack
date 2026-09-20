@@ -36,10 +36,18 @@ pub(crate) const INGESTION_TABLES: &[(&str, &[&str])] = &[
 /// One chunk receipt is the batch answer for one bounded chunk, so it holds
 /// no more than the idempotency cache it accompanies.
 const MAX_RECEIPT_BYTES: usize = crate::idempotency::MAX_HELD_BODY_BYTES;
-/// The member-to-field-identity map stored beside a receipt: one short
-/// identifier pair per committed answer member, negligible beside the
-/// receipt ceiling it is bounded under.
-pub(crate) const MAX_FIELD_BINDINGS_BYTES: usize = 16 * 1024;
+/// One canonical map entry: a quoted api name, a colon, a quoted field id,
+/// and the comma that separates it from the next entry. The compiler bounds a
+/// field id (`validate_id`) and an api name (`valid_api_name`) at 64 bytes.
+const FIELD_BINDING_ENTRY_BYTES: usize = 2 + 64 + 1 + 2 + 64 + 1;
+/// The member-to-field-identity map stored beside a receipt: one identifier
+/// pair per committed answer member. The ceiling is computed from the
+/// compiler's bounds, not assumed: the widest map one valid projection can
+/// carry binds the contract's full per-entity field scale
+/// (`MAX_ENCRYPTED_FIELDS_PER_ENTITY`) at maximum-width names, commas
+/// between entries, braces around them.
+pub(crate) const MAX_FIELD_BINDINGS_BYTES: usize =
+    2 + crate::contract::MAX_ENCRYPTED_FIELDS_PER_ENTITY * FIELD_BINDING_ENTRY_BYTES - 1;
 /// Runs are operator-driven and few; one page stays explicitly bounded.
 pub(crate) const MAX_RUN_PAGE_SIZE: i64 = 100;
 pub(crate) const DEFAULT_RUN_PAGE_SIZE: i64 = 25;
@@ -1495,6 +1503,89 @@ mod tests {
             parse_field_bindings(r#"{"serialNumber":""}"#),
             None,
             "an empty field id refuses"
+        );
+    }
+
+    #[test]
+    fn a_full_width_valid_projection_derives_a_map_the_ceiling_admits() {
+        // The compiler bounds every field id and api name at 64 bytes and the
+        // contract bounds the per-entity field scale at
+        // MAX_ENCRYPTED_FIELDS_PER_ENTITY, so this is the widest map one valid
+        // chunk answer can carry. A ceiling under that width would roll back
+        // every chunk submission of a valid configuration, while the batch
+        // answer itself stays within its own bound.
+        let field_count = crate::contract::MAX_ENCRYPTED_FIELDS_PER_ENTITY;
+        let ids: Vec<String> = (0..field_count)
+            .map(|index| format!("f{index:063}"))
+            .collect();
+        let api_names: Vec<String> = (0..field_count)
+            .map(|index| format!("m{index:063}"))
+            .collect();
+        let fields = ids
+            .iter()
+            .zip(&api_names)
+            .map(|(id, api_name)| {
+                format!(
+                    r#"{{"id":"{id}","apiName":"{api_name}","type":"string","maxLength":1,"classification":"internal"}}"#
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let readable = ids
+            .iter()
+            .map(|id| format!(r#""{id}""#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let fixture = format!(
+            r#"{{
+              "apiVersion":"registry.registrystack.org/v1alpha1",
+              "kind":"RegistryProject",
+              "registry":{{"id":"bindings-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "entities":[{{
+                "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
+                "fields":[{fields}]
+              }}],
+              "accessProfiles":[{{
+                "id":"operator","default":true,"principalClaim":"registry_principal",
+                "requiredPurposes":["review"],
+                "permissions":[{{
+                  "entity":"entry","operations":["create"],
+                  "readableFields":[{readable}],
+                  "writableFields":[{readable}],
+                  "rowBoundaries":[]
+                }}]
+              }}]
+            }}"#
+        );
+        let project =
+            crate::contract::parse_project_json(fixture.as_bytes()).expect("the fixture parses");
+        let registry = crate::compiler::compile_project(
+            &project,
+            &[],
+            crate::compiler::CompileProfile::Authoring,
+        )
+        .expect("the fixture compiles");
+        let entity = registry.entities().get("entry").expect("fixture entity");
+        let members = api_names
+            .iter()
+            .map(|name| format!(r#""{name}":1"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let receipt = format!(
+            r#"{{"results":[{{"id":"11111111-1111-4111-8111-111111111111","revision":1,"data":{{{members}}}}}]}}"#
+        );
+        let bindings = receipt_field_bindings(entity, receipt.as_bytes()).expect("the map derives");
+        // Every entry is a quoted 64-byte api name, a colon, a quoted 64-byte
+        // field id, and its comma, inside one object.
+        let widest = 2 + field_count * (2 + 64 + 1 + 2 + 64 + 1) - 1;
+        assert_eq!(bindings.len(), widest, "the fixture reaches the bound");
+        assert!(
+            !bindings.is_empty()
+                && bindings.len() <= MAX_FIELD_BINDINGS_BYTES
+                && parse_field_bindings(&bindings).is_some(),
+            "commit_chunk must accept the widest valid projection map: {} bytes against a {}-byte ceiling",
+            bindings.len(),
+            MAX_FIELD_BINDINGS_BYTES
         );
     }
 
