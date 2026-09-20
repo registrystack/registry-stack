@@ -81,9 +81,11 @@ release, draft, and decide work. Every mutation checks the current task revision
 membership, queue service, exclusions, and idempotency binding in the committing
 transaction. `GET /v1/review-tasks/{taskId}/context` returns only the frozen
 submitted context, or a bounded current source projection authorized for the
-exact human caller. Kind descriptions supply the configured stages, outcomes,
-and schemas. Casework pins the policy identity and submission digest once, so a
-later configuration change cannot reinterpret accepted work.
+exact human caller, together with the policy snapshot pinned to that task.
+Kind descriptions supply the currently configured kinds for discovery; task
+handling uses the returned pinned snapshot. Casework pins the policy identity
+and submission digest once, so a later configuration change cannot reinterpret
+accepted work.
 
 Results are read through `GET /v1/review-requests/{requestId}/result` or the
 producer result feed. Completion-mode producers may instead configure one

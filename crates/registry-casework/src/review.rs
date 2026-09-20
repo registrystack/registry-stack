@@ -536,6 +536,7 @@ impl CaseworkService {
             subject: record.subject,
             requester_reference: record.requester_reference,
             policy: policy_binding(&record.policy),
+            policy_snapshot: record.policy,
             result_constraints: record.result_constraints,
             context,
         })
@@ -1780,9 +1781,27 @@ impl PostgresStore {
         transaction
             .execute(
                 "UPDATE casework_review_requests
-                 SET context='{}'::jsonb,result_constraints=NULL
+                 SET producer_issuer=submission_digest,producer_subject=submission_digest,
+                     source_namespace=submission_digest,subject_source=submission_digest,
+                     subject_type=submission_digest,subject_id=submission_digest,
+                     subject_version=submission_digest,subject_digest=submission_digest,
+                     requester_reference=submission_digest,initiator_issuer=NULL,
+                     initiator_subject=NULL,context='{}'::jsonb,result_constraints=NULL,
+                     completion_destination=NULL,completion_recipient_binding=NULL
                  WHERE request_id=ANY($2) AND result_available_until<=$1
-                   AND (context<>'{}'::jsonb OR result_constraints IS NOT NULL)",
+                   AND result_erased_at IS NULL",
+                &[&now, &selected],
+            )
+            .await?;
+        transaction
+            .execute(
+                "UPDATE casework_review_submission_reservations s
+                 SET source_namespace=s.submission_digest,subject_source=s.submission_digest,
+                     subject_type=s.submission_digest,subject_id=s.submission_digest,
+                     subject_version=s.submission_digest
+                 FROM casework_review_requests r
+                 WHERE s.request_id=r.request_id AND r.request_id=ANY($2)
+                   AND r.result_available_until<=$1",
                 &[&now, &selected],
             )
             .await?;
@@ -1947,20 +1966,13 @@ impl PostgresStore {
                 recovered: true,
             }));
         }
+        let binding_digest = review_submission_binding_digest(producer_id, request);
         let reservation = transaction
             .query_opt(
                 "SELECT submission_digest,request_id,recovery_deadline
                  FROM casework_review_submission_reservations
-                 WHERE producer_id=$1 AND source_namespace=$2 AND subject_source=$2
-                   AND subject_type=$3 AND subject_id=$4 AND subject_version=$5 AND policy_id=$6",
-                &[
-                    &producer_id,
-                    &request.subject.source,
-                    &request.subject.subject_type,
-                    &request.subject.id,
-                    &request.subject.version,
-                    &request.kind,
-                ],
+                 WHERE binding_digest=$1",
+                &[&binding_digest],
             )
             .await?;
         let Some(reservation) = reservation else {
@@ -1978,6 +1990,12 @@ impl PostgresStore {
             return Ok(None);
         };
         let record = load_request(&transaction, producer_id, request_id, true).await?;
+        if record
+            .result_available_until
+            .is_some_and(|available_until| available_until <= Utc::now())
+        {
+            return Err(ReviewRuntimeError::ResultExpired);
+        }
         let accepted = accepted(&record);
         insert_review_idempotency(
             &transaction,
@@ -2020,6 +2038,7 @@ impl PostgresStore {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let resource = format!("review-producer:{}", producer.id);
+        let binding_digest = review_submission_binding_digest(&producer.id, &request);
         let subject_lock = format!(
             "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
             producer.id,
@@ -2053,12 +2072,13 @@ impl PostgresStore {
         transaction
             .execute(
                 "INSERT INTO casework_review_submission_reservations(
-                    producer_id,source_namespace,subject_source,subject_type,subject_id,
+                    binding_digest,producer_id,source_namespace,subject_source,subject_type,subject_id,
                     subject_version,policy_id,submission_digest,request_id,recovery_deadline,
                     retained_until,created_at)
-                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULL,$9,$10,$11)
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,$11,$12)
                  ON CONFLICT DO NOTHING",
                 &[
+                    &binding_digest,
                     &producer.id,
                     &request.subject.source,
                     &request.subject.source,
@@ -2077,18 +2097,9 @@ impl PostgresStore {
             .query_one(
                 "SELECT submission_digest,request_id,recovery_deadline
                  FROM casework_review_submission_reservations
-                 WHERE producer_id=$1 AND source_namespace=$2 AND subject_source=$3
-                   AND subject_type=$4 AND subject_id=$5 AND subject_version=$6 AND policy_id=$7
+                 WHERE binding_digest=$1
                  FOR UPDATE",
-                &[
-                    &producer.id,
-                    &request.subject.source,
-                    &request.subject.source,
-                    &request.subject.subject_type,
-                    &request.subject.id,
-                    &request.subject.version,
-                    &request.kind,
-                ],
+                &[&binding_digest],
             )
             .await?;
         let retained_digest: String = reservation.get(0);
@@ -2100,6 +2111,12 @@ impl PostgresStore {
         }
         if let Some(request_id) = reservation.get::<_, Option<Uuid>>(1) {
             let record = load_request(&transaction, &producer.id, request_id, true).await?;
+            if record
+                .result_available_until
+                .is_some_and(|available_until| available_until <= now)
+            {
+                return Err(ReviewRuntimeError::ResultExpired);
+            }
             let accepted = accepted(&record);
             insert_review_idempotency(
                 &transaction,
@@ -2221,17 +2238,8 @@ impl PostgresStore {
         transaction
             .execute(
                 "UPDATE casework_review_submission_reservations SET request_id=$1
-                 WHERE producer_id=$2 AND source_namespace=$3 AND subject_source=$3
-                   AND subject_type=$4 AND subject_id=$5 AND subject_version=$6 AND policy_id=$7",
-                &[
-                    &request_id,
-                    &producer.id,
-                    &request.subject.source,
-                    &request.subject.subject_type,
-                    &request.subject.id,
-                    &request.subject.version,
-                    &request.kind,
-                ],
+                 WHERE binding_digest=$2",
+                &[&request_id, &binding_digest],
             )
             .await?;
         let tasks = insert_stage_tasks(&transaction, request_id, &policy, 0, now).await?;
@@ -4749,6 +4757,22 @@ fn policy_binding(policy: &ReviewKindPolicySnapshot) -> PolicyBinding {
         version: policy.identity.version.clone(),
         digest: policy.identity.digest.clone(),
     }
+}
+
+fn review_submission_binding_digest(producer_id: &str, request: &ReviewCreateRequest) -> String {
+    ContentDigest::for_bytes(
+        format!(
+            "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+            producer_id,
+            request.subject.source,
+            request.subject.subject_type,
+            request.subject.id,
+            request.subject.version,
+            request.kind
+        )
+        .as_bytes(),
+    )
+    .to_string()
 }
 
 fn parse_lifecycle(value: &str) -> Result<ReviewRequestLifecycle, ReviewRuntimeError> {

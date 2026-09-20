@@ -128,7 +128,16 @@ async fn rhai_planner_no_review_manual_application_is_atomic() {
     assert_eq!(first.body["request"]["application"], Value::Null);
     assert_eq!(test_planner_invocation_count(), 1);
 
-    let apply = action(&first.body, "apply_request");
+    let before_apply = get_record(
+        &harness,
+        &format!(
+            "/v1/records/person-name-change-requests/{}?accessProfile=name-change-submitter",
+            request.id
+        ),
+        &submitter,
+    )
+    .await;
+    let apply = action(&before_apply.body, "apply_request");
     let application_body = json!({
         "proposalVersion": first.body["request"]["proposalVersion"],
         "effectDigest": first.body["request"]["effectDigest"]

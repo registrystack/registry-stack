@@ -3335,7 +3335,58 @@
       "ReviewCreateRequest": {
         "additionalProperties": false,
         "properties": {
-          "context": {},
+          "context": {
+            "discriminator": {
+              "propertyName": "strategy"
+            },
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "snapshot": {},
+                  "strategy": {
+                    "enum": [
+                      "submitted"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "strategy",
+                  "snapshot"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "binding": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "reference": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "reference"
+                    ],
+                    "type": "object"
+                  },
+                  "strategy": {
+                    "enum": [
+                      "source"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "strategy",
+                  "binding"
+                ],
+                "type": "object"
+              }
+            ]
+          },
           "initiator": {
             "anyOf": [
               {
@@ -4420,6 +4471,9 @@
             ],
             "type": "object"
           },
+          "policySnapshot": {
+            "$ref": "#/components/schemas/ReviewKindPolicySnapshot"
+          },
           "requestId": {
             "format": "uuid",
             "type": "string"
@@ -4478,6 +4532,7 @@
           "subject",
           "requesterReference",
           "policy",
+          "policySnapshot",
           "context"
         ],
         "type": "object"

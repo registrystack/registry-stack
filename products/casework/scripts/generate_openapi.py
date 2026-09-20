@@ -420,6 +420,25 @@ def review_schemas() -> dict:
         "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000][^\\u0000-\\u001F\\u007F-\\u009F]*$",
         "description": "Must contain at least one non-whitespace Unicode character and no Unicode control characters. The runtime maximum is 2,000 UTF-8 bytes. OpenAPI maxLength is intentionally omitted because it counts Unicode code points rather than UTF-8 bytes.",
     }
+    review_context = {
+        "oneOf": [
+            obj(
+                {
+                    "strategy": {"type": "string", "enum": ["submitted"]},
+                    "snapshot": value,
+                },
+                ["strategy", "snapshot"],
+            ),
+            obj(
+                {
+                    "strategy": {"type": "string", "enum": ["source"]},
+                    "binding": obj({"reference": text}, ["reference"]),
+                },
+                ["strategy", "binding"],
+            ),
+        ],
+        "discriminator": {"propertyName": "strategy"},
+    }
     result = {
         "ReviewRetentionPolicy": retention,
         "ReviewOutcomePolicy": outcome,
@@ -441,7 +460,7 @@ def review_schemas() -> dict:
         "ReviewCompletionDestinationPolicy": obj({"destinationId": text, "recipientBinding": text}, ["destinationId", "recipientBinding"]),
         "ReviewSubjectBinding": subject,
         "ReviewPolicyBinding": policy,
-        "ReviewCreateRequest": obj({"kind": text, "subject": subject, "requesterReference": text, "initiator": nullable(ref("IssuerPrincipal")), "context": value, "resultConstraints": result_payload}, ["kind", "subject", "requesterReference", "context"]),
+        "ReviewCreateRequest": obj({"kind": text, "subject": subject, "requesterReference": text, "initiator": nullable(ref("IssuerPrincipal")), "context": review_context, "resultConstraints": result_payload}, ["kind", "subject", "requesterReference", "context"]),
         "ReviewRequestAccepted": obj({"requestId": uuid, "subject": subject, "policy": policy, "submissionDigest": policy_digest}, ["requestId", "subject", "policy", "submissionDigest"]),
         "ReviewRequestView": obj({"requestId": uuid, "subject": subject, "policy": policy, "submissionDigest": policy_digest, "requesterReference": text, "lifecycle": {"type": "string", "enum": ["reviewing", "approved", "rejected", "changes_requested", "answered", "cancelled", "superseded"]}, "activeStage": nullable(text), "createdAt": instant, "updatedAt": instant}, ["requestId", "subject", "policy", "submissionDigest", "requesterReference", "lifecycle", "createdAt", "updatedAt"]),
         "ReviewResult": obj({"resultId": uuid, "requestId": uuid, "subject": subject, "policy": policy, "submissionDigest": policy_digest, "status": {"type": "string", "enum": ["approved", "rejected", "changes_requested", "answered", "cancelled", "superseded"]}, "outcome": nullable(text), "result": result_payload, "completedAt": instant, "availableUntil": instant}, ["resultId", "requestId", "subject", "policy", "submissionDigest", "status", "completedAt", "availableUntil"]),
@@ -451,7 +470,7 @@ def review_schemas() -> dict:
         "ReviewCancelResponse": cancel_response,
         "ReviewerTask": task,
         "ReviewTaskPage": obj({"items": array(task), "nextCursor": nullable(uuid)}, ["items"]),
-        "ReviewTaskContext": obj({"taskId": uuid, "requestId": uuid, "subject": subject, "requesterReference": text, "policy": policy, "resultConstraints": result_payload, "context": value}, ["taskId", "requestId", "subject", "requesterReference", "policy", "context"]),
+        "ReviewTaskContext": obj({"taskId": uuid, "requestId": uuid, "subject": subject, "requesterReference": text, "policy": policy, "policySnapshot": ref("ReviewKindPolicySnapshot"), "resultConstraints": result_payload, "context": value}, ["taskId", "requestId", "subject", "requesterReference", "policy", "policySnapshot", "context"]),
         "ReviewTaskDraftInput": obj({"body": value}, ["body"]),
         "ReviewTaskDraft": obj({"taskId": uuid, "author": ref("IssuerPrincipal"), "body": value, "revision": integer, "updatedAt": instant}, ["taskId", "author", "body", "revision", "updatedAt"]),
         "ReviewTaskDecisionRequest": obj({"decision": decision}, ["decision"]),

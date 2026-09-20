@@ -140,7 +140,7 @@ impl CaseworkClient {
                 &[],
             )
             .await?;
-        if complete.value.request_id != request_id {
+        if !valid_review_request_view(&complete.value, request_id) {
             return Err(protocol(
                 StatusCode::OK,
                 CaseworkProtocolFailure::Body,
@@ -344,7 +344,12 @@ impl CaseworkClient {
                 &[],
             )
             .await?;
-        if complete.value.task_id != task_id {
+        let snapshot = &complete.value.policy_snapshot;
+        if complete.value.task_id != task_id
+            || snapshot.identity.id != complete.value.policy.id
+            || snapshot.identity.version != complete.value.policy.version
+            || snapshot.identity.digest != complete.value.policy.digest
+        {
             return Err(protocol(
                 StatusCode::OK,
                 CaseworkProtocolFailure::Body,
@@ -352,6 +357,74 @@ impl CaseworkClient {
             ));
         }
         Ok(complete)
+    }
+
+    pub async fn preview_review_task_templates(
+        &self,
+        auth: CaseworkAuth<'_>,
+        task_id: Uuid,
+    ) -> Result<CaseworkComplete<registry_casework_core::TaskTemplatePreviews>, CaseworkClientError>
+    {
+        require_source_profile(&auth)?;
+        self.get_json(
+            &auth,
+            &["v1", "review-tasks", &task_id.to_string(), "task-templates"],
+            &[],
+        )
+        .await
+    }
+
+    pub async fn list_review_task_grants(
+        &self,
+        auth: CaseworkAuth<'_>,
+        task_id: Uuid,
+    ) -> Result<CaseworkComplete<registry_casework_core::TaskGrantList>, CaseworkClientError> {
+        require_source_profile(&auth)?;
+        self.get_json(
+            &auth,
+            &["v1", "review-tasks", &task_id.to_string(), "task-grants"],
+            &[],
+        )
+        .await
+    }
+
+    pub async fn approve_review_task_grant(
+        &self,
+        auth: CaseworkAuth<'_>,
+        task_id: Uuid,
+        expected_revision: i64,
+        idempotency_key: &str,
+        approval: &registry_casework_core::TaskApprovalRequest,
+    ) -> Result<CaseworkComplete<registry_casework_core::TaskGrantView>, CaseworkClientError> {
+        require_source_profile(&auth)?;
+        self.mutate(
+            &auth,
+            &["v1", "review-tasks", &task_id.to_string(), "task-grants"],
+            expected_revision,
+            idempotency_key,
+            approval,
+        )
+        .await
+    }
+
+    pub async fn revoke_review_task_grant(
+        &self,
+        auth: CaseworkAuth<'_>,
+        task_id: Uuid,
+        grant_id: Uuid,
+    ) -> Result<CaseworkComplete<registry_casework_core::TaskGrantRevocation>, CaseworkClientError>
+    {
+        reject_source_profile(&auth)?;
+        let url = self.url(&[
+            "v1",
+            "review-tasks",
+            &task_id.to_string(),
+            "task-grants",
+            &grant_id.to_string(),
+            "revoke",
+        ])?;
+        self.send_json(self.authorized(self.http.post(url), &auth)?, StatusCode::OK)
+            .await
     }
 
     pub async fn claim_review_task(
@@ -1623,6 +1696,24 @@ impl CaseworkClient {
     }
 }
 
+fn valid_review_request_view(value: &ReviewRequestView, expected_request_id: Uuid) -> bool {
+    let active_stage_is_consistent = match value.lifecycle {
+        registry_casework_core::ReviewRequestLifecycle::Reviewing => value.active_stage.is_some(),
+        _ => value.active_stage.is_none(),
+    };
+    value.subject.check().is_ok()
+        && value.policy.check().is_ok()
+        && value.request_id == expected_request_id
+        && active_stage_is_consistent
+        && !value.requester_reference.is_empty()
+        && value.requester_reference.len() <= 256
+        && !value.requester_reference.chars().any(char::is_control)
+        && value.active_stage.as_ref().is_none_or(|stage| {
+            !stage.is_empty() && stage.len() <= 128 && !stage.chars().any(char::is_control)
+        })
+        && value.updated_at >= value.created_at
+}
+
 fn review_validation_reason(value: &str) -> Option<ReviewValidationReason> {
     Some(match value {
         "kind_not_allowed" => ReviewValidationReason::KindNotAllowed,
@@ -1845,5 +1936,31 @@ mod tests {
         assert!(validate_identifier(&"x".repeat(129), "profile").is_err());
         assert!(validate_idempotency_key(&"x".repeat(128)).is_ok());
         assert!(validate_idempotency_key(&"x".repeat(129)).is_err());
+    }
+
+    #[test]
+    fn review_request_views_require_the_complete_protocol_shape() {
+        let mut view: ReviewRequestView = serde_json::from_value(serde_json::json!({
+            "requestId": Uuid::nil(),
+            "subject": {
+                "source": "registry", "type": "request", "id": "request-1", "version": "1",
+                "digest": registry_casework_core::ContentDigest::for_bytes(b"request-1")
+            },
+            "policy": {
+                "id": "approval", "version": "1",
+                "digest": registry_casework_core::ContentDigest::for_bytes(b"policy")
+            },
+            "submissionDigest": registry_casework_core::ContentDigest::for_bytes(b"submission"),
+            "requesterReference": "request-1", "lifecycle": "reviewing",
+            "activeStage": "review", "createdAt": "2026-09-20T00:00:00Z",
+            "updatedAt": "2026-09-20T00:00:00Z"
+        }))
+        .expect("valid request view");
+        assert!(valid_review_request_view(&view, Uuid::nil()));
+        view.lifecycle = registry_casework_core::ReviewRequestLifecycle::Approved;
+        assert!(!valid_review_request_view(&view, Uuid::nil()));
+        view.active_stage = None;
+        view.updated_at = view.created_at - std::time::Duration::from_secs(1);
+        assert!(!valid_review_request_view(&view, Uuid::nil()));
     }
 }

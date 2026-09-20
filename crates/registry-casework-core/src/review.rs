@@ -492,6 +492,7 @@ pub struct ReviewTaskContext {
     pub subject: SubjectBinding,
     pub requester_reference: String,
     pub policy: PolicyBinding,
+    pub policy_snapshot: ReviewKindPolicySnapshot,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_constraints: Option<Value>,
     pub context: ReviewTaskContextData,

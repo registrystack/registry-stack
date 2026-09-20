@@ -318,14 +318,29 @@ async fn request(
     body: Option<Value>,
     key: Option<&str>,
 ) -> (StatusCode, Value) {
+    request_with_profiles(f, method, path, token, human, human, body, key).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn request_with_profiles(
+    f: &Fixture,
+    method: &str,
+    path: &str,
+    token: &str,
+    casework_profile: bool,
+    source_profile: bool,
+    body: Option<Value>,
+    key: Option<&str>,
+) -> (StatusCode, Value) {
     let mut req = Request::builder()
         .method(method)
         .uri(path)
         .header("authorization", format!("Bearer {token}"));
-    if human {
-        req = req
-            .header(CASEWORK_PROFILE_HEADER, f.profile_id)
-            .header(SOURCE_PROFILE_HEADER, "source-reader");
+    if casework_profile {
+        req = req.header(CASEWORK_PROFILE_HEADER, f.profile_id);
+    }
+    if source_profile {
+        req = req.header(SOURCE_PROFILE_HEADER, "source-reader");
     }
     if let Some(key) = key {
         req = req
@@ -1000,12 +1015,18 @@ async fn review_task_grants_bind_holder_revision_subject_and_revocation() {
         "/v1/review-tasks/{}/task-grants/{revoked_id}/revoke",
         f.review_task
     );
-    assert_eq!(
-        request(&f, "POST", &revoke_path, &human, true, None, None)
-            .await
-            .0,
-        StatusCode::OK
-    );
+    let db = f.store.client().await.unwrap();
+    db.execute(
+        "INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
+             VALUES('team',$1,'revoker','staff')",
+        &[&ISSUER],
+    )
+    .await
+    .unwrap();
+    let revoker = token("revoker", "human-client", "human", "casework:staff");
+    let (status, body) =
+        request_with_profiles(&f, "POST", &revoke_path, &revoker, true, false, None, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         request(
             &f,
@@ -1027,7 +1048,7 @@ async fn review_task_grants_bind_holder_revision_subject_and_revocation() {
         &grants,
         &human,
         true,
-        Some(approval),
+        Some(approval.clone()),
         Some("review-source-change"),
     )
     .await;
@@ -1064,6 +1085,41 @@ async fn review_task_grants_bind_holder_revision_subject_and_revocation() {
         false,
         "restored source disclosure must not revive an invalidated review task grant"
     );
+
+    let existing: i64 = db
+        .query_one(
+            "SELECT count(*) FROM casework_review_task_grants WHERE task_id=$1",
+            &[&f.review_task],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    db.execute(
+        "INSERT INTO casework_review_task_grants(
+                grant_id,task_id,request_id,task_revision,holder_issuer,holder_subject,
+                approver_profile,approver_role,idempotency_key,request_hash,record,
+                approved_at,expires_at)
+             SELECT md5($1::text||'-'||n::text)::uuid,task_id,request_id,task_revision,
+                    holder_issuer,holder_subject,approver_profile,approver_role,
+                    'capacity-'||n::text,request_hash,record,approved_at,expires_at
+             FROM (
+                 SELECT * FROM casework_review_task_grants WHERE task_id=$1 LIMIT 1
+             ) seed CROSS JOIN generate_series(1,$2::integer) n",
+        &[&f.review_task, &i32::try_from(128 - existing).unwrap()],
+    )
+    .await
+    .unwrap();
+    let (status, body) = request(
+        &f,
+        "POST",
+        &grants,
+        &human,
+        true,
+        Some(approval),
+        Some("review-capacity-overflow"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 
     f.store
         .client()

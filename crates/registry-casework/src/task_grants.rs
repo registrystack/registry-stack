@@ -421,6 +421,13 @@ impl PostgresStore {
                 &[],
             )
             .await?;
+        transaction
+            .query_opt(
+                "SELECT 1 FROM casework_review_tasks WHERE task_id=$1 FOR UPDATE",
+                &[&grant.task_id],
+            )
+            .await?
+            .ok_or(StoreError::NotFound)?;
         if !template_active(&transaction, &grant.template).await? {
             return Err(StoreError::Forbidden);
         }
@@ -482,6 +489,16 @@ impl PostgresStore {
                 grant: serde_json::from_value(previous.get(1))?,
                 invalidated: previous.get(2),
             });
+        }
+        let count: i64 = transaction
+            .query_one(
+                "SELECT count(*) FROM casework_review_task_grants WHERE task_id=$1",
+                &[&grant.task_id],
+            )
+            .await?
+            .get(0);
+        if count >= 128 {
+            return Err(StoreError::Invalid);
         }
         let approved = DateTime::from_timestamp(
             i64::try_from(grant.approved_at).map_err(|_| StoreError::Invalid)?,
@@ -648,16 +665,62 @@ impl PostgresStore {
         if !matches!(reason, "revoked" | "source" | "template") {
             return Err(StoreError::Invalid);
         }
-        let stored = self.review_task_grant(id).await?;
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        transaction
+            .query_one(
+                "SELECT directory_revision FROM casework_meta WHERE singleton=true FOR SHARE",
+                &[],
+            )
+            .await?;
+        let row = transaction
+            .query_opt(
+                "SELECT record FROM casework_review_task_grants WHERE grant_id=$1 FOR UPDATE",
+                &[&id],
+            )
+            .await?
+            .ok_or(StoreError::NotFound)?;
+        let grant: ReviewTaskGrant = serde_json::from_value(row.get(0))?;
         if let Some(actor) = actor {
-            if actor.principal != stored.grant.holder
-                || actor.profile_id != stored.grant.approver_profile
+            let Some(kind) = membership_kind(actor.role) else {
+                return Err(StoreError::Forbidden);
+            };
+            if !template_active(&transaction, &grant.template).await?
+                || !grant.template.eligible_profiles.contains(&actor.profile_id)
+                || !transaction
+                    .query_one(
+                        "SELECT EXISTS(
+                           SELECT 1 FROM casework_review_tasks t
+                           JOIN casework_review_requests r ON r.request_id=t.request_id
+                           JOIN casework_queue_service q ON q.queue_id=t.queue_id
+                           JOIN casework_memberships m ON m.team_id=q.team_id
+                           WHERE t.task_id=$1 AND t.request_id=$2
+                             AND r.lifecycle='reviewing' AND t.stage_index=r.active_stage_index
+                             AND m.issuer=$3 AND m.subject=$4 AND m.membership_kind=$5
+                             AND m.team_id=ANY($6) AND $7=ANY($8)
+                             AND ((r.policy_snapshot->'stages'->t.stage_index->'decidingProfiles') ? $7)
+                             AND r.policy_id=ANY($9) AND r.subject_source=$10
+                         )",
+                        &[
+                            &grant.task_id,
+                            &grant.request_id,
+                            &actor.principal.issuer,
+                            &actor.principal.subject,
+                            &kind,
+                            &grant.template.eligible_teams,
+                            &actor.profile_id,
+                            &grant.template.eligible_profiles,
+                            &grant.template.review_kinds,
+                            &grant.template.source,
+                        ],
+                    )
+                    .await?
+                    .get::<_, bool>(0)
             {
                 return Err(StoreError::Forbidden);
             }
         }
-        let client = self.client().await?;
-        client
+        transaction
             .execute(
                 "UPDATE casework_review_task_grants
                  SET invalidated_at=COALESCE(invalidated_at,now()),
@@ -666,6 +729,7 @@ impl PostgresStore {
                 &[&id, &reason],
             )
             .await?;
+        transaction.commit().await?;
         Ok(())
     }
 }

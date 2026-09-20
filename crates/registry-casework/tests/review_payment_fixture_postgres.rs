@@ -13,7 +13,6 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use chrono::{TimeDelta, Utc};
 use registry_casework::{
     router, CaseworkAuthenticator, CaseworkService, DatabaseConfig, HttpState, HumanIdentityConfig,
     PostgresStore, ReviewResultRead, ReviewTaskDecisionRequest,
@@ -840,31 +839,18 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
         receipt
     );
 
-    let now = Utc::now();
-    database
-        .execute(
-            "UPDATE casework_review_terminal_events
-             SET completed_at=$2,retained_until=$3 WHERE request_id=$1",
-            &[
-                &created.request_id,
-                &(now - TimeDelta::minutes(2)),
-                &(now + TimeDelta::days(1)),
-            ],
+    let events = database
+        .query(
+            "SELECT event_id,request_id FROM casework_review_terminal_events
+             WHERE request_id=ANY($1) ORDER BY feed_position",
+            &[&vec![created.request_id, withdrawn.request_id]],
         )
         .await
-        .expect("order pushed payment event first");
-    database
-        .execute(
-            "UPDATE casework_review_terminal_events
-             SET completed_at=$2,retained_until=$3 WHERE request_id=$1",
-            &[
-                &withdrawn.request_id,
-                &(now - TimeDelta::minutes(1)),
-                &(now + TimeDelta::days(1)),
-            ],
-        )
-        .await
-        .expect("order withdrawn payment event second");
+        .expect("read commit-stable payment feed order");
+    assert_eq!(events.len(), 2);
+    let first_event_id: Uuid = events[0].get(0);
+    let first_request_id: Uuid = events[0].get(1);
+    let second_request_id: Uuid = events[1].get(1);
     let first_feed = client
         .get(format!("{}/v1/review-results?limit=1", casework.base_url))
         .bearer_auth(&producer_token)
@@ -877,19 +863,26 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
     let first_feed: ReviewResultFeedPage =
         serde_json::from_slice(&first_feed_bytes).expect("first payment feed page");
     assert_eq!(first_feed.items.len(), 1);
-    assert_eq!(first_feed.items[0].event_id, completion.event_id);
+    assert_eq!(first_feed.items[0].event_id, first_event_id);
     receiver_store.record_feed(&first_feed);
+    receiver_store.register_request(first_request_id);
     assert_eq!(
         receiver_store.inbox.lock().expect("receiver inbox").len(),
-        1
+        if first_event_id == completion.event_id {
+            1
+        } else {
+            2
+        }
     );
     let cursor = first_feed.next_cursor.expect("payment feed cursor");
 
     database
         .execute(
             "UPDATE casework_review_terminal_events
-             SET retained_until=now()-interval '1 second' WHERE event_id=$1",
-            &[&completion.event_id],
+             SET completed_at=now()-interval '2 seconds',
+                 retained_until=now()-interval '1 second'
+             WHERE event_id=$1",
+            &[&first_event_id],
         )
         .await
         .expect("expire payment feed cursor event");
@@ -920,9 +913,9 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
     let restarted_feed: ReviewResultFeedPage =
         serde_json::from_slice(&restarted_feed_bytes).expect("restarted payment feed page");
     assert_eq!(restarted_feed.items.len(), 1);
-    assert_eq!(restarted_feed.items[0].request_id, withdrawn.request_id);
+    assert_eq!(restarted_feed.items[0].request_id, second_request_id);
     receiver_store.record_feed(&restarted_feed);
-    receiver_store.register_request(withdrawn.request_id);
+    receiver_store.register_request(second_request_id);
     assert_eq!(
         receiver_store.inbox.lock().expect("receiver inbox").len(),
         2

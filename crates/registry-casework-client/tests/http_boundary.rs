@@ -13,7 +13,10 @@ use registry_casework_client::{
     ReviewCreateRequest, ReviewHistoryAudience, ReviewNoteRequest, ReviewTaskContextData,
     ReviewValidationReason, SourceBinding, SourceContextBinding,
 };
-use registry_casework_core::SubjectBinding;
+use registry_casework_core::{
+    ReviewContextStrategy, ReviewKindPolicy, ReviewKindPurpose, ReviewRetentionPolicy,
+    ReviewStagePolicy, SubjectBinding,
+};
 use serde_json::{json, Value};
 use url::Url;
 use uuid::Uuid;
@@ -1304,19 +1307,53 @@ async fn problem_response() -> impl IntoResponse {
 }
 
 async fn task_context_response() -> impl IntoResponse {
+    let snapshot = ReviewKindPolicy {
+        id: "standalone-answer".to_owned(),
+        version: "1".to_owned(),
+        purpose: ReviewKindPurpose::Approval,
+        context_strategy: ReviewContextStrategy::Submitted,
+        stages: vec![ReviewStagePolicy {
+            id: "answer".to_owned(),
+            queue: "answers".to_owned(),
+            deciding_profiles: vec!["staff".to_owned()],
+            required_approvals: 1,
+            exclude_initiator: false,
+            exclude_previous_stage_reviewers: false,
+        }],
+        clocks: Vec::new(),
+        retention: ReviewRetentionPolicy {
+            terminal_days: 30,
+            accountability_days: 30,
+        },
+        display_schema: json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+        }),
+        result_schema: None,
+        outcomes: Vec::new(),
+    }
+    .snapshot()
+    .expect("fixture policy snapshot");
+    let body = json!({
+        "taskId": Uuid::nil(),
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "subject": {
+            "source": "registry", "type": "record", "id": "record-1", "version": "1",
+            "digest": ContentDigest::for_bytes(b"record-1")
+        },
+        "requesterReference": "requester-reference",
+        "policy": snapshot.identity.clone(),
+        "policySnapshot": snapshot,
+        "context": {"strategy": "submitted", "snapshot": {"summary": "Frozen review"}}
+    });
     (
         StatusCode::OK,
-        [("content-type", "application/json"), ("traceparent", TRACEPARENT)],
-        concat!(
-            "{",
-            "\"taskId\":\"00000000-0000-0000-0000-000000000000\",",
-            "\"requestId\":\"10000000-0000-4000-8000-000000000001\",",
-            "\"subject\":{\"source\":\"registry\",\"type\":\"record\",\"id\":\"record-1\",\"version\":\"1\",\"digest\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\"},",
-            "\"requesterReference\":\"requester-reference\",",
-            "\"policy\":{\"id\":\"standalone-answer\",\"version\":\"1\",\"digest\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\"},",
-            "\"context\":{\"strategy\":\"submitted\",\"snapshot\":{\"summary\":\"Frozen review\"}}",
-            "}"
-        ),
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        body.to_string(),
     )
 }
 

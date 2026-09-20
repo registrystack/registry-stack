@@ -54,6 +54,23 @@ class _Handler(BaseHTTPRequestHandler):
                     "version": "1",
                     "digest": f"sha256:{'b' * 64}",
                 },
+                "policySnapshot": {
+                    "identity": {
+                        "id": "registry-correction",
+                        "version": "1",
+                        "digest": f"sha256:{'b' * 64}",
+                    },
+                    "purpose": "approval",
+                    "contextStrategy": "source",
+                    "stages": [{
+                        "id": "review", "queue": "review",
+                        "decidingProfiles": ["staff"], "requiredApprovals": 1,
+                        "excludeInitiator": False,
+                        "excludePreviousStageReviewers": False,
+                    }],
+                    "retention": {"terminalDays": 30, "accountabilityDays": 30},
+                    "displaySchema": {},
+                },
                 "context": {
                     "strategy": "source",
                     "reference": "correction-42",

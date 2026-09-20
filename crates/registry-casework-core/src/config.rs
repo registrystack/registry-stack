@@ -483,7 +483,13 @@ pub struct ReviewCompletionDestinationPolicy {
 
 impl ReviewCompletionDestinationPolicy {
     fn check(&self) -> bool {
-        valid_review_name(&self.destination_id) && bounded_config_text(&self.recipient_binding, 256)
+        valid_review_name(&self.destination_id)
+            && !self.recipient_binding.is_empty()
+            && self.recipient_binding.len() <= 256
+            && self
+                .recipient_binding
+                .bytes()
+                .all(|byte| matches!(byte, 0x21..=0x7e))
     }
 }
 
@@ -845,6 +851,17 @@ mod tests {
             Some("i".repeat(257));
         assert_eq!(
             oversized_initiator_issuer.check(),
+            Err(ConfigError::ReviewProducers)
+        );
+
+        let mut invalid_recipient_header = candidate.clone();
+        invalid_recipient_header.review_producers[0]
+            .completion
+            .as_mut()
+            .expect("completion policy")
+            .recipient_binding = "récepteur".to_owned();
+        assert_eq!(
+            invalid_recipient_header.check(),
             Err(ConfigError::ReviewProducers)
         );
 

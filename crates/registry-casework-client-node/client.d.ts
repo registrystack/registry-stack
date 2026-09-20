@@ -411,6 +411,7 @@ export interface ReviewTaskContext {
   subject: ReviewSubjectBinding
   requesterReference: string
   policy: ReviewPolicyBinding
+  policySnapshot: ReviewKindPolicySnapshot
   resultConstraints?: JsonValue
   context: ReviewTaskContextData
 }
@@ -456,6 +457,10 @@ export class CaseworkClient {
   reviewTasks(token: string, profile: string, query?: ReviewTaskQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTaskPage>>
   reviewTask(token: string, profile: string, taskId: string, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewerTask>>
   reviewTaskContext(token: string, profile: string, taskId: string, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTaskContext>>
+  previewReviewTaskTemplates(token: string, profile: string, sourceProfile: string, taskId: string): Promise<CaseworkOutcome<TaskTemplatePreviews>>
+  listReviewTaskGrants(token: string, profile: string, sourceProfile: string, taskId: string): Promise<CaseworkOutcome<TaskGrantList>>
+  approveReviewTaskGrant(token: string, profile: string, sourceProfile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string, approval: TaskApprovalRequest): Promise<CaseworkOutcome<TaskGrantView>>
+  revokeReviewTaskGrant(token: string, profile: string, taskId: string, grantId: string): Promise<CaseworkOutcome<TaskGrantRevocation>>
   claimReviewTask(token: string, profile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewerTask>>
   releaseReviewTask(token: string, profile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string): Promise<CaseworkOutcome<ReviewerTask>>
   assignReviewTask(token: string, profile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string, request: AssignmentRequest, sourceProfile?: string): Promise<CaseworkOutcome<ReviewerTask>>

@@ -13,6 +13,10 @@ export declare class CaseworkClient {
   reviewTasks(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   reviewTask(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   reviewTaskContext(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  previewReviewTaskTemplates(token: string, profile: string, sourceProfile: string, taskId: string): Promise<CaseworkOutcome>
+  listReviewTaskGrants(token: string, profile: string, sourceProfile: string, taskId: string): Promise<CaseworkOutcome>
+  approveReviewTaskGrant(token: string, profile: string, sourceProfile: string, taskId: string, expectedRevision: number, idempotencyKey: string, approval: any): Promise<CaseworkOutcome>
+  revokeReviewTaskGrant(token: string, profile: string, taskId: string, grantId: string): Promise<CaseworkOutcome>
   claimReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   releaseReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string): Promise<CaseworkOutcome>
   assignReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, request: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>

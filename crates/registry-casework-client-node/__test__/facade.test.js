@@ -29,6 +29,12 @@ test('review task context uses the exact route and forwards the optional source 
         },
         requesterReference: 'correction-42',
         policy: { id: 'registry-correction', version: '1', digest: `sha256:${'b'.repeat(64)}` },
+        policySnapshot: {
+          identity: { id: 'registry-correction', version: '1', digest: `sha256:${'b'.repeat(64)}` },
+          purpose: 'approval', contextStrategy: 'source',
+          stages: [{ id: 'review', queue: 'review', decidingProfiles: ['staff'], requiredApprovals: 1, excludeInitiator: false, excludePreviousStageReviewers: false }],
+          retention: { terminalDays: 30, accountabilityDays: 30 }, displaySchema: {},
+        },
         context: {
           strategy: 'source', reference: 'correction-42', bindingStatus: 'current',
           projection: {

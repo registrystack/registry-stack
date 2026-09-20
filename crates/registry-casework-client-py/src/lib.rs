@@ -610,6 +610,103 @@ impl CaseworkClient {
         )
     }
 
+    fn preview_review_task_templates<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        source_profile: &str,
+        task_id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime
+                    .block_on(self.inner.preview_review_task_templates(
+                        auth(&token, profile, Some(source_profile)),
+                        task_id,
+                    ))
+            }),
+        )
+    }
+
+    fn list_review_task_grants<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        source_profile: &str,
+        task_id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner.list_review_task_grants(
+                        auth(&token, profile, Some(source_profile)),
+                        task_id,
+                    ),
+                )
+            }),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn approve_review_task_grant<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        source_profile: &str,
+        task_id: &str,
+        expected_revision: i64,
+        idempotency_key: &str,
+        approval: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        let approval: casework_client_sdk::TaskApprovalRequest = input(py, approval)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.approve_review_task_grant(
+                    auth(&token, profile, Some(source_profile)),
+                    task_id,
+                    expected_revision,
+                    idempotency_key,
+                    &approval,
+                ))
+            }),
+        )
+    }
+
+    fn revoke_review_task_grant<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        task_id: &str,
+        grant_id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        let grant_id = uuid(py, grant_id)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.revoke_review_task_grant(
+                    auth(&token, profile, None),
+                    task_id,
+                    grant_id,
+                ))
+            }),
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn claim_review_task<'py>(
         &self,

@@ -99,6 +99,7 @@ CREATE INDEX casework_review_request_retention_idx
     WHERE terminal_at IS NOT NULL;
 
 CREATE TABLE casework_review_submission_reservations (
+    binding_digest text NOT NULL UNIQUE CHECK (binding_digest ~ '^sha256:[0-9a-f]{64}$'),
     producer_id text NOT NULL CHECK (octet_length(producer_id) BETWEEN 1 AND 128),
     source_namespace text NOT NULL CHECK (octet_length(source_namespace) BETWEEN 1 AND 128),
     subject_source text NOT NULL CHECK (octet_length(subject_source) BETWEEN 1 AND 128),
@@ -121,27 +122,8 @@ CREATE TABLE casework_review_submission_reservations (
         policy_id
     ),
     CHECK (retained_until >= recovery_deadline),
-    FOREIGN KEY (
-        request_id,
-        producer_id,
-        source_namespace,
-        subject_source,
-        subject_type,
-        subject_id,
-        subject_version,
-        policy_id,
-        submission_digest
-    ) REFERENCES casework_review_requests(
-        request_id,
-        producer_id,
-        source_namespace,
-        subject_source,
-        subject_type,
-        subject_id,
-        subject_version,
-        policy_id,
-        submission_digest
-    ) ON DELETE SET NULL (request_id)
+    FOREIGN KEY (request_id) REFERENCES casework_review_requests(request_id)
+        ON DELETE SET NULL
 );
 CREATE INDEX casework_review_submission_retention_idx
     ON casework_review_submission_reservations(retained_until, producer_id, subject_id);

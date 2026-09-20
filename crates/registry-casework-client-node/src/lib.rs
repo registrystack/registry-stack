@@ -264,6 +264,91 @@ impl CaseworkClient {
     }
 
     #[napi]
+    pub async fn preview_review_task_templates(
+        &self,
+        token: String,
+        profile: String,
+        source_profile: String,
+        task_id: String,
+    ) -> Result<CaseworkOutcome> {
+        let task_id = uuid(&task_id)?;
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .preview_review_task_templates(auth(&token, &profile, &source_profile), task_id)
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn list_review_task_grants(
+        &self,
+        token: String,
+        profile: String,
+        source_profile: String,
+        task_id: String,
+    ) -> Result<CaseworkOutcome> {
+        let task_id = uuid(&task_id)?;
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .list_review_task_grants(auth(&token, &profile, &source_profile), task_id)
+                .await,
+        )
+    }
+
+    #[napi]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn approve_review_task_grant(
+        &self,
+        token: String,
+        profile: String,
+        source_profile: String,
+        task_id: String,
+        expected_revision: i64,
+        idempotency_key: String,
+        approval: Value,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(expected_revision)?;
+        let task_id = uuid(&task_id)?;
+        let approval: registry_casework_client::TaskApprovalRequest = input(approval)?;
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .approve_review_task_grant(
+                    auth(&token, &profile, &source_profile),
+                    task_id,
+                    expected_revision,
+                    &idempotency_key,
+                    &approval,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn revoke_review_task_grant(
+        &self,
+        token: String,
+        profile: String,
+        task_id: String,
+        grant_id: String,
+    ) -> Result<CaseworkOutcome> {
+        let task_id = uuid(&task_id)?;
+        let grant_id = uuid(&grant_id)?;
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .revoke_review_task_grant(
+                    optional_source_auth(&token, &profile, None),
+                    task_id,
+                    grant_id,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
     pub async fn claim_review_task(
         &self,
         token: String,

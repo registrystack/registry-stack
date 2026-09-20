@@ -1274,20 +1274,17 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
             .await,
         Ok(ReviewResultRead::Expired)
     ));
-    let retained_recovery = fixture
-        .service_v1
-        .create_review_request(
-            &fixture.producer,
-            create.clone(),
-            "recover-after-result-expiry",
-        )
-        .await
-        .expect("recover retained creation after result expiry");
-    assert!(retained_recovery.recovered);
-    assert_eq!(
-        retained_recovery.accepted.request_id,
-        first.accepted.request_id
-    );
+    assert!(matches!(
+        fixture
+            .service_v1
+            .create_review_request(
+                &fixture.producer,
+                create.clone(),
+                "recover-after-result-expiry",
+            )
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
     fixture
         .database
         .execute(
@@ -1323,6 +1320,40 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         .expect("retained accountability tombstone")
         .get(0);
     assert_eq!(redacted_context, json!({}));
+    let scrubbed = fixture
+        .database
+        .query_one(
+            "SELECT submission_digest,producer_issuer,producer_subject,source_namespace,
+                    subject_source,subject_type,subject_id,subject_version,subject_digest,
+                    requester_reference,initiator_issuer,initiator_subject,
+                    completion_destination,completion_recipient_binding
+             FROM casework_review_requests WHERE request_id=$1",
+            &[&first.accepted.request_id],
+        )
+        .await
+        .expect("inspect payload-free request tombstone");
+    let tombstone: String = scrubbed.get(0);
+    for column in 1..=9 {
+        assert_eq!(scrubbed.get::<_, String>(column), tombstone);
+    }
+    for column in 10..=13 {
+        assert!(scrubbed.get::<_, Option<String>>(column).is_none());
+    }
+    let reservation = fixture
+        .database
+        .query_one(
+            "SELECT binding_digest,submission_digest,source_namespace,subject_source,
+                    subject_type,subject_id,subject_version
+             FROM casework_review_submission_reservations WHERE request_id=$1",
+            &[&first.accepted.request_id],
+        )
+        .await
+        .expect("inspect payload-free submission tombstone");
+    assert!(reservation.get::<_, String>(0).starts_with("sha256:"));
+    let reservation_tombstone: String = reservation.get(1);
+    for column in 2..=6 {
+        assert_eq!(reservation.get::<_, String>(column), reservation_tombstone);
+    }
     assert!(
         count_for_request(
             &fixture,
