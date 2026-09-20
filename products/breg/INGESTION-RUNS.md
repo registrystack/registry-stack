@@ -16,7 +16,11 @@ digest and length, the chunking algorithm `greedy-canonical-http-batch-v1`, and
 the expected item and chunk counts. A run refuses any other algorithm, so
 remaining source bytes are never reinterpreted under a different chunking
 contract. `maximumItems` and `maximumBytes` on the run are the compiled batch
-bounds every chunk stays inside.
+bounds every chunk stays inside. `maximumBytes` bounds the chunk's canonical
+batch body; the request envelope that wraps it (chunk index, content and
+length digests, and their member names) is read under a separate fixed
+transport ceiling of the compiled batch byte ceiling plus 1 KiB, so a chunk
+the run's own bounds admit is never refused for the envelope that carries it.
 
 Every operation rechecks current profile authority against the compiled batch
 route. A run id is not a capability: visibility is creator-scoped, another
