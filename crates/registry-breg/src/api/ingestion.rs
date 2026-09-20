@@ -214,8 +214,8 @@ async fn list_runs(
             &surface.context,
             IngestionRunListQuery {
                 entity_id: binding.base.entity_id.clone(),
-                status: None,
-                input_digest: None,
+                status: query.status,
+                input_digest: query.input_digest,
                 after_run_id: query.after_run_id,
                 limit: query.limit,
             },
@@ -813,18 +813,23 @@ fn path_chunk_index(path: &HashMap<String, String>) -> Option<i64> {
 
 struct IngestionListQuery {
     options: QueryOptions,
+    status: Option<String>,
+    input_digest: Option<String>,
     after_run_id: Option<Uuid>,
     limit: i64,
 }
 
 /// The query an ingestion listing admits: the access profile every ingestion
-/// operation re-authorizes under, the bounded page size, and the keyset
-/// cursor. Any other member is invalid, exactly like the strict read query.
+/// operation re-authorizes under, the bounded page size, the keyset cursor,
+/// and the status and input-digest filters. Any other member is invalid,
+/// exactly like the strict read query.
 fn parse_list_query(raw: Option<&str>) -> Result<IngestionListQuery, QueryParseError> {
     let mut access_profile = None;
     let mut limit = crate::ingestion_store::DEFAULT_RUN_PAGE_SIZE;
     let mut limit_seen = false;
     let mut after_run_id = None;
+    let mut status = None;
+    let mut input_digest = None;
     if let Some(raw) = raw {
         if raw.is_empty() || raw.len() > MAX_RAW_QUERY_BYTES {
             return Err(QueryParseError::Invalid);
@@ -852,6 +857,18 @@ fn parse_list_query(raw: Option<&str>) -> Result<IngestionListQuery, QueryParseE
                         return Err(QueryParseError::Invalid);
                     }
                 }
+                "status" => {
+                    if crate::ingestion_store::IngestionRunStatus::parse(&value).is_none()
+                        || status.replace(value).is_some()
+                    {
+                        return Err(QueryParseError::Invalid);
+                    }
+                }
+                "inputDigest" => {
+                    if !valid_digest(&value) || input_digest.replace(value).is_some() {
+                        return Err(QueryParseError::Invalid);
+                    }
+                }
                 _ => return Err(QueryParseError::Invalid),
             }
         }
@@ -868,6 +885,8 @@ fn parse_list_query(raw: Option<&str>) -> Result<IngestionListQuery, QueryParseE
             request_history_after_proposal_version: None,
             historical: None,
         },
+        status,
+        input_digest,
         after_run_id,
         limit,
     })
@@ -981,6 +1000,23 @@ pub(super) fn append_openapi(
                         "required": false,
                         "description": "The keyset cursor: only runs ordered before this run id.",
                         "schema": {"type": "string", "format": "uuid"}
+                    },
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "required": false,
+                        "description": "Only runs in one status.",
+                        "schema": {
+                            "type": "string",
+                            "enum": ["open", "complete", "cancelled", "blocked"]
+                        }
+                    },
+                    {
+                        "name": "inputDigest",
+                        "in": "query",
+                        "required": false,
+                        "description": "Only runs announced with this input digest.",
+                        "schema": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
                     }
                 ],
                 "responses": ingestion_responses(

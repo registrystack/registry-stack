@@ -276,23 +276,29 @@ impl IngestionDrive<'_> {
     fn read_run(&self, run_id: Uuid) -> Result<BRegIngestionRun, DataLifecycleError> {
         let run = self
             .runtime
-            .block_on(self.client.read_ingestion_run(self.entity_route, run_id))
+            .block_on(
+                self.client
+                    .read_ingestion_run(self.entity_route, run_id, None),
+            )
             .map_err(map_ingestion_client_error)?;
         Ok(run.value)
     }
 
-    /// Submit one chunk, returning the client's own error so the caller can
-    /// decide whether the exchange may have committed before mapping it.
+    /// Submit one chunk under the run's announced access profile, returning
+    /// the client's own error so the caller can decide whether the exchange
+    /// may have committed before mapping it.
     fn submit_chunk(
         &self,
         run_id: Uuid,
         chunk: &BRegIngestionChunk,
     ) -> Result<registry_breg_client::BRegIngestionChunkSubmission, BaseRegistryClientError> {
         self.runtime
-            .block_on(
-                self.client
-                    .submit_ingestion_chunk(self.entity_route, run_id, chunk),
-            )
+            .block_on(self.client.submit_ingestion_chunk(
+                self.entity_route,
+                run_id,
+                chunk,
+                self.plan.profile_id(),
+            ))
             .map(|submission| submission.value)
     }
 }
@@ -2010,7 +2016,7 @@ mod tests {
         let (request_line, headers, announcement) = request_parts(&requests[0]);
         assert_eq!(
             request_line,
-            "POST /v1/records/records/ingestion-runs HTTP/1.1"
+            "POST /v1/records/records/ingestion-runs?accessProfile=operator HTTP/1.1"
         );
         assert_eq!(
             announcement,
@@ -2039,7 +2045,10 @@ mod tests {
             let (request_line, _, submission) = request_parts(request);
             assert_eq!(
                 request_line,
-                format!("POST /v1/records/records/ingestion-runs/{RUN_ID}/chunks HTTP/1.1")
+                format!(
+                    "POST /v1/records/records/ingestion-runs/{RUN_ID}/chunks\
+                     ?accessProfile=operator HTTP/1.1"
+                )
             );
             let chunk = &plan.chunks()[chunk_index];
             let expected_items =
@@ -2092,7 +2101,10 @@ mod tests {
         let (chunk_request, _, submission) = request_parts(&requests[1]);
         assert_eq!(
             chunk_request,
-            format!("POST /v1/records/records/ingestion-runs/{RUN_ID}/chunks HTTP/1.1")
+            format!(
+                "POST /v1/records/records/ingestion-runs/{RUN_ID}/chunks\
+                 ?accessProfile=operator HTTP/1.1"
+            )
         );
         assert_eq!(submission["chunkIndex"], 1);
         assert_eq!(submission["digest"], plan.chunks()[1].digest());

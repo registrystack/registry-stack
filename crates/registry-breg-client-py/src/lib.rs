@@ -6,17 +6,17 @@
 use std::sync::Arc;
 
 use breg_client_sdk::{
-    ingestion_prefix_digest, BRegActionInvocationRequest, BRegActionTargetConditions,
-    BRegActionTargetConditionsRequest, BRegAsOfContinuation, BRegAsOfContinuationProjection,
-    BRegAsOfListRequest, BRegAttachmentSlot as CoreAttachmentSlot, BRegAttachmentSlotValue,
-    BRegAttachmentState, BRegAttachmentUpload as CoreAttachmentUpload,
-    BRegAttachmentVerificationStatus, BRegBatchBinding, BRegBatchBuilder, BRegBoundingBox,
-    BRegChangeContext, BRegComplete, BRegContinuation, BRegContinuationProjection,
-    BRegCreateBinding, BRegCreateRequest, BRegCurrentContinuation,
-    BRegCurrentContinuationProjection, BRegCurrentListRequest, BRegDirectWrite, BRegEtag,
-    BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest,
-    BRegGeoJsonOptions, BRegIdempotencyKey, BRegImmediateActionBinding,
-    BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError, BRegIngestionRunListQuery,
+    BRegActionInvocationRequest, BRegActionTargetConditions, BRegActionTargetConditionsRequest,
+    BRegAsOfContinuation, BRegAsOfContinuationProjection, BRegAsOfListRequest,
+    BRegAttachmentSlot as CoreAttachmentSlot, BRegAttachmentSlotValue, BRegAttachmentState,
+    BRegAttachmentUpload as CoreAttachmentUpload, BRegAttachmentVerificationStatus,
+    BRegBatchBinding, BRegBatchBuilder, BRegBoundingBox, BRegChangeContext, BRegComplete,
+    BRegContinuation, BRegContinuationProjection, BRegCreateBinding, BRegCreateRequest,
+    BRegCurrentContinuation, BRegCurrentContinuationProjection, BRegCurrentListRequest,
+    BRegDirectWrite, BRegEtag, BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection,
+    BRegGeoJsonListRequest, BRegGeoJsonOptions, BRegIdempotencyKey, BRegImmediateActionBinding,
+    BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
+    BRegIngestionPrefixDigest as CoreIngestionPrefixDigest, BRegIngestionRunListQuery,
     BRegIngestionRunRequest, BRegLifecycleAction as CoreLifecycleAction,
     BRegLifecycleActionReceipt, BRegLifecycleAuthority, BRegLifecyclePromotionError,
     BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata, BRegMetadataSelectionError,
@@ -763,8 +763,14 @@ fn ingestion_run_list_query(
     after: Option<String>,
     status: Option<String>,
     input_digest: Option<String>,
+    access_profile: Option<String>,
 ) -> PyResult<BRegIngestionRunListQuery> {
     let mut query = BRegIngestionRunListQuery::default();
+    if let Some(access_profile) = access_profile {
+        query = query
+            .access_profile(access_profile)
+            .map_err(|error| ingestion_error(py, error))?;
+    }
     if let Some(limit) = limit {
         query = query
             .limit(limit)
@@ -860,26 +866,27 @@ fn encode_ingestion_chunk(
 /// The digest is never a chain over chunk digests: the server stores it as an
 /// opaque value and cannot re-derive the raw bytes.
 #[pyclass(name = "BRegIngestionPrefixDigest", module = "registry_breg_client")]
-#[derive(Default)]
 struct IngestionPrefixDigest {
-    bytes: Vec<u8>,
+    inner: CoreIngestionPrefixDigest,
 }
 
 #[pymethods]
 impl IngestionPrefixDigest {
     #[new]
     fn new() -> Self {
-        Self::default()
+        Self {
+            inner: CoreIngestionPrefixDigest::new(),
+        }
     }
 
     /// Absorb the next raw source bytes, typically one chunk's source extent.
     fn update(&mut self, data: Vec<u8>) {
-        self.bytes.extend_from_slice(&data);
+        self.inner.update(&data);
     }
 
     /// The lowercase SHA-256 of every raw source byte absorbed so far.
     fn digest(&self) -> String {
-        ingestion_prefix_digest(&self.bytes)
+        self.inner.digest()
     }
 
     fn __repr__(&self) -> &'static str {
@@ -2783,7 +2790,9 @@ impl BaseRegistryClient {
         complete_value(py, &value.value, &value.metadata)
     }
 
-    /// Announce one whole input and open a durable ingestion run for it.
+    /// Announce one whole input and open a durable ingestion run for it. The
+    /// run request names the access profile, which the client selects for the
+    /// exchange.
     fn create_ingestion_run<'py>(
         &self,
         py: Python<'py>,
@@ -2803,7 +2812,8 @@ impl BaseRegistryClient {
     }
 
     /// Read one bounded page of ingestion runs for one entity route.
-    #[pyo3(signature = (entity_route, *, limit=None, after=None, status=None, input_digest=None))]
+    #[pyo3(signature = (entity_route, *, limit=None, after=None, status=None, input_digest=None, access_profile=None))]
+    #[allow(clippy::too_many_arguments)]
     fn list_ingestion_runs<'py>(
         &self,
         py: Python<'py>,
@@ -2812,8 +2822,10 @@ impl BaseRegistryClient {
         after: Option<String>,
         status: Option<String>,
         input_digest: Option<String>,
+        access_profile: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let query = ingestion_run_list_query(py, limit, after, status, input_digest)?;
+        let query =
+            ingestion_run_list_query(py, limit, after, status, input_digest, access_profile)?;
         let value = py
             .detach(|| {
                 self.runtime
@@ -2824,30 +2836,37 @@ impl BaseRegistryClient {
     }
 
     /// Read the current durable state of one ingestion run.
+    #[pyo3(signature = (entity_route, run_id, access_profile=None))]
     fn read_ingestion_run<'py>(
         &self,
         py: Python<'py>,
         entity_route: &str,
         run_id: &str,
+        access_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let run_id = ingestion_run_identifier(py, run_id)?;
         let value = py
             .detach(|| {
-                self.runtime
-                    .block_on(self.inner.read_ingestion_run(entity_route, run_id))
+                self.runtime.block_on(self.inner.read_ingestion_run(
+                    entity_route,
+                    run_id,
+                    access_profile,
+                ))
             })
             .map_err(|error| sdk_error(py, error))?;
         complete_value(py, &value.value, &value.metadata)
     }
 
-    /// Submit one bounded chunk of an open ingestion run. A resubmitted chunk
-    /// replays its retained receipt instead of executing twice.
+    /// Submit one bounded chunk of an open ingestion run under the run's
+    /// access profile. A resubmitted chunk replays its retained receipt
+    /// instead of executing twice.
     fn submit_ingestion_chunk<'py>(
         &self,
         py: Python<'py>,
         entity_route: &str,
         run_id: &str,
         chunk: PyRef<'_, IngestionChunk>,
+        profile_id: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
         let run_id = ingestion_run_identifier(py, run_id)?;
         let chunk = Arc::clone(&chunk.inner);
@@ -2857,6 +2876,7 @@ impl BaseRegistryClient {
                     entity_route,
                     run_id,
                     chunk.as_ref(),
+                    profile_id,
                 ))
             })
             .map_err(|error| sdk_error(py, error))?;
@@ -2864,30 +2884,38 @@ impl BaseRegistryClient {
     }
 
     /// Cancel an open ingestion run. Committed chunks stay committed.
+    #[pyo3(signature = (entity_route, run_id, access_profile=None))]
     fn cancel_ingestion_run<'py>(
         &self,
         py: Python<'py>,
         entity_route: &str,
         run_id: &str,
+        access_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let run_id = ingestion_run_identifier(py, run_id)?;
         let value = py
             .detach(|| {
-                self.runtime
-                    .block_on(self.inner.cancel_ingestion_run(entity_route, run_id))
+                self.runtime.block_on(self.inner.cancel_ingestion_run(
+                    entity_route,
+                    run_id,
+                    access_profile,
+                ))
             })
             .map_err(|error| sdk_error(py, error))?;
         complete_value(py, &value.value, &value.metadata)
     }
 
-    /// Read the retained receipt of one committed chunk. An erased receipt
-    /// answers with the `ingestion.receipt_erased` problem instead.
+    /// Read the retained receipt of one committed chunk under the run's
+    /// access profile. An erased receipt answers with the
+    /// `ingestion.receipt_erased` problem instead.
+    #[pyo3(signature = (entity_route, run_id, chunk_index, profile_id))]
     fn ingestion_chunk_receipt<'py>(
         &self,
         py: Python<'py>,
         entity_route: &str,
         run_id: &str,
         chunk_index: u64,
+        profile_id: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
         let run_id = ingestion_run_identifier(py, run_id)?;
         let value = py
@@ -2896,6 +2924,7 @@ impl BaseRegistryClient {
                     entity_route,
                     run_id,
                     chunk_index,
+                    profile_id,
                 ))
             })
             .map_err(|error| sdk_error(py, error))?;

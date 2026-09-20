@@ -1595,52 +1595,12 @@ impl MutationCoordinator {
                     .await
                     .map_err(|_| MutationError::Unavailable)?
                     .ok_or(MutationError::InvalidRequest)?;
-            if !run.active_binding_matches(
-                &self.expected.package_revision,
-                &self.expected.schema_fingerprint,
-            ) {
-                crate::ingestion_store::mark_blocked(
-                    transaction.transaction(),
-                    chunk_binding.run_id,
-                    crate::ingestion_store::IngestionBlockedReason::ActivePackageChanged,
-                )
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
-                record_attempt(
-                    transaction.transaction(),
-                    chunk_binding.run_id,
-                    IngestionAttemptOutcome::BindingChanged,
-                    chunk_binding.chunk_index,
-                )
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
-                crate::ingestion_store::append_run_audit(
-                    transaction.transaction(),
-                    &self.audit_profile,
-                    crate::ingestion_store::run_audit_record(
-                        "blocked",
-                        &run,
-                        &self.expected.package_revision,
-                        &run.created_principal_reference,
-                        Some(&request.correlation.request_id().to_string()),
-                    ),
-                )
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
-                // The blocked marking and its audit must outlive the refusal,
-                // so the refusal returns only after an explicit commit.
-                transaction
-                    .commit()
-                    .await
-                    .map_err(|_| MutationError::Unavailable)?;
-                return Err(MutationError::IngestionRefusal(
-                    IngestionRefusal::BindingChanged,
-                ));
-            }
             if chunk_binding.chunk_index < run.next_chunk_index {
                 // The checkpoint already covers this chunk: an exact replay
                 // returns the stored receipt without any further mutation,
                 // and anything else is refused without moving the checkpoint.
+                // This precedes the binding check, so a committed chunk
+                // replays in any run status, including blocked.
                 let stored = crate::ingestion_store::load_chunk(
                     transaction.transaction(),
                     chunk_binding.run_id,
@@ -1649,7 +1609,8 @@ impl MutationCoordinator {
                 .await
                 .map_err(|_| MutationError::Unavailable)?
                 .ok_or(MutationError::Unavailable)?;
-                let replayed = stored.chunk_digest == chunk_binding.chunk_digest;
+                let replayed = stored.chunk_digest == chunk_binding.chunk_digest
+                    && stored.prefix_digest == chunk_binding.prefix_digest;
                 record_attempt(
                     transaction.transaction(),
                     chunk_binding.run_id,
@@ -1698,8 +1659,65 @@ impl MutationCoordinator {
                     replayed: true,
                 });
             }
+            if !run.active_binding_matches(
+                &self.expected.package_revision,
+                &self.expected.schema_fingerprint,
+            ) {
+                crate::ingestion_store::mark_blocked(
+                    transaction.transaction(),
+                    chunk_binding.run_id,
+                    crate::ingestion_store::IngestionBlockedReason::ActivePackageChanged,
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+                record_attempt(
+                    transaction.transaction(),
+                    chunk_binding.run_id,
+                    IngestionAttemptOutcome::BindingChanged,
+                    chunk_binding.chunk_index,
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+                let mut audited_run = run.clone();
+                audited_run.status = IngestionRunStatus::Blocked;
+                audited_run.blocked_reason =
+                    Some(crate::ingestion_store::IngestionBlockedReason::ActivePackageChanged);
+                crate::ingestion_store::append_run_audit(
+                    transaction.transaction(),
+                    &self.audit_profile,
+                    crate::ingestion_store::run_audit_record(
+                        "blocked",
+                        &audited_run,
+                        &self.expected.package_revision,
+                        &run.created_principal_reference,
+                        Some(&request.correlation.request_id().to_string()),
+                    ),
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+                // The blocked marking and its audit must outlive the refusal,
+                // so the refusal returns only after an explicit commit.
+                transaction
+                    .commit()
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?;
+                return Err(MutationError::IngestionRefusal(
+                    IngestionRefusal::BindingChanged,
+                ));
+            }
             let announced_items =
                 i64::try_from(request.items.len()).map_err(|_| MutationError::Unavailable)?;
+            let announced_operation = match run.operation.as_str() {
+                "create" => Operation::Create,
+                "patch" => Operation::Patch,
+                // Storage admits only create and patch operations, so an
+                // unmappable value is corruption an operator must see.
+                _ => return Err(MutationError::Unavailable),
+            };
+            // The terminal chunk closes the run, so it must satisfy the
+            // announced totals exactly and bind the whole-input digest its
+            // prefix digest equals on the last chunk.
+            let terminal_chunk = chunk_binding.chunk_index + 1 == run.chunk_count;
             let not_open = run.status != IngestionRunStatus::Open;
             if not_open
                 || chunk_binding.chunk_index != run.next_chunk_index
@@ -1707,6 +1725,12 @@ impl MutationCoordinator {
                 || announced_items != chunk_binding.item_count
                 || announced_items > run.maximum_items
                 || run.committed_items + announced_items > run.item_count
+                || (terminal_chunk && run.committed_items + announced_items != run.item_count)
+                || (terminal_chunk && chunk_binding.prefix_digest != run.input_digest)
+                || request
+                    .items
+                    .iter()
+                    .any(|item| item.operation() != announced_operation)
                 || canonical_chunk_digest(&request.items)? != chunk_binding.chunk_digest
             {
                 record_attempt(

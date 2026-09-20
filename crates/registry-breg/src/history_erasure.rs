@@ -207,7 +207,9 @@ pub async fn erase_record_history(
     .await?;
     let scrubbed_ingestion_receipt_count = crate::ingestion_store::scrub_receipts_for_records(
         &transaction,
-        &[request.target.record_id],
+        request.target.entity_id,
+        request.target.record_id,
+        request.target.erase_through_revision,
     )
     .await
     .map_err(|_| HistoryErasureError::Unavailable)?;

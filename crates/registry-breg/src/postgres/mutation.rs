@@ -747,15 +747,21 @@ impl PostgresRecordMutationService {
     }
 
     /// The creator-scoped principal reference of one ingestion caller. The
-    /// scope is deliberately revision independent, so a run stays visible to
-    /// its creator across a package change instead of silently disappearing.
+    /// scope is the database, stable across package revisions, so a run stays
+    /// visible to its creator across a package change instead of silently
+    /// disappearing, and the same principal in another database yields an
+    /// unrelated reference.
     fn ingestion_principal_reference(
         &self,
         principal: &str,
     ) -> Result<String, IngestionServiceError> {
         self.audit_profile
             .key_hasher()
-            .audit_reference_hash("breg-ingestion-principal-v1", "", principal)
+            .audit_reference_hash(
+                "breg-ingestion-principal-v1",
+                &self.expected.database_id,
+                principal,
+            )
             .map_err(|_| IngestionServiceError::Unavailable)
     }
 
@@ -792,9 +798,10 @@ impl PostgresRecordMutationService {
         Ok(run)
     }
 
-    /// Record the bounded outcome of one refused attempt. The refusal itself
-    /// is audited at the HTTP mutation boundary, so a failure to persist this
-    /// operational hint is dropped rather than masking the original answer.
+    /// Record the bounded outcome of one refused attempt. The operational hint
+    /// is best-effort: a failure to persist it is dropped rather than masking
+    /// the original answer. Service-level refusals carry no refusal audit of
+    /// their own, matching the ordinary mutation surface.
     async fn record_ingestion_attempt(
         &self,
         client: &impl tokio_postgres::GenericClient,
@@ -1067,63 +1074,18 @@ impl PostgresRecordMutationService {
         if run.profile_id != claims.access_profile() {
             return Err(IngestionServiceError::ProfileMismatch);
         }
-        if !run.active_binding_matches(
-            &self.expected.package_revision,
-            &self.expected.schema_fingerprint,
-        ) {
-            let mut writer = self.client().await?;
-            let transaction = writer
-                .transaction()
-                .await
-                .map_err(|_| IngestionServiceError::Unavailable)?;
-            let tx: &tokio_postgres::Transaction<'_> = &transaction;
-            ingestion_store::mark_blocked(
-                tx,
-                run.run_id,
-                ingestion_store::IngestionBlockedReason::ActivePackageChanged,
-            )
-            .await
-            .map_err(|_| IngestionServiceError::Unavailable)?;
-            ingestion_store::record_attempt(
-                tx,
-                run.run_id,
-                IngestionAttemptOutcome::BindingChanged,
-                input.chunk_index,
-            )
-            .await
-            .map_err(|_| IngestionServiceError::Unavailable)?;
-            if crate::audit::profile_is_keyed(&self.audit_profile) {
-                ingestion_store::append_run_audit(
-                    tx,
-                    &self.audit_profile,
-                    ingestion_store::run_audit_record(
-                        "blocked",
-                        &run,
-                        &self.expected.package_revision,
-                        &run.created_principal_reference,
-                        Some(&correlation.request_id().to_string()),
-                    ),
-                )
-                .await
-                .map_err(|_| IngestionServiceError::Unavailable)?;
-            }
-            transaction
-                .commit()
-                .await
-                .map_err(|_| IngestionServiceError::Unavailable)?;
-            return Err(IngestionServiceError::RunBlocked);
-        }
         if input.chunk_index < run.next_chunk_index {
             // The checkpoint already covers this chunk, so the caller is
             // recovering a lost response: return the stored receipt, never a
-            // second mutation. This holds for every terminal status too,
-            // because the committed prefix and its receipts survive
-            // completion and cancellation.
+            // second mutation. This holds for every terminal status and for
+            // a changed active package, because the committed prefix and its
+            // receipts survive completion, cancellation, and blocking.
             let stored = ingestion_store::load_chunk(&**client, run.run_id, input.chunk_index)
                 .await
                 .map_err(|_| IngestionServiceError::Unavailable)?
                 .ok_or(IngestionServiceError::Unavailable)?;
-            let replayed = stored.chunk_digest == input.digest;
+            let replayed =
+                stored.chunk_digest == input.digest && stored.prefix_digest == input.prefix_digest;
             self.record_ingestion_attempt(
                 &**client,
                 run.run_id,
@@ -1155,6 +1117,56 @@ impl PostgresRecordMutationService {
                 "run": self.run_response(&run),
                 "receipt": receipt_json(input.chunk_index, &input.digest, true, false, batch),
             }));
+        }
+        if !run.active_binding_matches(
+            &self.expected.package_revision,
+            &self.expected.schema_fingerprint,
+        ) {
+            let mut writer = self.client().await?;
+            let transaction = writer
+                .transaction()
+                .await
+                .map_err(|_| IngestionServiceError::Unavailable)?;
+            let tx: &tokio_postgres::Transaction<'_> = &transaction;
+            ingestion_store::mark_blocked(
+                tx,
+                run.run_id,
+                ingestion_store::IngestionBlockedReason::ActivePackageChanged,
+            )
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+            ingestion_store::record_attempt(
+                tx,
+                run.run_id,
+                IngestionAttemptOutcome::BindingChanged,
+                input.chunk_index,
+            )
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+            if crate::audit::profile_is_keyed(&self.audit_profile) {
+                let mut audited_run = run.clone();
+                audited_run.status = IngestionRunStatus::Blocked;
+                audited_run.blocked_reason =
+                    Some(ingestion_store::IngestionBlockedReason::ActivePackageChanged);
+                ingestion_store::append_run_audit(
+                    tx,
+                    &self.audit_profile,
+                    ingestion_store::run_audit_record(
+                        "blocked",
+                        &audited_run,
+                        &self.expected.package_revision,
+                        &run.created_principal_reference,
+                        Some(&correlation.request_id().to_string()),
+                    ),
+                )
+                .await
+                .map_err(|_| IngestionServiceError::Unavailable)?;
+            }
+            transaction
+                .commit()
+                .await
+                .map_err(|_| IngestionServiceError::Unavailable)?;
+            return Err(IngestionServiceError::RunBlocked);
         }
 
         match run.status {
@@ -1344,6 +1356,11 @@ impl PostgresRecordMutationService {
         let run = self
             .visible_run(&**client, context, entity_id, run_id)
             .await?;
+        let claims = strict_claim_context(&self.registry, context, entity_id)
+            .map_err(|_| IngestionServiceError::RequestInvalid)?;
+        if run.profile_id != claims.access_profile() {
+            return Err(IngestionServiceError::ProfileMismatch);
+        }
         let stored = ingestion_store::load_chunk(&**client, run.run_id, chunk_index)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?

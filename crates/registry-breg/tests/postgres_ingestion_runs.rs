@@ -464,6 +464,7 @@ async fn package_change_blocks_the_run_and_keeps_it_inspectable() {
         .await;
     assert_eq!(committed.status(), StatusCode::OK);
     assert_eq!(durable_widget_count(&harness).await, 3);
+    let original_receipt = body_json(committed).await["receipt"].clone();
 
     // A new active package revision must not reinterpret remaining source
     // bytes: the run is blocked, not silently re-bound.
@@ -491,7 +492,22 @@ async fn package_change_blocks_the_run_and_keeps_it_inspectable() {
     assert_eq!(run["committedItems"], 3);
     assert_eq!(run["nextChunkIndex"], 1);
 
-    // A blocked run refuses again, consistently.
+    // A committed chunk replays in any run status: the blocked binding
+    // governs only chunks the checkpoint has not covered.
+    let replayed = changed
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{}/chunks", run_id),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replayed.status(), StatusCode::OK);
+    let replay_body = body_json(replayed).await;
+    assert_eq!(replay_body["receipt"]["replayed"], true);
+    assert_eq!(replay_body["receipt"]["batch"], original_receipt["batch"]);
+    assert_eq!(durable_widget_count(&harness).await, 3);
+
+    // A blocked run refuses the next uncommitted chunk again, consistently.
     let refused = changed
         .post_json(
             &format!("/v1/records/widgets/ingestion-runs/{}/chunks", run_id),
@@ -501,6 +517,29 @@ async fn package_change_blocks_the_run_and_keeps_it_inspectable() {
         .await;
     assert_eq!(refused.status(), StatusCode::CONFLICT);
     assert_eq!(body_json(refused).await["code"], "ingestion.run_blocked");
+
+    // The blocking audit record carries the blocked state it wrote.
+    let blocked_records = harness
+        .database
+        .admin
+        .query(
+            "SELECT convert_from(envelope, 'UTF8')
+               FROM registry_internal.registry_audit
+              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionRun\"%'
+                AND convert_from(envelope, 'UTF8') LIKE '%\"outcome\":\"blocked\"%'",
+            &[],
+        )
+        .await
+        .expect("administrator inspects the run audit journal");
+    assert!(
+        !blocked_records.is_empty(),
+        "the blocked transition is audited"
+    );
+    for row in blocked_records {
+        let envelope: Value =
+            serde_json::from_str(&row.get::<_, String>(0)).expect("audit envelope is JSON");
+        assert_eq!(envelope["record"]["status"], "blocked");
+    }
 
     // The creator may still cancel a blocked run.
     let cancelled = changed
@@ -611,6 +650,314 @@ async fn erasing_record_history_erases_the_receipt_that_describes_it() {
         .await;
     assert_eq!(replay.status(), StatusCode::GONE);
     assert_eq!(body_json(replay).await["code"], "ingestion.receipt_erased");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn receipt_recovery_enforces_the_runs_profile() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("profiled", 1);
+    let chunks = plan_chunks(&items, 1);
+
+    // The run is created and driven under the non-default batch profile the
+    // same principal also holds.
+    let created = harness
+        .post_json(
+            "/v1/records/widgets/ingestion-runs?accessProfile=operator-minimal",
+            &claims,
+            run_body_under(
+                "create",
+                &harness.identity.schema_fingerprint,
+                &chunks,
+                "operator-minimal",
+            ),
+        )
+        .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let run_id = body_json(created).await["run"]["runId"]
+        .as_str()
+        .expect("run id")
+        .to_owned();
+
+    let committed = harness
+        .post_json(
+            &format!(
+                "/v1/records/widgets/ingestion-runs/{run_id}/chunks?accessProfile=operator-minimal"
+            ),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+
+    // Recovering the receipt projects record values, so it answers under the
+    // run's own profile even for a caller granted another one.
+    let mismatched = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(mismatched.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        body_json(mismatched).await["code"],
+        "ingestion.profile_mismatch"
+    );
+
+    let recovered = harness
+        .get_json(
+            &format!(
+                "/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt?accessProfile=operator-minimal"
+            ),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::OK);
+    assert_eq!(body_json(recovered).await["chunkIndex"], 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_committed_chunk_replay_with_a_divergent_prefix_digest_is_a_mismatch() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("prefix-divergent", 4);
+    let chunks = plan_chunks(&items, 3);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let uri = format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks");
+
+    let committed = harness
+        .post_json(&uri, &claims, chunk_body(&chunks, 0))
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let original = body_json(committed).await["receipt"].clone();
+
+    // The same items hash to the announced chunk digest, but the rolling
+    // prefix names a different input: the submission is a divergent replay
+    // and must not be answered with the retained receipt.
+    let mut divergent = chunk_body(&chunks, 0);
+    divergent["prefixDigest"] = json!("1".repeat(64));
+    let refused = harness.post_json(&uri, &claims, divergent).await;
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(refused).await["code"], "ingestion.chunk_mismatch");
+
+    // The exact replay still returns the original receipt's batch answer.
+    let replay = harness
+        .post_json(&uri, &claims, chunk_body(&chunks, 0))
+        .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(replay).await["receipt"]["batch"],
+        original["batch"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn terminal_chunks_must_satisfy_the_announced_operation_totals_and_prefix() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+
+    // A create run whose chunk carries a well-formed patch item: the item
+    // parses for the batch route, but diverges from the announced operation.
+    let patch_item = json!({
+        "operation": "patch",
+        "recordId": Uuid::new_v4().to_string(),
+        "ifMatch": "\"breg-ingestion-terminal-proof\"",
+        "patch": [{"op": "replace", "path": "/data/quantity", "value": 5}]
+    });
+    let patch_plan = plan_chunks(std::slice::from_ref(&patch_item), 3);
+    let patch_run = harness.create_run(&claims, &patch_plan).await;
+    let refused = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{patch_run}/chunks"),
+            &claims,
+            chunk_body(&patch_plan, 0),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(refused).await["code"], "ingestion.chunk_mismatch");
+    let run = harness.read_run(&claims, &patch_run).await;
+    assert_eq!(run["nextChunkIndex"], 0, "the checkpoint does not move");
+
+    // A run announcing four items whose final chunk totals fewer: the run
+    // stays open instead of completing on an underrun.
+    let items = announce_items("terminal", 4);
+    let underrun = chunk_plan(&items, &[(0, 2), (2, 3)]);
+    let run_id = harness.create_run(&claims, &underrun).await;
+    let uri = format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks");
+    let first = harness
+        .post_json(&uri, &claims, chunk_body(&underrun, 0))
+        .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let short = harness
+        .post_json(&uri, &claims, chunk_body(&underrun, 1))
+        .await;
+    assert_eq!(short.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(short).await["code"], "ingestion.chunk_mismatch");
+    let run = harness.read_run(&claims, &run_id).await;
+    assert_eq!(run["status"], "open");
+    assert_eq!(run["committedItems"], 2);
+    assert_eq!(run["nextChunkIndex"], 1);
+
+    // A terminal chunk that totals the announced items but binds a prefix
+    // other than the whole-input digest is refused the same way.
+    let complete = chunk_plan(&items, &[(0, 2), (2, 4)]);
+    let mut wrong_prefix = chunk_body(&complete, 1);
+    wrong_prefix["prefixDigest"] = json!("2".repeat(64));
+    let refused = harness.post_json(&uri, &claims, wrong_prefix).await;
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(refused).await["code"], "ingestion.chunk_mismatch");
+
+    // The compliant terminal chunk completes the announced totals exactly.
+    let final_chunk = harness
+        .post_json(&uri, &claims, chunk_body(&complete, 1))
+        .await;
+    assert_eq!(final_chunk.status(), StatusCode::OK);
+    assert_eq!(body_json(final_chunk).await["run"]["complete"], true);
+    assert_eq!(durable_widget_count(&harness).await, 4);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn listing_runs_filters_by_status_and_input_digest() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let open_plan = plan_chunks(&announce_items("filter-open", 2), 3);
+    let open_id = harness.create_run(&claims, &open_plan).await;
+    let complete_plan = plan_chunks(&announce_items("filter-complete", 2), 3);
+    let complete_id = harness.create_run(&claims, &complete_plan).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{complete_id}/chunks"),
+            &claims,
+            chunk_body(&complete_plan, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    assert_eq!(body_json(committed).await["run"]["complete"], true);
+
+    let by_digest = harness
+        .get_json(
+            &format!(
+                "/v1/records/widgets/ingestion-runs?inputDigest={}",
+                complete_plan.input_digest
+            ),
+            &claims,
+        )
+        .await;
+    assert_eq!(by_digest.status(), StatusCode::OK);
+    let runs = body_json(by_digest).await["runs"]
+        .as_array()
+        .expect("runs")
+        .clone();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0]["runId"], complete_id.as_str());
+
+    let by_status = harness
+        .get_json("/v1/records/widgets/ingestion-runs?status=open", &claims)
+        .await;
+    assert_eq!(by_status.status(), StatusCode::OK);
+    let runs = body_json(by_status).await["runs"]
+        .as_array()
+        .expect("runs")
+        .clone();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0]["runId"], open_id.as_str());
+
+    let by_both = harness
+        .get_json(
+            &format!(
+                "/v1/records/widgets/ingestion-runs?status=complete&inputDigest={}",
+                complete_plan.input_digest
+            ),
+            &claims,
+        )
+        .await;
+    assert_eq!(by_both.status(), StatusCode::OK);
+    let runs = body_json(by_both).await["runs"]
+        .as_array()
+        .expect("runs")
+        .clone();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0]["runId"], complete_id.as_str());
+
+    // Values outside the closed filter vocabularies are invalid queries.
+    for invalid in ["status=pending", "inputDigest=not-a-digest"] {
+        let refused = harness
+            .get_json(
+                &format!("/v1/records/widgets/ingestion-runs?{invalid}"),
+                &claims,
+            )
+            .await;
+        assert_eq!(refused.status(), StatusCode::NOT_FOUND);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn erasing_through_revision_one_keeps_the_revision_two_receipt() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+
+    // Revision 1 arrives through a create run; revision 2 of the same record
+    // through a patch run, so each run's receipt describes one revision.
+    let create_plan = plan_chunks(&announce_items("ranged", 1), 3);
+    let create_run = harness.create_run(&claims, &create_plan).await;
+    let created = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{create_run}/chunks"),
+            &claims,
+            chunk_body(&create_plan, 0),
+        )
+        .await;
+    assert_eq!(created.status(), StatusCode::OK);
+    let results = body_json(created).await["receipt"]["batch"]["results"].clone();
+    let record_id = results[0]["id"].as_str().expect("record id").to_owned();
+    let etag = results[0]["etag"].as_str().expect("record etag").to_owned();
+    assert_eq!(results[0]["revision"], 1);
+
+    let patch_item = json!({
+        "operation": "patch",
+        "recordId": record_id,
+        "ifMatch": etag,
+        "patch": [{"op": "replace", "path": "/data/quantity", "value": 7}]
+    });
+    let patch_plan = plan_chunks(std::slice::from_ref(&patch_item), 3);
+    let patch_run = harness.create_run_for(&claims, "patch", &patch_plan).await;
+    let patched = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{patch_run}/chunks"),
+            &claims,
+            chunk_body(&patch_plan, 0),
+        )
+        .await;
+    assert_eq!(patched.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(patched).await["receipt"]["batch"]["results"][0]["revision"],
+        2
+    );
+
+    harness.erase_widget_history(&record_id).await;
+
+    // The receipt describing revision 1 answers erased; the receipt
+    // describing the surviving revision 2 still recovers.
+    let erased = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{create_run}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(erased.status(), StatusCode::GONE);
+    assert_eq!(body_json(erased).await["code"], "ingestion.receipt_erased");
+
+    let retained = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{patch_run}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(retained.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(retained).await["batch"]["results"][0]["revision"],
+        2
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -818,11 +1165,20 @@ impl IngestionHarness {
     }
 
     async fn create_run(&self, claims: &VerifiedRequestClaims, plan: &ChunkPlan) -> String {
+        self.create_run_for(claims, "create", plan).await
+    }
+
+    async fn create_run_for(
+        &self,
+        claims: &VerifiedRequestClaims,
+        operation: &str,
+        plan: &ChunkPlan,
+    ) -> String {
         let response = self
             .post_json(
                 "/v1/records/widgets/ingestion-runs",
                 claims,
-                self.run_body("create", plan),
+                self.run_body(operation, plan),
             )
             .await;
         assert_eq!(response.status(), StatusCode::CREATED);
@@ -1089,8 +1445,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
 
 /// The client-side chunk plan over the full item array, derived exactly the
 /// way the durable-run client contract derives it: greedy fixed-size chunks
-/// of canonical items, each chunk bound to its digest and a rolling prefix
-/// digest.
+/// of canonical items, each chunk bound to its digest, and prefix digests
+/// over the raw source input through the end of each chunk.
 struct ChunkPlan {
     items: Vec<Value>,
     starts: Vec<usize>,
@@ -1115,12 +1471,6 @@ fn announce_items(label_prefix: &str, count: i64) -> Vec<Value> {
         .collect()
 }
 
-fn canonical_digest(value: &Value) -> String {
-    let canonical =
-        registry_platform_canonical_json::canonicalize_json(value).expect("canonical JSON derives");
-    hex_digest(&canonical)
-}
-
 fn hex_digest(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in Sha256::digest(bytes) {
@@ -1134,41 +1484,69 @@ fn zero_digest() -> String {
 }
 
 fn chunk_digest(items: &[Value]) -> String {
-    canonical_digest(&json!({ "items": items }))
+    let canonical = registry_platform_canonical_json::canonicalize_json(&json!({ "items": items }))
+        .expect("canonical JSON derives");
+    hex_digest(&canonical)
 }
 
 fn plan_chunks(items: &[Value], maximum_per_chunk: usize) -> ChunkPlan {
     assert!(!items.is_empty(), "a run announces at least one item");
+    let mut bounds = Vec::new();
+    let mut start = 0;
+    while start < items.len() {
+        let end = (start + maximum_per_chunk).min(items.len());
+        bounds.push((start, end));
+        start = end;
+    }
+    chunk_plan(items, &bounds)
+}
+
+/// One plan over an explicit partition of the items, so a test can announce
+/// the whole input while submitting a chunk partition the run must refuse.
+/// The announced digests bind one canonical JSON line per item: the raw
+/// source input the client contract chunks, whose full-input digest the
+/// terminal chunk's prefix digest must equal.
+fn chunk_plan(items: &[Value], bounds: &[(usize, usize)]) -> ChunkPlan {
+    assert!(!items.is_empty(), "a run announces at least one item");
+    assert!(!bounds.is_empty(), "a plan carries at least one chunk");
+    let lines: Vec<Vec<u8>> = items
+        .iter()
+        .map(|item| {
+            let mut line = registry_platform_canonical_json::canonicalize_json(item)
+                .expect("canonical JSON derives");
+            line.push(b'\n');
+            line
+        })
+        .collect();
+    let mut raw_input = Vec::new();
+    for line in &lines {
+        raw_input.extend_from_slice(line);
+    }
     let mut starts = Vec::new();
     let mut ends = Vec::new();
     let mut digests = Vec::new();
     let mut prefix_digests = Vec::new();
-    let mut prefix = String::new();
-    let mut start = 0;
-    while start < items.len() {
-        let end = (start + maximum_per_chunk).min(items.len());
+    for &(start, end) in bounds {
         let chunk = &items[start..end];
-        let digest = chunk_digest(chunk);
-        prefix = canonical_digest(&json!({"prefix": prefix, "chunk": digest}));
+        let mut raw_prefix = Vec::new();
+        for line in &lines[..end] {
+            raw_prefix.extend_from_slice(line);
+        }
         starts.push(start);
         ends.push(end);
-        digests.push(digest);
-        prefix_digests.push(prefix.clone());
-        start = end;
+        digests.push(chunk_digest(chunk));
+        prefix_digests.push(hex_digest(&raw_prefix));
     }
-    let canonical = registry_platform_canonical_json::canonicalize_json(&json!({ "items": items }))
-        .expect("canonical JSON derives");
-    let chunk_count = ends.len() as i64;
     ChunkPlan {
         items: items.to_vec(),
         starts,
         ends,
         digests,
         prefix_digests,
-        input_digest: hex_digest(&canonical),
-        input_length: canonical.len() as i64,
+        input_digest: hex_digest(&raw_input),
+        input_length: raw_input.len() as i64,
         item_count: items.len() as i64,
-        chunk_count,
+        chunk_count: bounds.len() as i64,
     }
 }
 
@@ -1182,9 +1560,18 @@ fn chunk_body(plan: &ChunkPlan, index: usize) -> Value {
 }
 
 fn run_body(operation: &str, schema_fingerprint: &str, plan: &ChunkPlan) -> Value {
+    run_body_under(operation, schema_fingerprint, plan, "operator")
+}
+
+fn run_body_under(
+    operation: &str,
+    schema_fingerprint: &str,
+    plan: &ChunkPlan,
+    profile_id: &str,
+) -> Value {
     json!({
         "operation": operation,
-        "profileId": "operator",
+        "profileId": profile_id,
         "packageRevision": PACKAGE_REVISION,
         "schemaFingerprint": schema_fingerprint,
         "inputDigest": plan.input_digest,

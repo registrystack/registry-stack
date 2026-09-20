@@ -8,25 +8,26 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use napi::{bindgen_prelude::Buffer, Error as NapiError, Result};
 use napi_derive::napi;
 use registry_breg_client::{
-    ingestion_prefix_digest, verify_webhook_delivery as verify_core_webhook_delivery,
-    BRegActionInvocationRequest, BRegActionTargetConditions as CoreActionTargetConditions,
-    BRegActionTargetConditionsRequest, BRegAsOfContinuation, BRegAsOfContinuationProjection,
-    BRegAsOfListRequest, BRegAttachmentSlot as CoreAttachmentSlot, BRegAttachmentSlotValue,
-    BRegAttachmentState, BRegAttachmentUpload as CoreAttachmentUpload,
-    BRegAttachmentVerificationStatus, BRegBatchBinding, BRegBatchBuilder, BRegBatchRequest,
-    BRegBoundingBox, BRegChangeContext, BRegComplete, BRegContinuation, BRegContinuationProjection,
-    BRegCreateBinding, BRegCreateRequest, BRegCurrentContinuation,
-    BRegCurrentContinuationProjection, BRegCurrentListRequest, BRegDirectWrite, BRegEtag,
-    BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest,
-    BRegGeoJsonOptions, BRegImmediateActionBinding, BRegIngestionChunk as CoreIngestionChunk,
-    BRegIngestionError, BRegIngestionRunListQuery, BRegIngestionRunRequest,
-    BRegLifecycleAction as CoreLifecycleAction, BRegLifecycleActionReceipt, BRegLifecycleAuthority,
-    BRegLifecyclePromotionError, BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata,
-    BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding,
-    BRegPatchRequest, BRegPreparedCreate as CorePreparedCreate,
-    BRegPreparedLifecycle as CorePreparedLifecycle, BRegProblemCode, BRegProtocolFailure,
-    BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
-    BRegRelationshipContinuationProjection, BRegRelationshipListRequest, BRegRequestMetadata,
+    verify_webhook_delivery as verify_core_webhook_delivery, BRegActionInvocationRequest,
+    BRegActionTargetConditions as CoreActionTargetConditions, BRegActionTargetConditionsRequest,
+    BRegAsOfContinuation, BRegAsOfContinuationProjection, BRegAsOfListRequest,
+    BRegAttachmentSlot as CoreAttachmentSlot, BRegAttachmentSlotValue, BRegAttachmentState,
+    BRegAttachmentUpload as CoreAttachmentUpload, BRegAttachmentVerificationStatus,
+    BRegBatchBinding, BRegBatchBuilder, BRegBatchRequest, BRegBoundingBox, BRegChangeContext,
+    BRegComplete, BRegContinuation, BRegContinuationProjection, BRegCreateBinding,
+    BRegCreateRequest, BRegCurrentContinuation, BRegCurrentContinuationProjection,
+    BRegCurrentListRequest, BRegDirectWrite, BRegEtag, BRegGeoJsonContinuation,
+    BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest, BRegGeoJsonOptions,
+    BRegImmediateActionBinding, BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
+    BRegIngestionPrefixDigest as CoreIngestionPrefixDigest, BRegIngestionRunListQuery,
+    BRegIngestionRunRequest, BRegLifecycleAction as CoreLifecycleAction,
+    BRegLifecycleActionReceipt, BRegLifecycleAuthority, BRegLifecyclePromotionError,
+    BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata, BRegMetadataSelectionError,
+    BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding, BRegPatchRequest,
+    BRegPreparedCreate as CorePreparedCreate, BRegPreparedLifecycle as CorePreparedLifecycle,
+    BRegProblemCode, BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
+    BRegRelationshipContinuation, BRegRelationshipContinuationProjection,
+    BRegRelationshipListRequest, BRegRequestMetadata,
     BRegRequestResultReference as CoreRequestResultReference, BRegRequestReview, BRegRequestState,
     BRegRetainedRequestHistoryPage as CoreRetainedRequestHistoryPage,
     BRegRetainedRequestProposal as CoreRetainedRequestProposal, BRegSnapshotContinuation,
@@ -1860,11 +1861,21 @@ fn ingestion_run_list_query(value: Option<&Value>) -> Result<BRegIngestionRunLis
     let object = input_object(value.clone(), "run list query must be an object")?;
     only_fields(
         &object,
-        &["limit", "after", "status", "inputDigest"],
+        &["accessProfile", "limit", "after", "status", "inputDigest"],
         "invalid_request",
         "run list query contains an unsupported field",
     )?;
     let mut query = BRegIngestionRunListQuery::default();
+    if let Some(access_profile) = optional_string(
+        &object,
+        "accessProfile",
+        "invalid_request",
+        "run list query accessProfile must be a string",
+    )? {
+        query = query
+            .access_profile(access_profile)
+            .map_err(ingestion_error)?;
+    }
     if let Some(limit) = object.get("limit") {
         let limit = safe_integer(
             limit,
@@ -1998,26 +2009,28 @@ pub fn encode_ingestion_chunk(
 #[napi(js_name = "BRegIngestionPrefixDigest")]
 #[derive(Default)]
 pub struct IngestionPrefixDigest {
-    bytes: Vec<u8>,
+    inner: CoreIngestionPrefixDigest,
 }
 
 #[napi]
 impl IngestionPrefixDigest {
     #[napi(constructor)]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            inner: CoreIngestionPrefixDigest::new(),
+        }
     }
 
     /// Absorb the next raw source bytes, typically one chunk's source extent.
     #[napi]
     pub fn update(&mut self, data: Buffer) {
-        self.bytes.extend_from_slice(data.as_ref());
+        self.inner.update(data.as_ref());
     }
 
     /// The lowercase SHA-256 of every raw source byte absorbed so far.
     #[napi]
     pub fn digest(&self) -> String {
-        ingestion_prefix_digest(&self.bytes)
+        self.inner.digest()
     }
 }
 
@@ -3190,7 +3203,9 @@ impl BaseRegistryClient {
         complete_value(value, metadata)
     }
 
-    /// Announce one whole input and open a durable ingestion run for it.
+    /// Announce one whole input and open a durable ingestion run for it. The
+    /// run request names the access profile, which the client selects for the
+    /// exchange.
     #[napi]
     pub async fn create_ingestion_run(
         &self,
@@ -3228,30 +3243,33 @@ impl BaseRegistryClient {
         &self,
         entity_route: String,
         run_id: String,
+        access_profile: Option<String>,
     ) -> Result<CompleteOutcome> {
         let run_id = ingestion_run_identifier(run_id)?;
         let BRegComplete { value, metadata } = self
             .inner
-            .read_ingestion_run(&entity_route, run_id)
+            .read_ingestion_run(&entity_route, run_id, access_profile.as_deref())
             .await
             .map_err(client_error)?;
         complete_value(value, metadata)
     }
 
-    /// Submit one bounded chunk of an open ingestion run. A resubmitted chunk
-    /// replays its retained receipt instead of executing twice.
+    /// Submit one bounded chunk of an open ingestion run under the run's
+    /// access profile. A resubmitted chunk replays its retained receipt
+    /// instead of executing twice.
     #[napi]
     pub async fn submit_ingestion_chunk(
         &self,
         entity_route: String,
         run_id: String,
         chunk: &IngestionChunk,
+        profile_id: String,
     ) -> Result<CompleteOutcome> {
         let run_id = ingestion_run_identifier(run_id)?;
         let chunk = Arc::clone(&chunk.inner);
         let BRegComplete { value, metadata } = self
             .inner
-            .submit_ingestion_chunk(&entity_route, run_id, chunk.as_ref())
+            .submit_ingestion_chunk(&entity_route, run_id, chunk.as_ref(), &profile_id)
             .await
             .map_err(client_error)?;
         complete_value(value, metadata)
@@ -3263,24 +3281,27 @@ impl BaseRegistryClient {
         &self,
         entity_route: String,
         run_id: String,
+        access_profile: Option<String>,
     ) -> Result<CompleteOutcome> {
         let run_id = ingestion_run_identifier(run_id)?;
         let BRegComplete { value, metadata } = self
             .inner
-            .cancel_ingestion_run(&entity_route, run_id)
+            .cancel_ingestion_run(&entity_route, run_id, access_profile.as_deref())
             .await
             .map_err(client_error)?;
         complete_value(value, metadata)
     }
 
-    /// Read the retained receipt of one committed chunk. An erased receipt
-    /// answers with the `ingestion.receipt_erased` problem instead.
+    /// Read the retained receipt of one committed chunk under the run's
+    /// access profile. An erased receipt answers with the
+    /// `ingestion.receipt_erased` problem instead.
     #[napi]
     pub async fn ingestion_chunk_receipt(
         &self,
         entity_route: String,
         run_id: String,
         chunk_index: i64,
+        profile_id: String,
     ) -> Result<CompleteOutcome> {
         let run_id = ingestion_run_identifier(run_id)?;
         let chunk_index = ingestion_chunk_index(
@@ -3289,7 +3310,7 @@ impl BaseRegistryClient {
         )?;
         let BRegComplete { value, metadata } = self
             .inner
-            .ingestion_chunk_receipt(&entity_route, run_id, chunk_index)
+            .ingestion_chunk_receipt(&entity_route, run_id, chunk_index, &profile_id)
             .await
             .map_err(client_error)?;
         complete_value(value, metadata)

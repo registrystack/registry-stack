@@ -100,11 +100,12 @@ class IngestionRunTests(unittest.TestCase):
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802
                 self.record(b"")
-                if "/chunks/0/receipt" in self.path:
+                path = self.path.split("?")[0]
+                if "/chunks/0/receipt" in path:
                     self.answer(200, {"receipt": receipt_wire()})
-                elif re.search(r"/ingestion-runs/[0-9a-f-]+$", self.path):
+                elif re.search(r"/ingestion-runs/[0-9a-f-]+$", path):
                     self.answer(200, {"run": run_wire(status="cancelled")})
-                elif "/chunks/1/receipt" in self.path:
+                elif "/chunks/1/receipt" in path:
                     body = json.dumps(
                         {
                             "type": "https://id.registrystack.org/problems/"
@@ -124,7 +125,7 @@ class IngestionRunTests(unittest.TestCase):
                     self.send_header("content-length", str(len(body)))
                     self.end_headers()
                     self.wfile.write(body)
-                elif "/ingestion-runs" in self.path:
+                elif "/ingestion-runs" in path:
                     self.answer(200, {"runs": [run_wire()], "hasMore": False, "nextAfter": None})
                 else:
                     self.answer(404, {})
@@ -132,9 +133,10 @@ class IngestionRunTests(unittest.TestCase):
             def do_POST(self) -> None:  # noqa: N802
                 body = self.rfile.read(int(self.headers.get("content-length", "0")))
                 self.record(body)
-                if self.path.endswith("/v1/records/people/ingestion-runs"):
+                path = self.path.split("?")[0]
+                if path.endswith("/v1/records/people/ingestion-runs"):
                     self.answer(201, {"run": run_wire()})
-                elif self.path.endswith("/chunks"):
+                elif path.endswith("/chunks"):
                     self.answer(
                         200,
                         {
@@ -142,7 +144,7 @@ class IngestionRunTests(unittest.TestCase):
                             "receipt": receipt_wire(),
                         },
                     )
-                elif self.path.endswith("/cancel"):
+                elif path.endswith("/cancel"):
                     self.answer(200, {"run": run_wire(status="cancelled")})
                 else:
                     self.answer(404, {})
@@ -221,7 +223,10 @@ class IngestionRunTests(unittest.TestCase):
         self.assertIs(outcome["value"]["complete"], False)
         method, path, content_type, body = self.requests[-1]
         self.assertEqual(method, "POST")
-        self.assertTrue(path.endswith("/v1/records/people/ingestion-runs"))
+        # The run request names the profile, and the exchange selects it.
+        self.assertTrue(
+            path.endswith("/v1/records/people/ingestion-runs?accessProfile=importer.v1")
+        )
         self.assertEqual(json.loads(body), {
             "operation": "create",
             "profileId": "importer.v1",
@@ -269,13 +274,18 @@ class IngestionRunTests(unittest.TestCase):
             after="cursor+/=",
             status="open",
             input_digest=INPUT_DIGEST,
+            access_profile="importer.v1",
         )
         self.assertEqual(len(outcome["value"]["runs"]), 1)
         self.assertEqual(outcome["value"]["runs"][0]["runId"], RUN_ID)
         self.assertIs(outcome["value"]["hasMore"], False)
         self.assertIsNone(outcome["value"]["nextAfter"])
         query = parse_qsl(urlsplit(self.requests[-1][1]).query)
-        self.assertEqual([key for key, _ in query], ["limit", "after", "status", "inputDigest"])
+        self.assertEqual(
+            [key for key, _ in query],
+            ["accessProfile", "limit", "after", "status", "inputDigest"],
+        )
+        self.assertEqual(dict(query)["accessProfile"], "importer.v1")
         self.assertEqual(dict(query)["status"], "open")
         self.assertEqual(dict(query)["inputDigest"], INPUT_DIGEST)
 
@@ -288,15 +298,26 @@ class IngestionRunTests(unittest.TestCase):
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.list_ingestion_runs("people", input_digest="xyz")
         self.assertEqual(raised.exception.kind, "invalid_request")
+        with self.assertRaises(BaseRegistryClientError) as raised:
+            self.client.list_ingestion_runs("people", access_profile="x\n")
+        self.assertEqual(raised.exception.kind, "invalid_request")
 
         unfiltered = self.client.list_ingestion_runs("people")
         self.assertEqual(len(unfiltered["value"]["runs"]), 1)
+        self.assertEqual(urlsplit(self.requests[-1][1]).query, "")
 
     def test_read_and_cancel_address_one_run(self) -> None:
         read = self.client.read_ingestion_run("people", RUN_ID)
         self.assertEqual(read["value"]["status"], "cancelled")
         self.assertTrue(
             self.requests[-1][1].endswith(f"/v1/records/people/ingestion-runs/{RUN_ID}")
+        )
+        profiled = self.client.read_ingestion_run("people", RUN_ID, "importer.v1")
+        self.assertEqual(profiled["value"]["status"], "cancelled")
+        self.assertTrue(
+            self.requests[-1][1].endswith(
+                f"/v1/records/people/ingestion-runs/{RUN_ID}?accessProfile=importer.v1"
+            )
         )
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.read_ingestion_run("people", "not-a-uuid")
@@ -308,10 +329,16 @@ class IngestionRunTests(unittest.TestCase):
         self.assertTrue(path.endswith("/cancel"))
         self.assertEqual(body, b"")
         self.assertIsNone(content_type)
+        cancelled_again = self.client.cancel_ingestion_run("people", RUN_ID, "importer.v1")
+        self.assertEqual(cancelled_again["value"]["status"], "cancelled")
+        method, path, content_type, body = self.requests[-1]
+        self.assertTrue(path.endswith("/cancel?accessProfile=importer.v1"))
+        self.assertEqual(body, b"")
+        self.assertIsNone(content_type)
 
     def test_submit_ingestion_chunk_returns_run_and_receipt(self) -> None:
         chunk = encode_ingestion_chunk(0, ITEMS, PREFIX_DIGEST)
-        outcome = self.client.submit_ingestion_chunk("people", RUN_ID, chunk)
+        outcome = self.client.submit_ingestion_chunk("people", RUN_ID, chunk, "importer.v1")
         self.assertEqual(outcome["kind"], "complete")
         self.assertEqual(outcome["value"]["run"]["committedItems"], 1)
         self.assertEqual(outcome["value"]["receipt"]["chunkIndex"], 0)
@@ -319,6 +346,12 @@ class IngestionRunTests(unittest.TestCase):
         self.assertEqual(
             outcome["value"]["receipt"]["batch"]["snapshot"],
             "breg1_00000000-0000-4000-8000-000000000002",
+        )
+        self.assertTrue(
+            self.requests[-1][1].endswith(
+                f"/v1/records/people/ingestion-runs/{RUN_ID}"
+                "/chunks?accessProfile=importer.v1"
+            )
         )
         self.assertEqual(
             json.loads(self.requests[-1][3]),
@@ -329,13 +362,22 @@ class IngestionRunTests(unittest.TestCase):
                 "prefixDigest": PREFIX_DIGEST,
             },
         )
+        with self.assertRaises(BaseRegistryClientError) as raised:
+            self.client.submit_ingestion_chunk("people", RUN_ID, chunk, "Invalid Profile")
+        self.assertEqual(raised.exception.kind, "invalid_request")
 
     def test_chunk_receipt_reads_one_retained_and_reports_one_erased(self) -> None:
-        retained = self.client.ingestion_chunk_receipt("people", RUN_ID, 0)
+        retained = self.client.ingestion_chunk_receipt("people", RUN_ID, 0, "importer.v1")
         self.assertIs(retained["value"]["replayed"], False)
         self.assertEqual(len(retained["value"]["batch"]["results"]), 1)
+        self.assertTrue(
+            self.requests[-1][1].endswith(
+                f"/v1/records/people/ingestion-runs/{RUN_ID}"
+                "/chunks/0/receipt?accessProfile=importer.v1"
+            )
+        )
         with self.assertRaises(BaseRegistryClientError) as raised:
-            self.client.ingestion_chunk_receipt("people", RUN_ID, 1)
+            self.client.ingestion_chunk_receipt("people", RUN_ID, 1, "importer.v1")
         self.assertEqual(raised.exception.kind, "problem")
         self.assertEqual(raised.exception.code, "ingestion.receipt_erased")
         self.assertEqual(raised.exception.status, 410)

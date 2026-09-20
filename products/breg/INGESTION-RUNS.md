@@ -28,10 +28,14 @@ whose profile no longer satisfies the binding makes no progress.
 A submission names the run, the expected chunk index, the chunk digest, and the
 rolling input-prefix digest. The three digest and index members must match the
 run's committed prefix exactly; a divergent value is refused and nothing is
-written. The ingestion routes take no `Idempotency-Key` header: the server
-derives the attempt key from the run id, input digest, chunk index, and chunk
-digest, so resubmitting the exact chunk replays the original receipt instead of
-writing again.
+written. Every item carries the run's announced operation, and the final chunk
+totals the announced item count exactly and binds the whole-input digest, so a
+run never completes on an underrun or a mixed-operation chunk. The ingestion
+routes take no `Idempotency-Key` header: the server derives the attempt key
+from the run id, input digest, chunk index, and chunk digest, so resubmitting
+the exact chunk replays the original receipt instead of writing again. A
+committed chunk index is answered with the retained receipt only when both the
+submitted chunk digest and the submitted prefix digest match the stored ones.
 
 Chunk mutations, record revisions, run audit, the idempotency receipt, and the
 checkpoint advancement commit in one transaction. A fault after that commit is
@@ -44,7 +48,9 @@ A run is `open`, `complete`, `cancelled`, or `blocked`. An open run whose
 package or schema binding no longer matches the active package reports
 `blocked` with reason `activePackageChanged`; it is retained and inspectable,
 and a successor run created under the new binding carries the work forward. A
-cancelled run keeps its counts and its audit. The last attempt is classified as
+committed chunk replays its receipt in any run status, including blocked: the
+binding governs only chunks the checkpoint has not covered. A cancelled run
+keeps its counts and its audit. The last attempt is classified as
 `committed`, `replayed`, `invalidItem`, `refused`, `bindingChanged`,
 `chunkMismatch`, `runNotOpen`, or `unavailable`.
 
@@ -73,7 +79,8 @@ refusals.
 
 A chunk receipt holds exactly what the ordinary batch route answers the same
 authorized caller with, and it is erased when the record history it describes
-is erased. A later receipt read answers
+is erased, through the revision the erasure names: a receipt describing only
+later revisions of the same record survives. A later receipt read answers
 `410 ingestion.receipt_erased`; the chunk and its counts stay visible in the
 run.
 

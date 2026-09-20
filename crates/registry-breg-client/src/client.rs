@@ -1458,15 +1458,17 @@ impl BaseRegistryClient {
     /// following. Ingestion routes carry no Idempotency-Key header: a resubmitted
     /// chunk is bound by the run's announced digests instead. A `content_type`
     /// of `None` sends no body and no Content-Type header at all, which the
-    /// cancel route requires.
+    /// cancel route requires. The query pairs select the run's access profile
+    /// when the exchange carries one.
     pub(crate) async fn ingestion_post_json(
         &self,
         segments: &[&str],
+        pairs: &[(String, String)],
         body: Vec<u8>,
         content_type: Option<&'static str>,
         expected_status: StatusCode,
     ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
-        let url = self.url_with_query(segments, &[])?;
+        let url = self.url_with_query(segments, pairs)?;
         let mut builder = self
             .transport
             .http
@@ -2093,7 +2095,7 @@ fn validate_profile_link(
     Ok(())
 }
 
-fn access_profile_query(
+pub(crate) fn access_profile_query(
     access_profile: Option<&str>,
 ) -> Result<Vec<(String, String)>, BaseRegistryClientError> {
     let Some(access_profile) = access_profile else {

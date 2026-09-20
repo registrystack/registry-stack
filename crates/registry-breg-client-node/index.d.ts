@@ -41,24 +41,30 @@ export declare class BaseRegistryClient {
   patchRecord(binding: BRegPatchBinding, recordIdentifier: string, etag: string, operations: any, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
   /** Execute one metadata-selected atomic batch without automatic retry. */
   batchRecords(binding: BRegBatchBinding, request: any, idempotencyKey: string): Promise<CompleteOutcome>
-  /** Announce one whole input and open a durable ingestion run for it. */
+  /**
+   * Announce one whole input and open a durable ingestion run for it. The
+   * run request names the access profile, which the client selects for the
+   * exchange.
+   */
   createIngestionRun(entityRoute: string, request: any): Promise<CompleteOutcome>
   /** Read one bounded page of ingestion runs for one entity route. */
   listIngestionRuns(entityRoute: string, query?: any | undefined | null): Promise<CompleteOutcome>
   /** Read the current durable state of one ingestion run. */
-  readIngestionRun(entityRoute: string, runId: string): Promise<CompleteOutcome>
+  readIngestionRun(entityRoute: string, runId: string, accessProfile?: string | undefined | null): Promise<CompleteOutcome>
   /**
-   * Submit one bounded chunk of an open ingestion run. A resubmitted chunk
-   * replays its retained receipt instead of executing twice.
+   * Submit one bounded chunk of an open ingestion run under the run's
+   * access profile. A resubmitted chunk replays its retained receipt
+   * instead of executing twice.
    */
-  submitIngestionChunk(entityRoute: string, runId: string, chunk: BRegIngestionChunk): Promise<CompleteOutcome>
+  submitIngestionChunk(entityRoute: string, runId: string, chunk: BRegIngestionChunk, profileId: string): Promise<CompleteOutcome>
   /** Cancel an open ingestion run. Committed chunks stay committed. */
-  cancelIngestionRun(entityRoute: string, runId: string): Promise<CompleteOutcome>
+  cancelIngestionRun(entityRoute: string, runId: string, accessProfile?: string | undefined | null): Promise<CompleteOutcome>
   /**
-   * Read the retained receipt of one committed chunk. An erased receipt
-   * answers with the `ingestion.receipt_erased` problem instead.
+   * Read the retained receipt of one committed chunk under the run's
+   * access profile. An erased receipt answers with the
+   * `ingestion.receipt_erased` problem instead.
    */
-  ingestionChunkReceipt(entityRoute: string, runId: string, chunkIndex: number): Promise<CompleteOutcome>
+  ingestionChunkReceipt(entityRoute: string, runId: string, chunkIndex: number, profileId: string): Promise<CompleteOutcome>
   /** Tombstone one record against its current strong ETag. */
   tombstoneRecord(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
   /**

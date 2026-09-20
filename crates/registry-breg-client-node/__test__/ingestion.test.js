@@ -73,7 +73,10 @@ before(async () => {
     request.on('data', (chunk) => chunks.push(chunk));
     request.on('end', () => {
       const body = Buffer.concat(chunks).toString();
-      seen.push({ url: request.url, method: request.method, contentType: request.headers['content-type'], body });
+      // The fixture mounts the API under a /tenant base path; recorded URLs
+      // are relative to that base, like the assertions that read them.
+      seen.push({ url: request.url.replace(/^\/tenant/, ''), method: request.method, contentType: request.headers['content-type'], body });
+      const path = request.url.split('?')[0];
       const answer = (status, document) => {
         response.setHeader('traceparent', TRACEPARENT);
         response.setHeader('content-type', 'application/json');
@@ -82,16 +85,16 @@ before(async () => {
         response.statusCode = status;
         response.end(JSON.stringify(document));
       };
-      if (request.method === 'POST' && request.url.endsWith('/v1/records/people/ingestion-runs')) {
+      if (request.method === 'POST' && path.endsWith('/v1/records/people/ingestion-runs')) {
         return answer(201, { run: runWire() });
       }
-      if (request.method === 'GET' && request.url.includes('/chunks/0/receipt')) {
+      if (request.method === 'GET' && path.includes('/chunks/0/receipt')) {
         return answer(200, { receipt: receiptWire() });
       }
-      if (request.method === 'GET' && /ingestion-runs\/[0-9a-f-]+$/.test(request.url)) {
+      if (request.method === 'GET' && /ingestion-runs\/[0-9a-f-]+$/.test(path)) {
         return answer(200, { run: runWire({ status: 'cancelled', nextChunkIndex: 1 }) });
       }
-      if (request.method === 'GET' && request.url.includes('/chunks/1/receipt')) {
+      if (request.method === 'GET' && path.includes('/chunks/1/receipt')) {
         response.setHeader('traceparent', TRACEPARENT);
         response.setHeader('content-type', 'application/problem+json');
         response.setHeader('cache-control', 'no-store');
@@ -105,13 +108,13 @@ before(async () => {
           traceId: TRACE_ID,
         }));
       }
-      if (request.method === 'GET' && request.url.includes('/ingestion-runs')) {
+      if (request.method === 'GET' && path.includes('/ingestion-runs')) {
         return answer(200, { runs: [runWire()], hasMore: false, nextAfter: null });
       }
-      if (request.method === 'POST' && request.url.endsWith('/chunks')) {
+      if (request.method === 'POST' && path.endsWith('/chunks')) {
         return answer(200, { run: runWire({ committedItems: 1, nextChunkIndex: 1 }), receipt: receiptWire() });
       }
-      if (request.method === 'POST' && request.url.endsWith('/cancel')) {
+      if (request.method === 'POST' && path.endsWith('/cancel')) {
         return answer(200, { run: runWire({ status: 'cancelled' }) });
       }
       response.statusCode = 404;
@@ -166,7 +169,7 @@ test('encodeIngestionChunk refuses broken planning inputs without echoing values
   ));
 });
 
-test('createIngestionRun announces the exact run binding', async () => {
+test('createIngestionRun announces the exact run binding under its profile', async () => {
   const client = new BaseRegistryClient({ baseUrl });
   const outcome = await client.createIngestionRun('people', {
     operation: 'create',
@@ -185,6 +188,8 @@ test('createIngestionRun announces the exact run binding', async () => {
   assert.equal(outcome.value.status, 'open');
   assert.equal(outcome.value.itemCount, 10);
   assert.equal(outcome.value.complete, false);
+  // The run request names the profile, and the exchange selects it.
+  assert.equal(seen.at(-1).url, '/v1/records/people/ingestion-runs?accessProfile=importer.v1');
   const announcement = JSON.parse(seen.at(-1).body);
   assert.deepEqual(announcement, {
     operation: 'create',
@@ -235,6 +240,7 @@ test('createIngestionRun refuses unsupported, missing, and broken fields', async
 test('listIngestionRuns sends contract filters in order and returns the page', async () => {
   const client = new BaseRegistryClient({ baseUrl });
   const outcome = await client.listIngestionRuns('people', {
+    accessProfile: 'importer.v1',
     limit: 25,
     after: 'cursor+/=',
     status: 'open',
@@ -245,7 +251,8 @@ test('listIngestionRuns sends contract filters in order and returns the page', a
   assert.equal(outcome.value.hasMore, false);
   assert.equal(outcome.value.nextAfter, null);
   const query = new URLSearchParams(seen.at(-1).url.split('?')[1]);
-  assert.deepEqual([...query.keys()], ['limit', 'after', 'status', 'inputDigest']);
+  assert.deepEqual([...query.keys()], ['accessProfile', 'limit', 'after', 'status', 'inputDigest']);
+  assert.equal(query.get('accessProfile'), 'importer.v1');
   assert.equal(query.get('status'), 'open');
   assert.equal(query.get('inputDigest'), INPUT_DIGEST);
 
@@ -258,50 +265,68 @@ test('listIngestionRuns sends contract filters in order and returns the page', a
   await assert.rejects(client.listIngestionRuns('people', { inputDigest: 'xyz' }), (error) => (
     error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
   ));
+  await assert.rejects(client.listIngestionRuns('people', { accessProfile: 'x\n' }), (error) => (
+    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+  ));
   const unfiltered = await client.listIngestionRuns('people');
   assert.equal(unfiltered.value.runs.length, 1);
+  assert.equal(seen.at(-1).url, '/v1/records/people/ingestion-runs');
 });
 
 test('readIngestionRun and cancelIngestionRun address one run', async () => {
   const client = new BaseRegistryClient({ baseUrl });
   const read = await client.readIngestionRun('people', RUN_ID);
   assert.equal(read.value.status, 'cancelled');
-  assert.match(seen.at(-1).url, new RegExp(`/v1/records/people/ingestion-runs/${RUN_ID}$`));
+  assert.equal(seen.at(-1).url, `/v1/records/people/ingestion-runs/${RUN_ID}`);
+  const profiled = await client.readIngestionRun('people', RUN_ID, 'importer.v1');
+  assert.equal(profiled.value.status, 'cancelled');
+  assert.equal(seen.at(-1).url, `/v1/records/people/ingestion-runs/${RUN_ID}?accessProfile=importer.v1`);
   await assert.rejects(client.readIngestionRun('people', 'not-a-uuid'), (error) => (
     error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
   ));
 
   const cancelled = await client.cancelIngestionRun('people', RUN_ID);
   assert.equal(cancelled.value.status, 'cancelled');
-  const cancel = seen.at(-1);
-  assert.match(cancel.url, /\/cancel$/);
-  assert.equal(cancel.body, '');
-  assert.equal(cancel.contentType, undefined);
+  const bare = seen.at(-1);
+  assert.equal(bare.url, `/v1/records/people/ingestion-runs/${RUN_ID}/cancel`);
+  assert.equal(bare.body, '');
+  assert.equal(bare.contentType, undefined);
+  const cancelledAgain = await client.cancelIngestionRun('people', RUN_ID, 'importer.v1');
+  assert.equal(cancelledAgain.value.status, 'cancelled');
+  assert.equal(seen.at(-1).url, `/v1/records/people/ingestion-runs/${RUN_ID}/cancel?accessProfile=importer.v1`);
+  assert.equal(seen.at(-1).body, '');
+  assert.equal(seen.at(-1).contentType, undefined);
 });
 
-test('submitIngestionChunk sends the encoded chunk and returns run and receipt', async () => {
+test('submitIngestionChunk sends the encoded chunk under the run profile', async () => {
   const client = new BaseRegistryClient({ baseUrl });
   const chunk = encodeIngestionChunk(0, ITEMS, PREFIX_DIGEST);
-  const outcome = await client.submitIngestionChunk('people', RUN_ID, chunk);
+  const outcome = await client.submitIngestionChunk('people', RUN_ID, chunk, 'importer.v1');
   assert.equal(outcome.kind, 'complete');
   assert.equal(outcome.value.run.committedItems, 1);
   assert.equal(outcome.value.receipt.chunkIndex, 0);
   assert.equal(outcome.value.receipt.digest, CHUNK_DIGEST);
   assert.equal(outcome.value.receipt.batch.snapshot, 'breg1_00000000-0000-4000-8000-000000000002');
+  assert.equal(seen.at(-1).url, `/v1/records/people/ingestion-runs/${RUN_ID}/chunks?accessProfile=importer.v1`);
   assert.deepEqual(JSON.parse(seen.at(-1).body), {
     chunkIndex: 0,
     items: ITEMS,
     digest: chunk.digest,
     prefixDigest: PREFIX_DIGEST,
   });
+  await assert.rejects(
+    client.submitIngestionChunk('people', RUN_ID, chunk, 'Invalid Profile'),
+    (error) => error instanceof BaseRegistryClientError && error.kind === 'invalid_request',
+  );
 });
 
 test('ingestionChunkReceipt reads one retained receipt and reports an erased one', async () => {
   const client = new BaseRegistryClient({ baseUrl });
-  const retained = await client.ingestionChunkReceipt('people', RUN_ID, 0);
+  const retained = await client.ingestionChunkReceipt('people', RUN_ID, 0, 'importer.v1');
   assert.equal(retained.value.replayed, false);
   assert.equal(retained.value.batch.results.length, 1);
-  await assert.rejects(client.ingestionChunkReceipt('people', RUN_ID, 1), (error) => (
+  assert.equal(seen.at(-1).url, `/v1/records/people/ingestion-runs/${RUN_ID}/chunks/0/receipt?accessProfile=importer.v1`);
+  await assert.rejects(client.ingestionChunkReceipt('people', RUN_ID, 1, 'importer.v1'), (error) => (
     error instanceof BaseRegistryClientError
     && error.kind === 'problem'
     && error.code === 'ingestion.receipt_erased'

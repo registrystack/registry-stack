@@ -961,15 +961,18 @@ fn valid_receipt(receipt: &[u8]) -> bool {
         .is_ok_and(|value| value.get("snapshot").is_some_and(Value::is_string))
 }
 
-/// Tombstone every chunk receipt that describes any of the erased records.
-/// Called inside the record-history erasure transaction, so a receipt never
-/// outlives the history it describes.
+/// Tombstone every chunk receipt that describes one erased revision of the
+/// record. Called inside the record-history erasure transaction, so a receipt
+/// never outlives the history it describes, while a receipt describing only
+/// later revisions of the same record survives.
 pub(crate) async fn scrub_receipts_for_records(
     transaction: &tokio_postgres::Transaction<'_>,
-    record_ids: &[Uuid],
+    entity_id: &str,
+    record_id: Uuid,
+    erase_through_revision: i64,
 ) -> Result<u64, IngestionStoreError> {
-    if record_ids.is_empty() {
-        return Ok(0);
+    if entity_id.is_empty() || erase_through_revision <= 0 {
+        return Err(IngestionStoreError::InvalidInput);
     }
     let changed = transaction
         .execute(
@@ -980,11 +983,15 @@ pub(crate) async fn scrub_receipts_for_records(
                 AND EXISTS (
                     SELECT 1
                       FROM registry_internal.registry_ingestion_run_chunk_records AS link
+                      JOIN registry_internal.registry_ingestion_runs AS run
+                        ON run.run_id = link.run_id
                      WHERE link.run_id = chunk.run_id
                        AND link.chunk_index = chunk.chunk_index
-                       AND link.record_id = ANY($1)
+                       AND link.record_id = $2
+                       AND link.record_revision <= $3
+                       AND run.entity_id = $1
                 )",
-            &[&record_ids],
+            &[&entity_id, &record_id, &erase_through_revision],
         )
         .await
         .map_err(|_| IngestionStoreError::Unavailable)?;

@@ -538,20 +538,33 @@ class BaseRegistryClient:
         after: str | None = None,
         status: IngestionRunStatus | None = None,
         input_digest: str | None = None,
+        access_profile: str | None = None,
     ) -> dict[str, Any]: ...
-    def read_ingestion_run(self, entity_route: str, run_id: str) -> dict[str, Any]: ...
+    def read_ingestion_run(
+        self,
+        entity_route: str,
+        run_id: str,
+        access_profile: str | None = None,
+    ) -> dict[str, Any]: ...
     def submit_ingestion_chunk(
         self,
         entity_route: str,
         run_id: str,
         chunk: BRegIngestionChunk,
+        profile_id: str,
     ) -> dict[str, Any]: ...
-    def cancel_ingestion_run(self, entity_route: str, run_id: str) -> dict[str, Any]: ...
+    def cancel_ingestion_run(
+        self,
+        entity_route: str,
+        run_id: str,
+        access_profile: str | None = None,
+    ) -> dict[str, Any]: ...
     def ingestion_chunk_receipt(
         self,
         entity_route: str,
         run_id: str,
         chunk_index: int,
+        profile_id: str,
     ) -> dict[str, Any]: ...
     def lifecycle_actions(
         self,

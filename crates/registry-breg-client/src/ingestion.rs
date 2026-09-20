@@ -21,7 +21,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use crate::client::{valid_breg_identifier, validate_entity_route};
+use crate::client::{access_profile_query, valid_breg_identifier, validate_entity_route};
 use crate::mutation::{validate_json_values, MAXIMUM_BREG_MUTATION_BODY_BYTES};
 use crate::{
     BRegBatchOperation, BRegComplete, BRegRawDocument, BaseRegistryClient, BaseRegistryClientError,
@@ -1045,6 +1045,7 @@ struct BRegIngestionChunkEnvelope<'a> {
 /// Bounded filters for one ingestion-run listing.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BRegIngestionRunListQuery {
+    access_profile: Option<String>,
     status: Option<BRegIngestionRunStatus>,
     input_digest: Option<String>,
     limit: Option<u32>,
@@ -1052,6 +1053,13 @@ pub struct BRegIngestionRunListQuery {
 }
 
 impl BRegIngestionRunListQuery {
+    /// List runs under one access profile, selected as the `accessProfile`
+    /// query pair of every exchange the listing travels on.
+    pub fn access_profile(mut self, value: impl Into<String>) -> Result<Self, BRegIngestionError> {
+        self.access_profile = Some(bound_member(value)?);
+        Ok(self)
+    }
+
     /// List only runs in one status.
     #[must_use]
     pub fn status(mut self, status: BRegIngestionRunStatus) -> Self {
@@ -1086,7 +1094,10 @@ impl BRegIngestionRunListQuery {
     }
 
     fn query_pairs(&self) -> Vec<(String, String)> {
-        let mut pairs = Vec::with_capacity(4);
+        let mut pairs = Vec::with_capacity(5);
+        if let Some(profile) = &self.access_profile {
+            pairs.push(("accessProfile".to_owned(), profile.clone()));
+        }
         if let Some(limit) = self.limit {
             pairs.push(("limit".to_owned(), limit.to_string()));
         }
@@ -1122,6 +1133,34 @@ pub fn ingestion_prefix_digest(bytes: &[u8]) -> String {
     sha256_hex(bytes)
 }
 
+/// An incremental [`ingestion_prefix_digest`]: absorbs the raw source bytes of
+/// one ingestion input chunk by chunk and derives each prefix digest from the
+/// retained hash state alone, without retaining or re-hashing the bytes.
+#[derive(Clone, Default)]
+pub struct BRegIngestionPrefixDigest {
+    state: Sha256,
+}
+
+impl BRegIngestionPrefixDigest {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Absorb the next raw source bytes, typically one chunk's source extent.
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.state.update(bytes);
+    }
+
+    /// The lowercase SHA-256 of every raw source byte absorbed so far, exactly
+    /// the digest [`ingestion_prefix_digest`] derives over those bytes.
+    /// Deriving leaves the accumulator open for further absorption.
+    #[must_use]
+    pub fn digest(&self) -> String {
+        hex_lower(&self.state.clone().finalize())
+    }
+}
+
 /// The canonical batch body and its digest for the items of one chunk. A run
 /// binds and stores exactly these bytes.
 fn canonical_chunk_body(items: &[Value]) -> Result<(Vec<u8>, String), BRegIngestionError> {
@@ -1136,8 +1175,12 @@ fn canonical_chunk_body(items: &[Value]) -> Result<(Vec<u8>, String), BRegIngest
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
+    hex_lower(&Sha256::digest(bytes))
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
     let mut encoded = String::with_capacity(SHA256_HEX_LENGTH);
-    for byte in Sha256::digest(bytes) {
+    for byte in bytes {
         use std::fmt::Write as _;
         write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
     }
@@ -1233,16 +1276,20 @@ fn decode_envelope<T>(
 }
 
 impl BaseRegistryClient {
-    /// Announce one whole input and open a durable ingestion run for it.
+    /// Announce one whole input and open a durable ingestion run for it. The
+    /// run request names the access profile the run travels under, and this
+    /// exchange selects it as the `accessProfile` query pair.
     pub async fn create_ingestion_run(
         &self,
         entity_route: &str,
         request: &BRegIngestionRunRequest,
     ) -> Result<BRegComplete<BRegIngestionRun>, BaseRegistryClientError> {
         validate_entity_route(entity_route)?;
+        let pairs = access_profile_query(Some(request.profile_id()))?;
         let raw = self
             .ingestion_post_json(
                 &["v1", "records", entity_route, "ingestion-runs"],
+                &pairs,
                 request.body().to_vec(),
                 Some(crate::client::APPLICATION_JSON),
                 reqwest::StatusCode::CREATED,
@@ -1277,14 +1324,18 @@ impl BaseRegistryClient {
         )
     }
 
-    /// Read the current durable state of one ingestion run.
+    /// Read the current durable state of one ingestion run. The access
+    /// profile, when one is given, is selected as the `accessProfile` query
+    /// pair; an absent profile leaves the route default selected.
     pub async fn read_ingestion_run(
         &self,
         entity_route: &str,
         run_id: Uuid,
+        access_profile: Option<&str>,
     ) -> Result<BRegComplete<BRegIngestionRun>, BaseRegistryClientError> {
         validate_entity_route(entity_route)?;
         let run_identifier = run_id.to_string();
+        let pairs = access_profile_query(access_profile)?;
         let raw = self
             .ingestion_get_json(
                 &[
@@ -1294,7 +1345,7 @@ impl BaseRegistryClient {
                     "ingestion-runs",
                     &run_identifier,
                 ],
-                &[],
+                &pairs,
             )
             .await?;
         decode_envelope(raw, reqwest::StatusCode::OK.as_u16(), &["run"], |object| {
@@ -1302,16 +1353,20 @@ impl BaseRegistryClient {
         })
     }
 
-    /// Submit one bounded chunk of an open ingestion run. A resubmitted chunk
-    /// replays its retained receipt instead of executing twice.
+    /// Submit one bounded chunk of an open ingestion run under its run's
+    /// access profile, selected as the `accessProfile` query pair. A
+    /// resubmitted chunk replays its retained receipt instead of executing
+    /// twice.
     pub async fn submit_ingestion_chunk(
         &self,
         entity_route: &str,
         run_id: Uuid,
         chunk: &BRegIngestionChunk,
+        profile_id: &str,
     ) -> Result<BRegComplete<BRegIngestionChunkSubmission>, BaseRegistryClientError> {
         validate_entity_route(entity_route)?;
         let run_identifier = run_id.to_string();
+        let pairs = access_profile_query(Some(profile_id))?;
         let raw = self
             .ingestion_post_json(
                 &[
@@ -1322,6 +1377,7 @@ impl BaseRegistryClient {
                     &run_identifier,
                     "chunks",
                 ],
+                &pairs,
                 chunk.body().to_vec(),
                 Some(crate::client::APPLICATION_JSON),
                 reqwest::StatusCode::OK,
@@ -1338,14 +1394,17 @@ impl BaseRegistryClient {
     /// Cancel an open ingestion run. Committed chunks stay committed.
     ///
     /// The request carries no body and no Content-Type header: the cancel
-    /// route refuses any declared media type.
+    /// route refuses any declared media type. The access profile, when one is
+    /// given, is selected as the `accessProfile` query pair.
     pub async fn cancel_ingestion_run(
         &self,
         entity_route: &str,
         run_id: Uuid,
+        access_profile: Option<&str>,
     ) -> Result<BRegComplete<BRegIngestionRun>, BaseRegistryClientError> {
         validate_entity_route(entity_route)?;
         let run_identifier = run_id.to_string();
+        let pairs = access_profile_query(access_profile)?;
         let raw = self
             .ingestion_post_json(
                 &[
@@ -1356,6 +1415,7 @@ impl BaseRegistryClient {
                     &run_identifier,
                     "cancel",
                 ],
+                &pairs,
                 Vec::new(),
                 None,
                 reqwest::StatusCode::OK,
@@ -1366,17 +1426,20 @@ impl BaseRegistryClient {
         })
     }
 
-    /// Read the retained receipt of one committed chunk. An erased receipt
-    /// answers with the `ingestion.receipt_erased` problem instead.
+    /// Read the retained receipt of one committed chunk under its run's
+    /// access profile, selected as the `accessProfile` query pair. An erased
+    /// receipt answers with the `ingestion.receipt_erased` problem instead.
     pub async fn ingestion_chunk_receipt(
         &self,
         entity_route: &str,
         run_id: Uuid,
         chunk_index: u64,
+        profile_id: &str,
     ) -> Result<BRegComplete<BRegIngestionChunkReceipt>, BaseRegistryClientError> {
         validate_entity_route(entity_route)?;
         let run_identifier = run_id.to_string();
         let chunk = chunk_index.to_string();
+        let pairs = access_profile_query(Some(profile_id))?;
         let raw = self
             .ingestion_get_json(
                 &[
@@ -1389,7 +1452,7 @@ impl BaseRegistryClient {
                     &chunk,
                     "receipt",
                 ],
-                &[],
+                &pairs,
             )
             .await?;
         decode_envelope(
@@ -1877,6 +1940,8 @@ mod tests {
             Vec::new()
         );
         let query = BRegIngestionRunListQuery::default()
+            .access_profile("importer.v1")
+            .unwrap()
             .limit(25)
             .unwrap()
             .after("cursor+/=")
@@ -1887,6 +1952,7 @@ mod tests {
         assert_eq!(
             query.query_pairs(),
             vec![
+                ("accessProfile".to_owned(), "importer.v1".to_owned()),
                 ("limit".to_owned(), "25".to_owned()),
                 ("after".to_owned(), "cursor+/=".to_owned()),
                 ("status".to_owned(), "open".to_owned()),
@@ -1909,6 +1975,40 @@ mod tests {
             BRegIngestionRunListQuery::default().after("cursor\n"),
             Err(BRegIngestionError::InvalidCursor)
         );
+        // The selected access profile is carried as one bounded identifier.
+        assert_eq!(
+            BRegIngestionRunListQuery::default().access_profile(""),
+            Err(BRegIngestionError::InvalidBinding)
+        );
+        assert_eq!(
+            BRegIngestionRunListQuery::default().access_profile("profile\n"),
+            Err(BRegIngestionError::InvalidBinding)
+        );
+    }
+
+    #[test]
+    fn the_prefix_digest_accumulator_matches_one_shot_prefix_digests() {
+        // Incremental absorption at several split points, including the empty
+        // input, derives exactly the one-shot digest of the same bytes, and
+        // deriving twice keeps deriving it.
+        let source: &[u8] = b"abcdefghij";
+        for split in [0, 1, 3, source.len()] {
+            let mut accumulator = BRegIngestionPrefixDigest::new();
+            accumulator.update(&source[..split]);
+            accumulator.update(&source[split..]);
+            assert_eq!(accumulator.digest(), ingestion_prefix_digest(source));
+            assert_eq!(accumulator.digest(), ingestion_prefix_digest(source));
+        }
+        let default = BRegIngestionPrefixDigest::default();
+        assert_eq!(
+            default.digest(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        let mut three_way = BRegIngestionPrefixDigest::new();
+        three_way.update(b"ab");
+        three_way.update(b"");
+        three_way.update(source);
+        assert_eq!(three_way.digest(), ingestion_prefix_digest(b"ababcdefghij"));
     }
 
     #[test]

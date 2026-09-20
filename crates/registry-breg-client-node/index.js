@@ -740,5 +740,5 @@ module.exports.PrivateKeyJwtBinding = nativeBinding.PrivateKeyJwtBinding
 module.exports.RequestResultReference = nativeBinding.RequestResultReference
 module.exports.RetainedRequestHistoryPage = nativeBinding.RetainedRequestHistoryPage
 module.exports.RetainedRequestProposal = nativeBinding.RetainedRequestProposal
-module.exports.verifyWebhookDelivery = nativeBinding.verifyWebhookDelivery
 module.exports.encodeIngestionChunk = nativeBinding.encodeIngestionChunk
+module.exports.verifyWebhookDelivery = nativeBinding.verifyWebhookDelivery
