@@ -3343,7 +3343,9 @@
               {
                 "additionalProperties": false,
                 "properties": {
-                  "snapshot": {},
+                  "snapshot": {
+                    "type": "object"
+                  },
                   "strategy": {
                     "enum": [
                       "submitted"
@@ -18045,41 +18047,6 @@
               "maxLength": 128,
               "minLength": 1,
               "pattern": "^[A-Za-z0-9_.:-]+$",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Explicit source profile used for the caller-scoped BReg read or action.",
-            "in": "header",
-            "name": "Registry-Source-Profile",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_.:-]+$",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Quoted positive signed 64-bit Casework item revision.",
-            "in": "header",
-            "name": "If-Match",
-            "required": true,
-            "schema": {
-              "maxLength": 21,
-              "pattern": "^\"[1-9][0-9]{0,18}\"$",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Caller-selected ASCII graphic key bound to this exact mutation.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[!-~]+$",
               "type": "string"
             }
           },

@@ -165,6 +165,21 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertFalse(
             review_clock_parameters["Registry-Source-Profile"]["required"]
         )
+        submitted_context = schemas["ReviewCreateRequest"]["properties"]["context"][
+            "oneOf"
+        ][0]
+        self.assertEqual(
+            "object", submitted_context["properties"]["snapshot"]["type"]
+        )
+        revoke_parameters = {
+            parameter["name"]
+            for parameter in self.openapi["paths"][
+                "/v1/review-tasks/{task_id}/task-grants/{grant_id}/revoke"
+            ]["post"]["parameters"]
+        }
+        self.assertNotIn("If-Match", revoke_parameters)
+        self.assertNotIn("Idempotency-Key", revoke_parameters)
+        self.assertNotIn("Registry-Source-Profile", revoke_parameters)
         review_note = schemas["ReviewNoteRequest"]["properties"]["note"]
         self.assertEqual(1, review_note["minLength"])
         self.assertNotIn("maxLength", review_note)

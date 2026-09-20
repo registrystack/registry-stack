@@ -425,7 +425,7 @@ def review_schemas() -> dict:
             obj(
                 {
                     "strategy": {"type": "string", "enum": ["submitted"]},
-                    "snapshot": value,
+                    "snapshot": {"type": "object"},
                 },
                 ["strategy", "snapshot"],
             ),
@@ -1483,7 +1483,7 @@ def document(contract: dict) -> dict:
         "/v1/review-accountability/{event_id}": {"get": operation("Resolve protected review accountability", "ReviewAccountabilityRecord", parameters=[EVENT_ID])},
         "/v1/review-tasks/{task_id}/task-templates": {"get": operation("Preview task grants for a held review task", "TaskTemplatePreviews", source=True, parameters=[TASK_ID])},
         "/v1/review-tasks/{task_id}/task-grants": {"get": operation("List grants for a held review task", "TaskGrantList", source=True, parameters=[TASK_ID]), "post": operation("Approve a grant for a held review task", "TaskGrantView", source=True, mutation=True, body="TaskApprovalRequest", parameters=[TASK_ID])},
-        "/v1/review-tasks/{task_id}/task-grants/{grant_id}/revoke": {"post": operation("Revoke a review-task grant", "TaskGrantRevocation", source=True, mutation=True, parameters=[TASK_ID, parameter("grant_id", "path", "Task grant UUID.", {"type": "string", "format": "uuid"})])},
+        "/v1/review-tasks/{task_id}/task-grants/{grant_id}/revoke": {"post": operation("Revoke a review-task grant", "TaskGrantRevocation", parameters=[TASK_ID, parameter("grant_id", "path", "Task grant UUID.", {"type": "string", "format": "uuid"})])},
         "/v1/work-items": {"get": operation("List a caller-authorized inbox view", "WorkItemPage", source=True, source_required=False, parameters=[
             parameter("view", "query", "Required view evaluated before pagination.", {"type": "string", "enum": ["mine", "my_teams", "team_holdings", "overdue", "completed_by_me"]}),
             parameter("sort", "query", "Source-backed ordering. due orders by effective due date with undated items last, then age and item id; age orders oldest first; type orders by source-neutral subject kind, then age and item id. Defaults to due.", {"type": "string", "enum": ["due", "age", "type"], "default": "due"}, required=False),

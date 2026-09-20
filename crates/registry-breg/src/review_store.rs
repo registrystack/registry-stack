@@ -46,6 +46,11 @@ pub(crate) fn valid_completion_recipient(recipient: &str) -> bool {
         && !recipient.chars().any(char::is_control)
 }
 
+fn valid_completion_token(token: &str) -> bool {
+    registry_platform_authcommon::parse_bearer_token(&format!("Bearer {token}"))
+        .is_ok_and(|parsed| parsed == token)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReviewConfigurationError;
 
@@ -319,9 +324,9 @@ impl ReviewAuthorityClient {
             || producer_id.chars().any(char::is_control)
             || !(1..=MAXIMUM_REVIEW_RECOVERY_DAYS).contains(&recovery_days)
             || completion_token.is_some() != completion_recipient.is_some()
-            || completion_token.as_ref().is_some_and(|token| {
-                token.is_empty() || token.len() > 4096 || token.chars().any(char::is_control)
-            })
+            || completion_token
+                .as_ref()
+                .is_some_and(|token| token.len() > 4096 || !valid_completion_token(token))
             || completion_recipient
                 .as_ref()
                 .is_some_and(|recipient| !valid_completion_recipient(recipient))
@@ -498,6 +503,26 @@ impl ReviewAuthorityRegistry {
                         updated_at=transaction_timestamp()
                   WHERE accepted_binding IS NULL AND recovery_deadline <= transaction_timestamp()
                     AND state IN ('pending','submitting','uncertain')",
+                &[],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+            > 0
+        {
+            return Ok(true);
+        }
+        if client
+            .execute(
+                "UPDATE registry_internal.registry_request_review_submissions
+                    SET state='failed',accepted_binding=NULL,lease_until=NULL,
+                        last_error_code=CASE
+                            WHEN recovery_deadline <= transaction_timestamp()
+                            THEN 'cancellation-recovery-expired'
+                            ELSE 'cancellation-attempts-exhausted'
+                        END,
+                        updated_at=transaction_timestamp()
+                  WHERE state='cancelling'
+                    AND (recovery_deadline <= transaction_timestamp() OR attempt_count >= 1000)",
                 &[],
             )
             .await
@@ -2593,6 +2618,35 @@ mod tests {
             registry.completion_authority("outgoing-token", "registry-a"),
             None
         );
+    }
+
+    #[test]
+    fn completion_sender_rejects_tokens_outside_the_inbound_bearer_grammar() {
+        for token in ["sender token", "sender,token"] {
+            let client = ReviewClient::new(
+                registry_review_client::ReviewClientConfig::new(
+                    "https://casework.example.test/".parse().expect("URL"),
+                )
+                .with_profile("producer"),
+            )
+            .expect("client");
+            assert!(
+                ReviewAuthorityClient::new(
+                    "casework-a".to_owned(),
+                    client,
+                    Arc::new(
+                        registry_platform_httputil::StaticToken::new("outgoing-token".to_owned(),)
+                            .expect("outgoing token"),
+                    ),
+                    "registry-producer".to_owned(),
+                    30,
+                    Some(Zeroizing::new(token.to_owned())),
+                    Some("registry-a".to_owned()),
+                )
+                .is_err(),
+                "completion token {token:?} cannot authenticate the inbound route"
+            );
+        }
     }
 
     #[test]

@@ -1543,6 +1543,110 @@ async fn stale_cancellation_failure_cannot_replace_a_reclaimed_lease() {
     database.cleanup().await;
 }
 
+#[tokio::test]
+async fn expired_or_exhausted_cancellations_become_terminal_without_remote_io() {
+    let database = TestDatabase::create(2).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT USAGE ON SCHEMA registry_internal TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime review schema access");
+    let expired = Uuid::from_u128(0xc6);
+    let exhausted = Uuid::from_u128(0xc7);
+    for request_id in [expired, exhausted] {
+        seed_submission(
+            &database.admin,
+            request_id,
+            "casework-a",
+            "producer-a",
+            "policy-a",
+        )
+        .await;
+        let review_request_id = Uuid::from_u128(request_id.as_u128() + 100).to_string();
+        database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_request_review_submissions
+                    SET state='cancelling',withdrawn=true,
+                        accepted_binding=jsonb_build_object('requestId',$2::text)
+                  WHERE request_id=$1",
+                &[&request_id, &review_request_id],
+            )
+            .await
+            .expect("seed cancellation");
+    }
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET recovery_deadline=transaction_timestamp()-interval '1 second'
+              WHERE request_id=$1",
+            &[&expired],
+        )
+        .await
+        .expect("expire cancellation recovery");
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET attempt_count=1000 WHERE request_id=$1",
+            &[&exhausted],
+        )
+        .await
+        .expect("exhaust cancellation attempts");
+
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let authorities = authority_registry("casework-a", "producer-a", "sender", "registry-a");
+    assert!(run_review_authority_once_for_test(&pool, &authorities)
+        .await
+        .expect("terminalize stranded cancellations"));
+    let rows = database
+        .admin
+        .query(
+            "SELECT request_id,state,accepted_binding,last_error_code
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=ANY($1) ORDER BY request_id",
+            &[&vec![expired, exhausted]],
+        )
+        .await
+        .expect("read terminal cancellations");
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(row.get::<_, String>(1), "failed");
+        assert!(row.get::<_, Option<Value>>(2).is_none());
+        let request_id: Uuid = row.get(0);
+        assert_eq!(
+            row.get::<_, String>(3),
+            if request_id == expired {
+                "cancellation-recovery-expired"
+            } else {
+                "cancellation-attempts-exhausted"
+            }
+        );
+    }
+
+    drop(pool);
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn real_postgres_completion_inbox_deduplicates_refuses_substitution_expires_and_redacts_diagnostics(
 ) {

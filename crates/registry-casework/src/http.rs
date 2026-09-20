@@ -364,7 +364,7 @@ async fn review_tasks(
                 token,
                 query.queue.as_deref(),
                 query.cursor,
-                query.limit.unwrap_or(25),
+                page_limit(&state, query.limit)?,
             )
             .await?,
     ))
