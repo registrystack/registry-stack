@@ -784,6 +784,11 @@ mod tests {
                 "evidenceProviders",
             ),
             (
+                SchemaTestRuntimeSetupError::WasmExecution,
+                "test.wasm_execution.setup_failed",
+                "wasmExecution",
+            ),
+            (
                 SchemaTestRuntimeSetupError::EventDestinations(
                     EventDestinationActivationError::InventoryMismatch,
                 ),

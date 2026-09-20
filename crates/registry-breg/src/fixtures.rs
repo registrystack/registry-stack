@@ -83,6 +83,7 @@ pub enum SchemaTestRuntimeSetupError {
     Cursor,
     EventDestinations(EventDestinationActivationError),
     Evidence,
+    WasmExecution,
 }
 
 impl fmt::Display for SchemaTestRuntimeSetupError {
@@ -95,6 +96,7 @@ impl fmt::Display for SchemaTestRuntimeSetupError {
             Self::Evidence => {
                 formatter.write_str("schema-test Evidence provider activation failed")
             }
+            Self::WasmExecution => formatter.write_str("schema-test WASM execution setup failed"),
         }
     }
 }
@@ -3279,6 +3281,8 @@ struct SchemaTestRuntime {
     authenticator: Arc<RegistryAuthenticator>,
     verifier: TokenVerifier,
     readiness: Arc<SchemaTestReadiness>,
+    #[cfg(feature = "wasm")]
+    _wasm_runtime: crate::wasm_runtime::ConfiguredWasmRuntime,
 }
 
 impl SchemaTestRuntime {
@@ -3354,6 +3358,9 @@ impl SchemaTestRuntime {
         let evidence = config
             .activate_evidence(&registry)
             .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Evidence))?;
+        #[cfg(feature = "wasm")]
+        let wasm_runtime = crate::wasm_runtime::install_configured(*config.wasm_execution())
+            .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::WasmExecution))?;
         let mutations = PostgresRecordMutationService::new_with_event_destinations(
             pool.clone(),
             Arc::clone(&registry),
@@ -3391,6 +3398,8 @@ impl SchemaTestRuntime {
             authenticator,
             verifier,
             readiness,
+            #[cfg(feature = "wasm")]
+            _wasm_runtime: wasm_runtime,
         })
     }
 
@@ -6100,7 +6109,9 @@ fn source_module_asset_package_path(
         || asset_path.contains('\\')
         || asset_path.starts_with('/')
         || asset_path.ends_with('/')
-        || (!asset_path.ends_with(".sql") && !asset_path.ends_with(".rhai"))
+        || (!asset_path.ends_with(".sql")
+            && !asset_path.ends_with(".rhai")
+            && !asset_path.ends_with(".wasm"))
         || asset_path == "module.yaml"
     {
         return Err(FixtureError::CandidateBindingRefused);
@@ -6126,6 +6137,11 @@ fn source_module_asset_policy(asset_path: &str) -> Result<(PackageFileRole, usiz
             PackageFileRole::SourceModulePlannerScript,
             MAX_RHAI_PLANNER_SOURCE_BYTES as usize,
         ))
+    } else if asset_path.ends_with(".wasm") {
+        Ok((
+            PackageFileRole::SourceModuleAsset,
+            crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES,
+        ))
     } else {
         Err(FixtureError::CandidateBindingRefused)
     }
@@ -6144,6 +6160,11 @@ fn source_project_asset_policy(
             PackageFileRole::SourceProjectPlannerScript,
             MAX_RHAI_PLANNER_SOURCE_BYTES as usize,
         ))
+    } else if source_path.ends_with(".wasm") {
+        Ok((
+            PackageFileRole::SourceProjectPlannerScript,
+            crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES,
+        ))
     } else {
         Err(FixtureError::CandidateBindingRefused)
     }
@@ -6159,6 +6180,7 @@ fn source_project_asset_path(package_path: &str) -> Result<&str, FixtureError> {
         || source_path.starts_with('/')
         || source_path.ends_with('/')
         || (!source_path.ends_with(".rhai")
+            && !source_path.ends_with(".wasm")
             && !crate::action_evidence_contracts::valid_contract_path(source_path))
     {
         return Err(FixtureError::CandidateBindingRefused);

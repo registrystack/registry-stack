@@ -129,6 +129,7 @@ async fn professional_licence_starter_policy_journeys_and_http_refusals() {
 }
 
 async fn run_starter(starter: &Starter) {
+    let _runtime_guard = super::WASM_RUNTIME_TEST_LOCK.lock().await;
     let project = parse_project_yaml(starter.project).expect("authored starter parses");
     let requester_clients = requester_clients(&project);
     let registry = compile_project(&project, &[], CompileProfile::Production)

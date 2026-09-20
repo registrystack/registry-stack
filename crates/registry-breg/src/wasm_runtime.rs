@@ -18,7 +18,7 @@
 //! validator (`action_outcome`), so authorization, write ceilings, receipt
 //! semantics, and audit content are identical by construction.
 
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::Instant;
 
 use registry_platform_script::wasm::{
@@ -98,13 +98,14 @@ impl From<crate::runtime_config::WasmExecutionConfig> for WasmExecutionBudgets {
 }
 
 /// Why the process runtime could not start: the engine rejected its
-/// configuration, or the epoch ticker's thread could not be spawned. Either
-/// way the caller refuses to install a running runtime: a runtime without
-/// its ticker would leave every action deadline permanently inert.
+/// configuration, the epoch ticker's thread could not be spawned, or another
+/// lifecycle already owns the process executor. Every case refuses installation
+/// rather than weakening execution bounds or replacing an active lifecycle.
 #[derive(Debug)]
 pub enum WasmRuntimeStartError {
     EngineSetup(InvokeError),
     Ticker(TickerSpawnError),
+    LifecycleActive,
 }
 
 /// One engine, one ticker, and the bounded prepared-module cache.
@@ -231,6 +232,45 @@ impl WasmHandlerRuntime {
 /// rather than silently served on default budgets.
 static RUNTIME: RwLock<Option<Arc<WasmHandlerRuntime>>> = RwLock::new(None);
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RuntimeOwnership {
+    Vacant,
+    #[cfg(feature = "runtime")]
+    Configured,
+    PersistentDefault,
+}
+
+static RUNTIME_OWNERSHIP: Mutex<RuntimeOwnership> = Mutex::new(RuntimeOwnership::Vacant);
+
+/// Ownership of one configured process runtime installation.
+///
+/// Configured ownership is exclusive. The guard clears the runtime it
+/// installed and releases ownership so a later server or schema-test lifecycle
+/// can install its own configured executor.
+#[cfg(feature = "runtime")]
+pub(crate) struct ConfiguredWasmRuntime {
+    runtime: Weak<WasmHandlerRuntime>,
+}
+
+#[cfg(feature = "runtime")]
+impl Drop for ConfiguredWasmRuntime {
+    fn drop(&mut self) {
+        let mut ownership = RUNTIME_OWNERSHIP
+            .lock()
+            .expect("wasm runtime ownership lock");
+        let mut installed = RUNTIME.write().expect("wasm runtime lock");
+        let owns_installed = self
+            .runtime
+            .upgrade()
+            .zip(installed.as_ref())
+            .is_some_and(|(owned, current)| Arc::ptr_eq(&owned, current));
+        if owns_installed {
+            drop(installed.take());
+        }
+        *ownership = RuntimeOwnership::Vacant;
+    }
+}
+
 fn runtime() -> Result<Arc<WasmHandlerRuntime>, ActionHandlerDiagnostic> {
     RUNTIME
         .read()
@@ -249,37 +289,97 @@ fn runtime_not_installed() -> ActionHandlerDiagnostic {
     )
 }
 
-/// Install the configured runtime. Called once at server startup, before
-/// requests, and by any embedder that evaluates handlers outside the server
-/// startup path: replacing a runtime stops the previous ticker once the last
-/// evaluation holding it finishes, so no evaluation loses its backstop
-/// mid-call. A start failure (engine configuration rejected, ticker thread
-/// not spawned) is returned, never swallowed into a degraded runtime.
+/// Replace the runtime for serialized unit tests that exercise executor
+/// behavior under different configurations.
+#[cfg(test)]
 pub(crate) fn install(
     budgets: WasmExecutionBudgets,
     backend: Backend,
     retained_modules: usize,
 ) -> Result<(), WasmRuntimeStartError> {
-    let runtime = WasmHandlerRuntime::new(budgets, backend, retained_modules)?;
-    *RUNTIME.write().expect("wasm runtime lock") = Some(Arc::new(runtime));
-    Ok(())
+    let ownership = RUNTIME_OWNERSHIP
+        .lock()
+        .expect("wasm runtime ownership lock");
+    if *ownership != RuntimeOwnership::Vacant {
+        return Err(WasmRuntimeStartError::LifecycleActive);
+    }
+    replace_runtime(budgets, backend, retained_modules).map(drop)
 }
 
-/// Clear the process runtime. The server shutdown path calls this; the
-/// runtime's Drop stops its ticker at the last reference, and a later
-/// evaluation refuses until a new install.
-#[cfg(any(test, feature = "runtime"))]
+fn replace_runtime(
+    budgets: WasmExecutionBudgets,
+    backend: Backend,
+    retained_modules: usize,
+) -> Result<Weak<WasmHandlerRuntime>, WasmRuntimeStartError> {
+    let runtime = Arc::new(WasmHandlerRuntime::new(budgets, backend, retained_modules)?);
+    let ownership = Arc::downgrade(&runtime);
+    *RUNTIME.write().expect("wasm runtime lock") = Some(runtime);
+    Ok(ownership)
+}
+
+/// Install the process runtime from the validated operator configuration and
+/// return its exclusive lifecycle owner. Production serving and pre-sign
+/// schema tests use this same mapping so neither path can drift on budgets,
+/// backend, or cache bounds. An overlapping owner is refused before it can
+/// replace the active executor.
+#[cfg(feature = "runtime")]
+pub(crate) fn install_configured(
+    config: crate::runtime_config::WasmExecutionConfig,
+) -> Result<ConfiguredWasmRuntime, WasmRuntimeStartError> {
+    let mut ownership = RUNTIME_OWNERSHIP
+        .lock()
+        .expect("wasm runtime ownership lock");
+    if *ownership != RuntimeOwnership::Vacant {
+        return Err(WasmRuntimeStartError::LifecycleActive);
+    }
+    let runtime = replace_runtime(
+        WasmExecutionBudgets::from(config),
+        crate::wasm_handler::execution_backend(config.backend()),
+        MAXIMUM_RETAINED_PREPARED_MODULES,
+    )?;
+    *ownership = RuntimeOwnership::Configured;
+    Ok(ConfiguredWasmRuntime { runtime })
+}
+
+/// Clear the process runtime for unit tests that exercise uninstalled state.
+/// The configured production and schema-test lifecycles use
+/// [`ConfiguredWasmRuntime`] instead so ownership remains exclusive.
+#[cfg(test)]
 pub(crate) fn shutdown() {
+    let mut ownership = RUNTIME_OWNERSHIP
+        .lock()
+        .expect("wasm runtime ownership lock");
     drop(RUNTIME.write().expect("wasm runtime lock").take());
+    *ownership = RuntimeOwnership::Vacant;
+}
+
+fn install_persistent(
+    budgets: WasmExecutionBudgets,
+    backend: Backend,
+    retained_modules: usize,
+) -> Result<(), WasmRuntimeStartError> {
+    let mut ownership = RUNTIME_OWNERSHIP
+        .lock()
+        .expect("wasm runtime ownership lock");
+    match *ownership {
+        RuntimeOwnership::PersistentDefault => return Ok(()),
+        #[cfg(feature = "runtime")]
+        RuntimeOwnership::Configured => return Err(WasmRuntimeStartError::LifecycleActive),
+        RuntimeOwnership::Vacant => {}
+    }
+    replace_runtime(budgets, backend, retained_modules)?;
+    *ownership = RuntimeOwnership::PersistentDefault;
+    Ok(())
 }
 
 /// Install the process runtime with the default execution budgets, default
 /// backend, and default cache bound. The server startup path installs the
 /// configured runtime itself; an embedder assembling the HTTP app without
-/// that path calls this before serving, and every evaluation before any
-/// install is refused.
+/// that path calls this before serving. Repeated default installation reuses
+/// the process-lifetime executor, and every evaluation before any install is
+/// refused.
 pub fn install_default() -> Result<(), WasmRuntimeStartError> {
-    install(
+    install_persistent(
         WasmExecutionBudgets::default(),
         crate::wasm_handler::execution_backend(crate::wasm_handler::WasmExecutionBackend::default()),
         MAXIMUM_RETAINED_PREPARED_MODULES,
