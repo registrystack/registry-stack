@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The authored scheduling policy: services, offerings, opening patterns,
-//! holiday sets, published arrival windows, and the hold policy, with the
-//! validators a publication gate runs.
+//! holiday sets, and the hold policy, with the validators a publication gate
+//! runs. Published arrival-window supply is an operator record referenced by
+//! identifier from an arrival offering.
 //!
 //! The policy is layer one of the configuration model. It declares what a
-//! deployment publishes and why; locations, resource pools, and dated
-//! exceptions are runtime records the policy references by identifier but
-//! never embeds, so the same published policy governs every environment that
-//! resolves those identifiers.
+//! deployment publishes and why; locations, resource pools, arrival windows,
+//! and dated exceptions are runtime records the policy references by
+//! identifier but never embeds, so the same published policy governs every
+//! environment that resolves those identifiers.
 
 use chrono::{DateTime, Utc};
 use registry_platform_hooks::{validate_hooks, HookHandlerSource, HookPhase, HookValidationError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 
 use crate::diagnostics::{PolicyCheckReason, SchedulingDiagnostic};
 use crate::naming::SCHEDULING_POLICY_API_VERSION;
@@ -324,7 +326,6 @@ pub struct SchedulingPolicy {
     pub offerings: Vec<OfferingPolicy>,
     pub holiday_sets: Vec<HolidaySetPolicy>,
     pub openings: Vec<OpeningPatternPolicy>,
-    pub windows: Vec<PublishedWindow>,
     /// The channels this deployment declares it serves. The vocabulary is
     /// closed by the `Channel` type itself; a declaration narrows it to the
     /// served subset, every subquota must draw on a declared channel, and a
@@ -349,11 +350,6 @@ impl SchedulingPolicy {
     #[must_use]
     pub fn offering(&self, id: &str) -> Option<&OfferingPolicy> {
         self.offerings.iter().find(|offering| offering.id == id)
-    }
-
-    #[must_use]
-    pub fn window(&self, id: &str) -> Option<&PublishedWindow> {
-        self.windows.iter().find(|window| window.id == id)
     }
 
     #[must_use]
@@ -411,7 +407,6 @@ impl SchedulingPolicy {
         check_collection_bound(&self.offerings, "offerings", &mut findings);
         check_collection_bound(&self.holiday_sets, "holidaySets", &mut findings);
         check_collection_bound(&self.openings, "openings", &mut findings);
-        check_collection_bound(&self.windows, "windows", &mut findings);
 
         // A declared channel set is a closed list of the channels this
         // deployment serves; naming one twice declares it once.
@@ -550,10 +545,6 @@ impl SchedulingPolicy {
             self.check_offering(offering, index, &mut findings);
         }
 
-        for (index, window) in self.windows.iter().enumerate() {
-            self.check_window(window, index, &mut findings);
-        }
-
         check_because(
             &self.hold_policy.because,
             "holdPolicy.because",
@@ -653,12 +644,7 @@ impl SchedulingPolicy {
                 }
                 if let Some(arrival) = &offering.arrival {
                     let block_path = format!("{path}.arrival");
-                    if self.window(&arrival.window).is_none() {
-                        findings.push(SchedulingDiagnostic::new(
-                            format!("{block_path}.window"),
-                            PolicyCheckReason::UnknownWindow,
-                        ));
-                    }
+                    check_identifier(&arrival.window, &format!("{block_path}.window"), findings);
                     if arrival.lead_time_minutes == 0 || arrival.horizon_days == 0 {
                         findings.push(SchedulingDiagnostic::new(
                             block_path.clone(),
@@ -723,9 +709,33 @@ impl SchedulingPolicy {
         }
     }
 
+    /// Validate the published windows in one environment-records document
+    /// against this policy. Policy authoring can validate the identifier
+    /// reference alone; existence and the window's capacity contract belong
+    /// to the operator records that carry the supply.
+    pub fn check_window_records(&self, windows: &[PublishedWindow]) -> Vec<SchedulingDiagnostic> {
+        let mut findings = Vec::new();
+        check_collection_bound(windows, "windows", &mut findings);
+        for (index, offering) in self.offerings.iter().enumerate() {
+            if let Some(arrival) = &offering.arrival {
+                if !windows.iter().any(|window| window.id == arrival.window) {
+                    findings.push(SchedulingDiagnostic::new(
+                        format!("offerings[{index}].arrival.window"),
+                        PolicyCheckReason::UnknownWindow,
+                    ));
+                }
+            }
+        }
+        for (index, window) in windows.iter().enumerate() {
+            self.check_window(window, windows, index, &mut findings);
+        }
+        findings
+    }
+
     fn check_window(
         &self,
         window: &PublishedWindow,
+        windows: &[PublishedWindow],
         index: usize,
         findings: &mut Vec<SchedulingDiagnostic>,
     ) {
@@ -738,7 +748,12 @@ impl SchedulingPolicy {
             ));
         }
         check_because(&window.because, &format!("{path}.because"), findings);
-        self.check_unique_id(&window.id, &path, "windows", findings);
+        if windows.iter().filter(|other| other.id == window.id).count() > 1 {
+            findings.push(SchedulingDiagnostic::new(
+                format!("{path}.id"),
+                PolicyCheckReason::DuplicateIdentifier,
+            ));
+        }
         if window.units == 0 {
             findings.push(SchedulingDiagnostic::new(
                 format!("{path}.units"),
@@ -851,7 +866,7 @@ impl SchedulingPolicy {
             // two overlapping windows each claiming the whole pool are
             // double-counting the same staffing.
             if staffing.reserved_members.is_none() {
-                let doubly_claimed = self.windows.iter().any(|other| {
+                let doubly_claimed = windows.iter().any(|other| {
                     other.id != window.id
                         && other.staffing.as_ref().is_some_and(|other_staffing| {
                             other_staffing.pool == staffing.pool
@@ -885,7 +900,6 @@ impl SchedulingPolicy {
                     .count()
                     > 1
             }
-            "windows" => self.windows.iter().filter(|window| window.id == id).count() > 1,
             "openings" => {
                 self.openings
                     .iter()
@@ -986,7 +1000,7 @@ pub struct CapacityReduction {
     pub proposed_units: u32,
 }
 
-/// Assess a proposed publication against the commitments already standing in
+/// Assess proposed window records against the commitments already standing in
 /// a ledger snapshot.
 ///
 /// A normal capacity reduction that would leave confirmed bookings and live
@@ -1001,32 +1015,37 @@ pub struct CapacityReduction {
 /// zero, and no longer capacity the moved window must cover. An emergency
 /// reduction is a different operation entirely, recorded as an incident with
 /// its affected bookings, and does not pass through this assessment.
-pub fn assess_publication_impact(
-    current: &SchedulingPolicy,
-    proposed: &SchedulingPolicy,
+pub fn assess_window_record_impact(
+    current: &[PublishedWindow],
+    proposed: &[PublishedWindow],
     snapshot: &crate::model::LedgerSnapshot,
     now: DateTime<Utc>,
 ) -> Vec<CapacityReduction> {
     let mut reductions = Vec::new();
-    for window in &current.windows {
-        let proposed_window = proposed.window(&window.id);
+    let window_ids: BTreeSet<&str> = current
+        .iter()
+        .map(|window| window.id.as_str())
+        .chain(
+            snapshot
+                .consuming(now)
+                .map(|claim| claim.supply_id.as_str()),
+        )
+        .collect();
+    for window_id in window_ids {
+        let current_window = current.iter().find(|candidate| candidate.id == window_id);
+        let proposed_window = proposed.iter().find(|candidate| candidate.id == window_id);
         let proposed_units = proposed_window.map_or(0, |proposed| proposed.units);
         // A window the proposal drops has no interval left to meet, so every
         // claim counts against the zero it proposes.
         let committed = match proposed_window {
-            Some(proposed) => units_committed_within(
-                snapshot,
-                &window.id,
-                None,
-                proposed.start,
-                proposed.end,
-                now,
-            ),
-            None => snapshot.window_units_allocated(&window.id, None, None, now),
+            Some(proposed) => {
+                units_committed_within(snapshot, window_id, None, proposed.start, proposed.end, now)
+            }
+            None => snapshot.window_units_allocated(window_id, None, None, now),
         };
-        if proposed_units < window.units && committed > proposed_units {
+        if committed > proposed_units {
             reductions.push(CapacityReduction {
-                window: window.id.clone(),
+                window: window_id.to_owned(),
                 channel: None,
                 committed_units: committed,
                 proposed_units,
@@ -1037,10 +1056,10 @@ pub fn assess_publication_impact(
             // stranded: the proposal publishes no capacity where they stand,
             // which is a reduction to zero for them.
             let stranded =
-                units_committed_outside(snapshot, &window.id, proposed.start, proposed.end, now);
+                units_committed_outside(snapshot, window_id, proposed.start, proposed.end, now);
             if stranded > 0 {
                 reductions.push(CapacityReduction {
-                    window: window.id.clone(),
+                    window: window_id.to_owned(),
                     channel: None,
                     committed_units: stranded,
                     proposed_units: 0,
@@ -1048,7 +1067,10 @@ pub fn assess_publication_impact(
             }
         }
         // A subquota dropped from the proposal proposes zero for its channel.
-        for subquota in &window.subquotas {
+        for subquota in current_window
+            .map(|window| window.subquotas.as_slice())
+            .unwrap_or_default()
+        {
             let proposed_subquota = proposed_window
                 .and_then(|proposed| {
                     proposed
@@ -1063,14 +1085,14 @@ pub fn assess_publication_impact(
             let committed_channel = match proposed_window {
                 Some(proposed) => units_committed_within(
                     snapshot,
-                    &window.id,
+                    window_id,
                     Some(subquota.channel.as_str()),
                     proposed.start,
                     proposed.end,
                     now,
                 ),
                 None => snapshot.window_units_allocated(
-                    &window.id,
+                    window_id,
                     Some(subquota.channel.as_str()),
                     None,
                     now,
@@ -1078,7 +1100,7 @@ pub fn assess_publication_impact(
             };
             if committed_channel > proposed_subquota {
                 reductions.push(CapacityReduction {
-                    window: window.id.clone(),
+                    window: window_id.to_owned(),
                     channel: Some(subquota.channel),
                     committed_units: committed_channel,
                     proposed_units: proposed_subquota,
@@ -1091,16 +1113,18 @@ pub fn assess_publication_impact(
         // reduction of an existing slice would.
         if let Some(proposed) = proposed_window {
             for subquota in &proposed.subquotas {
-                let already_published = window
-                    .subquotas
-                    .iter()
-                    .any(|current| current.channel == subquota.channel);
+                let already_published = current_window.is_some_and(|window| {
+                    window
+                        .subquotas
+                        .iter()
+                        .any(|current| current.channel == subquota.channel)
+                });
                 if already_published {
                     continue;
                 }
                 let committed_channel = units_committed_within(
                     snapshot,
-                    &window.id,
+                    window_id,
                     Some(subquota.channel.as_str()),
                     proposed.start,
                     proposed.end,
@@ -1108,7 +1132,7 @@ pub fn assess_publication_impact(
                 );
                 if committed_channel > subquota.units {
                     reductions.push(CapacityReduction {
-                        window: window.id.clone(),
+                        window: window_id.to_owned(),
                         channel: Some(subquota.channel),
                         committed_units: committed_channel,
                         proposed_units: subquota.units,
@@ -1121,9 +1145,9 @@ pub fn assess_publication_impact(
 }
 
 /// Recipient units standing against a window's supply at `now`, counting only
-/// claims whose occupied interval meets the half-open interval
-/// `[start, end)`, so a proposal that moves or shortens the window is assessed
-/// over the interval it now publishes.
+/// claims whose occupied interval is fully contained in `[start, end)`, so a
+/// proposal that moves or shortens the window cannot count a partly stranded
+/// commitment against the capacity it still publishes.
 fn units_committed_within(
     snapshot: &crate::model::LedgerSnapshot,
     window_id: &str,
@@ -1137,8 +1161,8 @@ fn units_committed_within(
         .filter(|claim| {
             claim.supply_id == window_id
                 && channel.is_none_or(|wanted| claim.channel.as_deref() == Some(wanted))
-                && claim.start < end
-                && start < claim.end
+                && start <= claim.start
+                && claim.end <= end
         })
         .map(|claim| claim.units)
         // Saturating, for the same reason the snapshot's own sum saturates:
@@ -1147,8 +1171,8 @@ fn units_committed_within(
 }
 
 /// Recipient units standing against a window's supply at `now` whose occupied
-/// interval meets nothing of the half-open interval `[start, end)`: the
-/// commitments a proposal publishing that interval no longer covers.
+/// interval is not fully contained in `[start, end)`: the commitments a
+/// proposal publishing that interval no longer covers.
 fn units_committed_outside(
     snapshot: &crate::model::LedgerSnapshot,
     window_id: &str,
@@ -1158,7 +1182,7 @@ fn units_committed_outside(
 ) -> u32 {
     snapshot
         .consuming(now)
-        .filter(|claim| claim.supply_id == window_id && !(claim.start < end && start < claim.end))
+        .filter(|claim| claim.supply_id == window_id && !(start <= claim.start && claim.end <= end))
         .map(|claim| claim.units)
         .fold(0, u32::saturating_add)
 }
@@ -1350,7 +1374,6 @@ openings:
     effectiveFrom: "2026-10-01"
     effectiveUntil: "2026-12-31"
     because: Counter opening hours reviewed by the office manager.
-windows: []
 holdPolicy:
   ttlMinutes: 5
   maxPerCaller: 3
@@ -1398,6 +1421,17 @@ openings:
     effectiveFrom: "2026-10-01"
     effectiveUntil: "2026-12-31"
     because: The hall opens on Saturday mornings.
+holdPolicy:
+  ttlMinutes: 10
+  maxPerCaller: 2
+  because: Households need a few minutes to gather documents.
+"#;
+        serde_norway::from_str(yaml).expect("the household policy parses")
+    }
+
+    fn household_windows() -> Vec<PublishedWindow> {
+        let records: crate::model::SchedulingFacts = serde_norway::from_str(
+            r#"
 windows:
   - id: household-morning-window
     revision: 2
@@ -1420,12 +1454,10 @@ windows:
         units: 1
         because: Assisted bookings hold a protected unit.
     because: The Saturday morning household block, sized for two officers.
-holdPolicy:
-  ttlMinutes: 10
-  maxPerCaller: 2
-  because: Households need a few minutes to gather documents.
-"#;
-        serde_norway::from_str(yaml).expect("the household policy parses")
+"#,
+        )
+        .expect("the household window records parse");
+        records.windows
     }
 
     #[test]
@@ -1580,18 +1612,20 @@ holdPolicy:
 
     #[test]
     fn subquota_slices_may_not_overdraw_the_window() {
-        let mut policy = household_window_policy();
-        policy.windows[0].subquotas[0].units = 3;
-        let findings = policy.check();
+        let policy = household_window_policy();
+        let mut windows = household_windows();
+        windows[0].subquotas[0].units = 3;
+        let findings = policy.check_window_records(&windows);
         let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
         assert!(rendered.contains(&"windows[0].subquotas: subquota-overdrawn".to_owned()));
     }
 
     #[test]
     fn one_channel_may_not_hold_two_slices_of_one_window() {
-        let mut policy = household_window_policy();
-        policy.windows[0].subquotas[1].channel = Channel::Public;
-        let findings = policy.check();
+        let policy = household_window_policy();
+        let mut windows = household_windows();
+        windows[0].subquotas[1].channel = Channel::Public;
+        let findings = policy.check_window_records(&windows);
         let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
         assert!(
             rendered.contains(&"windows[0].subquotas[1].channel: duplicate-identifier".to_owned())
@@ -1605,10 +1639,11 @@ holdPolicy:
     #[test]
     fn a_subquota_may_not_draw_on_an_undeclared_channel() {
         let mut policy = household_window_policy();
+        let windows = household_windows();
         // The window serves public and assisted; the deployment declares
         // only assisted.
         policy.channels = vec![Channel::Assisted];
-        let findings = policy.check();
+        let findings = policy.check_window_records(&windows);
         let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
         assert!(
             rendered.contains(&"windows[0].subquotas[0].channel: unknown-channel".to_owned()),
@@ -1621,7 +1656,7 @@ holdPolicy:
         // With no declaration, the vocabulary alone governs and the same
         // subquotas check clean.
         policy.channels = Vec::new();
-        let findings = policy.check();
+        let findings = policy.check_window_records(&windows);
         let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
         assert!(
             rendered
@@ -1652,7 +1687,8 @@ holdPolicy:
     #[test]
     fn an_unpartitioned_shared_staffing_block_is_rejected() {
         let mut policy = household_window_policy();
-        policy.windows[0].staffing = Some(WindowStaffing {
+        let mut windows = household_windows();
+        windows[0].staffing = Some(WindowStaffing {
             pool: "officer-pool".to_owned(),
             reserved_members: None,
             because: "The morning block is staffed by the duty officers.".to_owned(),
@@ -1681,7 +1717,7 @@ holdPolicy:
             requires_capabilities: Vec::new(),
             prerequisites: Vec::new(),
         });
-        let findings = policy.check();
+        let findings = policy.check_window_records(&windows);
         let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
         assert!(
             rendered.contains(&"windows[0].staffing.pool: shared-supply-unpartitioned".to_owned())
@@ -1689,12 +1725,12 @@ holdPolicy:
 
         // A partition does not attribute the supply across modes, so the mix
         // is refused with the partition declared.
-        policy.windows[0].staffing = Some(WindowStaffing {
+        windows[0].staffing = Some(WindowStaffing {
             pool: "officer-pool".to_owned(),
             reserved_members: Some(2),
             because: "Two of the four duty officers staff the block.".to_owned(),
         });
-        let findings = policy.check();
+        let findings = policy.check_window_records(&windows);
         let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
         assert!(
             rendered.contains(&"windows[0].staffing.pool: shared-supply-unpartitioned".to_owned())
@@ -1702,29 +1738,34 @@ holdPolicy:
 
         // A partitioned staffing block over a pool no exact-time offering
         // sells makes the share explicit and passes.
-        policy.windows[0].staffing = Some(WindowStaffing {
+        windows[0].staffing = Some(WindowStaffing {
             pool: "hall-officers".to_owned(),
             reserved_members: Some(2),
             because: "Two of the four duty officers staff the block.".to_owned(),
         });
-        assert!(policy.check().is_empty(), "{:?}", policy.check());
+        assert!(
+            policy.check_window_records(&windows).is_empty(),
+            "{:?}",
+            policy.check_window_records(&windows)
+        );
 
         // A window with no staffing block draws on no pool at all, so it
         // carries no edge an exact-time pool could share: the mode mix a
         // staffing block would create cannot exist without one.
-        policy.windows[0].staffing = None;
-        assert!(policy.check().is_empty(), "{:?}", policy.check());
+        windows[0].staffing = None;
+        assert!(policy.check_window_records(&windows).is_empty());
     }
 
     #[test]
     fn two_overlapping_whole_pool_claims_are_double_counting() {
-        let mut policy = household_window_policy();
-        policy.windows[0].staffing = Some(WindowStaffing {
+        let policy = household_window_policy();
+        let mut windows = household_windows();
+        windows[0].staffing = Some(WindowStaffing {
             pool: "officer-pool".to_owned(),
             reserved_members: None,
             because: "The morning block is staffed by the duty officers.".to_owned(),
         });
-        policy.windows.push(PublishedWindow {
+        windows.push(PublishedWindow {
             id: "household-noon-window".to_owned(),
             revision: 1,
             offering: "household-morning".to_owned(),
@@ -1747,7 +1788,7 @@ holdPolicy:
         });
         // The second window's offering linkage is wrong on purpose in this
         // fixture; only the supply finding is asserted here.
-        let findings = policy.check();
+        let findings = policy.check_window_records(&windows);
         let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
         assert!(rendered
             .iter()
@@ -1757,10 +1798,10 @@ holdPolicy:
         let disjoint = PublishedWindow {
             start: Utc.with_ymd_and_hms(2026, 10, 10, 13, 0, 0).unwrap(),
             end: Utc.with_ymd_and_hms(2026, 10, 10, 15, 0, 0).unwrap(),
-            ..policy.windows[1].clone()
+            ..windows[1].clone()
         };
-        policy.windows[1] = disjoint;
-        let findings = policy.check();
+        windows[1] = disjoint;
+        let findings = policy.check_window_records(&windows);
         let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
         assert!(!rendered
             .iter()
@@ -1772,7 +1813,7 @@ holdPolicy:
     /// covered passes.
     #[test]
     fn a_reduction_below_standing_commitments_is_rejected_with_its_deficit() {
-        let current = household_window_policy();
+        let current = household_windows();
         let now = utc(6, 0);
         let claim = LedgerClaim {
             id: "claim-1".to_owned(),
@@ -1791,9 +1832,9 @@ holdPolicy:
         };
 
         let mut reduced = current.clone();
-        reduced.windows[0].units = 1;
+        reduced[0].units = 1;
         assert_eq!(
-            assess_publication_impact(&current, &reduced, &snapshot, now),
+            assess_window_record_impact(&current, &reduced, &snapshot, now),
             vec![CapacityReduction {
                 window: "household-morning-window".to_owned(),
                 channel: None,
@@ -1805,18 +1846,18 @@ holdPolicy:
         // Dropping the window entirely reduces both the total and the public
         // slice to zero; the total reduction is reported first.
         let mut removed = current.clone();
-        removed.windows.clear();
-        let reductions = assess_publication_impact(&current, &removed, &snapshot, now);
+        removed.clear();
+        let reductions = assess_window_record_impact(&current, &removed, &snapshot, now);
         assert_eq!(reductions[0].proposed_units, 0);
         assert_eq!(reductions[0].channel, None);
 
         // A reduction that still covers commitments, and an increase, pass.
         let mut adequate = current.clone();
-        adequate.windows[0].units = 2;
-        assert!(assess_publication_impact(&current, &adequate, &snapshot, now).is_empty());
+        adequate[0].units = 2;
+        assert!(assess_window_record_impact(&current, &adequate, &snapshot, now).is_empty());
         let mut increased = current.clone();
-        increased.windows[0].units = 9;
-        assert!(assess_publication_impact(&current, &increased, &snapshot, now).is_empty());
+        increased[0].units = 9;
+        assert!(assess_window_record_impact(&current, &increased, &snapshot, now).is_empty());
     }
 
     /// AT-10, channel half: a subquota reduced below its channel's standing
@@ -1824,7 +1865,7 @@ holdPolicy:
     /// dropped subquota proposes zero for its channel.
     #[test]
     fn a_subquota_reduction_strands_its_channel_even_at_an_unchanged_total() {
-        let current = household_window_policy();
+        let current = household_windows();
         let now = utc(6, 0);
         let claim = LedgerClaim {
             id: "claim-1".to_owned(),
@@ -1845,9 +1886,9 @@ holdPolicy:
         // The total stays at 3 while the public slice shrinks below the 2
         // units that channel already holds.
         let mut narrowed = current.clone();
-        narrowed.windows[0].subquotas[0].units = 1;
+        narrowed[0].subquotas[0].units = 1;
         assert_eq!(
-            assess_publication_impact(&current, &narrowed, &snapshot, now),
+            assess_window_record_impact(&current, &narrowed, &snapshot, now),
             vec![CapacityReduction {
                 window: "household-morning-window".to_owned(),
                 channel: Some(Channel::Public),
@@ -1859,9 +1900,9 @@ holdPolicy:
         // Dropping the subquota entirely is a reduction of that channel to
         // zero; only the channel strand is reported, the total still covers.
         let mut dropped = current.clone();
-        dropped.windows[0].subquotas.remove(0);
+        dropped[0].subquotas.remove(0);
         assert_eq!(
-            assess_publication_impact(&current, &dropped, &snapshot, now),
+            assess_window_record_impact(&current, &dropped, &snapshot, now),
             vec![CapacityReduction {
                 window: "household-morning-window".to_owned(),
                 channel: Some(Channel::Public),
@@ -1873,11 +1914,13 @@ holdPolicy:
         // A channel nothing has committed against never strands, and an
         // unchanged slice passes.
         let mut assisted_dropped = current.clone();
-        assisted_dropped.windows[0].subquotas.remove(1);
-        assert!(assess_publication_impact(&current, &assisted_dropped, &snapshot, now).is_empty());
+        assisted_dropped[0].subquotas.remove(1);
+        assert!(
+            assess_window_record_impact(&current, &assisted_dropped, &snapshot, now).is_empty()
+        );
         let mut widened = current.clone();
-        widened.windows[0].subquotas[0].units = 2;
-        assert!(assess_publication_impact(&current, &widened, &snapshot, now).is_empty());
+        widened[0].subquotas[0].units = 2;
+        assert!(assess_window_record_impact(&current, &widened, &snapshot, now).is_empty());
     }
 
     /// BL-2: a subquota that exists only in the proposal was never assessed,
@@ -1885,8 +1928,8 @@ holdPolicy:
     /// already holds and strand its commitments silently.
     #[test]
     fn an_added_subquota_never_strands_its_channel_at_publication() {
-        let mut current = household_window_policy();
-        current.windows[0].subquotas.clear();
+        let mut current = household_windows();
+        current[0].subquotas.clear();
         let now = utc(6, 0);
         let claim = LedgerClaim {
             id: "claim-1".to_owned(),
@@ -1907,14 +1950,14 @@ holdPolicy:
         // Two public units already stand; the proposal publishes a public
         // slice of one for the first time.
         let mut proposal = current.clone();
-        proposal.windows[0].subquotas = vec![WindowSubquota {
+        proposal[0].subquotas = vec![WindowSubquota {
             id: "public-quota".to_owned(),
             channel: Channel::Public,
             units: 1,
             because: "One public unit in the revised block.".to_owned(),
         }];
         assert_eq!(
-            assess_publication_impact(&current, &proposal, &snapshot, now),
+            assess_window_record_impact(&current, &proposal, &snapshot, now),
             vec![CapacityReduction {
                 window: "household-morning-window".to_owned(),
                 channel: Some(Channel::Public),
@@ -1925,13 +1968,13 @@ holdPolicy:
 
         // A slice that still covers what the channel holds passes.
         let mut covered = current.clone();
-        covered.windows[0].subquotas = vec![WindowSubquota {
+        covered[0].subquotas = vec![WindowSubquota {
             id: "public-quota".to_owned(),
             channel: Channel::Public,
             units: 2,
             because: "Two public units in the revised block.".to_owned(),
         }];
-        assert!(assess_publication_impact(&current, &covered, &snapshot, now).is_empty());
+        assert!(assess_window_record_impact(&current, &covered, &snapshot, now).is_empty());
     }
 
     /// BL-3: a window moved under the same id was assessed by supply id
@@ -1939,8 +1982,8 @@ holdPolicy:
     /// window and pass as safe. Each standing claim's interval is now
     /// compared against the proposed window's interval.
     #[test]
-    fn moving_a_published_window_reports_no_reduction() {
-        let current = household_window_policy();
+    fn moving_a_published_window_reports_the_stranded_commitments() {
+        let current = household_windows();
         let now = utc(6, 0);
         let claim = LedgerClaim {
             id: "claim-1".to_owned(),
@@ -1962,10 +2005,10 @@ holdPolicy:
         // units fall outside the published interval and are stranded against
         // the zero capacity that proposal leaves where they stand.
         let mut moved = current.clone();
-        moved.windows[0].start = Utc.with_ymd_and_hms(2026, 12, 24, 8, 0, 0).unwrap();
-        moved.windows[0].end = Utc.with_ymd_and_hms(2026, 12, 24, 10, 0, 0).unwrap();
+        moved[0].start = Utc.with_ymd_and_hms(2026, 12, 24, 8, 0, 0).unwrap();
+        moved[0].end = Utc.with_ymd_and_hms(2026, 12, 24, 10, 0, 0).unwrap();
         assert_eq!(
-            assess_publication_impact(&current, &moved, &snapshot, now),
+            assess_window_record_impact(&current, &moved, &snapshot, now),
             vec![CapacityReduction {
                 window: "household-morning-window".to_owned(),
                 channel: None,
@@ -1975,7 +2018,12 @@ holdPolicy:
         );
 
         // A shortened interval strands only the claims it no longer covers:
-        // the morning claim still meets the window, the late one does not.
+        // the morning claim remains fully inside, while the late one only
+        // partly overlaps and therefore cannot be treated as covered.
+        let covered = LedgerClaim {
+            end: utc(9, 0),
+            ..claim
+        };
         let late = LedgerClaim {
             id: "claim-2".to_owned(),
             offering: "household-renewal".to_owned(),
@@ -1989,12 +2037,12 @@ holdPolicy:
             expires_at: None,
         };
         let snapshot = crate::model::LedgerSnapshot {
-            claims: vec![claim, late],
+            claims: vec![covered, late],
         };
         let mut shortened = current.clone();
-        shortened.windows[0].end = utc(9, 0);
+        shortened[0].end = utc(9, 45);
         assert_eq!(
-            assess_publication_impact(&current, &shortened, &snapshot, now),
+            assess_window_record_impact(&current, &shortened, &snapshot, now),
             vec![CapacityReduction {
                 window: "household-morning-window".to_owned(),
                 channel: None,
@@ -2004,7 +2052,41 @@ holdPolicy:
         );
 
         // A window that stays put reports nothing: its claims still meet it.
-        assert!(assess_publication_impact(&current, &current.clone(), &snapshot, now).is_empty());
+        assert!(assess_window_record_impact(&current, &current.clone(), &snapshot, now).is_empty());
+    }
+
+    #[test]
+    fn standing_claims_are_guarded_when_the_current_window_record_is_missing() {
+        let proposed = household_windows();
+        let now = utc(6, 0);
+        let snapshot = crate::model::LedgerSnapshot {
+            claims: vec![LedgerClaim {
+                id: "claim-1".to_owned(),
+                offering: "household-renewal".to_owned(),
+                supply_id: "household-morning-window".to_owned(),
+                kind: LedgerKind::Booking,
+                channel: Some("public".to_owned()),
+                start: utc(8, 0),
+                end: utc(10, 0),
+                units: 2,
+                duplicate_key: None,
+                expires_at: None,
+            }],
+        };
+
+        assert!(assess_window_record_impact(&[], &proposed, &snapshot, now).is_empty());
+
+        let mut inadequate = proposed.clone();
+        inadequate[0].units = 1;
+        assert_eq!(
+            assess_window_record_impact(&[], &inadequate, &snapshot, now),
+            vec![CapacityReduction {
+                window: "household-morning-window".to_owned(),
+                channel: None,
+                committed_units: 2,
+                proposed_units: 1,
+            }]
+        );
     }
 
     #[test]
@@ -2141,11 +2223,12 @@ holdPolicy:
 
     #[test]
     fn a_declared_leftover_policy_is_refused_because_nothing_reads_it() {
-        let mut policy = household_window_policy();
-        assert!(policy.check().is_empty());
+        let policy = household_window_policy();
+        let mut windows = household_windows();
+        assert!(policy.check_window_records(&windows).is_empty());
 
-        policy.windows[0].leftover = Some(LeftoverCapacityPolicy::BecomesWalkIn);
-        let findings = policy.check();
+        windows[0].leftover = Some(LeftoverCapacityPolicy::BecomesWalkIn);
+        let findings = policy.check_window_records(&windows);
         let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
         assert!(rendered.contains(&"windows[0].leftover: leftover-unsupported".to_owned()));
     }
@@ -2256,7 +2339,6 @@ services: []
 offerings: []
 holidaySets: []
 openings: []
-windows: []
 holdPolicy:
   ttlMinutes: 5
   maxPerCaller: 3

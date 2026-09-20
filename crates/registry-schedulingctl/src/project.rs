@@ -14,8 +14,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use registry_scheduling::config::{verify_policy_package, PolicyPackageManifest};
 use registry_scheduling_core::{
     parse_fixture_yaml, parse_policy_yaml, CaseStatus, FixtureExpectation, ReplayError,
-    SchedulingDiagnostic, SchedulingFixture, SchedulingPolicy, AUTHORED_POLICY_FILE,
-    SCHEDULING_PACKAGE_MANIFEST_FILE,
+    SchedulingDiagnostic, SchedulingFacts, SchedulingFixture, SchedulingPolicy,
+    AUTHORED_POLICY_FILE, SCHEDULING_PACKAGE_MANIFEST_FILE,
 };
 use serde_json::{json, Value};
 
@@ -70,7 +70,12 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
 
 pub(super) fn check(project: &Path) -> Result<Value> {
     let policy = load_policy(project)?;
-    let findings = policy.check();
+    let facts = load_records(project)?;
+    let mut findings = policy.check();
+    if authoring_status(&findings) != "invalid" {
+        crate::records::validate(&facts, &policy)?;
+    }
+    findings.extend(policy.check_window_records(&facts.windows));
     let status = authoring_status(&findings);
     Ok(json!({
         "ok": true,
@@ -78,7 +83,7 @@ pub(super) fn check(project: &Path) -> Result<Value> {
         "status": status,
         "project": project,
         "findings": findings_json(&findings),
-        "effective": effective(&policy),
+        "effective": effective(&policy, &facts),
         "networkAccess": false,
         "databaseAccess": false,
     }))
@@ -104,7 +109,12 @@ fn authoring_status(findings: &[SchedulingDiagnostic]) -> &'static str {
 
 pub(super) fn test(project: &Path) -> Result<Value> {
     let policy = load_policy(project)?;
-    let findings = policy.check();
+    let facts = load_records(project)?;
+    let mut findings = policy.check();
+    if authoring_status(&findings) != "invalid" {
+        crate::records::validate(&facts, &policy)?;
+    }
+    findings.extend(policy.check_window_records(&facts.windows));
     let authoring_status = authoring_status(&findings);
     if authoring_status == "invalid" {
         // A malformed value has no business running fixtures against it: the
@@ -163,7 +173,12 @@ pub(super) fn test(project: &Path) -> Result<Value> {
 
 pub(super) fn explain(project: &Path) -> Result<Value> {
     let policy = load_policy(project)?;
-    let findings = policy.check();
+    let facts = load_records(project)?;
+    let mut findings = policy.check();
+    if authoring_status(&findings) != "invalid" {
+        crate::records::validate(&facts, &policy)?;
+    }
+    findings.extend(policy.check_window_records(&facts.windows));
     if !findings.is_empty() {
         bail!(
             "explain requires a policy that passes its check; run schedulingctl check first. Findings: {}",
@@ -193,7 +208,7 @@ pub(super) fn explain(project: &Path) -> Result<Value> {
             Ok(report)
         })
         .collect::<Result<Vec<_>>>()?;
-    let windows = policy
+    let windows = facts
         .windows
         .iter()
         .map(|window| {
@@ -369,6 +384,11 @@ fn load_policy(project: &Path) -> Result<SchedulingPolicy> {
     parse_policy_yaml(&bytes).with_context(|| format!("parsing {AUTHORED_POLICY_FILE}"))
 }
 
+fn load_records(project: &Path) -> Result<SchedulingFacts> {
+    let bytes = read_authoring_input(&project.join("records.yaml"))?;
+    crate::records::parse_records(&bytes).context("parsing records.yaml")
+}
+
 fn load_fixture(path: &Path) -> Result<SchedulingFixture> {
     let bytes = read_authoring_input(path)?;
     parse_fixture_yaml(&bytes).with_context(|| format!("parsing fixture {}", path.display()))
@@ -392,7 +412,7 @@ fn findings_json(findings: &[SchedulingDiagnostic]) -> Vec<Value> {
 
 /// The effective policy a check saw: identity, digest, collection sizes and
 /// identifiers, and the hold policy.
-fn effective(policy: &SchedulingPolicy) -> Value {
+fn effective(policy: &SchedulingPolicy, facts: &SchedulingFacts) -> Value {
     fn summary<'a>(ids: impl Iterator<Item = &'a String>) -> Value {
         let all: Vec<&str> = ids.map(String::as_str).collect();
         json!({"count": all.len(), "ids": all})
@@ -404,7 +424,7 @@ fn effective(policy: &SchedulingPolicy) -> Value {
         "services": summary(policy.services.iter().map(|service| &service.id)),
         "offerings": summary(policy.offerings.iter().map(|offering| &offering.id)),
         "openings": summary(policy.openings.iter().map(|opening| &opening.id)),
-        "windows": summary(policy.windows.iter().map(|window| &window.id)),
+        "windows": summary(facts.windows.iter().map(|window| &window.id)),
         "holdPolicy": {
             "ttlMinutes": policy.hold_policy.ttl_minutes,
             "maxPerCaller": policy.hold_policy.max_per_caller,
@@ -765,8 +785,8 @@ mod tests {
         init(&project, "standalone-exact-time").unwrap();
         let policy_path = project.join(AUTHORED_POLICY_FILE);
         let broken = std::fs::read_to_string(&policy_path).unwrap().replacen(
-            "windows: []\n",
-            "windows: []\nsurprise: true\n",
+            "holdPolicy:\n",
+            "surprise: true\nholdPolicy:\n",
             1,
         );
         std::fs::write(&policy_path, broken).unwrap();

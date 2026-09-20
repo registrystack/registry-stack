@@ -3,7 +3,8 @@
 //! The live environment-records command.
 //!
 //! `records apply` is the one attributable operator write that swaps a
-//! deployment's locations, pools, members, and exceptions wholesale. The
+//! deployment's locations, pools, members, published windows, and exceptions
+//! wholesale. The
 //! records document is parsed and validated offline first, nothing reaches
 //! the database until the whole document holds together, and the swap itself
 //! lands through the store's single replace transaction, which writes its own
@@ -17,7 +18,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_scheduling::config::RuntimeConfig;
 use registry_scheduling::store::PostgresStore;
-use registry_scheduling_core::SchedulingFacts;
+use registry_scheduling_core::{location_open_intervals, SchedulingFacts};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -33,7 +34,7 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
         .with_context(|| format!("loading {}", config.policy_path().display()))?;
     let text = crate::project::read_authoring_input(&records_path)?;
     let facts = parse_records(&text)?;
-    validate(&facts)?;
+    validate(&facts, &policy)?;
     let counts = counts(&facts);
     let resolver = secret_resolver(&config)?;
     let store = PostgresStore::connect_migration(&config.database, &resolver)
@@ -69,7 +70,7 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
 
 /// Read the environment records, refusing a document the model does not
 /// carry and naming the path of the first offending field.
-fn parse_records(text: &str) -> Result<SchedulingFacts> {
+pub(crate) fn parse_records(text: &str) -> Result<SchedulingFacts> {
     let deserializer = serde_norway::Deserializer::from_str(text);
     serde_path_to_error::deserialize(deserializer).map_err(|error| {
         let path = error.path().to_string();
@@ -88,7 +89,10 @@ fn parse_records(text: &str) -> Result<SchedulingFacts> {
 /// and typed columns, so an inconsistent document would fail mid-swap with a
 /// database error naming none of the author's vocabulary. Every rule here
 /// refuses before the transaction opens, in the records document's own terms.
-fn validate(facts: &SchedulingFacts) -> Result<()> {
+pub(crate) fn validate(
+    facts: &SchedulingFacts,
+    policy: &registry_scheduling_core::SchedulingPolicy,
+) -> Result<()> {
     let mut locations = BTreeSet::new();
     for location in &facts.locations {
         if location.id.is_empty() {
@@ -129,9 +133,44 @@ fn validate(facts: &SchedulingFacts) -> Result<()> {
             }
         }
     }
+    if let Some(finding) = policy
+        .check_window_records(&facts.windows)
+        .into_iter()
+        .next()
+    {
+        bail!("invalid window record at {finding}");
+    }
+    for window in &facts.windows {
+        if !locations.contains(&window.location) {
+            bail!(
+                "window {} names location {} the records do not declare",
+                window.id,
+                window.location
+            );
+        }
+        if pools.contains(&window.id) {
+            bail!(
+                "window {} collides with a resource-pool supply identifier",
+                window.id
+            );
+        }
+        if let Some(staffing) = &window.staffing {
+            if !pools.contains(&staffing.pool) {
+                bail!(
+                    "window {} names staffing pool {} the records do not declare",
+                    window.id,
+                    staffing.pool
+                );
+            }
+        }
+    }
+    let mut exception_ids = BTreeSet::new();
     for exception in &facts.exceptions {
         if exception.id.is_empty() {
             bail!("an exception record carries an empty id");
+        }
+        if !exception_ids.insert(&exception.id) {
+            bail!("exception {} is declared more than once", exception.id);
         }
         if !locations.contains(&exception.location) {
             bail!(
@@ -156,6 +195,16 @@ fn validate(facts: &SchedulingFacts) -> Result<()> {
                 );
             }
         }
+    }
+    for location in &facts.locations {
+        let exceptions: Vec<_> = facts
+            .exceptions
+            .iter()
+            .filter(|exception| exception.location == location.id)
+            .map(|exception| exception.borrowed())
+            .collect();
+        location_open_intervals(policy, &location.id, &location.timezone, &exceptions)
+            .with_context(|| format!("validating calendar records for location {}", location.id))?;
     }
     Ok(())
 }
@@ -189,6 +238,7 @@ fn counts(facts: &SchedulingFacts) -> Value {
         "locations": facts.locations.len(),
         "pools": facts.pools.len(),
         "members": facts.pools.iter().map(|pool| pool.members.len()).sum::<usize>(),
+        "windows": facts.windows.len(),
         "exceptions": facts.exceptions.len(),
     })
 }
@@ -216,6 +266,16 @@ pub(crate) fn secret_resolver(config: &RuntimeConfig) -> Result<SecretResolver> 
 mod tests {
     use super::*;
 
+    fn policy() -> registry_scheduling_core::SchedulingPolicy {
+        let files = crate::templates::template_files("standalone-exact-time").unwrap();
+        let text = files
+            .iter()
+            .find(|(path, _)| *path == "scheduling.yaml")
+            .unwrap()
+            .1;
+        registry_scheduling_core::parse_policy_yaml(text).unwrap()
+    }
+
     fn facts_from(text: &str) -> SchedulingFacts {
         serde_norway::from_str(text).unwrap()
     }
@@ -229,10 +289,10 @@ mod tests {
              exceptions:\n  - id: training\n    location: north-counter\n    kind: closure\n\
              \x20   date: '2026-10-07'\n    startTime: '09:00'\n    endTime: '12:30'\n",
         );
-        assert!(validate(&facts).is_ok());
+        assert!(validate(&facts, &policy()).is_ok());
         assert_eq!(
             counts(&facts),
-            json!({"locations": 1, "pools": 1, "members": 1, "exceptions": 1})
+            json!({"locations": 1, "pools": 1, "members": 1, "windows": 0, "exceptions": 1})
         );
     }
 
@@ -275,10 +335,71 @@ mod tests {
         ];
         for (document, expected) in cases {
             let facts = facts_from(document);
-            let refusal = validate(&facts).expect_err("the document is refused");
+            let refusal = validate(&facts, &policy()).expect_err("the document is refused");
             assert!(
                 refusal.to_string().contains(expected),
                 "{refusal} does not name {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn exception_layer_semantics_are_refused_before_apply() {
+        let cases = [
+            (
+                "duplicate id",
+                "  - id: repeated\n    location: bangkok-counter\n    kind: closure\n    date: '2026-10-07'\n    startTime: '09:00'\n    endTime: '10:00'\n\
+                 \x20 - id: repeated\n    location: bangkok-counter\n    kind: closure\n    date: '2026-10-07'\n    startTime: '10:00'\n    endTime: '11:00'\n",
+                "exception repeated is declared more than once",
+            ),
+            (
+                "opening without a named closure",
+                "  - id: reopening\n    location: bangkok-counter\n    kind: opening\n    date: '2026-10-07'\n    startTime: '09:30'\n    endTime: '10:00'\n",
+                "exceptional reopening reopening does not name an existing closure",
+            ),
+            (
+                "opening without authority",
+                "  - id: closure\n    location: bangkok-counter\n    kind: closure\n    date: '2026-10-07'\n    startTime: '09:00'\n    endTime: '11:00'\n\
+                 \x20 - id: reopening\n    location: bangkok-counter\n    kind: opening\n    date: '2026-10-07'\n    startTime: '09:30'\n    endTime: '10:00'\n    reopens: closure\n",
+                "exceptional reopening reopening has no explicit authority",
+            ),
+            (
+                "opening names an unknown closure",
+                "  - id: reopening\n    location: bangkok-counter\n    kind: opening\n    date: '2026-10-07'\n    startTime: '09:30'\n    endTime: '10:00'\n    reopens: absent\n    authority: office-manager\n",
+                "exceptional reopening reopening does not name an existing closure",
+            ),
+            (
+                "closure carries reopening fields",
+                "  - id: closure\n    location: bangkok-counter\n    kind: closure\n    date: '2026-10-07'\n    startTime: '09:00'\n    endTime: '10:00'\n    reopens: another\n    authority: office-manager\n",
+                "blocking closure closure carries reopening fields",
+            ),
+            (
+                "invalid interval",
+                "  - id: backwards\n    location: bangkok-counter\n    kind: closure\n    date: '2026-10-07'\n    startTime: '11:00'\n    endTime: '10:00'\n",
+                "exception times must be valid HH:MM local values with start before end",
+            ),
+            (
+                "reopening outside the pattern",
+                "  - id: early-closure\n    location: bangkok-counter\n    kind: closure\n    date: '2026-10-07'\n    startTime: '08:00'\n    endTime: '10:00'\n\
+                 \x20 - id: early-reopening\n    location: bangkok-counter\n    kind: opening\n    date: '2026-10-07'\n    startTime: '08:00'\n    endTime: '08:30'\n    reopens: early-closure\n    authority: office-manager\n",
+                "reopening early-reopening is not inside the opening pattern's time",
+            ),
+        ];
+
+        for (name, exceptions, expected) in cases {
+            let facts = facts_from(&format!(
+                "locations:\n  - id: bangkok-counter\n    timezone: Asia/Bangkok\nexceptions:\n{exceptions}"
+            ));
+            let refusal = validate(&facts, &policy()).expect_err(name);
+            let message = format!("{refusal:#}");
+            assert!(
+                message.contains("validating calendar records for location bangkok-counter")
+                    || expected.contains("declared more than once"),
+                "{name}: {message} does not name the affected location"
+            );
+            assert!(
+                message.contains(expected),
+                "{name}: {message} does not name {expected}"
             );
         }
     }

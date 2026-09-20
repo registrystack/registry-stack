@@ -41,7 +41,7 @@ use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use registry_platform_calendar::CalendarInterval;
 use registry_platform_config::SecretResolver;
 use registry_scheduling_core::{
-    assess_publication_impact, evaluate_exact_time_admission, evaluate_hold_state,
+    assess_window_record_impact, evaluate_exact_time_admission, evaluate_hold_state,
     evaluate_window_admission, AdmissionRefusal, ExactTimeContext, LedgerClaim, LedgerKind,
     LedgerSnapshot, PoolMember, SchedulingFacts, SchedulingPolicy, APPOINTMENT_CANCELLED_TRIGGER,
     APPOINTMENT_CONFIRMED_TRIGGER, APPOINTMENT_RESCHEDULED_TRIGGER,
@@ -61,14 +61,17 @@ const FACTS_REVISION_MIGRATION: &str =
 const HOOK_DELIVERY_MIGRATION_VERSION: i64 = 3;
 const POLICY_DOCUMENT_MIGRATION: &str = include_str!("../migrations/0004_policy_document.sql");
 const POLICY_DOCUMENT_MIGRATION_VERSION: i64 = 4;
+const WINDOW_RECORDS_MIGRATION: &str = include_str!("../migrations/0005_window_records.sql");
+const WINDOW_RECORDS_MIGRATION_VERSION: i64 = 5;
 
 /// Every schema version in ledger order.
 const MIGRATIONS: [(i64, &str); 2] = [(1, SCHEDULING_MIGRATION), (2, FACTS_REVISION_MIGRATION)];
-const SCHEMA_VERSIONS: [i64; 4] = [
+const SCHEMA_VERSIONS: [i64; 5] = [
     1,
     2,
     HOOK_DELIVERY_MIGRATION_VERSION,
     POLICY_DOCUMENT_MIGRATION_VERSION,
+    WINDOW_RECORDS_MIGRATION_VERSION,
 ];
 
 /// Serializes operator-run migrations on one session lock. A second migrator
@@ -109,11 +112,11 @@ pub enum StoreError {
     Corrupt,
     #[error("the Scheduling database belongs to another deployment")]
     DeploymentIdentity,
-    /// The environment records would retire resources that live appointments
-    /// or holds still occupy. The swap is refused whole, so the operator
-    /// either keeps the resource or closes what stands on it first.
+    /// The environment records would retire or reduce supply that live
+    /// appointments or holds still occupy. The swap is refused whole, so the
+    /// operator either keeps the supply or closes what stands on it first.
     #[error(
-        "the environment records retire or move {0}, which live appointments or holds still occupy"
+        "the environment records retire, move, or reduce {0}, which live appointments or holds still occupy"
     )]
     FactsInUse(String),
     #[error("the proposed policy would strand standing commitments: {0}")]
@@ -291,6 +294,8 @@ pub enum SupplyContext<'p> {
         lead_time_minutes: u32,
         horizon_days: u32,
         channels: &'p [registry_scheduling_core::Channel],
+        open: &'p [CalendarInterval],
+        closures: &'p [CalendarInterval],
     },
 }
 
@@ -585,6 +590,25 @@ impl PostgresStore {
                 .await?;
         }
         transaction.commit().await?;
+
+        let transaction = client.transaction().await?;
+        let applied: bool = transaction
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM scheduling_schema_migrations WHERE version=$1)",
+                &[&WINDOW_RECORDS_MIGRATION_VERSION],
+            )
+            .await?
+            .get(0);
+        if !applied {
+            transaction.batch_execute(WINDOW_RECORDS_MIGRATION).await?;
+            transaction
+                .execute(
+                    "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
+                    &[&WINDOW_RECORDS_MIGRATION_VERSION],
+                )
+                .await?;
+        }
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -657,9 +681,9 @@ impl PostgresStore {
     }
 
     /// Publish a policy after proving it does not strand standing commitments
-    /// or change the lifecycle terms they still need. Re-applying the same
-    /// digest backfills its retained policy document and remains a no-op for
-    /// the revision.
+    /// or move their offering to different supply. Re-applying the same digest
+    /// backfills its retained policy document and remains a no-op for the
+    /// revision.
     ///
     /// Lock order, load-bearing: policy publication takes every existing
     /// supply anchor in order before `scheduling_meta`, the same order as the
@@ -671,7 +695,6 @@ impl PostgresStore {
         scheduling_id: &str,
         policy_digest: &str,
         pool_ids: &[String],
-        window_ids: &[String],
         policy: &SchedulingPolicy,
     ) -> Result<i64, StoreError> {
         if policy.policy_digest() != policy_digest {
@@ -708,12 +731,19 @@ impl PostgresStore {
                     )
                     .await?
                     .and_then(|stored| stored.get(0));
-                let Some(current_document) = current_document else {
+                let Some(mut current_document) = current_document else {
                     return Err(StoreError::PolicyInUse(
                         "the current policy document is unavailable; reapply the current policy before publishing a change"
                             .to_owned(),
                     ));
                 };
+                // Earlier branch builds retained mutable window records inside
+                // the policy document. Preserve that historical document and
+                // digest, but ignore its legacy member while comparing the
+                // lifecycle terms governed by the current policy shape.
+                if let Some(document) = current_document.as_object_mut() {
+                    document.remove("windows");
+                }
                 let current: SchedulingPolicy =
                     serde_json::from_value(current_document).map_err(|_| StoreError::Corrupt)?;
                 let now = self.observed_now();
@@ -734,49 +764,28 @@ impl PostgresStore {
                         )));
                     };
                     let retained = policy.offering(&offering_id).is_some_and(|proposed| {
+                        let same_supply = match (
+                            &current_offering.exact_time,
+                            &proposed.exact_time,
+                            &current_offering.arrival,
+                            &proposed.arrival,
+                        ) {
+                            (Some(current), Some(next), None, None) => current.pool == next.pool,
+                            (None, None, Some(current), Some(next)) => {
+                                current.window == next.window
+                            }
+                            _ => false,
+                        };
                         proposed.service == current_offering.service
                             && proposed.location == current_offering.location
                             && proposed.mode == current_offering.mode
-                            && proposed.cancellation_cutoff_minutes
-                                == current_offering.cancellation_cutoff_minutes
+                            && same_supply
                     });
                     if !retained {
                         return Err(StoreError::PolicyInUse(format!(
-                            "offering {offering_id} has active commitments and must retain its service, location, mode, and cancellation cutoff"
+                            "offering {offering_id} has active commitments and must retain its service, location, mode, and supply"
                         )));
                     }
-                }
-                let rows = transaction
-                    .query(
-                        "SELECT c.claim_id, c.offering, c.supply_id, c.kind, c.channel, \
-                         c.occupied_start, c.occupied_end, c.units, c.duplicate_key, \
-                         c.hold_expires_at FROM scheduling_claims AS c \
-                         JOIN scheduling_supply AS s ON s.supply_id=c.supply_id \
-                         WHERE s.kind='window' AND c.state='active' \
-                           AND (c.kind='booking' OR (c.kind='hold' AND c.hold_expires_at > $1)) \
-                         ORDER BY c.occupied_start",
-                        &[&now],
-                    )
-                    .await?;
-                let reductions =
-                    assess_publication_impact(&current, policy, &snapshot_from_rows(rows), now);
-                if !reductions.is_empty() {
-                    let details = reductions
-                        .iter()
-                        .map(|reduction| {
-                            format!(
-                                "{}:{} has {} committed units but proposes {}",
-                                reduction.window,
-                                reduction
-                                    .channel
-                                    .map_or("total", |channel| channel.as_str()),
-                                reduction.committed_units,
-                                reduction.proposed_units
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    return Err(StoreError::PolicyInUse(details));
                 }
             }
             revision = row.get::<_, i64>(1) + 1;
@@ -804,16 +813,12 @@ impl PostgresStore {
                 )
                 .await?;
         }
-        for (id, kind) in pool_ids
-            .iter()
-            .map(|id| (id, "pool"))
-            .chain(window_ids.iter().map(|id| (id, "window")))
-        {
+        for id in pool_ids {
             transaction
                 .execute(
                     "INSERT INTO scheduling_supply(supply_id, kind) VALUES($1,$2) \
                      ON CONFLICT(supply_id) DO NOTHING",
-                    &[id, &kind],
+                    &[id, &"pool"],
                 )
                 .await?;
         }
@@ -856,6 +861,12 @@ impl PostgresStore {
         let pools = transaction
             .query("SELECT pool_id FROM scheduling_pools ORDER BY pool_id", &[])
             .await?;
+        let windows = transaction
+            .query(
+                "SELECT window_record FROM scheduling_windows ORDER BY window_id",
+                &[],
+            )
+            .await?;
         let exceptions = transaction
             .query(
                 "SELECT exception_id, location, kind, date::text, start_time, end_time, \
@@ -863,6 +874,13 @@ impl PostgresStore {
                 &[],
             )
             .await?;
+        let windows = windows
+            .iter()
+            .map(|row| {
+                serde_json::from_value::<registry_scheduling_core::PublishedWindow>(row.get(0))
+                    .map_err(|_| StoreError::Corrupt)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let facts = SchedulingFacts {
             locations: locations
                 .iter()
@@ -886,6 +904,7 @@ impl PostgresStore {
                         .collect(),
                 })
                 .collect(),
+            windows,
             exceptions: exceptions
                 .iter()
                 .map(|row| registry_scheduling_core::CalendarExceptionRecord {
@@ -908,7 +927,7 @@ impl PostgresStore {
 
     /// Replace the environment records wholesale. This is the operator
     /// tooling path (`schedulingctl records apply`): one attributable write
-    /// that swaps locations, pools, members, and exceptions atomically.
+    /// that swaps locations, pools, members, windows, and exceptions atomically.
     pub async fn replace_facts(
         &self,
         scheduling_id: &str,
@@ -2373,10 +2392,14 @@ fn evaluate(
             lead_time_minutes,
             horizon_days,
             channels,
+            open,
+            closures,
         } => evaluate_window_admission(
             &registry_scheduling_core::WindowContext {
                 offering,
                 window,
+                open,
+                closures,
                 lead_time_minutes: *lead_time_minutes,
                 horizon_days: *horizon_days,
                 snapshot,
@@ -2588,6 +2611,55 @@ pub(crate) async fn replace_facts_in_transaction(
     if !occupied.is_empty() {
         return Err(StoreError::FactsInUse(occupied.join(", ")));
     }
+    let current_windows = transaction
+        .query(
+            "SELECT window_record FROM scheduling_windows ORDER BY window_id",
+            &[],
+        )
+        .await?
+        .iter()
+        .map(|row| {
+            serde_json::from_value::<registry_scheduling_core::PublishedWindow>(row.get(0))
+                .map_err(|_| StoreError::Corrupt)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let now = Utc::now();
+    let rows = transaction
+        .query(
+            "SELECT c.claim_id, c.offering, c.supply_id, c.kind, c.channel, \
+             c.occupied_start, c.occupied_end, c.units, c.duplicate_key, c.hold_expires_at \
+             FROM scheduling_claims AS c \
+             JOIN scheduling_supply AS s ON s.supply_id=c.supply_id \
+             WHERE s.kind='window' AND c.state='active' \
+               AND (c.kind='booking' OR (c.kind='hold' AND c.hold_expires_at > $1)) \
+             ORDER BY c.occupied_start",
+            &[&now],
+        )
+        .await?;
+    let reductions = assess_window_record_impact(
+        &current_windows,
+        &facts.windows,
+        &snapshot_from_rows(rows),
+        now,
+    );
+    if !reductions.is_empty() {
+        let details = reductions
+            .iter()
+            .map(|reduction| {
+                format!(
+                    "{}:{} has {} committed units but proposes {}",
+                    reduction.window,
+                    reduction
+                        .channel
+                        .map_or("total", |channel| channel.as_str()),
+                    reduction.committed_units,
+                    reduction.proposed_units
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(StoreError::FactsInUse(details));
+    }
     transaction
         .execute("DELETE FROM scheduling_pool_members", &[])
         .await?;
@@ -2599,6 +2671,12 @@ pub(crate) async fn replace_facts_in_transaction(
         .await?;
     transaction
         .execute("DELETE FROM scheduling_exceptions", &[])
+        .await?;
+    transaction
+        .execute("DELETE FROM scheduling_windows", &[])
+        .await?;
+    transaction
+        .execute("DELETE FROM scheduling_supply WHERE kind='window'", &[])
         .await?;
     for location in &facts.locations {
         transaction
@@ -2629,6 +2707,21 @@ pub(crate) async fn replace_facts_in_transaction(
                 )
                 .await?;
         }
+    }
+    for window in &facts.windows {
+        let record = serde_json::to_value(window).map_err(|_| StoreError::Corrupt)?;
+        transaction
+            .execute(
+                "INSERT INTO scheduling_windows(window_id, window_record) VALUES($1,$2)",
+                &[&window.id, &record],
+            )
+            .await?;
+        transaction
+            .execute(
+                "INSERT INTO scheduling_supply(supply_id, kind) VALUES($1,'window')",
+                &[&window.id],
+            )
+            .await?;
     }
     for exception in &facts.exceptions {
         let kind = match exception.kind {
@@ -2679,8 +2772,8 @@ pub(crate) async fn replace_facts_in_transaction(
 /// a member out from under a live booking would leave that booking pointing
 /// at a resource the deployment no longer has: invisible to every pool
 /// snapshot, counted against nothing, and still promised to its caller. A
-/// window claim names the window instead, which records never carry, so the
-/// window anchors are excluded rather than reported as missing members.
+/// Window claims are assessed separately against the incoming window records,
+/// so this helper reports only moved or retired pool members.
 async fn occupied_resources_changed_by(
     transaction: &deadpool_postgres::Transaction<'_>,
     facts: &SchedulingFacts,

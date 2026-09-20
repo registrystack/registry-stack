@@ -270,8 +270,8 @@ impl CalendarExceptionRecord {
     }
 }
 
-/// The environment records an admission runs against: locations, pools, and
-/// dated exceptions. In production these are runtime records; in an offline
+/// The environment records an admission runs against: locations, pools,
+/// published windows, and dated exceptions. In production these are runtime records; in an offline
 /// replay they are fixture facts. The evaluator never reads or mutates them
 /// directly; its caller resolves them into the context the evaluator takes.
 /// A fixture may omit an empty collection; replay fails fast when a case
@@ -283,6 +283,10 @@ pub struct SchedulingFacts {
     pub locations: Vec<LocationRecord>,
     #[serde(default)]
     pub pools: Vec<ResourcePool>,
+    /// Published arrival-window supply owned by this deployment's operator
+    /// records. The policy references these records by identifier.
+    #[serde(default)]
+    pub windows: Vec<crate::policy::PublishedWindow>,
     #[serde(default)]
     pub exceptions: Vec<CalendarExceptionRecord>,
 }
@@ -296,6 +300,11 @@ impl SchedulingFacts {
     #[must_use]
     pub fn pool(&self, id: &str) -> Option<&ResourcePool> {
         self.pools.iter().find(|pool| pool.id == id)
+    }
+
+    #[must_use]
+    pub fn window(&self, id: &str) -> Option<&crate::policy::PublishedWindow> {
+        self.windows.iter().find(|window| window.id == id)
     }
 }
 

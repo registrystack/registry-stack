@@ -271,15 +271,8 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     // the digest changed; the anchors the policy names must exist for any
     // offering to resolve supply.
     let pool_ids = offering_pool_ids(&policy);
-    let window_ids = offering_window_ids(&policy);
     let policy_revision = store
-        .apply_policy(
-            &scheduling_id,
-            &policy_digest,
-            &pool_ids,
-            &window_ids,
-            &policy,
-        )
+        .apply_policy(&scheduling_id, &policy_digest, &pool_ids, &policy)
         .await
         .map_err(database_step("policy publication"))?;
 
@@ -581,23 +574,6 @@ fn offering_pool_ids(policy: &registry_scheduling_core::SchedulingPolicy) -> Vec
         .offerings
         .iter()
         .filter_map(|offering| offering.exact_time.as_ref().map(|exact| exact.pool.clone()))
-        .collect();
-    ids.sort();
-    ids.dedup();
-    ids
-}
-
-/// The published windows the policy's arrival-window offerings serve in.
-fn offering_window_ids(policy: &registry_scheduling_core::SchedulingPolicy) -> Vec<String> {
-    let mut ids: Vec<String> = policy
-        .offerings
-        .iter()
-        .filter_map(|offering| {
-            offering
-                .arrival
-                .as_ref()
-                .map(|arrival| arrival.window.clone())
-        })
         .collect();
     ids.sort();
     ids.dedup();
@@ -1090,7 +1066,7 @@ mod tests {
     }
 
     #[test]
-    fn the_offering_anchors_are_collected_without_duplicates() {
+    fn the_offering_pool_anchors_are_collected_without_duplicates() {
         use registry_scheduling_core::{
             ArrivalOffering, ExactTimeOffering, HoldPolicy, OfferingPolicy, PolicyIdentity,
             SchedulingMode, SchedulingPolicy, ServicePolicy,
@@ -1156,7 +1132,6 @@ mod tests {
             ],
             holiday_sets: Vec::new(),
             openings: Vec::new(),
-            windows: Vec::new(),
             channels: Vec::new(),
             hold_policy: HoldPolicy {
                 ttl_minutes: 10,
@@ -1166,7 +1141,6 @@ mod tests {
             hooks: Vec::new(),
         };
         assert_eq!(offering_pool_ids(&policy), vec!["north".to_owned()]);
-        assert_eq!(offering_window_ids(&policy), vec!["w-morning".to_owned()]);
     }
 
     #[test]

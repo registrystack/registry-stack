@@ -50,12 +50,13 @@ repeats that authoring status and replays the project's bounded synthetic
 fixtures offline; a passing report carries the `offline_synthetic` proof
 boundary and `productionClosure: false`, so it does not establish source
 reachability or deployment readiness. Explain publishes what the runtime would
-serve: identity, policy digest, offerings, windows with their subquotas, and
-the hold policy.
+serve: identity, policy digest, offerings, the operator-published windows with
+their subquotas, and the hold policy.
 
 `schedulingctl init` writes `runtime.example.yaml` and `records.yaml` beside
-the policy. The records document contains every location and resource pool the
-selected starter needs. Copy the runtime example to `runtime.yaml`, set its
+the policy. The records document contains every location, resource pool, and
+arrival window the selected starter needs. Copy the runtime example to
+`runtime.yaml`, set its
 absolute paths and secret references, and read
 [RUNTIME-CONFIG.md](RUNTIME-CONFIG.md) for every block, field, and default.
 Then apply the live environment records and start:
@@ -76,14 +77,14 @@ continuation cursors answer `cursor.invalid` once the new binary holds
 them, so a caller mid-pagination restarts that listing from its first page.
 The migration also retains the current policy document beside its digest. On
 an upgrade from an earlier schema, start once with the unchanged policy to
-backfill that document before publishing a policy change. A later start locks
-the standing supply while it checks the proposal and refuses a change that
-would move, remove, or reduce a window below its live bookings and holds; the
-operator error names the affected window and deficit.
+backfill that document before publishing a policy change.
 `records apply` is the one attributable operator write of a deployment's
 environment records: the locations with their time zones, the resource pools
-and their members, and the dated exceptions such as closures. The policy
-references that supply by identifier; it does not embed it. Database
+and their members, the published arrival windows, and the dated exceptions
+such as closures. The policy references that supply by identifier; it does
+not embed it. A records replacement locks standing supply and refuses to move,
+remove, or reduce a window below its live bookings and holds; the operator
+error names the affected window and deficit. Database
 transport security is not configurable in production: the runtime requires
 TLS on both connections, and the plaintext escape is a `postgres-test` build
 switch documented in [RUNTIME-CONFIG.md](RUNTIME-CONFIG.md).

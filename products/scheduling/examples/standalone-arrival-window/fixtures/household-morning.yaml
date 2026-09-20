@@ -6,6 +6,28 @@ facts:
   locations:
     - id: civic-hall
       timezone: Asia/Bangkok
+  windows:
+    - id: household-morning-window
+      revision: 2
+      offering: household-morning
+      location: civic-hall
+      start: 2026-10-10T01:00:00Z
+      end: 2026-10-10T03:00:00Z
+      units: 3
+      unitsPolicy:
+        kind: perRecipient
+        perRecipient: 1
+        because: Each recipient consumes one serving slot.
+      subquotas:
+        - id: public-quota
+          channel: public
+          units: 2
+          because: Most households book the public channel.
+        - id: assisted-quota
+          channel: assisted
+          units: 1
+          because: Assisted bookings hold a protected unit.
+      because: The Saturday morning household block, sized for two officers.
 initial: []
 cases:
   - name: first-household-takes-the-public-quota

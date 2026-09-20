@@ -45,6 +45,19 @@ offerings:
     cancellationCutoffMinutes: 240
     requiresCapabilities: []
     prerequisites: []
+  - id: registry-arrivals
+    service: registry-update
+    label: Counter arrivals
+    mode: arrival-window
+    location: bangkok-counter
+    because: Arrivals join an operator-published window.
+    arrival:
+      window: morning-arrivals
+      leadTimeMinutes: 60
+      horizonDays: 45
+    cancellationCutoffMinutes: 240
+    requiresCapabilities: []
+    prerequisites: []
 holidaySets:
   - id: office-holidays
     revision: 1
@@ -60,7 +73,6 @@ openings:
     effectiveFrom: "2026-10-01"
     effectiveUntil: "2026-12-31"
     because: Counter opening hours reviewed by the office manager.
-windows: []
 holdPolicy:
   ttlMinutes: 5
   maxPerCaller: 3
@@ -79,6 +91,17 @@ pools:
       - resourceId: station-2
         capabilities: []
         available: true
+windows:
+  - id: morning-arrivals
+    revision: 1
+    offering: registry-arrivals
+    location: bangkok-counter
+    start: 2026-10-08T02:00:00Z
+    end: 2026-10-08T04:00:00Z
+    units: 10
+    unitsPolicy: {kind: fixed, units: 1, because: Each arrival consumes one unit.}
+    subquotas: []
+    because: The operator published the morning arrival block.
 exceptions:
   - id: staff-training
     location: bangkok-counter
@@ -99,6 +122,17 @@ pools:
       - resourceId: station-1
         capabilities: []
         available: true
+windows:
+  - id: morning-arrivals
+    revision: 2
+    offering: registry-arrivals
+    location: bangkok-counter
+    start: 2026-10-08T03:00:00Z
+    end: 2026-10-08T05:00:00Z
+    units: 8
+    unitsPolicy: {kind: fixed, units: 1, because: Each arrival consumes one unit.}
+    subquotas: []
+    because: The operator republished the arrival block.
 "#;
 
 fn scoped_url(base: &str, schema: &str) -> String {
@@ -143,7 +177,9 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
             .expect("the administrative connection stays up")
     });
     admin
-        .batch_execute(&format!("CREATE SCHEMA {schema}"))
+        .batch_execute(&format!(
+            "CREATE SCHEMA {schema}; SET search_path TO {schema}"
+        ))
         .await
         .expect("a disposable schema is created");
 
@@ -197,7 +233,7 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
     assert_eq!(report["command"], "records-apply");
     assert_eq!(
         report["applied"],
-        json!({"locations": 1, "pools": 1, "members": 2, "exceptions": 1})
+        json!({"locations": 1, "pools": 1, "members": 2, "windows": 1, "exceptions": 1})
     );
 
     let (facts, _) = store.facts().await.unwrap();
@@ -206,6 +242,9 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
     assert_eq!(facts.locations[0].timezone, "Asia/Bangkok");
     assert_eq!(facts.pools.len(), 1);
     assert_eq!(facts.pools[0].id, "update-stations");
+    assert_eq!(facts.windows.len(), 1);
+    assert_eq!(facts.windows[0].id, "morning-arrivals");
+    assert_eq!(facts.windows[0].revision, 1);
     let member_ids: Vec<&str> = facts.pools[0]
         .members
         .iter()
@@ -225,13 +264,14 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
     assert_eq!(applies[0].1["outcome"], "allowed");
     assert_eq!(applies[0].1["reason"], "authorization.allowed");
     assert_eq!(applies[0].1["counts"]["exceptions"], 1);
+    assert_eq!(applies[0].1["counts"]["windows"], 1);
 
     // The second document replaces the first: the second location lands, the
     // retired station is gone, and the closure does not survive.
     let report = apply(&config_path, &root.path().join("second.yaml"));
     assert_eq!(
         report["applied"],
-        json!({"locations": 2, "pools": 1, "members": 1, "exceptions": 0})
+        json!({"locations": 2, "pools": 1, "members": 1, "windows": 1, "exceptions": 0})
     );
     let (facts, _) = store.facts().await.unwrap();
     assert_eq!(facts.locations.len(), 2);
@@ -242,6 +282,8 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
         .any(|member| member.resource_id == "station-2");
     assert!(!retired_station, "a replace is not an append");
     assert!(facts.exceptions.is_empty(), "the closure did not survive");
+    assert_eq!(facts.windows.len(), 1);
+    assert_eq!(facts.windows[0].revision, 2, "the window was replaced");
 
     let audit = store.pending_audit(10).await.unwrap();
     let applies: Vec<_> = audit

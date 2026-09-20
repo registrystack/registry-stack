@@ -72,12 +72,12 @@ fi
 
 # The banded units table is reachable from the authoring journey, not only
 # from the core's unit tests: swapping the arrival template's per-recipient
-# policy for a banded table must still check clean, and must change the
-# policy digest, which proves the swap took and was read.
+# record for a banded table must still check clean, and must change explain's
+# window projection, which proves the records swap was read.
 banded="$work/banded"
 "$schedulingctl_bin" init "$banded" --template standalone-arrival-window >/dev/null
-plain_digest=$("$schedulingctl_bin" check "$banded" | grep -o '"policyDigest":"[^"]*"')
-python3 - "$banded/scheduling.yaml" <<'PY'
+plain_explain=$("$schedulingctl_bin" explain "$banded")
+python3 - "$banded/records.yaml" <<'PY'
 import sys
 from pathlib import Path
 
@@ -98,9 +98,10 @@ for window in document["windows"]:
     }
 path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
 PY
-banded_digest=$("$schedulingctl_bin" check "$banded" | grep -o '"policyDigest":"[^"]*"')
-if [ "$plain_digest" = "$banded_digest" ]; then
-  echo 'the banded units table did not change the policy the check read' >&2
+"$schedulingctl_bin" check "$banded" >/dev/null
+banded_explain=$("$schedulingctl_bin" explain "$banded")
+if [ "$plain_explain" = "$banded_explain" ]; then
+  echo 'the banded units table did not change the window records explain read' >&2
   exit 1
 fi
 

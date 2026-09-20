@@ -143,6 +143,12 @@ pub struct ExactTimeContext<'a> {
 pub struct WindowContext<'a> {
     pub offering: &'a OfferingPolicy,
     pub window: &'a PublishedWindow,
+    /// Effective published openings for the window's location, after dated
+    /// closures and authorized reopenings have been layered.
+    pub open: &'a [CalendarInterval],
+    /// Raw blocking closures, used only to distinguish `location.closed`
+    /// from a start outside every published opening.
+    pub closures: &'a [CalendarInterval],
     /// The arrival block's lead time and horizon, resolved from the offering.
     pub lead_time_minutes: u32,
     pub horizon_days: u32,
@@ -324,6 +330,8 @@ pub fn evaluate_window_admission(
     let WindowContext {
         offering,
         window,
+        open,
+        closures,
         lead_time_minutes,
         horizon_days,
         snapshot,
@@ -341,6 +349,22 @@ pub fn evaluate_window_admission(
         });
     }
     check_horizon(window.start, *now, *lead_time_minutes, *horizon_days)?;
+    if request.start != window.start {
+        return Err(AdmissionRefusal::ScheduleUnpublished);
+    }
+    let covered = open
+        .iter()
+        .any(|interval| interval.start <= window.start && window.end <= interval.end);
+    if !covered {
+        let overlaps_closure = closures
+            .iter()
+            .any(|closure| window.start < closure.end && closure.start < window.end);
+        return Err(if overlaps_closure {
+            AdmissionRefusal::LocationClosed
+        } else {
+            AdmissionRefusal::ScheduleUnpublished
+        });
+    }
 
     if request.party.recipients == 0 {
         return Err(AdmissionRefusal::PartyCapacityInadequate);
@@ -1225,6 +1249,13 @@ mod tests {
         }
     }
 
+    fn published_window_interval(window: &PublishedWindow) -> [CalendarInterval; 1] {
+        [CalendarInterval {
+            start: window.start,
+            end: window.end,
+        }]
+    }
+
     /// AT-03: three attendees with two recipients consume two units, never
     /// three.
     #[test]
@@ -1233,9 +1264,12 @@ mod tests {
         let window = window();
         let snapshot = LedgerSnapshot::default();
         let now = utc(4, 9, 0);
+        let open = published_window_interval(&window);
         let context = WindowContext {
             offering: &offering,
             window: &window,
+            open: &open,
+            closures: &[],
             lead_time_minutes: 1,
             horizon_days: 60,
             snapshot: &snapshot,
@@ -1258,9 +1292,12 @@ mod tests {
             claims: vec![window_claim("claim-1", 2, "public")],
         };
         let now = utc(4, 9, 0);
+        let open = published_window_interval(&window);
         let context = WindowContext {
             offering: &offering,
             window: &window,
+            open: &open,
+            closures: &[],
             lead_time_minutes: 1,
             horizon_days: 60,
             snapshot: &snapshot,
@@ -1291,9 +1328,12 @@ mod tests {
         let window = window();
         let snapshot = LedgerSnapshot::default();
         let now = utc(4, 9, 0);
+        let open = published_window_interval(&window);
         let context = WindowContext {
             offering: &offering,
             window: &window,
+            open: &open,
+            closures: &[],
             lead_time_minutes: 1,
             horizon_days: 60,
             snapshot: &snapshot,
@@ -1330,9 +1370,12 @@ mod tests {
         };
         let snapshot = LedgerSnapshot::default();
         let now = utc(4, 9, 0);
+        let open = published_window_interval(&window);
         let context = WindowContext {
             offering: &offering,
             window: &window,
+            open: &open,
+            closures: &[],
             lead_time_minutes: 1,
             horizon_days: 60,
             snapshot: &snapshot,
@@ -1361,9 +1404,12 @@ mod tests {
             claims: vec![window_claim("claim-1", 2, "public")],
         };
         let now = utc(4, 9, 0);
+        let open = published_window_interval(&window);
         let context = WindowContext {
             offering: &offering,
             window: &window,
+            open: &open,
+            closures: &[],
             lead_time_minutes: 1,
             horizon_days: 60,
             snapshot: &snapshot,
@@ -1392,9 +1438,12 @@ mod tests {
             claims: vec![window_claim("claim-1", 2, "public")],
         };
         let now = utc(4, 9, 0);
+        let open = published_window_interval(&window);
         let context = WindowContext {
             offering: &offering,
             window: &window,
+            open: &open,
+            closures: &[],
             lead_time_minutes: 1,
             horizon_days: 60,
             snapshot: &snapshot,
@@ -1448,9 +1497,12 @@ mod tests {
         let window = window();
         let snapshot = LedgerSnapshot::default();
         let now = utc(4, 9, 0);
+        let open = published_window_interval(&window);
         let context = WindowContext {
             offering: &offering,
             window: &window,
+            open: &open,
+            closures: &[],
             lead_time_minutes: 1,
             horizon_days: 60,
             snapshot: &snapshot,
@@ -1474,6 +1526,75 @@ mod tests {
         assert_eq!(
             evaluate_window_admission(&context, &stale_both, None).err(),
             Some(AdmissionRefusal::PolicyChanged)
+        );
+    }
+
+    #[test]
+    fn window_request_start_must_match_the_published_window() {
+        let offering = arrival_offering();
+        let window = window();
+        let snapshot = LedgerSnapshot::default();
+        let open = published_window_interval(&window);
+        let context = WindowContext {
+            offering: &offering,
+            window: &window,
+            open: &open,
+            closures: &[],
+            lead_time_minutes: 1,
+            horizon_days: 60,
+            snapshot: &snapshot,
+            policy_revision: 1,
+            channels: &[],
+            now: utc(4, 9, 0),
+        };
+        let request = AdmissionRequest {
+            start: utc(4, 10, 30),
+            ..window_request(1, 1)
+        };
+
+        assert_eq!(
+            evaluate_window_admission(&context, &request, None)
+                .err()
+                .map(|refusal| refusal.public_code()),
+            Some(ProblemCode::ScheduleUnpublished)
+        );
+    }
+
+    #[test]
+    fn window_outside_openings_distinguishes_closure_from_unpublished_schedule() {
+        let offering = arrival_offering();
+        let window = window();
+        let snapshot = LedgerSnapshot::default();
+        let closure = published_window_interval(&window);
+        let context = WindowContext {
+            offering: &offering,
+            window: &window,
+            open: &[],
+            closures: &closure,
+            lead_time_minutes: 1,
+            horizon_days: 60,
+            snapshot: &snapshot,
+            policy_revision: 1,
+            channels: &[],
+            now: utc(4, 9, 0),
+        };
+
+        assert_eq!(
+            evaluate_window_admission(&context, &window_request(1, 1), None)
+                .err()
+                .map(|refusal| refusal.public_code()),
+            Some(ProblemCode::LocationClosed)
+        );
+
+        let uncovered = WindowContext {
+            closures: &[],
+            ..context
+        };
+        assert_eq!(
+            evaluate_window_admission(&uncovered, &window_request(1, 1), None)
+                .err()
+                .map(|refusal| refusal.public_code()),
+            Some(ProblemCode::ScheduleUnpublished)
         );
     }
 

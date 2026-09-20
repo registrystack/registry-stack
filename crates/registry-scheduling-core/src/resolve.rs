@@ -199,8 +199,7 @@ holidaySets:
     because: Public holidays observed by the registry office.
     dates: []
 openings:
-{openings}windows: []
-holdPolicy:
+{openings}holdPolicy:
   ttlMinutes: 5
   maxPerCaller: 3
   because: Holds are short because counter capacity is scarce.

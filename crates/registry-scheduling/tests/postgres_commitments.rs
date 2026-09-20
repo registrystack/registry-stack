@@ -16,7 +16,7 @@ use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use axum::Router;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
+use chrono::{DateTime, SecondsFormat, TimeDelta, Timelike, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use registry_platform_audit::{
     AuditEnvelope, AuditHashSecret, AuditKeyHasher, AuditProfile, JsonlFileSink,
@@ -40,8 +40,9 @@ use registry_scheduling::store::{
 };
 use registry_scheduling_core::{
     location_closure_intervals, location_open_intervals, parse_policy_yaml, AdmissionRefusal,
-    AdmissionRequest, LocationRecord, OfferingPolicy, PartyCounts, PoolMember, ResourcePool,
-    SchedulingFacts, SchedulingPolicy,
+    AdmissionRequest, CalendarExceptionRecord, Channel, ExceptionRecordKind, LocationRecord,
+    OfferingPolicy, PartyCounts, PoolMember, PublishedWindow, RequiredUnitsPolicy, ResourcePool,
+    SchedulingFacts, SchedulingPolicy, WindowSubquota,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -153,7 +154,6 @@ offerings:
       maxRecipients: 1
     requiresCapabilities: []
     prerequisites: []
-windows: []
 holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 "#;
 
@@ -263,31 +263,19 @@ async fn fixture() -> Fixture {
 /// A fresh deployment whose publication anchored exactly `pool_ids`, so a
 /// test can pin what happens when a policy names a pool no anchor covers.
 async fn fixture_anchoring(pool_ids: &[String]) -> Fixture {
-    fixture_publishing(POLICY, pool_ids, &[]).await
+    fixture_publishing(POLICY, pool_ids).await
 }
 
-/// A fresh deployment publishing `policy_yaml`, anchoring exactly `pool_ids`
-/// and `window_ids`. A published window is an anchor of its own: its claims
-/// occupy the window rather than a pool member, so the supply the capacity
-/// transaction locks is the window itself.
-async fn fixture_publishing(
-    policy_yaml: &str,
-    pool_ids: &[String],
-    window_ids: &[String],
-) -> Fixture {
-    fixture_publishing_with_hook_url(
-        policy_yaml,
-        pool_ids,
-        window_ids,
-        "http://127.0.0.1:9/scheduling-hooks",
-    )
-    .await
+/// A fresh deployment publishing `policy_yaml` and anchoring exactly
+/// `pool_ids`. Window anchors are owned by the records replacement path.
+async fn fixture_publishing(policy_yaml: &str, pool_ids: &[String]) -> Fixture {
+    fixture_publishing_with_hook_url(policy_yaml, pool_ids, "http://127.0.0.1:9/scheduling-hooks")
+        .await
 }
 
 async fn fixture_publishing_with_hook_url(
     policy_yaml: &str,
     pool_ids: &[String],
-    window_ids: &[String],
     hook_url: &str,
 ) -> Fixture {
     let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
@@ -360,7 +348,7 @@ async fn fixture_publishing_with_hook_url(
     let policy = parse_policy_yaml(policy_yaml).expect("the scheduling test policy");
     let digest = policy.policy_digest();
     let revision = store
-        .apply_policy(SCHEDULING_ID, &digest, pool_ids, window_ids, &policy)
+        .apply_policy(SCHEDULING_ID, &digest, pool_ids, &policy)
         .await
         .expect("publish the scheduling policy");
     let keying = AuditHashSecret::new(vec![0x42; 32]).expect("the test audit hash secret");
@@ -735,7 +723,6 @@ async fn hook_fixture_at(hook_url: &str) -> Fixture {
     fixture_publishing_with_hook_url(
         &policy,
         &["north-counter".to_owned(), "two-counter".to_owned()],
-        &[],
         hook_url,
     )
     .await
@@ -1331,7 +1318,6 @@ async fn exact_time_commitments_include_buffers_outside_the_opening_range() {
     let fx = fixture_publishing(
         &buffered,
         &["north-counter".to_owned(), "two-counter".to_owned()],
-        &[],
     )
     .await;
     let day = (Utc::now() + TimeDelta::days(2)).date_naive();
@@ -1375,7 +1361,6 @@ async fn duplicate_active_keys_are_scoped_to_the_offering() {
     let fx = fixture_publishing(
         &keyed,
         &["north-counter".to_owned(), "two-counter".to_owned()],
-        &[],
     )
     .await;
     let first = first_slot(&fx, OFFERING, 300, 440).await;
@@ -2121,7 +2106,7 @@ async fn explain_assumes_the_offerings_declared_inputs_are_present() {
         .collect();
     pool_ids.sort();
     pool_ids.dedup();
-    let fx = fixture_publishing(&authored, &pool_ids, &[]).await;
+    let fx = fixture_publishing(&authored, &pool_ids).await;
     let slot = first_slot(&fx, OFFERING, 300, 440).await;
 
     let (status, explanation) = fx
@@ -2171,6 +2156,35 @@ async fn a_commitment_against_an_unanchored_pool_refuses_loudly() {
         .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(problem["code"], "service.unavailable");
+}
+
+#[tokio::test]
+async fn an_arrival_offering_without_its_window_record_is_an_operator_gap() {
+    let start = (Utc::now() + TimeDelta::hours(3))
+        .with_nanosecond(0)
+        .expect("second precision");
+    let fx = fixture_publishing(
+        &policy_with_window(),
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+    )
+    .await;
+
+    let (status, unavailable) = fx
+        .get(&availability_uri(WINDOW_OFFERING, 60, 300), &fx.reader)
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{unavailable}");
+    assert_eq!(unavailable["code"], "service.unavailable");
+
+    let (status, unavailable) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "missing-window-record",
+            arrival(&fx, start, None),
+        )
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{unavailable}");
+    assert_eq!(unavailable["code"], "service.unavailable");
 }
 
 /// Adoption binds one deployment identity: claiming from empty is the
@@ -2417,7 +2431,6 @@ async fn a_policy_applied_under_a_running_process_refuses_the_older_revision() {
             SCHEDULING_ID,
             &replacement_digest,
             &["north-counter".to_owned(), "two-counter".to_owned()],
-            &[],
             &replacement,
         )
         .await
@@ -2565,6 +2578,7 @@ fn records_without(retired: &[&str]) -> SchedulingFacts {
             ..pool
         })
         .collect(),
+        windows: Vec::new(),
         exceptions: Vec::new(),
     }
 }
@@ -3844,17 +3858,11 @@ const WINDOW_ID: &str = "morning-arrivals";
 /// accepted by coincidence.
 const WINDOW_REVISION: u64 = 3;
 
-/// The test policy with one arrival window in it, opening at `start` and
-/// running two hours, with two units in total and one of them reserved to the
-/// assisted channel.
-///
-/// A published window carries absolute instants, so its interval is built
-/// against the clock the test runs on rather than frozen into the constant
-/// policy beside it.
-fn policy_with_window(start: DateTime<Utc>) -> String {
-    let end = start + TimeDelta::hours(2);
+/// The test policy with one arrival offering that references the window ID
+/// owned by the runtime records.
+fn policy_with_window() -> String {
     POLICY.replace(
-        "windows: []",
+        "holdPolicy:",
         &format!(
             "  - id: {WINDOW_OFFERING}\n\
              \x20   service: registry-update\n\
@@ -3869,21 +3877,55 @@ fn policy_with_window(start: DateTime<Utc>) -> String {
              \x20     horizonDays: 60\n\
              \x20   requiresCapabilities: []\n\
              \x20   prerequisites: []\n\
-             windows:\n\
-             \x20 - id: {WINDOW_ID}\n\
-             \x20   revision: {WINDOW_REVISION}\n\
-             \x20   offering: {WINDOW_OFFERING}\n\
-             \x20   location: north-counter\n\
-             \x20   start: {}\n\
-             \x20   end: {}\n\
-             \x20   units: 2\n\
-             \x20   unitsPolicy: {{kind: fixed, units: 1, because: test}}\n\
-             \x20   subquotas: [{{id: assisted-quota, channel: assisted, units: 1, because: test}}]\n\
-             \x20   because: test",
-            stamp(start),
-            stamp(end),
+             holdPolicy:",
         ),
     )
+}
+
+/// The operator records that publish one concrete arrival window.
+fn records_with_window(start: DateTime<Utc>) -> SchedulingFacts {
+    let mut facts = records_without(&[]);
+    facts.windows.push(PublishedWindow {
+        id: WINDOW_ID.to_owned(),
+        revision: WINDOW_REVISION,
+        offering: WINDOW_OFFERING.to_owned(),
+        location: "north-counter".to_owned(),
+        start,
+        end: start + TimeDelta::hours(2),
+        units: 2,
+        units_policy: RequiredUnitsPolicy::Fixed {
+            units: 1,
+            because: "test".to_owned(),
+        },
+        subquotas: vec![WindowSubquota {
+            id: "assisted-quota".to_owned(),
+            channel: Channel::Assisted,
+            units: 1,
+            because: "test".to_owned(),
+        }],
+        leftover: None,
+        staffing: None,
+        because: "test".to_owned(),
+    });
+    facts
+}
+
+async fn fixture_with_window(start: DateTime<Utc>) -> Fixture {
+    let fx = fixture_publishing(
+        &policy_with_window(),
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+    )
+    .await;
+    fx.store
+        .replace_facts(
+            SCHEDULING_ID,
+            &records_with_window(start),
+            Uuid::new_v4(),
+            operator_audit(),
+        )
+        .await
+        .expect("publish the window records");
+    fx
 }
 
 /// One direct-create body admitting an arrival on the window, on `channel`
@@ -3920,19 +3962,13 @@ async fn window_entry(fx: &Fixture, from_minutes: i64, to_minutes: i64) -> Optio
 }
 
 #[tokio::test]
-async fn policy_publication_refuses_to_move_a_window_with_standing_commitments() {
+async fn records_replacement_refuses_to_move_a_window_with_standing_commitments() {
     let day = (Utc::now() + TimeDelta::days(2)).date_naive();
     let start = DateTime::<Utc>::from_naive_utc_and_offset(
         day.and_hms_opt(9, 0, 0).expect("a morning instant"),
         Utc,
     );
-    let authored = policy_with_window(start);
-    let fx = fixture_publishing(
-        &authored,
-        &["north-counter".to_owned(), "two-counter".to_owned()],
-        &[WINDOW_ID.to_owned()],
-    )
-    .await;
+    let fx = fixture_with_window(start).await;
     let (status, appointment) = fx
         .post(
             "/v1/appointments",
@@ -3943,24 +3979,55 @@ async fn policy_publication_refuses_to_move_a_window_with_standing_commitments()
         .await;
     assert_eq!(status, StatusCode::CREATED, "{appointment}");
 
-    let current = parse_policy_yaml(&authored).expect("the current policy");
-    let mut moved = current.clone();
-    moved.scheduling.version += 1;
+    let mut moved = records_with_window(start);
     moved.windows[0].start += TimeDelta::days(1);
     moved.windows[0].end += TimeDelta::days(1);
-    let digest = moved.policy_digest();
     let refusal = fx
         .store
-        .apply_policy(
-            SCHEDULING_ID,
-            &digest,
-            &["north-counter".to_owned(), "two-counter".to_owned()],
-            &[WINDOW_ID.to_owned()],
-            &moved,
-        )
+        .replace_facts(SCHEDULING_ID, &moved, Uuid::new_v4(), operator_audit())
         .await
         .expect_err("a moved window cannot strand a standing appointment");
     assert!(refusal.to_string().contains(WINDOW_ID), "{refusal}");
+}
+
+#[tokio::test]
+async fn a_location_closure_hides_and_refuses_an_arrival_window() {
+    let day = (Utc::now() + TimeDelta::days(2)).date_naive();
+    let start = DateTime::<Utc>::from_naive_utc_and_offset(
+        day.and_hms_opt(9, 0, 0).expect("a morning instant"),
+        Utc,
+    );
+    let fx = fixture_with_window(start).await;
+    let mut facts = records_with_window(start);
+    facts.exceptions.push(CalendarExceptionRecord {
+        id: "counter-closure".to_owned(),
+        location: "north-counter".to_owned(),
+        kind: ExceptionRecordKind::Closure,
+        date: day.to_string(),
+        start_time: "08:00".to_owned(),
+        end_time: "12:00".to_owned(),
+        reopens: None,
+        authority: None,
+    });
+    fx.store
+        .replace_facts(SCHEDULING_ID, &facts, Uuid::new_v4(), operator_audit())
+        .await
+        .expect("apply the location closure");
+
+    assert!(
+        window_entry(&fx, 60, 4_000).await.is_none(),
+        "a closed window is not published as availability"
+    );
+    let (status, refused) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "arrival-closed",
+            arrival(&fx, start, None),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["code"], "location.closed");
 }
 
 #[tokio::test]
@@ -3984,7 +4051,7 @@ async fn policy_publication_refuses_to_remove_an_offering_with_a_live_appointmen
 
     let refusal = fx
         .store
-        .apply_policy(SCHEDULING_ID, &digest, &pool_ids, &[], &replacement)
+        .apply_policy(SCHEDULING_ID, &digest, &pool_ids, &replacement)
         .await
         .expect_err("a live appointment keeps its offering operable");
     assert!(refusal.to_string().contains(OFFERING), "{refusal}");
@@ -4001,6 +4068,34 @@ async fn policy_publication_refuses_to_remove_an_offering_with_a_live_appointmen
     assert_eq!(cancelled["state"], "cancelled");
 }
 
+#[tokio::test]
+async fn policy_publication_refuses_to_move_an_active_offering_between_pools() {
+    let fx = fixture().await;
+    booked(&fx, 300, 440, "retained-offering-pool-create").await;
+    let mut replacement = parse_policy_yaml(POLICY).expect("the current policy");
+    replacement.scheduling.version += 1;
+    replacement
+        .offerings
+        .iter_mut()
+        .find(|offering| offering.id == OFFERING)
+        .and_then(|offering| offering.exact_time.as_mut())
+        .expect("the exact-time offering")
+        .pool = "two-counter".to_owned();
+    let digest = replacement.policy_digest();
+
+    let refusal = fx
+        .store
+        .apply_policy(
+            SCHEDULING_ID,
+            &digest,
+            &["north-counter".to_owned(), "two-counter".to_owned()],
+            &replacement,
+        )
+        .await
+        .expect_err("an active offering cannot move to different supply");
+    assert!(refusal.to_string().contains("supply"), "{refusal}");
+}
+
 /// An arrival window is a second admission mode with a ledger of its own: its
 /// claims occupy the window rather than a member of a pool, its capacity is
 /// counted in units rather than in slots, and a channel subquota is a ceiling
@@ -4015,13 +4110,10 @@ async fn policy_publication_refuses_to_remove_an_offering_with_a_live_appointmen
 async fn an_arrival_window_allocates_its_units_and_holds_its_channel_ceiling() {
     // The published interval is stamped to the second, which is the precision
     // every comparison below reads it back at.
-    let start = Utc::now() + TimeDelta::hours(3);
-    let fx = fixture_publishing(
-        &policy_with_window(start),
-        &["north-counter".to_owned(), "two-counter".to_owned()],
-        &[WINDOW_ID.to_owned()],
-    )
-    .await;
+    let start = (Utc::now() + TimeDelta::hours(3))
+        .with_nanosecond(0)
+        .expect("second precision");
+    let fx = fixture_with_window(start).await;
 
     let offered = window_entry(&fx, 60, 300)
         .await
@@ -4029,6 +4121,17 @@ async fn an_arrival_window_allocates_its_units_and_holds_its_channel_ceiling() {
     assert_eq!(offered["window"], WINDOW_ID);
     assert_eq!(offered["start"], stamp(start));
     assert_eq!(offered["remaining"], 2, "the whole window is unallocated");
+
+    let (status, mismatch) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "arrival-wrong-start",
+            arrival(&fx, start + TimeDelta::minutes(15), None),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{mismatch}");
+    assert_eq!(mismatch["code"], "schedule.unpublished");
 
     // The assisted channel holds one of the two units.
     let (status, booked) = fx
@@ -4446,7 +4549,6 @@ async fn a_stale_process_refuses_even_a_request_under_the_current_revision() {
             SCHEDULING_ID,
             &replacement_digest,
             &["north-counter".to_owned(), "two-counter".to_owned()],
-            &[],
             &replacement,
         )
         .await
@@ -4479,7 +4581,6 @@ async fn a_stale_process_can_still_release_an_appointment() {
             SCHEDULING_ID,
             &replacement_digest,
             &["north-counter".to_owned(), "two-counter".to_owned()],
-            &[],
             &replacement,
         )
         .await
@@ -4796,13 +4897,10 @@ async fn a_suppressed_reminder_is_skipped_and_keeps_its_accounting() {
 /// full one as the public capacity refusal, never as a revision mismatch.
 #[tokio::test]
 async fn explain_answers_a_window_offering_rather_than_a_revision_mismatch() {
-    let start = Utc::now() + TimeDelta::hours(3);
-    let fx = fixture_publishing(
-        &policy_with_window(start),
-        &["north-counter".to_owned(), "two-counter".to_owned()],
-        &[WINDOW_ID.to_owned()],
-    )
-    .await;
+    let start = (Utc::now() + TimeDelta::hours(3))
+        .with_nanosecond(0)
+        .expect("second precision");
+    let fx = fixture_with_window(start).await;
     let uri = format!(
         "/v1/availability/explain?offering={WINDOW_OFFERING}&start={}",
         stamp(start)

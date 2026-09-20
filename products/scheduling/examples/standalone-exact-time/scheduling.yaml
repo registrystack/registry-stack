@@ -73,7 +73,6 @@ openings:
     effectiveFrom: "2026-11-01"
     effectiveUntil: "2026-11-01"
     because: Fold-day hours whose endpoints sit outside the repeated local hour.
-windows: []
 holdPolicy:
   ttlMinutes: 5
   maxPerCaller: 3

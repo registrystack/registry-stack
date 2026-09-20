@@ -34,6 +34,10 @@
 - Re-check hold expiry after locking its supply during confirmation, so a
   delayed confirmation cannot claim capacity that became bookable and was
   committed elsewhere after the hold expired.
+- Keep arrival offerings as policy references while operators publish their
+  concrete window capacity through atomic runtime records. Apply location
+  openings and closures to live window availability and admission, and refuse
+  a request whose start differs from the selected window.
 - Close the beta review races and contract gaps: include exact-time buffers in
   locked snapshots, scope duplicate keys to their offering, enforce requested
   capabilities, reject cross-offering reschedules, keep cancellations

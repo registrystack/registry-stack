@@ -17,6 +17,7 @@ pools:
       - resourceId: hall-station-1
         capabilities: []
         available: true
+windows: []
 exceptions:
   - id: hall-prep
     location: new-york-hall

@@ -174,7 +174,7 @@ pub enum ReplayError {
     EmptyPool { case: String, pool: String },
     #[error("case {case} needs location {location}, which the facts do not declare")]
     UnknownLocation { case: String, location: String },
-    #[error("case {case} needs window {window}, which the policy does not publish")]
+    #[error("case {case} needs window {window}, which the facts do not declare")]
     UnknownWindow { case: String, window: String },
     #[error("case name {case} is used more than once; case names identify claims")]
     DuplicateCaseName { case: String },
@@ -292,7 +292,7 @@ impl SchedulingFixture {
                         });
                     };
                     let window_id = arrival.window.clone();
-                    let Some(window) = policy.window(&window_id) else {
+                    let Some(window) = self.facts.window(&window_id) else {
                         return Err(ReplayError::UnknownWindow {
                             case: case.name.clone(),
                             window: window_id,
@@ -307,19 +307,11 @@ impl SchedulingFixture {
                         .expect("the location was resolved above")
                         .timezone
                         .clone();
-                    let exceptions: Vec<_> = self
-                        .facts
-                        .exceptions
-                        .iter()
-                        .filter(|exception| exception.location == offering.location)
-                        .map(|exception| exception.borrowed())
-                        .collect();
-                    let open = location_open_intervals(
-                        policy,
-                        &offering.location,
-                        &timezone,
-                        &exceptions,
-                    )?;
+                    // Structural validation uses the authored schedule before
+                    // dated exceptions. A closure is a valid fixture fact
+                    // whose case must reach admission and refuse as
+                    // `location.closed`, not an invalid fixture definition.
+                    let open = location_open_intervals(policy, &offering.location, &timezone, &[])?;
                     if !covers_span(&open, window.start, window.end) {
                         return Err(ReplayError::WindowOutsideOpenings { window: window_id });
                     }
@@ -496,15 +488,35 @@ fn replay_case(
                     offering: offering.id.clone(),
                 },
             ))?;
-            let window = policy.window(&arrival.window).ok_or(CaseStoppage::Replay(
-                ReplayError::UnknownWindow {
+            let window = fixture
+                .facts
+                .window(&arrival.window)
+                .ok_or(CaseStoppage::Replay(ReplayError::UnknownWindow {
                     case: case.name.clone(),
                     window: arrival.window.clone(),
-                },
-            ))?;
+                }))?;
+            let exceptions: Vec<_> = fixture
+                .facts
+                .exceptions
+                .iter()
+                .filter(|exception| exception.location == offering.location)
+                .map(|exception| exception.borrowed())
+                .collect();
+            let open = location_open_intervals(
+                policy,
+                &offering.location,
+                &location.timezone,
+                &exceptions,
+            )
+            .map_err(|error| CaseStoppage::Replay(error.into()))?;
+            let closures =
+                location_closure_intervals(&fixture.facts, &offering.location, &location.timezone)
+                    .map_err(|error| CaseStoppage::Replay(error.into()))?;
             let context = WindowContext {
                 offering,
                 window,
+                open: &open,
+                closures: &closures,
                 lead_time_minutes: arrival.lead_time_minutes,
                 horizon_days: arrival.horizon_days,
                 snapshot,
@@ -568,7 +580,7 @@ impl From<ResolveError> for ReplayError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{LocationRecord, PartyCounts};
+    use crate::model::{CalendarExceptionRecord, ExceptionRecordKind, LocationRecord, PartyCounts};
     use registry_platform_calendar::CalendarInterval;
 
     fn exact_time_fixture_yaml() -> &'static str {
@@ -669,7 +681,6 @@ openings:
     effectiveFrom: "2026-10-05"
     effectiveUntil: "2026-10-05"
     because: Counter opening hours reviewed by the office manager.
-windows: []
 holdPolicy:
   ttlMinutes: 5
   maxPerCaller: 3
@@ -912,6 +923,7 @@ cases:
                 timezone: "Asia/Bangkok".to_owned(),
             }],
             pools: vec![],
+            windows: vec![],
             exceptions: vec![crate::model::CalendarExceptionRecord {
                 id: "systems-training".to_owned(),
                 location: "north-counter".to_owned(),
@@ -948,6 +960,28 @@ facts:
     - id: civic-hall
       timezone: Asia/Bangkok
   pools: []
+  windows:
+    - id: household-morning-window
+      revision: 2
+      offering: household-morning
+      location: civic-hall
+      start: 2026-10-10T01:00:00Z
+      end: 2026-10-10T03:00:00Z
+      units: 3
+      unitsPolicy:
+        kind: perRecipient
+        perRecipient: 1
+        because: Each recipient consumes one serving slot.
+      subquotas:
+        - id: public-quota
+          channel: public
+          units: 2
+          because: Most households book the public channel.
+        - id: assisted-quota
+          channel: assisted
+          units: 1
+          because: Assisted bookings hold a protected unit.
+      because: The Saturday morning household block.
 initial: []
 cases:
   - name: first-household
@@ -1035,28 +1069,6 @@ openings:
     effectiveFrom: "2026-10-01"
     effectiveUntil: "2026-12-31"
     because: The hall opens on Saturday mornings.
-windows:
-  - id: household-morning-window
-    revision: 2
-    offering: household-morning
-    location: civic-hall
-    start: 2026-10-10T01:00:00Z
-    end: 2026-10-10T03:00:00Z
-    units: 3
-    unitsPolicy:
-      kind: perRecipient
-      perRecipient: 1
-      because: Each recipient consumes one serving slot.
-    subquotas:
-      - id: public-quota
-        channel: public
-        units: 2
-        because: Most households book the public channel.
-      - id: assisted-quota
-        channel: assisted
-        units: 1
-        because: Assisted bookings hold a protected unit.
-    because: The Saturday morning household block.
 holdPolicy:
   ttlMinutes: 10
   maxPerCaller: 2
@@ -1074,6 +1086,26 @@ holdPolicy:
                 .all(|outcome| outcome.status == CaseStatus::Pass),
             "{outcomes:?}"
         );
+
+        let mut closed = parse_fixture_yaml(yaml).expect("parses a closed-window fixture");
+        closed.facts.exceptions.push(CalendarExceptionRecord {
+            id: "hall-closure".to_owned(),
+            location: "civic-hall".to_owned(),
+            kind: ExceptionRecordKind::Closure,
+            date: "2026-10-10".to_owned(),
+            start_time: "08:00".to_owned(),
+            end_time: "12:00".to_owned(),
+            reopens: None,
+            authority: None,
+        });
+        closed.cases.truncate(1);
+        closed.cases[0].expect = FixtureExpectation::Refused {
+            code: "location.closed".to_owned(),
+        };
+        let outcomes = closed
+            .replay(&policy)
+            .expect("the closure reaches admission");
+        assert_eq!(outcomes[0].status, CaseStatus::Pass, "{outcomes:?}");
     }
 
     #[test]

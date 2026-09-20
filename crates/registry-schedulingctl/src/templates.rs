@@ -84,7 +84,6 @@ openings:
     effectiveFrom: "2026-11-01"
     effectiveUntil: "2026-11-01"
     because: Fold-day hours whose endpoints sit outside the repeated local hour.
-windows: []
 holdPolicy:
   ttlMinutes: 5
   maxPerCaller: 3
@@ -284,6 +283,7 @@ pools:
       - resourceId: hall-station-1
         capabilities: []
         available: true
+windows: []
 exceptions:
   - id: hall-prep
     location: new-york-hall
@@ -356,50 +356,6 @@ openings:
     effectiveFrom: "2026-10-01"
     effectiveUntil: "2026-12-31"
     because: The hall reopens on Saturday afternoons for banded household visits.
-windows:
-  - id: household-morning-window
-    revision: 2
-    offering: household-morning
-    location: civic-hall
-    start: 2026-10-10T01:00:00Z
-    end: 2026-10-10T03:00:00Z
-    units: 3
-    unitsPolicy:
-      kind: perRecipient
-      perRecipient: 1
-      because: Each recipient consumes one serving slot.
-    subquotas:
-      - id: public-quota
-        channel: public
-        units: 2
-        because: Most households book the public channel.
-      - id: assisted-quota
-        channel: assisted
-        units: 1
-        because: Assisted bookings hold a protected unit.
-    because: The Saturday morning household block, sized for two officers.
-  - id: household-afternoon-window
-    revision: 1
-    offering: household-afternoon
-    location: civic-hall
-    start: 2026-10-10T07:00:00Z
-    end: 2026-10-10T09:00:00Z
-    units: 3
-    unitsPolicy:
-      kind: bandedTable
-      input: serviceRecipientCount
-      bands:
-        - upTo: 4
-          units: 1
-          because: A household of up to four shares one officers' block.
-        - upTo: 8
-          units: 2
-          because: A larger household of up to eight needs two officers' blocks.
-      aboveHighestBand:
-        policy: refuse
-      because: A household above eight needs a scheduled outreach visit instead of a walk-in block.
-    subquotas: []
-    because: The Saturday afternoon household block, sized by party rather than a flat headcount.
 holdPolicy:
   ttlMinutes: 10
   maxPerCaller: 2
@@ -416,6 +372,28 @@ facts:
   locations:
     - id: civic-hall
       timezone: Asia/Bangkok
+  windows:
+    - id: household-morning-window
+      revision: 2
+      offering: household-morning
+      location: civic-hall
+      start: 2026-10-10T01:00:00Z
+      end: 2026-10-10T03:00:00Z
+      units: 3
+      unitsPolicy:
+        kind: perRecipient
+        perRecipient: 1
+        because: Each recipient consumes one serving slot.
+      subquotas:
+        - id: public-quota
+          channel: public
+          units: 2
+          because: Most households book the public channel.
+        - id: assisted-quota
+          channel: assisted
+          units: 1
+          because: Assisted bookings hold a protected unit.
+      because: The Saturday morning household block, sized for two officers.
 initial: []
 cases:
   - name: first-household-takes-the-public-quota
@@ -476,6 +454,29 @@ facts:
   locations:
     - id: civic-hall
       timezone: Asia/Bangkok
+  windows:
+    - id: household-afternoon-window
+      revision: 1
+      offering: household-afternoon
+      location: civic-hall
+      start: 2026-10-10T07:00:00Z
+      end: 2026-10-10T09:00:00Z
+      units: 3
+      unitsPolicy:
+        kind: bandedTable
+        input: serviceRecipientCount
+        bands:
+          - upTo: 4
+            units: 1
+            because: A household of up to four shares one officers' block.
+          - upTo: 8
+            units: 2
+            because: A larger household of up to eight needs two officers' blocks.
+        aboveHighestBand:
+          policy: refuse
+        because: A household above eight needs a scheduled outreach visit instead of a walk-in block.
+      subquotas: []
+      because: The Saturday afternoon household block, sized by party rather than a flat headcount.
 initial: []
 cases:
   - name: a-small-household-fits-the-first-band
@@ -522,12 +523,56 @@ cases:
       units: 2
 "#;
 
-/// Live environment records for the arrival-window starter. Published windows
-/// carry their own supply, so this project needs only its referenced location.
+/// Live environment records for the arrival-window starter. The policy names
+/// each window by id; this operator document owns its concrete supply.
 const ARRIVAL_WINDOW_RECORDS: &str = r#"locations:
   - id: civic-hall
     timezone: Asia/Bangkok
 pools: []
+windows:
+  - id: household-morning-window
+    revision: 2
+    offering: household-morning
+    location: civic-hall
+    start: 2026-10-10T01:00:00Z
+    end: 2026-10-10T03:00:00Z
+    units: 3
+    unitsPolicy:
+      kind: perRecipient
+      perRecipient: 1
+      because: Each recipient consumes one serving slot.
+    subquotas:
+      - id: public-quota
+        channel: public
+        units: 2
+        because: Most households book the public channel.
+      - id: assisted-quota
+        channel: assisted
+        units: 1
+        because: Assisted bookings hold a protected unit.
+    because: The Saturday morning household block, sized for two officers.
+  - id: household-afternoon-window
+    revision: 1
+    offering: household-afternoon
+    location: civic-hall
+    start: 2026-10-10T07:00:00Z
+    end: 2026-10-10T09:00:00Z
+    units: 3
+    unitsPolicy:
+      kind: bandedTable
+      input: serviceRecipientCount
+      bands:
+        - upTo: 4
+          units: 1
+          because: A household of up to four shares one officers' block.
+        - upTo: 8
+          units: 2
+          because: A larger household of up to eight needs two officers' blocks.
+      aboveHighestBand:
+        policy: refuse
+      because: A household above eight needs a scheduled outreach visit instead of a walk-in block.
+    subquotas: []
+    because: The Saturday afternoon household block, sized by party rather than a flat headcount.
 exceptions: []
 "#;
 
@@ -794,8 +839,23 @@ mod tests {
     #[test]
     fn the_arrival_window_template_demonstrates_a_banded_table_refusing_above_its_highest_band() {
         let files = template_files("standalone-arrival-window").unwrap();
-        let policy = parse_policy_yaml(files[0].1).expect("the template policy parses");
-        let window = policy
+        let policy = parse_policy_yaml(
+            files
+                .iter()
+                .find(|(path, _)| *path == "scheduling.yaml")
+                .expect("the policy file exists")
+                .1,
+        )
+        .expect("the template policy parses");
+        let records: registry_scheduling_core::SchedulingFacts = serde_norway::from_str(
+            files
+                .iter()
+                .find(|(path, _)| *path == "records.yaml")
+                .expect("the records file exists")
+                .1,
+        )
+        .expect("the template records parse");
+        let window = records
             .windows
             .iter()
             .find(|window| window.id == "household-afternoon-window")

@@ -229,12 +229,13 @@ impl SchedulingService {
     ) -> Result<PageDocument<OfferingDocument>, ServiceError> {
         let limit = page_limit(limit);
         let position = self.resolve_position(cursor, "offerings", now).await?;
+        let (facts, _) = self.store.facts().await?;
         let mut offerings: Vec<_> = self
             .policy
             .offerings
             .iter()
-            .map(|offering| self.offering_document(offering))
-            .collect();
+            .map(|offering| self.offering_document(offering, &facts))
+            .collect::<Result<_, _>>()?;
         offerings.sort_by(|a, b| a.id.cmp(&b.id));
         page_of(self, offerings, position, limit, "offerings", now).await
     }
@@ -396,6 +397,7 @@ impl SchedulingService {
                 window,
                 lead_time_minutes,
                 horizon_days,
+                open,
                 ..
             } => {
                 let snapshot = self.store.window_snapshot(&window.id, now).await?;
@@ -407,6 +409,7 @@ impl SchedulingService {
                     now,
                     lead_time_minutes,
                     horizon_days,
+                    &open,
                 )
             }
         };
@@ -505,6 +508,8 @@ impl SchedulingService {
                 lead_time_minutes,
                 horizon_days,
                 channels,
+                open,
+                closures,
             } => {
                 // The probe carries the window's current revision, the way a
                 // booking request would: window admission checks capacity
@@ -518,6 +523,8 @@ impl SchedulingService {
                     &WindowContext {
                         offering,
                         window: &window,
+                        open: &open,
+                        closures: &closures,
                         lead_time_minutes,
                         horizon_days,
                         snapshot: &snapshot,
@@ -1016,7 +1023,11 @@ impl SchedulingService {
         Ok(Some(claim))
     }
 
-    fn offering_document(&self, offering: &OfferingPolicy) -> OfferingDocument {
+    fn offering_document(
+        &self,
+        offering: &OfferingPolicy,
+        facts: &SchedulingFacts,
+    ) -> Result<OfferingDocument, ServiceError> {
         let mode = match offering.mode {
             SchedulingMode::ExactTime => SchedulingModeDocument::ExactTime,
             SchedulingMode::ArrivalWindow => SchedulingModeDocument::ArrivalWindow,
@@ -1032,25 +1043,33 @@ impl SchedulingService {
                 ),
                 None => (None, None, None, None, None),
             };
-        let window = offering.arrival.as_ref().map(|arrival| {
-            let window = self
-                .policy
-                .window(&arrival.window)
-                .expect("a published offering names a declared window");
-            WindowDocument {
-                id: window.id.clone(),
-                revision: window.revision,
-                start: window.start,
-                end: window.end,
-                units: window.units,
-            }
-        });
+        let window = offering
+            .arrival
+            .as_ref()
+            .map(|arrival| {
+                let window = facts.window(&arrival.window).ok_or_else(|| {
+                    tracing::error!(
+                        offering = %offering.id,
+                        reference = %arrival.window,
+                        "the offering names a window the records do not carry"
+                    );
+                    ServiceError::Problem(ProblemCode::ServiceUnavailable)
+                })?;
+                Ok::<WindowDocument, ServiceError>(WindowDocument {
+                    id: window.id.clone(),
+                    revision: window.revision,
+                    start: window.start,
+                    end: window.end,
+                    units: window.units,
+                })
+            })
+            .transpose()?;
         let (lead_time_minutes, horizon_days) = match (&offering.exact_time, &offering.arrival) {
             (Some(exact), None) => (exact.lead_time_minutes, exact.horizon_days),
             (None, Some(arrival)) => (arrival.lead_time_minutes, arrival.horizon_days),
             _ => (0, 0),
         };
-        OfferingDocument {
+        Ok(OfferingDocument {
             id: offering.id.clone(),
             service: offering.service.clone(),
             label: offering.label.clone(),
@@ -1074,7 +1093,7 @@ impl SchedulingService {
                 .collect(),
             requires_capabilities: offering.requires_capabilities.clone(),
             prerequisites: offering.prerequisites.clone(),
-        }
+        })
     }
 
     /// The offering the deployed policy publishes under `offering_id`.
@@ -1461,10 +1480,12 @@ enum ResolvedSupply {
         closures: Vec<CalendarInterval>,
     },
     Window {
-        window: PublishedWindow,
+        window: Box<PublishedWindow>,
         lead_time_minutes: u32,
         horizon_days: u32,
         channels: Vec<Channel>,
+        open: Vec<CalendarInterval>,
+        closures: Vec<CalendarInterval>,
     },
 }
 
@@ -1516,14 +1537,25 @@ impl ResolvedSupply {
                 })
             }
             (None, Some(arrival)) => {
-                let window = policy
+                let window = facts
                     .window(&arrival.window)
                     .ok_or_else(|| operator_gap(&arrival.window))?;
                 Ok(Self::Window {
-                    window: window.clone(),
+                    window: Box::new(window.clone()),
                     lead_time_minutes: arrival.lead_time_minutes,
                     horizon_days: arrival.horizon_days,
                     channels: policy.channels.clone(),
+                    open: location_open_intervals(
+                        policy,
+                        &offering.location,
+                        &location.timezone,
+                        &exceptions,
+                    )?,
+                    closures: location_closure_intervals(
+                        facts,
+                        &offering.location,
+                        &location.timezone,
+                    )?,
                 })
             }
             _ => Err(operator_gap("one scheduling mode")),
@@ -1548,11 +1580,15 @@ impl ResolvedSupply {
                 lead_time_minutes,
                 horizon_days,
                 channels,
+                open,
+                closures,
             } => SupplyContext::Window {
                 window,
                 lead_time_minutes: *lead_time_minutes,
                 horizon_days: *horizon_days,
                 channels: channels.as_slice(),
+                open,
+                closures,
             },
         }
     }
@@ -1634,6 +1670,7 @@ fn exact_time_slots(
 
 /// The arrival-window availability walk: one entry per published window in
 /// range with units left, after lead time and inside the horizon.
+#[allow(clippy::too_many_arguments)]
 fn window_entries(
     window: &PublishedWindow,
     snapshot: &LedgerSnapshot,
@@ -1642,6 +1679,7 @@ fn window_entries(
     now: DateTime<Utc>,
     lead_time_minutes: u32,
     horizon_days: u32,
+    open: &[CalendarInterval],
 ) -> Vec<AvailabilityEntry> {
     let consumed: u32 = snapshot.claims.iter().map(|claim| claim.units).sum();
     let remaining = window.units.saturating_sub(consumed);
@@ -1649,7 +1687,10 @@ fn window_entries(
     let latest = now + TimeDelta::days(i64::from(horizon_days));
     let in_range = window.start >= from && window.start < to;
     let in_horizon = window.start >= earliest && window.start <= latest;
-    if in_range && in_horizon && remaining > 0 {
+    let is_open = open
+        .iter()
+        .any(|interval| interval.start <= window.start && window.end <= interval.end);
+    if in_range && in_horizon && is_open && remaining > 0 {
         vec![AvailabilityEntry::Window {
             window: window.id.clone(),
             start: window.start,
@@ -2356,7 +2397,6 @@ mod tests {
             "offerings": [],
             "holidaySets": [],
             "openings": [],
-            "windows": [],
             "holdPolicy": {"ttlMinutes": 5, "maxPerCaller": 1, "because": "test"}
         }))
         .expect("a policy used only for replay projection");

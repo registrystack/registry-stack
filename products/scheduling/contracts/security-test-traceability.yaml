@@ -19,7 +19,8 @@ entries:
   - id: SCHEDULING-SEC-02
     tests:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_commitment_against_an_unanchored_pool_refuses_loudly}
-      - {path: crates/registry-scheduling/src/runtime.rs, name: the_offering_anchors_are_collected_without_duplicates}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: an_arrival_offering_without_its_window_record_is_an_operator_gap}
+      - {path: crates/registry-scheduling/src/runtime.rs, name: the_offering_pool_anchors_are_collected_without_duplicates}
   - id: SCHEDULING-SEC-03
     tests:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_grant_that_lapses_before_the_commit_never_books}
@@ -174,6 +175,6 @@ entries:
     tests:
       - {path: crates/registry-scheduling-core/src/policy.rs, name: a_reduction_below_standing_commitments_is_rejected_with_its_deficit}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: a_subquota_reduction_strands_its_channel_even_at_an_unchanged_total}
-      - {path: crates/registry-scheduling-core/src/policy.rs, name: moving_a_published_window_reports_no_reduction}
-      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: policy_publication_refuses_to_move_a_window_with_standing_commitments}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: moving_a_published_window_reports_the_stranded_commitments}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: records_replacement_refuses_to_move_a_window_with_standing_commitments}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: policy_publication_refuses_to_remove_an_offering_with_a_live_appointment}

@@ -42,7 +42,7 @@ invariants:
       unanchored reference in the operator's diagnostics, never to the caller.
     negativeTest:
       path: crates/registry-scheduling/tests/postgres_commitments.rs
-      name: a_commitment_against_an_unanchored_pool_refuses_loudly
+      name: an_arrival_offering_without_its_window_record_is_an_operator_gap
   - id: SCHEDULING-SEC-03
     state: partial
     threat: >-
@@ -405,18 +405,18 @@ invariants:
   - id: SCHEDULING-SEC-25
     state: enforced
     threat: >-
-      A rolling policy publication drops, moves, or reduces a published window
+      An operator records replacement drops, moves, or reduces a published window
       below the bookings and live holds that already consume it.
     enforcementPoint: >-
-      Policy publication locks every existing supply anchor, loads the retained
-      current policy and the standing window ledger, and assesses the proposal
-      before advancing the durable revision.
+      Records replacement locks every existing supply anchor, loads the current
+      window records and standing window ledger, and assesses the proposal
+      before atomically advancing the durable facts revision.
     refusal: >-
-      Refuse publication with an operator-facing deficit and leave the policy
-      revision unchanged; an ordinary restart never strands commitments.
+      Refuse replacement with an operator-facing deficit and leave all records
+      and their revision unchanged.
     negativeTest:
       path: crates/registry-scheduling/tests/postgres_commitments.rs
-      name: policy_publication_refuses_to_move_a_window_with_standing_commitments
+      name: records_replacement_refuses_to_move_a_window_with_standing_commitments
 deferred:
   - id: SCHEDULING-DEF-01
     subject: Full task-grant bounds re-checked inside the capacity transaction

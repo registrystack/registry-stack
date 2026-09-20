@@ -1073,7 +1073,6 @@ offerings:
       maxRecipients: 1
     requiresCapabilities: []
     prerequisites: []
-windows: []
 holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 "#;
 

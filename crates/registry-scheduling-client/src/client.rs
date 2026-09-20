@@ -566,8 +566,8 @@ fn validate_identifier(
 
 fn validate_availability(
     offering: &str,
-    start: Option<DateTime<Utc>>,
-    end: Option<DateTime<Utc>>,
+    _start: Option<DateTime<Utc>>,
+    _end: Option<DateTime<Utc>>,
     cursor: Option<&str>,
     limit: Option<u32>,
 ) -> Result<(), SchedulingClientError> {
@@ -581,13 +581,6 @@ fn validate_availability(
         return Err(SchedulingClientError::invalid_request(
             "the page size is outside the accepted range",
         ));
-    }
-    if let (Some(start), Some(end)) = (start, end) {
-        if end <= start {
-            return Err(SchedulingClientError::invalid_request(
-                "the availability interval ends before it starts",
-            ));
-        }
     }
     Ok(())
 }
@@ -653,9 +646,18 @@ mod tests {
         assert!(validate_availability("", None, None, None, None).is_err());
         assert!(validate_availability("registry-update-30", None, None, Some(""), None).is_err());
         assert!(validate_availability("registry-update-30", None, None, None, Some(0)).is_err());
+    }
+
+    #[test]
+    fn availability_ranges_preserve_runtime_normalization() {
+        let start = Utc.with_ymd_and_hms(2026, 10, 5, 2, 0, 0).unwrap();
+        let end = Utc.with_ymd_and_hms(2026, 10, 5, 2, 30, 0).unwrap();
         assert!(
-            validate_availability("registry-update-30", Some(end), Some(start), None, None)
-                .is_err()
+            validate_availability("registry-update-30", Some(start), Some(start), None, None)
+                .is_ok()
+        );
+        assert!(
+            validate_availability("registry-update-30", Some(end), Some(start), None, None).is_ok()
         );
     }
 

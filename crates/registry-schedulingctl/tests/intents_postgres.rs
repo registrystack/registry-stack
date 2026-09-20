@@ -65,7 +65,6 @@ openings:
     effectiveFrom: "2026-10-01"
     effectiveUntil: "2026-12-31"
     because: Counter opening hours reviewed by the office manager.
-windows: []
 holdPolicy:
   ttlMinutes: 5
   maxPerCaller: 3

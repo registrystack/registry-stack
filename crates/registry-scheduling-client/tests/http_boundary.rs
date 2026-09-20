@@ -368,22 +368,31 @@ async fn availability_forwards_the_exact_query_and_validates_its_selectors_local
             .await,
         Err(SchedulingClientError::InvalidRequest { .. })
     ));
-    assert!(matches!(
-        client
-            .availability(
-                auth(&token),
-                "registry-update-30",
-                Some(end),
-                Some(start),
-                None,
-                None
-            )
-            .await,
-        Err(SchedulingClientError::InvalidRequest { .. })
-    ));
+    client
+        .availability(
+            auth(&token),
+            "registry-update-30",
+            Some(start),
+            Some(start),
+            None,
+            None,
+        )
+        .await
+        .expect("equal bounds reach the runtime for normalization");
+    client
+        .availability(
+            auth(&token),
+            "registry-update-30",
+            Some(end),
+            Some(start),
+            None,
+            None,
+        )
+        .await
+        .expect("reversed bounds reach the runtime for normalization");
 
     let observations = observations.lock().expect("observations");
-    assert_eq!(observations.len(), 2);
+    assert_eq!(observations.len(), 4);
     assert_eq!(
         observations[0].uri,
         "/v1/availability?offering=registry-update-30&start=2026-10-05T02%3A00%3A00Z&end=2026-10-05T02%3A30%3A00Z&limit=25"
@@ -391,6 +400,14 @@ async fn availability_forwards_the_exact_query_and_validates_its_selectors_local
     assert_eq!(
         observations[1].uri,
         "/v1/availability?offering=registry-update-30&start=2026-10-05T02%3A00%3A00Z&end=2026-10-05T02%3A30%3A00Z&cursor=next&limit=25"
+    );
+    assert_eq!(
+        observations[2].uri,
+        "/v1/availability?offering=registry-update-30&start=2026-10-05T02%3A00%3A00Z&end=2026-10-05T02%3A00%3A00Z"
+    );
+    assert_eq!(
+        observations[3].uri,
+        "/v1/availability?offering=registry-update-30&start=2026-10-05T02%3A30%3A00Z&end=2026-10-05T02%3A00%3A00Z"
     );
     server.abort();
 }
