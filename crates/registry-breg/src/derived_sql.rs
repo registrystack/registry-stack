@@ -65,6 +65,7 @@ fn refuse_encrypted_columns(
     if encrypted_columns.is_empty() {
         return;
     }
+    let qualified_relations = source_relation_qualifiers(parsed);
     for (node, _, _, _) in parsed.protobuf.nodes() {
         let NodeRef::ColumnRef(column) = node else {
             continue;
@@ -84,9 +85,16 @@ fn refuse_encrypted_columns(
             [schema, relation, _column] if schema == "registry_source" => encrypted_columns
                 .get(relation.as_str())
                 .is_some_and(|columns| columns.contains(last)),
-            // Unqualified and table-qualified references cannot be resolved
-            // without scope analysis, so refuse conservatively against every
-            // known relation's encrypted columns.
+            [qualifier, _column] if qualified_relations.contains_key(qualifier) => {
+                qualified_relations[qualifier].iter().any(|relation| {
+                    encrypted_columns
+                        .get(relation)
+                        .is_some_and(|columns| columns.contains(last))
+                })
+            }
+            // An unqualified reference, or a qualifier not owned by a direct
+            // registry_source range, cannot be resolved without full scope
+            // analysis. Refuse it conservatively against every source.
             _ => encrypted_columns
                 .values()
                 .any(|columns| columns.contains(last)),
@@ -100,6 +108,35 @@ fn refuse_encrypted_columns(
             return;
         }
     }
+}
+
+/// Map each direct `registry_source` relation and authored alias back to the
+/// source relation it qualifies. A qualifier can occur in nested scopes, so
+/// retain every candidate and refuse when any candidate owns the encrypted
+/// column rather than pretending the query has one flat namespace.
+fn source_relation_qualifiers(
+    parsed: &pg_query::ParseResult,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let mut qualifiers = BTreeMap::<String, BTreeSet<String>>::new();
+    for (node, _, _, _) in parsed.protobuf.nodes() {
+        let NodeRef::RangeVar(range) = node else {
+            continue;
+        };
+        if !range.catalogname.is_empty() || range.schemaname != "registry_source" {
+            continue;
+        }
+        qualifiers
+            .entry(range.relname.clone())
+            .or_default()
+            .insert(range.relname.clone());
+        if let Some(alias) = &range.alias {
+            qualifiers
+                .entry(alias.aliasname.clone())
+                .or_default()
+                .insert(range.relname.clone());
+        }
+    }
+    qualifiers
 }
 
 fn root_node(parsed: &pg_query::ParseResult) -> Option<&PgNode> {

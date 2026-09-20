@@ -36,7 +36,7 @@ pub use crate::history_maintenance::HistoryMaintenanceTimeouts as HistoryErasure
 const MAX_ENTITY_ID_BYTES: usize = 256;
 const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
 const MAX_REASON_BYTES: usize = 1024;
-const MAX_ERASURE_REVISIONS: i64 = 10_000;
+pub(crate) const MAX_ERASURE_REVISIONS: i64 = 10_000;
 const AUDIT_OPERATION_ID: &str = "history-erasure-maintenance";
 
 #[derive(Clone, Eq, PartialEq)]
@@ -562,9 +562,20 @@ async fn append_history_erasure_audit(
         let object = record
             .as_object_mut()
             .ok_or(HistoryErasureError::Unavailable)?;
+        let target_record_reference = key_hasher
+            .audit_reference_hash(
+                "breg-history-erasure-target-record-v1",
+                &request.expected.package_revision,
+                &format!("{}:{}", request.target.entity_id, request.target.record_id),
+            )
+            .map_err(|_| HistoryErasureError::InvalidInput)?;
         object.insert(
             "lifecycleReference".to_owned(),
             Value::String(lifecycle_reference.to_owned()),
+        );
+        object.insert(
+            "targetRecordReference".to_owned(),
+            Value::String(target_record_reference),
         );
     }
     append_audit_envelope(transaction, request.audit_profile, record).await?;

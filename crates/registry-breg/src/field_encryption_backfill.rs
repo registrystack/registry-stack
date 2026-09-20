@@ -29,7 +29,7 @@ use tokio_postgres::Client;
 use crate::history_commit::lock_history_head;
 use crate::history_erasure::{
     erase_record_history_for_lifecycle, HistoryErasureError, HistoryErasureRequest,
-    RecordHistoryErasureTarget,
+    RecordHistoryErasureTarget, MAX_ERASURE_REVISIONS,
 };
 use crate::history_maintenance::{
     append_audit_envelope, profile_is_keyed, set_local_timeouts, verify_ready_identity,
@@ -62,6 +62,8 @@ const MAX_REASON_BYTES: usize = 1024;
 /// Bound the records one collision report names so a bulk collision cannot
 /// flood an operator surface. The apply-side preflight applies the same cap.
 const MAX_NAMED_DUPLICATE_RECORDS: usize = 64;
+/// Keep both target discovery and each established erasure transaction bounded.
+const MAX_ERASURE_TARGETS_PER_PAGE: i64 = 128;
 const AUDIT_OPERATION_ID: &str = "field-encryption-erase-history";
 
 /// Read-only preflight over the database a reviewed backfill would target.
@@ -551,35 +553,41 @@ pub async fn erase_field_encryption_history(
     // existing durable retry signal if this lifecycle stops before rebaseline.
     let (_, _, needs_rebaseline, lifecycle_reference) =
         scrub_plaintext_request_snapshots(client, &request).await?;
-    let targets = pending_erase_targets(client, &request).await?;
-    if targets.is_empty() && !needs_rebaseline {
-        return Err(FieldEncryptionHistoryErasureError::NoPendingPlaintextHistory);
+    let mut erased_any = false;
+    loop {
+        let targets = pending_erase_targets(client, &request).await?;
+        if targets.is_empty() {
+            break;
+        }
+        erased_any = true;
+        for target in &targets {
+            // Discovery caps each target at the next 10,000 retained revisions,
+            // preserving the established transaction bound. Re-querying after
+            // the page commits resumes the same record when it has more history.
+            erase_record_history_for_lifecycle(
+                client,
+                HistoryErasureRequest {
+                    expected: request.expected,
+                    migration_role: request.migration_role,
+                    lock_key: request.lock_key,
+                    timeouts: request.timeouts,
+                    audit_profile: request.audit_profile,
+                    operator_reference: request.operator_reference,
+                    reason: request.reason,
+                    target: RecordHistoryErasureTarget::new(
+                        &target.entity_id,
+                        target.record_id,
+                        target.erase_through_revision,
+                    ),
+                },
+                &lifecycle_reference,
+            )
+            .await
+            .map_err(FieldEncryptionHistoryErasureError::Erasure)?;
+        }
     }
-
-    for target in &targets {
-        // The erasure path enforces the per-record revision cap and appends
-        // its own per-record audit envelope; a refusal stops the lifecycle
-        // with the record already erased staying erased, so a re-run resumes.
-        erase_record_history_for_lifecycle(
-            client,
-            HistoryErasureRequest {
-                expected: request.expected,
-                migration_role: request.migration_role,
-                lock_key: request.lock_key,
-                timeouts: request.timeouts,
-                audit_profile: request.audit_profile,
-                operator_reference: request.operator_reference,
-                reason: request.reason,
-                target: RecordHistoryErasureTarget::new(
-                    &target.entity_id,
-                    target.record_id,
-                    target.erase_through_revision,
-                ),
-            },
-            &lifecycle_reference,
-        )
-        .await
-        .map_err(FieldEncryptionHistoryErasureError::Erasure)?;
+    if !erased_any && !needs_rebaseline {
+        return Err(FieldEncryptionHistoryErasureError::NoPendingPlaintextHistory);
     }
 
     // Coverage and both terminal audit records form one closing commit. A
@@ -986,26 +994,46 @@ async fn pending_erase_targets(
     verify_ready_identity(&transaction, request.expected).await?;
     let rows = transaction
         .query(
-            "SELECT flip.entity_id, revision.record_id, max(revision.record_revision)::bigint
-               FROM registry_internal.registry_field_encryption_flips AS flip
-               JOIN registry_internal.registry_revisions AS revision
-                 ON revision.entity_id = flip.entity_id
-               LEFT JOIN registry_internal.registry_revision_commit_members AS member
-                 ON member.entity_id = revision.entity_id
-                AND member.record_id = revision.record_id
-                AND member.record_revision = revision.record_revision
-              WHERE flip.history_choice = 'erase-and-rebaseline'
-                AND revision.snapshot IS NOT NULL
-                AND revision.erased_at IS NULL
-                AND revision.package_revision <> flip.boundary_package_revision
-                AND convert_from(revision.snapshot, 'UTF8')::jsonb ? flip.field_id
-                AND (
-                    member.commit_position < flip.history_commit_position
-                    OR member.commit_position IS NULL
-                )
-              GROUP BY flip.entity_id, revision.record_id
-              ORDER BY flip.entity_id, revision.record_id",
-            &[],
+            "WITH pending_boundaries AS (
+                 SELECT flip.entity_id, revision.record_id,
+                        max(revision.record_revision)::bigint AS pending_boundary
+                   FROM registry_internal.registry_field_encryption_flips AS flip
+                   JOIN registry_internal.registry_revisions AS revision
+                     ON revision.entity_id = flip.entity_id
+                   LEFT JOIN registry_internal.registry_revision_commit_members AS member
+                     ON member.entity_id = revision.entity_id
+                    AND member.record_id = revision.record_id
+                    AND member.record_revision = revision.record_revision
+                  WHERE flip.history_choice = 'erase-and-rebaseline'
+                    AND revision.snapshot IS NOT NULL
+                    AND revision.erased_at IS NULL
+                    AND revision.package_revision <> flip.boundary_package_revision
+                    AND convert_from(revision.snapshot, 'UTF8')::jsonb ? flip.field_id
+                    AND (
+                        member.commit_position < flip.history_commit_position
+                        OR member.commit_position IS NULL
+                    )
+                  GROUP BY flip.entity_id, revision.record_id
+             ), ranked AS (
+                 SELECT boundary.entity_id, boundary.record_id,
+                        revision.record_revision,
+                        row_number() OVER (
+                            PARTITION BY boundary.entity_id, boundary.record_id
+                            ORDER BY revision.record_revision
+                        ) AS revision_ordinal
+                   FROM pending_boundaries AS boundary
+                   JOIN registry_internal.registry_revisions AS revision
+                     ON revision.entity_id = boundary.entity_id
+                    AND revision.record_id = boundary.record_id
+                    AND revision.record_revision <= boundary.pending_boundary
+             )
+             SELECT entity_id, record_id, max(record_revision)::bigint
+               FROM ranked
+              WHERE revision_ordinal <= $1
+              GROUP BY entity_id, record_id
+              ORDER BY entity_id, record_id
+              LIMIT $2",
+            &[&MAX_ERASURE_REVISIONS, &MAX_ERASURE_TARGETS_PER_PAGE],
         )
         .await
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
@@ -1148,7 +1176,10 @@ async fn aggregate_lifecycle_counts(
                    FROM registry_internal.registry_audit
              )
              SELECT
-                 count(*) FILTER (
+                 count(DISTINCT COALESCE(
+                     record ->> 'targetRecordReference',
+                     record ->> 'targetReference'
+                 )) FILTER (
                      WHERE record ->> 'schema' = 'breg-history-erasure-audit/v1'
                  )::bigint,
                  COALESCE(sum((record ->> 'erasedRevisionCount')::bigint) FILTER (

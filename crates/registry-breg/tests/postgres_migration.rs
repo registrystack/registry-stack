@@ -873,7 +873,7 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
     let secrets = (0..5)
         .map(|index| format!("flip-secret-{index}"))
         .collect::<Vec<_>>();
-    seed_flip_rows(&database, &prior, &secrets).await;
+    seed_flip_rows(&database, &prior, &secrets, true).await;
 
     let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
     let statements = flip_compiler_statements(
@@ -984,14 +984,17 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
     );
     let sealed_step = step_snapshot(&database, &package, "seal-secret").await;
     assert_eq!(sealed_step.0, "completed");
-    assert_eq!(sealed_step.2, 5, "the resume seals every row exactly once");
+    assert_eq!(
+        sealed_step.2, 6,
+        "the resume processes every valued or null row exactly once"
+    );
     assert_eq!(
         step_snapshot(&database, &package, "drop-secret-plaintext")
             .await
             .0,
         "completed"
     );
-    assert_flip_sealed_at_rest(&database, &prior, &candidate).await;
+    assert_flip_sealed_at_rest(&database, &prior, &candidate, 1).await;
     assert_flip_journal(&database, &target).await;
     assert_flip_boundary_row(&database, &target, "erase-and-rebaseline", 5, 5, 5).await;
     database.cleanup().await;
@@ -1020,7 +1023,7 @@ async fn real_postgres_field_encryption_flip_retains_pre_boundary_plaintext_hist
     let secrets = (0..5)
         .map(|index| format!("retain-secret-{index}"))
         .collect::<Vec<_>>();
-    seed_flip_rows(&database, &prior, &secrets).await;
+    seed_flip_rows(&database, &prior, &secrets, false).await;
 
     let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
     let statements = flip_compiler_statements(
@@ -1055,7 +1058,7 @@ async fn real_postgres_field_encryption_flip_retains_pre_boundary_plaintext_hist
         .expect("the retained-history flip applies");
     assert_ready_target(&database, &target).await;
     assert_eq!(target.schema_fingerprint, target_fingerprint);
-    assert_flip_sealed_at_rest(&database, &prior, &candidate).await;
+    assert_flip_sealed_at_rest(&database, &prior, &candidate, 0).await;
     assert_flip_journal(&database, &target).await;
     assert_flip_boundary_row(&database, &target, "retain-plaintext-history", 5, 5, 5).await;
     let retained = database
@@ -1112,7 +1115,7 @@ async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value
         "unique-secret-3".to_owned(),
         "unique-secret-4".to_owned(),
     ];
-    seed_flip_rows(&database, &prior, &secrets).await;
+    seed_flip_rows(&database, &prior, &secrets, false).await;
 
     let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
     let statements = flip_compiler_statements(
@@ -1228,7 +1231,7 @@ async fn real_postgres_field_encryption_flip_fails_closed_when_plaintext_returns
     let secrets = (0..5)
         .map(|index| format!("predrop-secret-{index}"))
         .collect::<Vec<_>>();
-    seed_flip_rows(&database, &prior, &secrets).await;
+    seed_flip_rows(&database, &prior, &secrets, false).await;
 
     let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
     let statements = flip_compiler_statements(
@@ -2228,7 +2231,12 @@ async fn apply_flip(
 /// Seeds plaintext rows the flip must seal, each with the journal revision a
 /// live registry would already hold for it, so the sealing journals a real
 /// pre-boundary binding instead of fabricating one mid-apply.
-async fn seed_flip_rows(database: &TestDatabase, registry: &CompiledRegistry, secrets: &[String]) {
+async fn seed_flip_rows(
+    database: &TestDatabase,
+    registry: &CompiledRegistry,
+    secrets: &[String],
+    include_null_secret: bool,
+) {
     let entity = &registry.entities()["asset"];
     let table = quote(&entity.physical_table);
     let code = quote(&entity.fields["code"].physical_name);
@@ -2263,6 +2271,25 @@ async fn seed_flip_rows(database: &TestDatabase, registry: &CompiledRegistry, se
             .await
             .expect("administrator seeds a flip row");
     }
+    if include_null_secret {
+        let index = secrets.len();
+        database
+            .admin
+            .execute(
+                &format!(
+                    "INSERT INTO registry_data.{table}
+                         (record_id, active_package_revision, {code}, {secret})
+                     VALUES ($1, $2, $3, NULL)"
+                ),
+                &[
+                    &Uuid::from_u128(index as u128 + 1),
+                    &active_revision,
+                    &format!("c{index}"),
+                ],
+            )
+            .await
+            .expect("administrator seeds a null flip row");
+    }
     let (mut migration, migration_task) = database.connect_migration().await;
     let transaction = migration
         .transaction()
@@ -2291,6 +2318,28 @@ async fn seed_flip_rows(database: &TestDatabase, registry: &CompiledRegistry, se
             )
             .await
             .expect("flip seed revision inserts");
+    }
+    if include_null_secret {
+        let index = secrets.len();
+        let record_id = Uuid::from_u128(index as u128 + 1);
+        let snapshot = canonical(&serde_json::json!({"code": format!("c{index}")}));
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_revisions
+                     (entity_id, record_id, record_reference, record_revision,
+                      predecessor_revision, record_lifecycle, package_revision, operation_id,
+                      mutation_kind, principal_reference, request_reference, snapshot)
+                 VALUES ('asset', $1, $2, 1, NULL, 'active', $3, 'op-1',
+                         'create', 'actor:hash', 'request:hash', $4)",
+                &[
+                    &record_id,
+                    &format!("asset:{record_id}"),
+                    &active_revision,
+                    &snapshot,
+                ],
+            )
+            .await
+            .expect("null flip seed revision inserts");
     }
     transaction
         .commit()
@@ -2326,6 +2375,7 @@ async fn assert_flip_sealed_at_rest(
     database: &TestDatabase,
     prior: &CompiledRegistry,
     candidate: &CompiledRegistry,
+    expected_null_rows: usize,
 ) {
     let entity = &candidate.entities()["asset"];
     let table = quote(&entity.physical_table);
@@ -2348,9 +2398,18 @@ async fn assert_flip_sealed_at_rest(
         .expect("sealed rows read");
     assert!(!rows.is_empty());
     let mut blind_indexes = BTreeSet::new();
+    let mut null_rows = 0;
     for row in &rows {
-        let envelope: Vec<u8> = row.get(0);
-        let blind: Vec<u8> = row.get(1);
+        let envelope: Option<Vec<u8>> = row.get(0);
+        let blind: Option<Vec<u8>> = row.get(1);
+        let (envelope, blind) = match (envelope, blind) {
+            (Some(envelope), Some(blind)) => (envelope, blind),
+            (None, None) => {
+                null_rows += 1;
+                continue;
+            }
+            _ => panic!("an absent envelope cannot retain a blind index"),
+        };
         assert_eq!(
             envelope.first(),
             Some(&1),
@@ -2372,6 +2431,10 @@ async fn assert_flip_sealed_at_rest(
             "distinct plaintexts keep distinct blind indexes"
         );
     }
+    assert_eq!(
+        null_rows, expected_null_rows,
+        "a null plaintext remains an absent envelope and blind index"
+    );
     let prior_entity = &prior.entities()["asset"];
     let dropped = database
         .admin

@@ -19,7 +19,11 @@ use crate::model::{CompiledEntity, CompiledRegistry};
 
 pub const HISTORY_SCHEMA_ENCODING_VERSION: &str = "breg-history-schema-v1";
 pub const MAX_HISTORY_SCHEMA_DESCRIPTOR_BYTES: usize = 2 * 1024 * 1024;
-pub const MAX_HISTORY_SNAPSHOT_BYTES: usize = 2 * 1024 * 1024;
+/// Internal revision snapshots retain encrypted members as tagged base64
+/// envelopes. Reserve half again as much space as the public 2 MiB mutation
+/// request bound for that deterministic expansion while keeping history reads
+/// and stored rows under one hard ceiling.
+pub const MAX_HISTORY_SNAPSHOT_BYTES: usize = 3 * 1024 * 1024;
 /// The member name an encrypted stored field records in a revision snapshot.
 /// It matches `registry_platform_crypto::field_encryption::ENVELOPE_MEMBER_TAG`,
 /// which this always-compiled module cannot reach: the crypto crate is a

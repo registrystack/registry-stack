@@ -57,6 +57,13 @@ use super::{
 const MAX_VERIFIED_DDL_STATEMENTS: usize = 1024;
 const MAX_VERIFIED_DDL_STATEMENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_VERIFIED_DDL_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// Final field-encryption verification must inspect every affected row without
+/// materializing an entity in process memory. A live envelope is bounded near
+/// 64 KiB, keeping one page near 32 MiB at its declared maximum.
+const FIELD_ENCRYPTION_LIVE_VERIFICATION_PAGE_SIZE: i64 = 512;
+/// Journal snapshots can reach 3 MiB, so use a smaller page that remains near
+/// 48 MiB even when every retained boundary snapshot is at its maximum size.
+const FIELD_ENCRYPTION_JOURNAL_VERIFICATION_PAGE_SIZE: i64 = 16;
 
 /// The finding reported when the live managed schema fingerprint differs from
 /// the one an expected package binds. Activation verification signals that
@@ -2608,108 +2615,147 @@ async fn verify_field_encryption_content(
         })
         .unwrap_or_default();
     let live_sql = format!(
-        "SELECT record_id::text, {envelope_column}{blind_selection}, {plaintext_projection}
+        "SELECT record_id, {envelope_column}{blind_selection}, {plaintext_projection}
            FROM registry_data.{}
+          WHERE ($1::uuid IS NULL OR record_id > $1::uuid)
           ORDER BY record_id",
         table.quoted()
     );
-    let live_rows = transaction
-        .query(&live_sql, &[])
-        .await
-        .map_err(|_| PostgresKernelError::Connection)?;
-    for row in &live_rows {
-        let record_id: String = row
-            .try_get(0)
-            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
-        let envelope: Option<Vec<u8>> = row
-            .try_get(1)
-            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
-        let blind: Option<Vec<u8>> = if field.blind.is_some() {
-            Some(
-                row.try_get(2)
-                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
+    let live_sql = format!("{live_sql} LIMIT $2");
+    let mut after_record_id: Option<Uuid> = None;
+    loop {
+        let live_rows = transaction
+            .query(
+                &live_sql,
+                &[
+                    &after_record_id,
+                    &FIELD_ENCRYPTION_LIVE_VERIFICATION_PAGE_SIZE,
+                ],
             )
-        } else {
-            None
-        };
-        let plaintext_column_index = if field.blind.is_some() { 3 } else { 2 };
-        let plaintext = row
-            .try_get::<_, Option<Value>>(plaintext_column_index)
-            .map_err(|_| PostgresKernelError::RegistryUnavailable)?
-            .unwrap_or(Value::Null);
-        if !plaintext.is_null() {
-            // The live row still holds plaintext this step was required to seal.
-            return Err(PostgresKernelError::RegistryUnavailable);
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+        if live_rows.is_empty() {
+            break;
         }
-        let Some(envelope) = envelope else {
-            if blind.is_some() {
+        for row in &live_rows {
+            let record_uuid: Uuid = row
+                .try_get(0)
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+            let record_id = record_uuid.to_string();
+            let envelope: Option<Vec<u8>> = row
+                .try_get(1)
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+            let blind: Option<Vec<u8>> = if field.blind.is_some() {
+                row.try_get(2)
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?
+            } else {
+                None
+            };
+            let plaintext_column_index = if field.blind.is_some() { 3 } else { 2 };
+            let plaintext = row
+                .try_get::<_, Option<Value>>(plaintext_column_index)
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)?
+                .unwrap_or(Value::Null);
+            if !plaintext.is_null() {
+                // The live row still holds plaintext this step was required to seal.
                 return Err(PostgresKernelError::RegistryUnavailable);
             }
-            continue;
-        };
-        let opened = service
-            .open(entity_id, field_id, &record_id, &envelope)
-            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
-        if let Some(blind_config) = field.blind {
-            let plaintext = String::from_utf8(opened.to_vec())
+            let Some(envelope) = envelope else {
+                if blind.is_some() {
+                    return Err(PostgresKernelError::RegistryUnavailable);
+                }
+                after_record_id = Some(record_uuid);
+                continue;
+            };
+            let opened = service
+                .open(entity_id, field_id, &record_id, &envelope)
                 .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
-            let expected = service.blind_index(
-                entity_id,
-                field_id,
-                &FieldEncryptionService::normalize(&blind_config.normalization, &plaintext),
-            );
-            match blind {
-                Some(stored) if stored.as_slice() == expected.as_slice() => {}
-                _ => return Err(PostgresKernelError::RegistryUnavailable),
+            if let Some(blind_config) = field.blind {
+                let plaintext = String::from_utf8(opened.to_vec())
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+                let expected = service.blind_index(
+                    entity_id,
+                    field_id,
+                    &FieldEncryptionService::normalize(&blind_config.normalization, &plaintext),
+                );
+                match blind {
+                    Some(stored) if stored.as_slice() == expected.as_slice() => {}
+                    _ => return Err(PostgresKernelError::RegistryUnavailable),
+                }
+            } else if blind.is_some() {
+                return Err(PostgresKernelError::RegistryUnavailable);
             }
-        } else if blind.is_some() {
-            return Err(PostgresKernelError::RegistryUnavailable);
+            verification.sealed_rows = verification
+                .sealed_rows
+                .checked_add(1)
+                .ok_or(PostgresKernelError::RegistryUnavailable)?;
+            after_record_id = Some(record_uuid);
         }
-        verification.sealed_rows = verification
-            .sealed_rows
-            .checked_add(1)
-            .ok_or(PostgresKernelError::RegistryUnavailable)?;
     }
 
     // Journal rows this apply wrote at the target revision must carry the
     // tagged envelope member and authenticate; a plaintext member at or after
     // the boundary is the masquerade direction and fails closed.
-    let journal_sql = "SELECT record_id::text, snapshot
+    let journal_sql = "SELECT record_id, record_revision, snapshot
                          FROM registry_internal.registry_revisions
                         WHERE entity_id = $1
                           AND package_revision = $2
-                        ORDER BY record_id";
-    let journal_rows = transaction
-        .query(journal_sql, &[&entity_id, &target_package_revision])
-        .await
-        .map_err(|_| PostgresKernelError::Connection)?;
-    for row in &journal_rows {
-        let record_id: String = row
-            .try_get(0)
-            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
-        let snapshot: Option<Vec<u8>> = row
-            .try_get(1)
-            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
-        let Some(snapshot) = snapshot else {
-            continue;
-        };
-        let snapshot: Value = serde_json::from_slice(&snapshot)
-            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
-        let Some(member) = snapshot.get(field_id) else {
-            continue;
-        };
-        let Some(envelope) =
-            registry_platform_crypto::field_encryption::parse_envelope_member(member)
-        else {
-            return Err(PostgresKernelError::RegistryUnavailable);
-        };
-        service
-            .open(entity_id, field_id, &record_id, &envelope)
-            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
-        verification.sealed_journal_rows = verification
-            .sealed_journal_rows
-            .checked_add(1)
-            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+                          AND (
+                              $3::uuid IS NULL
+                              OR (record_id, record_revision) > ($3::uuid, $4::bigint)
+                          )
+                        ORDER BY record_id, record_revision
+                        LIMIT $5";
+    let mut after_journal_record_id: Option<Uuid> = None;
+    let mut after_journal_revision: Option<i64> = None;
+    loop {
+        let journal_rows = transaction
+            .query(
+                journal_sql,
+                &[
+                    &entity_id,
+                    &target_package_revision,
+                    &after_journal_record_id,
+                    &after_journal_revision,
+                    &FIELD_ENCRYPTION_JOURNAL_VERIFICATION_PAGE_SIZE,
+                ],
+            )
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+        if journal_rows.is_empty() {
+            break;
+        }
+        for row in &journal_rows {
+            let record_uuid: Uuid = row
+                .try_get(0)
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+            let record_revision: i64 = row
+                .try_get(1)
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+            let snapshot: Option<Vec<u8>> = row
+                .try_get(2)
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+            if let Some(snapshot) = snapshot {
+                let snapshot: Value = serde_json::from_slice(&snapshot)
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+                if let Some(member) = snapshot.get(field_id) {
+                    let Some(envelope) =
+                        registry_platform_crypto::field_encryption::parse_envelope_member(member)
+                    else {
+                        return Err(PostgresKernelError::RegistryUnavailable);
+                    };
+                    service
+                        .open(entity_id, field_id, &record_uuid.to_string(), &envelope)
+                        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+                    verification.sealed_journal_rows = verification
+                        .sealed_journal_rows
+                        .checked_add(1)
+                        .ok_or(PostgresKernelError::RegistryUnavailable)?;
+                }
+            }
+            after_journal_record_id = Some(record_uuid);
+            after_journal_revision = Some(record_revision);
+        }
     }
 
     let accepted_plaintext_journal = transaction

@@ -1975,6 +1975,18 @@ fn validate_entity_fields(
     entities: &BTreeMap<String, EntitySource>,
     errors: &mut Vec<Diagnostic>,
 ) {
+    if entity.fields.iter().filter(|field| field.encrypted).count()
+        > crate::contract::MAX_ENCRYPTED_FIELDS_PER_ENTITY
+    {
+        errors.push(Diagnostic::error(
+            "entity.encrypted_fields.too_many",
+            format!("entities[{}].fields", entity.id),
+            &format!(
+                "an entity may declare at most {} encrypted fields so every valid Phase 1 plaintext snapshot has bounded envelope expansion",
+                crate::contract::MAX_ENCRYPTED_FIELDS_PER_ENTITY
+            ),
+        ));
+    }
     let mut fields = BTreeSet::new();
     let mut roles = BTreeMap::new();
     for field in &entity.fields {

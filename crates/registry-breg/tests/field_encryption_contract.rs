@@ -12,8 +12,9 @@ mod membership_fixture;
 use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{
     parse_project_json, ActionInputSource, Classification, DerivedFieldSource, FieldSource,
-    ModuleAssetSource, NormalizationStep, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
-    MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
+    ModuleAssetSource, NormalizationStep, MAX_ENCRYPTED_FIELDS_PER_ENTITY,
+    MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES, MAX_ENCRYPTED_FIELD_STRING_CHARACTERS,
+    MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
 };
 use registry_breg::generated_ddl::field_lookup_index_name;
 use registry_breg::{CompileFailure, CompiledRegistry};
@@ -332,6 +333,27 @@ fn encrypted_field_bounds_fit_the_phase_one_seal_limit() {
 }
 
 #[test]
+fn encrypted_field_count_bounds_snapshot_envelope_overhead() {
+    let mut source = encrypted_project();
+    let fields = source["entities"][0]["fields"].as_array_mut().unwrap();
+    for index in 1..=MAX_ENCRYPTED_FIELDS_PER_ENTITY {
+        fields.push(json!({
+            "id":format!("secret-{index}"),
+            "type":"date",
+            "classification":"restricted",
+            "encrypted":true
+        }));
+    }
+    expect_code(&source, "entity.encrypted_fields.too_many");
+
+    source["entities"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    compile_value(&source).expect("the Phase 1 encrypted-field ceiling remains usable");
+}
+
+#[test]
 fn encrypted_lookup_refuses_structured_values_and_unbounded_normalization() {
     let mut structured = encrypted_project();
     structured["entities"][0]["fields"][1] = json!({
@@ -498,6 +520,40 @@ fn derived_sql_cannot_reference_encrypted_columns() {
     )
     .unwrap();
     assert!(accepting.entities()["case"].fields.contains_key("secret"));
+}
+
+#[test]
+fn derived_sql_resolves_qualified_columns_to_their_source_relation() {
+    let mut source = encrypted_project();
+    source["entities"].as_array_mut().unwrap().push(json!({
+        "id":"public-case","primaryDataset":"test-dataset","route":"public-cases",
+        "mutationMode":"mutable",
+        "fields":[
+            {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
+            {"id":"secret","type":"string","maxLength":256,"classification":"restricted"}
+        ]
+    }));
+    source["entities"][0]["derived"] = json!([{
+        "id":"case-facts","sql":"sql/case-facts.sql","key":"id",
+        "fields":[{"id":"fact-count","type":"int64","classification":"internal"}]
+    }]);
+
+    for sql in [
+        "SELECT public_case.id AS id, count(public_case.secret) AS fact_count \
+         FROM registry_source.public_case GROUP BY public_case.id",
+        "SELECT p.id AS id, count(p.secret) AS fact_count \
+         FROM registry_source.public_case p GROUP BY p.id",
+    ] {
+        compile_with_assets(
+            &source,
+            vec![ModuleAssetSource {
+                module: None,
+                path: "sql/case-facts.sql".into(),
+                bytes: sql.as_bytes().to_vec(),
+            }],
+        )
+        .expect("the qualified secret name belongs to the plaintext source relation");
+    }
 }
 
 fn change_request_project() -> Value {

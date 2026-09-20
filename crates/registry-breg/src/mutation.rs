@@ -49,6 +49,7 @@ use crate::history_commit::{
     RevisionCommitMember,
 };
 use crate::history_context::{ChangeContext, CommitOrigin};
+use crate::history_schema::MAX_HISTORY_SNAPSHOT_BYTES;
 use crate::idempotency::{
     insert_result, lock_and_load, resolve_action_binding, resolve_binding,
     resolve_hook_action_binding, resolve_hook_key_reference, ActionIdempotencyBinding,
@@ -85,7 +86,7 @@ pub async fn install_mutation_schema(
     runtime_role: &SqlIdentifier,
 ) -> Result<(), MutationError> {
     migration
-        .batch_execute(
+        .batch_execute(&format!(
             "CREATE TABLE IF NOT EXISTS registry_internal.registry_revisions (
                  entity_id text NOT NULL CHECK (entity_id <> ''),
                  record_id uuid NOT NULL,
@@ -118,14 +119,14 @@ pub async fn install_mutation_schema(
              ALTER TABLE registry_internal.registry_revisions
                  ADD CONSTRAINT registry_revisions_snapshot_bounds CHECK (
                      snapshot IS NULL OR
-                     (octet_length(snapshot) > 0 AND octet_length(snapshot) <= 2097152)
+                     (octet_length(snapshot) > 0 AND octet_length(snapshot) <= {MAX_HISTORY_SNAPSHOT_BYTES})
                  ),
                  ADD CONSTRAINT registry_revisions_erasure_shape CHECK (
                      (snapshot IS NULL) = (erased_at IS NOT NULL)
                  ),
                  ADD CONSTRAINT registry_revisions_mutation_kind_check
-                 CHECK (mutation_kind IN ('create', 'patch', 'tombstone', 'migration'))",
-        )
+                 CHECK (mutation_kind IN ('create', 'patch', 'tombstone', 'migration'))"
+        ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
     registry_platform_hooks::delivery_schema::install(migration, crate::webhook::DELIVERY_SCHEMA)

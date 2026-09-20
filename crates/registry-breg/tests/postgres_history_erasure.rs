@@ -1694,6 +1694,98 @@ async fn erasure_refuses_more_than_ten_thousand_actual_target_revisions() {
     database.cleanup().await;
 }
 
+/// The field-encryption lifecycle composes the generic 10,000-revision
+/// transaction bound instead of inheriting its refusal. The flipped member is
+/// deliberately sparse at revision 10,001: choosing a chunk boundary by
+/// matching revisions alone would still hand all 10,001 retained revisions to
+/// the first generic erasure transaction.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn field_encryption_erasure_chunks_sparse_oversized_record_history() {
+    let database = TestDatabase::create(4).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let registry = compiled_registry();
+    let expected = install_ready_history_registry(&database, &mut migration, &registry).await;
+    let lock_key = RegistryLockKey::derive(&expected.package_id).expect("lock key derives");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x79; 32].into())
+        .expect("test owns a keyed audit profile");
+    let record_id = Uuid::parse_str("018feaa0-68f9-4a45-b9e3-58436df07afe").unwrap();
+
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("migration can begin transaction");
+    insert_revision_range(&transaction, record_id, 10_001).await;
+    let final_snapshot = registry_platform_canonical_json::canonicalize_json(&json!({
+        "person": "00000000-0000-4000-8000-000000000010",
+        "household": "household-bulk",
+        "details": "sparse-plaintext-canary",
+        "valid-from": "2026-06-01",
+        "valid-to": null
+    }))
+    .expect("sparse final snapshot canonicalizes");
+    transaction
+        .execute(
+            "UPDATE registry_internal.registry_revisions
+                SET snapshot = $1
+              WHERE entity_id = $2
+                AND record_id = $3
+                AND record_revision = 10001",
+            &[&final_snapshot, &ENTITY, &record_id],
+        )
+        .await
+        .expect("sparse flipped member inserts");
+    insert_erase_field_flip(&transaction, "details").await;
+    transaction
+        .commit()
+        .await
+        .expect("oversized sparse history commits");
+
+    let outcome = erase_field_encryption_history(
+        &mut migration,
+        FieldEncryptionHistoryErasureRequest {
+            expected: &expected,
+            migration_role: &database.migration_role,
+            lock_key,
+            timeouts: HistoryErasureTimeouts::new(Duration::from_secs(30), Duration::from_secs(30))
+                .unwrap(),
+            audit_profile: &audit_profile,
+            operator_reference: "field-encryption-operator",
+            reason: "erase oversized sparse pre-flip history",
+            registry: &registry,
+        },
+    )
+    .await
+    .expect("field-encryption erasure chunks an oversized record");
+    assert_eq!(outcome.erased_record_count, 1);
+    assert_eq!(outcome.erased_revision_count, 10_001);
+
+    let state = migration
+        .query_one(
+            "SELECT
+                 (SELECT count(*)::bigint
+                    FROM registry_internal.registry_revisions
+                   WHERE entity_id = $1 AND record_id = $2),
+                 (SELECT count(*)::bigint
+                    FROM registry_internal.registry_audit
+                   WHERE convert_from(envelope, 'UTF8')::jsonb #>> '{record,schema}'
+                             = 'breg-history-erasure-audit/v1'
+                     AND convert_from(envelope, 'UTF8')::jsonb #>> '{record,lifecycleReference}'
+                             IS NOT NULL)",
+            &[&ENTITY, &record_id],
+        )
+        .await
+        .expect("chunked erasure state resolves");
+    assert_eq!(state.get::<_, i64>(0), 0);
+    assert_eq!(
+        state.get::<_, i64>(1),
+        2,
+        "the lifecycle uses two bounded generic erasure transactions"
+    );
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
 /// A cached batch response whose stored bytes are not readable JSON refuses
 /// the erasure as the corruption it is. Reporting it as storage unavailability
 /// would hide the unreadable row behind an outage an operator would retry.

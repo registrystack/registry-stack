@@ -7,6 +7,8 @@ use serde_json::{Map, Value};
 use tokio_postgres::Transaction;
 use uuid::Uuid;
 
+use crate::history_schema::MAX_HISTORY_SNAPSHOT_BYTES;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum RevisionError {
     #[error("revision snapshot is invalid")]
@@ -16,7 +18,12 @@ pub enum RevisionError {
 }
 
 pub(crate) fn canonical_snapshot(data: &Map<String, Value>) -> Result<Vec<u8>, RevisionError> {
-    canonicalize_json(&Value::Object(data.clone())).map_err(|_| RevisionError::InvalidSnapshot)
+    let snapshot = canonicalize_json(&Value::Object(data.clone()))
+        .map_err(|_| RevisionError::InvalidSnapshot)?;
+    if snapshot.len() > MAX_HISTORY_SNAPSHOT_BYTES {
+        return Err(RevisionError::InvalidSnapshot);
+    }
+    Ok(snapshot)
 }
 
 pub(crate) struct RevisionInsert<'a> {
@@ -64,7 +71,7 @@ pub(crate) async fn insert_revision(
         || revision.principal_reference.is_empty()
         || revision.request_reference.is_empty()
         || revision.snapshot.is_empty()
-        || revision.snapshot.len() > 2 * 1024 * 1024
+        || revision.snapshot.len() > MAX_HISTORY_SNAPSHOT_BYTES
     {
         return Err(RevisionError::InvalidSnapshot);
     }
@@ -112,7 +119,7 @@ pub(crate) async fn insert_internal_migration_revision(
         || revision.system_origin.is_empty()
         || revision.migration_reference.is_empty()
         || revision.snapshot.is_empty()
-        || revision.snapshot.len() > 2 * 1024 * 1024
+        || revision.snapshot.len() > MAX_HISTORY_SNAPSHOT_BYTES
     {
         return Err(RevisionError::InvalidSnapshot);
     }
@@ -144,4 +151,58 @@ pub(crate) async fn insert_internal_migration_revision(
         return Err(RevisionError::Unavailable);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract::MAX_ENCRYPTED_FIELDS_PER_ENTITY;
+    use registry_platform_crypto::field_encryption::{
+        envelope_member_json, MAX_FIELD_ENVELOPE_BYTES, MAX_FIELD_PLAINTEXT_BYTES,
+    };
+
+    #[test]
+    fn encrypted_snapshot_expansion_has_bounded_headroom() {
+        const PLAINTEXT_SNAPSHOT_BYTES: usize = 2 * 1024 * 1024;
+        // Per encrypted member: 33 envelope bytes become 44 base64 bytes,
+        // the tagged JSON object adds 24, and base64 padding adds fewer than
+        // four. Seventy-two is therefore a conservative fixed allowance.
+        const MAX_ENVELOPE_MEMBER_OVERHEAD: usize = 72;
+        let worst_case_expanded = 4 * PLAINTEXT_SNAPSHOT_BYTES.div_ceil(3)
+            + MAX_ENCRYPTED_FIELDS_PER_ENTITY * MAX_ENVELOPE_MEMBER_OVERHEAD;
+        assert!(worst_case_expanded <= MAX_HISTORY_SNAPSHOT_BYTES);
+
+        let plaintext_bytes_per_field =
+            (PLAINTEXT_SNAPSHOT_BYTES - 4096) / MAX_ENCRYPTED_FIELDS_PER_ENTITY;
+        let plaintext = (0..MAX_ENCRYPTED_FIELDS_PER_ENTITY)
+            .map(|index| {
+                (
+                    format!("secret-{index}"),
+                    Value::String("x".repeat(plaintext_bytes_per_field)),
+                )
+            })
+            .collect::<Map<_, _>>();
+        let plaintext_snapshot = canonicalize_json(&Value::Object(plaintext)).unwrap();
+        assert!(plaintext_snapshot.len() <= PLAINTEXT_SNAPSHOT_BYTES);
+        assert!(PLAINTEXT_SNAPSHOT_BYTES - plaintext_snapshot.len() < 8 * 1024);
+
+        let envelope_overhead = MAX_FIELD_ENVELOPE_BYTES - MAX_FIELD_PLAINTEXT_BYTES;
+        let envelope = vec![0x5a; plaintext_bytes_per_field + envelope_overhead];
+        let data = (0..MAX_ENCRYPTED_FIELDS_PER_ENTITY)
+            .map(|index| (format!("secret-{index}"), envelope_member_json(&envelope)))
+            .collect::<Map<_, _>>();
+
+        let snapshot = canonical_snapshot(&data).expect("expanded snapshot remains admissible");
+        assert!(snapshot.len() > 2 * 1024 * 1024);
+        assert!(snapshot.len() <= MAX_HISTORY_SNAPSHOT_BYTES);
+
+        let oversized = Map::from_iter([(
+            "value".to_owned(),
+            Value::String("x".repeat(MAX_HISTORY_SNAPSHOT_BYTES)),
+        )]);
+        assert_eq!(
+            canonical_snapshot(&oversized),
+            Err(RevisionError::InvalidSnapshot)
+        );
+    }
 }

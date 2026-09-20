@@ -1126,6 +1126,10 @@ const _: () = assert!(
 /// Maximum authored characters for encrypted string and text fields. One
 /// Unicode scalar value can occupy four UTF-8 bytes.
 pub const MAX_ENCRYPTED_FIELD_STRING_CHARACTERS: u32 = MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES / 4;
+/// Maximum encrypted members one entity may retain in a revision snapshot.
+/// Together with the 3 MiB internal history ceiling, this bounds the fixed
+/// envelope overhead above the 2 MiB canonical plaintext snapshot budget.
+pub const MAX_ENCRYPTED_FIELDS_PER_ENTITY: usize = 128;
 /// Maximum number of transformations in one blind-index normalization pipeline.
 pub const MAX_FIELD_LOOKUP_NORMALIZATION_STEPS: usize = 8;
 
