@@ -12,8 +12,8 @@ compiled batch route an ordinary batch client uses, one chunk at a time.
 
 Creating a run binds the active package revision, the schema fingerprint, the
 entity, the selected access profile, the create-or-patch operation, the input
-digest and length, the chunking algorithm `greedy-canonical-http-batch-v1`, and
-the expected item and chunk counts. A run refuses any other algorithm, so
+digest and a positive length, the chunking algorithm
+`greedy-canonical-http-batch-v1`, and the expected item and chunk counts. A run refuses any other algorithm, so
 remaining source bytes are never reinterpreted under a different chunking
 contract. `maximumItems` and `maximumBytes` on the run are the compiled batch
 bounds every chunk stays inside. `maximumBytes` bounds the chunk's canonical
@@ -39,7 +39,9 @@ profile, and patch only on a mutable entity. The refused run never exists.
 A submission names the run, the expected chunk index, the chunk digest, and the
 rolling input-prefix digest. The three digest and index members must match the
 run's committed prefix exactly; a divergent value is refused and nothing is
-written. Every item carries the run's announced operation, and the final chunk
+written. Every item carries the run's announced operation and the closed
+create-or-patch batch item shape, and the maintained clients refuse an item
+outside that shape before the chunk encodes. The final chunk
 totals the announced item count exactly and binds the whole-input digest, so a
 run never completes on an underrun or a mixed-operation chunk. The ingestion
 routes take no `Idempotency-Key` header: the server derives the attempt key
@@ -75,7 +77,9 @@ committed chunk replays its receipt in any run status, including blocked: the
 binding governs only chunks the checkpoint has not covered, and the replay is
 compared against the run's own stored bounds, so a successor package that
 lowers the batch ceilings cannot strand the committed prefix. A cancelled run
-keeps its counts and its audit. The last attempt is classified as
+keeps its counts and its audit; cancellation records the last attempt as
+`refused` with no chunk index, because cancellation is not a chunk attempt.
+The last attempt is classified as
 `committed`, `replayed`, `invalidItem`, `refused`, `bindingChanged`,
 `chunkMismatch`, `runNotOpen`, or `unavailable`.
 
@@ -121,12 +125,26 @@ envelopes exactly as the ordinary batch route stores them, and every release
 path, the fresh answer, the replay, and the recovery read, opens those members
 at the same serve edge the batch route opens its answers. The stored receipt
 bytes stay sealed, and a process without key state, or one whose open fails,
-answers `service.unavailable` instead of releasing an envelope. A retained
-receipt never releases a member the active package no longer declares: a
-successor package that renames or retires an encrypted field's API name leaves
-any replay or recovery of that receipt answering the closed
-`service.unavailable` problem with nothing released and the envelope sealed at
-rest, rather than serving sealed ciphertext.
+answers `service.unavailable` instead of releasing an envelope.
+
+Every release of a retained receipt re-projects the stored answer through the
+readable fields the active package grants the run's profile: a successor that
+revokes or renames a readable field drops that member from every later
+release, while the members the successor still grants keep serving, encrypted
+ones included. A member that still parses as a sealed envelope in a receipt
+stored under a package the database no longer holds active fails the release
+closed with `service.unavailable`, unless the active entity declares that
+member's field encrypted; a successor that retires the encryption itself
+therefore still answers closed, and the envelope stays sealed at rest. An
+envelope-shaped value stored under the package the database still holds active
+is caller data, never refused for its shape, and the ordinary batch route's
+idempotency answer never takes that closed check at all, because its key binds
+the package revision that produced it.
+
+Releasing a retained receipt is a protected read: a serving instance whose
+package a successor retired answers `service.unavailable` on the replay and
+the recovery read instead of releasing, and a current instance serves the
+receipt the committed prefix retains.
 
 ## Contract material
 
