@@ -921,6 +921,29 @@ fn review_authorities_accept_one_refreshing_or_static_credential() {
 }
 
 #[test]
+fn review_authority_completion_recipient_accepts_the_shared_byte_bound() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let recipient = "x".repeat(256);
+    let valid = format!(
+        "{base}reviewAuthorities:\n  casework-a:\n    endpoint: https://casework.example/reviews/\n    profile: producer\n    producerId: registry-producer\n    recoveryDays: 7\n    tokenRef: secret:file/opaque-review-token\n    completionTokenRef: secret:file/review-completion-token\n    completionRecipient: {recipient}\n"
+    );
+    parse_runtime_config_with_env(&valid, env_lookup)
+        .expect("a completion recipient at the shared byte bound is accepted");
+
+    let over_bound = valid.replace(&recipient, &"x".repeat(257));
+    assert_eq!(
+        parse_runtime_config_with_env(&over_bound, env_lookup)
+            .expect_err("a completion recipient over the shared byte bound is refused"),
+        RuntimeConfigError::InvalidBinding
+    );
+}
+
+#[test]
 fn metrics_listener_is_absent_by_default_and_optional() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(

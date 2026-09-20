@@ -2232,9 +2232,7 @@ impl ReviewAuthorityConfig {
         let completion = match (raw.completion_token_ref, raw.completion_recipient) {
             (None, None) => None,
             (Some(token_ref), Some(recipient))
-                if !recipient.trim().is_empty()
-                    && recipient.len() <= 128
-                    && !recipient.chars().any(char::is_control) =>
+                if crate::review_store::valid_completion_recipient(&recipient) =>
             {
                 Some((
                     parse_secret_reference(token_ref, RuntimeConfigError::InvalidBinding)?,

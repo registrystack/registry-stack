@@ -12314,7 +12314,7 @@ mod tests {
         for (format, expected) in [
             (
                 OutputFormat::Human,
-                "9 dependency checks passed.\n\
+                "10 dependency checks passed.\n\
                  \u{20}\u{20}runtimeConfig        pass\n\
                  \u{20}\u{20}package              pass\n\
                  \u{20}\u{20}database             pass\n\
@@ -12322,12 +12322,13 @@ mod tests {
                  \u{20}\u{20}cursor               pass\n\
                  \u{20}\u{20}authentication.oidc  pass\n\
                  \u{20}\u{20}eventDestinations    pass\n\
+                 \u{20}\u{20}reviewBindings       pass\n\
                  \u{20}\u{20}authentication       pass\n\
                  \u{20}\u{20}fieldEncryption      pass\n",
             ),
             (
                 OutputFormat::Json,
-                "{\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"eventDestinations\",\n    \"authentication\",\n    \"fieldEncryption\"\n  ]\n}\n",
+                "{\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"eventDestinations\",\n    \"reviewBindings\",\n    \"authentication\",\n    \"fieldEncryption\"\n  ]\n}\n",
             ),
         ] {
             let mut stdout = Vec::new();

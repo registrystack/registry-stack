@@ -10,7 +10,7 @@ use registry_breg::{Diagnostic, DiagnosticSeverity};
 /// The startup dependencies `prepare()` checks, in the order it checks them.
 /// Doctor only reports success once every one of these has passed, so this is
 /// what the passing report counts and names, one line per dependency.
-pub(crate) const CHECKED_DEPENDENCIES: [&str; 9] = [
+pub(crate) const CHECKED_DEPENDENCIES: [&str; 10] = [
     "runtimeConfig",
     "package",
     "database",
@@ -18,6 +18,7 @@ pub(crate) const CHECKED_DEPENDENCIES: [&str; 9] = [
     "cursor",
     "authentication.oidc",
     "eventDestinations",
+    "reviewBindings",
     "authentication",
     "fieldEncryption",
 ];
@@ -120,6 +121,11 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "eventDestinations",
             "the event destination bindings were refused",
         ),
+        StartupError::ReviewBindings => (
+            "startup.review_bindings.refused",
+            "reviewBindings",
+            "the retained review authority or executor bindings were refused",
+        ),
         StartupError::AttachmentStorage => (
             "startup.attachment_storage.refused",
             "attachmentStorage",
@@ -218,6 +224,7 @@ mod tests {
             StartupError::EventDestinations,
             StartupError::FieldEncryption,
             StartupError::FieldEncryptionCustody,
+            StartupError::ReviewBindings,
         ];
 
         let reported_paths: HashSet<String> = distinctly_checked
@@ -316,6 +323,11 @@ mod tests {
                 StartupError::FieldEncryptionCustody,
                 "startup.field_encryption.custody_refused",
                 "fieldEncryption",
+            ),
+            (
+                StartupError::ReviewBindings,
+                "startup.review_bindings.refused",
+                "reviewBindings",
             ),
             (
                 StartupError::Listener,

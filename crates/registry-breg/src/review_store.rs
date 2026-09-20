@@ -34,6 +34,13 @@ use crate::request_workflow::ProposalSnapshot;
 const SUBJECT_TYPE: &str = "change-request";
 const SUBMISSION_LEASE_SECONDS: i64 = 30;
 const MAX_APPLICATION_RESPONSE_BYTES: u64 = 256 * 1024;
+pub(crate) const MAXIMUM_COMPLETION_RECIPIENT_BYTES: usize = 256;
+
+pub(crate) fn valid_completion_recipient(recipient: &str) -> bool {
+    !recipient.trim().is_empty()
+        && recipient.len() <= MAXIMUM_COMPLETION_RECIPIENT_BYTES
+        && !recipient.chars().any(char::is_control)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReviewConfigurationError;
@@ -292,11 +299,9 @@ impl ReviewAuthorityClient {
             || completion_token.as_ref().is_some_and(|token| {
                 token.is_empty() || token.len() > 4096 || token.chars().any(char::is_control)
             })
-            || completion_recipient.as_ref().is_some_and(|recipient| {
-                recipient.trim().is_empty()
-                    || recipient.len() > 128
-                    || recipient.chars().any(char::is_control)
-            })
+            || completion_recipient
+                .as_ref()
+                .is_some_and(|recipient| !valid_completion_recipient(recipient))
         {
             return Err(ReviewConfigurationError);
         }
@@ -2485,6 +2490,37 @@ mod tests {
         assert_eq!(
             registry.completion_authority("outgoing-token", "registry-a"),
             None
+        );
+    }
+
+    #[test]
+    fn completion_recipient_accepts_the_shared_byte_bound() {
+        let at_bound = "x".repeat(MAXIMUM_COMPLETION_RECIPIENT_BYTES);
+        authority("casework-a", Some(("sender-a", &at_bound)));
+
+        let over_bound = "x".repeat(MAXIMUM_COMPLETION_RECIPIENT_BYTES + 1);
+        let client = ReviewClient::new(
+            registry_review_client::ReviewClientConfig::new(
+                "https://casework.example.test/".parse().expect("URL"),
+            )
+            .with_profile("producer"),
+        )
+        .expect("client");
+        assert!(
+            ReviewAuthorityClient::new(
+                "casework-a".to_owned(),
+                client,
+                Arc::new(
+                    registry_platform_httputil::StaticToken::new("outgoing-token".to_owned())
+                        .expect("outgoing token"),
+                ),
+                "registry-producer".to_owned(),
+                30,
+                Some(Zeroizing::new("sender-a".to_owned())),
+                Some(over_bound),
+            )
+            .is_err(),
+            "a completion recipient over the shared byte bound is refused"
         );
     }
 

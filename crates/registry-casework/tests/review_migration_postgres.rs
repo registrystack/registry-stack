@@ -41,6 +41,7 @@ const MIGRATIONS_1_TO_15: &[(i64, &str)] = &[
 ];
 const MIGRATION_16: &str = include_str!("../migrations/0016_unified_reviews.sql");
 const MIGRATION_17: &str = include_str!("../migrations/0017_unified_review_clock_runtime.sql");
+const MIGRATION_18: &str = include_str!("../migrations/0018_unified_review_retention.sql");
 
 struct TestSchema {
     admin: Client,
@@ -142,6 +143,18 @@ async fn apply_version_17(database: &mut Client) -> Result<(), Error> {
     transaction
         .execute(
             "INSERT INTO casework_schema_migrations(version, applied_at) VALUES(17, now())",
+            &[],
+        )
+        .await?;
+    transaction.commit().await
+}
+
+async fn apply_version_18(database: &mut Client) -> Result<(), Error> {
+    let transaction = database.transaction().await?;
+    transaction.batch_execute(MIGRATION_18).await?;
+    transaction
+        .execute(
+            "INSERT INTO casework_schema_migrations(version, applied_at) VALUES(18, now())",
             &[],
         )
         .await?;
@@ -332,6 +345,9 @@ async fn fresh_database_applies_the_full_migration_sequence() {
     apply_version_17(&mut fixture.database)
         .await
         .expect("apply unified review clock runtime migration");
+    apply_version_18(&mut fixture.database)
+        .await
+        .expect("apply unified review retention migration");
 
     let versions: Vec<i64> = fixture
         .database
@@ -344,7 +360,7 @@ async fn fresh_database_applies_the_full_migration_sequence() {
         .into_iter()
         .map(|row| row.get(0))
         .collect();
-    assert_eq!(versions, (1..=17).collect::<Vec<_>>());
+    assert_eq!(versions, (1..=18).collect::<Vec<_>>());
 
     let missing_tables: Vec<String> = fixture
         .database
@@ -375,6 +391,149 @@ async fn fresh_database_applies_the_full_migration_sequence() {
         missing_tables.is_empty(),
         "unified review migrations omitted tables: {missing_tables:?}"
     );
+
+    fixture.cleanup().await;
+}
+
+#[tokio::test]
+async fn retention_migration_backfills_review_ownership_and_author_keys_drafts() {
+    let mut fixture = TestSchema::create("review_retention_upgrade").await;
+    apply_versions_1_to_15(&mut fixture.database).await;
+    apply_version_16(&mut fixture.database)
+        .await
+        .expect("apply unified review migration");
+    apply_version_17(&mut fixture.database)
+        .await
+        .expect("apply unified review clock runtime migration");
+
+    let request_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    insert_review_request(&fixture.database, request_id, false).await;
+    insert_review_task(&fixture.database, task_id, request_id).await;
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests
+             SET lifecycle='approved',active_stage_index=NULL,terminal_at=now(),
+                 result_available_until=now()+interval '1 day',
+                 accountability_retained_until=now()+interval '30 days'
+             WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("settle pre-upgrade review");
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_review_accountability(
+                event_id,request_id,task_id,actor_ref,actor_issuer,actor_subject,profile_id,
+                decision,occurred_at,retained_until)
+             VALUES($1,$2,$3,'actor-ref','https://issuer.test','reviewer-a','staff',
+                    'approve',now()-interval '20 days',now()-interval '1 day')",
+            &[&Uuid::new_v4(), &request_id, &task_id],
+        )
+        .await
+        .expect("insert early-stage accountability row");
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_review_task_drafts(
+                task_id,actor_issuer,actor_subject,body,revision,updated_at)
+             VALUES($1,'https://issuer.test','reviewer-a','{}'::jsonb,1,now())",
+            &[&task_id],
+        )
+        .await
+        .expect("insert pre-upgrade draft");
+    let submission_digest = format!("sha256:{}", "a".repeat(64));
+    let producer_id = format!("producer-{request_id}");
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_idempotency(
+                issuer,subject,profile_id,operation,resource,idempotency_key,request_hash,
+                response,created_at)
+             VALUES
+                ('https://rotated-issuer.test','rotated-producer-service','producer','review.create',$1,
+                 'create-key',$2,NULL,now()),
+                ('https://issuer.test','producer-service','producer','review.note.add',$3,
+                 'note-key','sha256:note','{}'::jsonb,now())",
+            &[
+                &format!("review-producer:{producer_id}"),
+                &submission_digest,
+                &format!("review-request:{request_id}"),
+            ],
+        )
+        .await
+        .expect("insert pre-upgrade review idempotency");
+
+    apply_version_18(&mut fixture.database)
+        .await
+        .expect("apply unified review retention migration");
+    let owned_rows: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_idempotency WHERE review_request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("count backfilled review idempotency ownership")
+        .get(0);
+    assert_eq!(owned_rows, 2);
+    let aligned_accountability: bool = fixture
+        .database
+        .query_one(
+            "SELECT a.retained_until=r.accountability_retained_until
+             FROM casework_review_accountability a
+             JOIN casework_review_requests r USING(request_id)
+             WHERE r.request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("read aligned accountability deadline")
+        .get(0);
+    assert!(
+        aligned_accountability,
+        "migration anchors early decisions to terminal settlement retention"
+    );
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_review_task_drafts(
+                task_id,actor_issuer,actor_subject,body,revision,updated_at)
+             VALUES($1,'https://issuer.test','reviewer-b','{}'::jsonb,1,now())",
+            &[&task_id],
+        )
+        .await
+        .expect("retain a second author's draft for one task");
+    let draft_count: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_task_drafts WHERE task_id=$1",
+            &[&task_id],
+        )
+        .await
+        .expect("count author-keyed drafts")
+        .get(0);
+    assert_eq!(draft_count, 2);
+
+    let expanded = json!({"numbers": vec![1e100_f64; 1_000]});
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests SET context=$2 WHERE request_id=$1",
+            &[&request_id, &expanded],
+        )
+        .await
+        .expect("store safely expanded submitted context");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_task_drafts SET body=$2
+             WHERE task_id=$1 AND actor_subject='reviewer-a'",
+            &[&task_id, &expanded],
+        )
+        .await
+        .expect("store safely expanded draft");
 
     fixture.cleanup().await;
 }

@@ -44,9 +44,11 @@ const HOSTED_RESULT_MIGRATION: &str = include_str!("../migrations/0015_hosted_re
 const UNIFIED_REVIEWS_MIGRATION: &str = include_str!("../migrations/0016_unified_reviews.sql");
 const UNIFIED_REVIEW_CLOCK_RUNTIME_MIGRATION: &str =
     include_str!("../migrations/0017_unified_review_clock_runtime.sql");
+const UNIFIED_REVIEW_RETENTION_MIGRATION: &str =
+    include_str!("../migrations/0018_unified_review_retention.sql");
 
 /// Every schema version in ledger order.
-const MIGRATIONS: [(i64, &str); 17] = [
+const MIGRATIONS: [(i64, &str); 18] = [
     (1, MIGRATION),
     (2, HOSTED_MIGRATION),
     (3, ASSIGNMENT_MIGRATION),
@@ -64,6 +66,7 @@ const MIGRATIONS: [(i64, &str); 17] = [
     (15, HOSTED_RESULT_MIGRATION),
     (16, UNIFIED_REVIEWS_MIGRATION),
     (17, UNIFIED_REVIEW_CLOCK_RUNTIME_MIGRATION),
+    (18, UNIFIED_REVIEW_RETENTION_MIGRATION),
 ];
 
 /// Serializes operator-run migrations on one session lock. A second migrator

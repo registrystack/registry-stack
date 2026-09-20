@@ -4,7 +4,7 @@ use std::{
     collections::BTreeMap,
     env,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
 };
@@ -542,12 +542,263 @@ async fn assert_store_sessions_hold_no_transaction_or_row_lock(fixture: &Fixture
     );
 }
 
-async fn block_completion_response(
-    State((received, release)): State<(Arc<Notify>, Arc<Notify>)>,
-) -> StatusCode {
-    received.notify_one();
-    release.notified().await;
-    StatusCode::NO_CONTENT
+#[derive(Default)]
+struct CompletionDeliveryRace {
+    calls: AtomicUsize,
+    first_received: Notify,
+    second_received: Notify,
+    release_first: Notify,
+    release_second: Notify,
+}
+
+async fn race_completion_responses(State(race): State<Arc<CompletionDeliveryRace>>) -> StatusCode {
+    match race.calls.fetch_add(1, Ordering::SeqCst) {
+        0 => {
+            race.first_received.notify_one();
+            race.release_first.notified().await;
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+        1 => {
+            race.second_received.notify_one();
+            race.release_second.notified().await;
+            StatusCode::NO_CONTENT
+        }
+        2 => StatusCode::NO_CONTENT,
+        call => panic!("unexpected completion delivery call {call}"),
+    }
+}
+
+async fn settle_review_for_completion(fixture: &Fixture, subject: &str) -> Uuid {
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request(subject, subject),
+            &format!("create-{subject}"),
+        )
+        .await
+        .expect("create HA completion review");
+    let primary = task_id(fixture, created.accepted.request_id, 0).await;
+    fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            primary,
+            None,
+            "",
+            1,
+            &format!("claim-{subject}-primary"),
+        )
+        .await
+        .expect("claim primary HA completion task");
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_a,
+            primary,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Approve,
+            },
+            None,
+            "",
+            2,
+            &format!("approve-{subject}-primary"),
+        )
+        .await
+        .expect("approve primary HA completion task");
+    let secondary = task_id(fixture, created.accepted.request_id, 1).await;
+    fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_b,
+            secondary,
+            None,
+            "",
+            1,
+            &format!("claim-{subject}-secondary"),
+        )
+        .await
+        .expect("claim secondary HA completion task");
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_b,
+            secondary,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Approve,
+            },
+            None,
+            "",
+            2,
+            &format!("approve-{subject}-secondary"),
+        )
+        .await
+        .expect("approve secondary HA completion task");
+    created.accepted.request_id
+}
+
+#[tokio::test]
+async fn completion_dispatcher_leases_one_at_a_time_and_fences_a_stale_owner() {
+    let fixture = fixture().await;
+    let request_id = settle_review_for_completion(&fixture, "ha-completion-first").await;
+    let later_request_id = settle_review_for_completion(&fixture, "ha-completion-second").await;
+    assert_eq!(
+        fixture
+            .database
+            .query_one(
+                "SELECT count(*) FROM casework_review_completion_outbox
+                 WHERE request_id IN ($1,$2)",
+                &[&request_id, &later_request_id],
+            )
+            .await
+            .expect("two completion deliveries")
+            .get::<_, i64>(0),
+        2
+    );
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET next_attempt_at=transaction_timestamp()-
+                 CASE WHEN request_id=$1 THEN interval '2 minutes' ELSE interval '1 minute' END
+             WHERE request_id IN ($1,$2)",
+            &[&request_id, &later_request_id],
+        )
+        .await
+        .expect("order the completion deliveries");
+
+    let race = Arc::new(CompletionDeliveryRace::default());
+    let completion_receiver = Router::new()
+        .route("/completion", post(race_completion_responses))
+        .with_state(Arc::clone(&race));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind completion receiver");
+    let completion_url = format!(
+        "http://{}/completion",
+        listener.local_addr().expect("completion receiver address")
+    );
+    let receiver = tokio::spawn(async move {
+        axum::serve(listener, completion_receiver)
+            .await
+            .expect("serve completion receiver");
+    });
+    let first_dispatcher = tokio::spawn(dispatch_review_completions_once_for_test(
+        fixture.store.clone(),
+        "registry-completion",
+        completion_url.clone(),
+        "completion-secret",
+    ));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        race.first_received.notified(),
+    )
+    .await
+    .expect("completion receiver observes the first leased delivery");
+    assert_store_sessions_hold_no_transaction_or_row_lock(&fixture).await;
+    let first_pass_states = fixture
+        .database
+        .query(
+            "SELECT request_id,state,attempt_count
+             FROM casework_review_completion_outbox WHERE request_id IN ($1,$2)",
+            &[&request_id, &later_request_id],
+        )
+        .await
+        .expect("completion states during the first remote call");
+    assert!(first_pass_states.iter().any(|row| {
+        row.get::<_, Uuid>(0) == request_id
+            && row.get::<_, String>(1) == "leased"
+            && row.get::<_, i32>(2) == 1
+    }));
+    assert!(first_pass_states.iter().any(|row| {
+        row.get::<_, Uuid>(0) == later_request_id
+            && row.get::<_, String>(1) == "pending"
+            && row.get::<_, i32>(2) == 0
+    }));
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET lease_until=transaction_timestamp()-interval '1 second'
+             WHERE request_id=$1 AND state='leased'",
+            &[&request_id],
+        )
+        .await
+        .expect("expire the first dispatcher's lease");
+
+    let second_dispatcher = tokio::spawn(dispatch_review_completions_once_for_test(
+        fixture.store.clone(),
+        "registry-completion",
+        completion_url,
+        "completion-secret",
+    ));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        race.second_received.notified(),
+    )
+    .await
+    .expect("completion receiver observes the replacement leased delivery");
+    let replacement_lease = fixture
+        .database
+        .query_one(
+            "SELECT state,attempt_count,lease_until
+             FROM casework_review_completion_outbox WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("replacement completion lease");
+    assert_eq!(replacement_lease.get::<_, String>(0), "leased");
+    assert_eq!(replacement_lease.get::<_, i32>(1), 2);
+    let replacement_lease_until = replacement_lease.get::<_, chrono::DateTime<Utc>>(2);
+
+    race.release_first.notify_one();
+    first_dispatcher
+        .await
+        .expect("first completion dispatcher task")
+        .expect("first completion dispatcher pass");
+    let still_owned = fixture
+        .database
+        .query_one(
+            "SELECT state,attempt_count,lease_until
+             FROM casework_review_completion_outbox WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("replacement lease after stale completion failure");
+    assert_eq!(still_owned.get::<_, String>(0), "leased");
+    assert_eq!(still_owned.get::<_, i32>(1), 2);
+    assert_eq!(
+        still_owned.get::<_, chrono::DateTime<Utc>>(2),
+        replacement_lease_until
+    );
+
+    race.release_second.notify_one();
+    second_dispatcher
+        .await
+        .expect("second completion dispatcher task")
+        .expect("second completion dispatcher pass");
+    receiver.abort();
+    let delivered = fixture
+        .database
+        .query(
+            "SELECT request_id,state,attempt_count,lease_until
+             FROM casework_review_completion_outbox WHERE request_id IN ($1,$2)",
+            &[&request_id, &later_request_id],
+        )
+        .await
+        .expect("delivered completion rows");
+    assert!(delivered.iter().any(|row| {
+        row.get::<_, Uuid>(0) == request_id
+            && row.get::<_, String>(1) == "delivered"
+            && row.get::<_, i32>(2) == 2
+            && row.get::<_, Option<chrono::DateTime<Utc>>>(3).is_none()
+    }));
+    assert!(delivered.iter().any(|row| {
+        row.get::<_, Uuid>(0) == later_request_id
+            && row.get::<_, String>(1) == "delivered"
+            && row.get::<_, i32>(2) == 1
+            && row.get::<_, Option<chrono::DateTime<Utc>>>(3).is_none()
+    }));
 }
 
 #[tokio::test]
@@ -752,65 +1003,6 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         .await,
         1
     );
-
-    let received = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let completion_receiver = Router::new()
-        .route("/completion", post(block_completion_response))
-        .with_state((Arc::clone(&received), Arc::clone(&release)));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind completion receiver");
-    let completion_url = format!(
-        "http://{}/completion",
-        listener.local_addr().expect("completion receiver address")
-    );
-    let receiver = tokio::spawn(async move {
-        axum::serve(listener, completion_receiver)
-            .await
-            .expect("serve completion receiver");
-    });
-    let dispatcher = tokio::spawn(dispatch_review_completions_once_for_test(
-        fixture.store.clone(),
-        "registry-completion",
-        completion_url,
-        "completion-secret",
-    ));
-    tokio::time::timeout(std::time::Duration::from_secs(5), received.notified())
-        .await
-        .expect("completion receiver observes the leased delivery");
-    assert_store_sessions_hold_no_transaction_or_row_lock(&fixture).await;
-    release.notify_one();
-    dispatcher
-        .await
-        .expect("completion dispatcher task")
-        .expect("completion dispatcher pass");
-    receiver.abort();
-    let delivered = fixture
-        .database
-        .query_one(
-            "SELECT state,attempt_count,lease_until FROM casework_review_completion_outbox
-             WHERE request_id=$1",
-            &[&first.accepted.request_id],
-        )
-        .await
-        .expect("delivered completion row");
-    assert_eq!(delivered.get::<_, String>(0), "delivered");
-    assert_eq!(delivered.get::<_, i32>(1), 1);
-    assert!(delivered
-        .get::<_, Option<chrono::DateTime<Utc>>>(2)
-        .is_none());
-    fixture
-        .database
-        .execute(
-            "UPDATE casework_review_completion_outbox
-             SET state='pending',attempt_count=0,next_attempt_at=now(),lease_until=NULL,
-                 delivered_at=NULL,last_failure_class=NULL
-             WHERE request_id=$1",
-            &[&first.accepted.request_id],
-        )
-        .await
-        .expect("reset delivery for lost-acknowledgement coverage");
 
     let first_lease = fixture
         .store
@@ -1094,6 +1286,517 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         )
         .await,
         0
+    );
+}
+
+#[tokio::test]
+async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("record-retention", "producer-ref-retention"),
+            "create-retention-review",
+        )
+        .await
+        .expect("create retention review");
+    let request_id = created.accepted.request_id;
+    let primary = task_id(&fixture, request_id, 0).await;
+    let claimed_primary = fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            primary,
+            None,
+            "",
+            1,
+            "claim-retention-primary",
+        )
+        .await
+        .expect("claim retention primary task");
+    let draft_a = fixture
+        .service_v1
+        .save_review_task_draft(
+            &fixture.reviewer_a,
+            primary,
+            None,
+            "",
+            claimed_primary.revision,
+            ReviewTaskDraftInput {
+                body: json!({"private": "reviewer A draft"}),
+            },
+            "draft-retention-a",
+        )
+        .await
+        .expect("save reviewer A draft");
+    let delegated = fixture
+        .service_v1
+        .delegate_review_task(
+            &fixture.reviewer_a,
+            primary,
+            None,
+            "",
+            claimed_primary.revision + 1,
+            DelegateRequest {
+                delegate: fixture.reviewer_b.principal.clone(),
+                reason: Some("continue review".to_owned()),
+            },
+            "delegate-retention-primary",
+        )
+        .await
+        .expect("delegate retention primary task");
+    let draft_b = fixture
+        .service_v1
+        .save_review_task_draft(
+            &fixture.reviewer_b,
+            primary,
+            None,
+            "",
+            delegated.revision,
+            ReviewTaskDraftInput {
+                body: json!({"private": "reviewer B draft"}),
+            },
+            "draft-retention-b",
+        )
+        .await
+        .expect("save reviewer B draft");
+    assert_eq!(draft_a.revision, 1);
+    assert_eq!(draft_b.revision, 1);
+    let retained_drafts: Vec<serde_json::Value> = fixture
+        .database
+        .query(
+            "SELECT body FROM casework_review_task_drafts
+             WHERE task_id=$1 ORDER BY actor_subject",
+            &[&primary],
+        )
+        .await
+        .expect("read author-keyed drafts")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(
+        retained_drafts,
+        vec![
+            json!({"private": "reviewer A draft"}),
+            json!({"private": "reviewer B draft"})
+        ]
+    );
+
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_b,
+            primary,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Approve,
+            },
+            None,
+            "",
+            delegated.revision + 1,
+            "decide-retention-primary",
+        )
+        .await
+        .expect("advance retention review");
+    let secondary = task_id(&fixture, request_id, 1).await;
+    fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            secondary,
+            None,
+            "",
+            1,
+            "claim-retention-secondary",
+        )
+        .await
+        .expect("claim retention secondary task");
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_a,
+            secondary,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Reject {
+                    outcome: "incorrect".to_owned(),
+                    reason: Some("private retained reason".to_owned()),
+                    result: Some(json!({"correction": "bounded correction"})),
+                },
+            },
+            None,
+            "",
+            2,
+            "decide-retention-secondary",
+        )
+        .await
+        .expect("settle retention review");
+
+    let deadlines = fixture
+        .database
+        .query_one(
+            "SELECT r.accountability_retained_until,
+                    count(DISTINCT a.retained_until),min(a.retained_until)
+             FROM casework_review_requests r
+             JOIN casework_review_accountability a USING(request_id)
+             WHERE r.request_id=$1 GROUP BY r.accountability_retained_until",
+            &[&request_id],
+        )
+        .await
+        .expect("read terminal accountability deadlines");
+    assert_eq!(deadlines.get::<_, i64>(1), 1);
+    assert_eq!(
+        deadlines.get::<_, chrono::DateTime<Utc>>(0),
+        deadlines.get::<_, chrono::DateTime<Utc>>(2),
+        "every decision, including an earlier-stage decision, expires from terminal settlement"
+    );
+
+    let now = Utc::now();
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_results
+             SET completed_at=$2,available_until=$3 WHERE request_id=$1",
+            &[
+                &request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire retained result");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_terminal_events
+             SET completed_at=$2,retained_until=$3 WHERE request_id=$1",
+            &[
+                &request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire terminal feed event");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET next_attempt_at=$2,retained_until=$3 WHERE request_id=$1",
+            &[
+                &request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire completion event");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests
+             SET terminal_at=$2,result_available_until=$3 WHERE request_id=$1",
+            &[
+                &request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire terminal payload retention");
+    fixture
+        .service_v1
+        .erase_expired_reviews()
+        .await
+        .expect("scrub terminal review payloads");
+
+    for table in [
+        "casework_review_results",
+        "casework_review_decisions",
+        "casework_review_history",
+    ] {
+        assert_eq!(
+            count_for_request(&fixture, table, request_id).await,
+            0,
+            "{table}"
+        );
+    }
+    let retained_draft_count: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_task_drafts d
+             JOIN casework_review_tasks t USING(task_id) WHERE t.request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("count scrubbed review drafts")
+        .get(0);
+    assert_eq!(retained_draft_count, 0);
+    assert_eq!(
+        count_for_request(&fixture, "casework_review_accountability", request_id).await,
+        2
+    );
+    assert_eq!(
+        count_for_request(&fixture, "casework_review_requests", request_id).await,
+        1
+    );
+    let idempotency = fixture
+        .database
+        .query_one(
+            "SELECT count(*),bool_and(response IS NULL)
+             FROM casework_idempotency WHERE review_request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("inspect retained review idempotency tombstones");
+    assert!(idempotency.get::<_, i64>(0) > 0);
+    assert!(idempotency.get::<_, bool>(1));
+
+    assert!(matches!(
+        fixture
+            .service_v1
+            .add_review_note(
+                &fixture.producer,
+                request_id,
+                ReviewNoteRequest {
+                    audience: ReviewHistoryAudience::Requester,
+                    note: "must not resurrect erased history".to_owned(),
+                },
+                "note-after-terminal-retention",
+            )
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    fixture
+        .service_v1
+        .erase_expired_reviews()
+        .await
+        .expect("repeat terminal cleanup after refused note");
+    assert_eq!(
+        count_for_request(&fixture, "casework_review_history", request_id).await,
+        0
+    );
+    let resurrected_idempotency: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_idempotency
+             WHERE review_request_id=$1 AND idempotency_key='note-after-terminal-retention'",
+            &[&request_id],
+        )
+        .await
+        .expect("check refused note replay state")
+        .get(0);
+    assert_eq!(resurrected_idempotency, 0);
+
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests
+             SET accountability_retained_until=$2 WHERE request_id=$1",
+            &[&request_id, &(now - TimeDelta::seconds(1))],
+        )
+        .await
+        .expect("expire review accountability boundary");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_accountability
+             SET occurred_at=$2,retained_until=$3 WHERE request_id=$1",
+            &[
+                &request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire minimized accountability rows");
+    fixture
+        .service_v1
+        .erase_expired_reviews()
+        .await
+        .expect("erase accountability-expired review");
+    assert_eq!(
+        count_for_request(&fixture, "casework_review_requests", request_id).await,
+        0
+    );
+    let owned_idempotency: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_idempotency WHERE review_request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("inspect erased review idempotency")
+        .get(0);
+    assert_eq!(owned_idempotency, 0);
+}
+
+#[tokio::test]
+async fn canonical_json_bounds_allow_safe_postgresql_expansion_for_context_and_drafts() {
+    let fixture = fixture().await;
+    let mut project = project("canonical-storage");
+    project.review_kinds[0].display_schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["summary", "numbers"],
+        "properties": {
+            "summary": {"type": "string", "maxLength": 160},
+            "numbers": {
+                "type": "array",
+                "maxItems": 1200,
+                "items": {"type": "number"}
+            }
+        }
+    });
+    project.check().expect("canonical storage project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("canonical storage service");
+    let numbers = vec![1e100_f64; 1_000];
+    let expanded = json!({"numbers": numbers, "summary": "bounded expansion"});
+    assert!(
+        registry_platform_canonical_json::canonicalize_json(&expanded)
+            .expect("canonical expansion")
+            .len()
+            < 16 * 1024
+    );
+    let mut create = request("record-canonical-storage", "producer-ref-canonical-storage");
+    create.context = ReviewContext::Submitted {
+        snapshot: expanded.clone(),
+    };
+    let created = service
+        .create_review_request(&fixture.producer, create, "create-canonical-storage")
+        .await
+        .expect("store admitted submitted context");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    let claimed = service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-canonical-storage",
+        )
+        .await
+        .expect("claim canonical storage task");
+    service
+        .save_review_task_draft(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            claimed.revision,
+            ReviewTaskDraftInput {
+                body: expanded.clone(),
+            },
+            "draft-canonical-storage",
+        )
+        .await
+        .expect("store admitted canonical draft");
+    let stored = fixture
+        .database
+        .query_one(
+            "SELECT octet_length(r.context::text),octet_length(d.body::text)
+             FROM casework_review_requests r
+             JOIN casework_review_tasks t USING(request_id)
+             JOIN casework_review_task_drafts d USING(task_id)
+             WHERE r.request_id=$1",
+            &[&created.accepted.request_id],
+        )
+        .await
+        .expect("measure expanded PostgreSQL jsonb storage");
+    assert!(stored.get::<_, i32>(0) > 65_536);
+    assert!(stored.get::<_, i32>(1) > 65_536);
+    assert!(matches!(
+        service
+            .save_review_task_draft(
+                &fixture.reviewer_a,
+                task,
+                None,
+                "",
+                claimed.revision + 1,
+                ReviewTaskDraftInput {
+                    body: json!({"oversized": "x".repeat(17 * 1024)}),
+                },
+                "draft-canonical-storage-too-large",
+            )
+            .await,
+        Err(ReviewRuntimeError::Invalid)
+    ));
+}
+
+#[tokio::test]
+async fn retention_cleanup_skips_locked_rows_and_processes_one_bounded_batch() {
+    let mut fixture = fixture().await;
+    let mut request_ids = Vec::new();
+    for index in 0..102 {
+        let request_id = Uuid::new_v4();
+        let producer_id = format!("retention-batch-{index}");
+        let subject_id = format!("retention-subject-{index}");
+        fixture
+            .database
+            .execute(
+                "INSERT INTO casework_review_requests(
+                    request_id,producer_id,producer_issuer,producer_subject,source_namespace,
+                    subject_source,subject_type,subject_id,subject_version,subject_digest,
+                    requester_reference,context_strategy,context,policy_id,policy_version,
+                    policy_digest,policy_snapshot,submission_digest,lifecycle,active_stage_index,
+                    revision,created_at,updated_at,terminal_at,result_available_until,
+                    accountability_retained_until)
+                 VALUES($1,$2,'https://issuer.test','retention-service','registry','registry',
+                    'record',$3,'1',$4,$3,'submitted','{}'::jsonb,'retention','1',$4,
+                    '{}'::jsonb,$4,'approved',NULL,1,now()-interval '4 days',
+                    now()-interval '3 days',now()-interval '3 days',
+                    now()-interval '2 days',now()-interval '1 day')",
+                &[
+                    &request_id,
+                    &producer_id,
+                    &subject_id,
+                    &format!("sha256:{}", "a".repeat(64)),
+                ],
+            )
+            .await
+            .expect("insert retention batch request");
+        request_ids.push(request_id);
+    }
+    let service = fixture.service_v1.clone();
+    let locked_request = request_ids[0];
+    let locking = fixture
+        .database
+        .transaction()
+        .await
+        .expect("begin retention row lock");
+    locking
+        .query_one(
+            "SELECT request_id FROM casework_review_requests
+             WHERE request_id=$1 FOR UPDATE",
+            &[&locked_request],
+        )
+        .await
+        .expect("lock one expired request");
+    assert_eq!(
+        service
+            .erase_expired_reviews()
+            .await
+            .expect("run bounded retention batch around lock"),
+        100
+    );
+    let remaining: i64 = locking
+        .query_one("SELECT count(*) FROM casework_review_requests", &[])
+        .await
+        .expect("count requests after bounded batch")
+        .get(0);
+    assert_eq!(remaining, 2);
+    locking.commit().await.expect("release retention row lock");
+    assert_eq!(
+        service
+            .erase_expired_reviews()
+            .await
+            .expect("finish retention batch"),
+        2
     );
 }
 

@@ -25,6 +25,8 @@ use uuid::Uuid;
 use crate::{CaseworkService, PostgresStore, StoreError};
 
 const MAXIMUM_REVIEW_FEED_PAGE: usize = 100;
+const MAXIMUM_REVIEW_DRAFT_BYTES: usize = 16 * 1024;
+const REVIEW_RETENTION_BATCH_SIZE: i64 = 100;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewCreateOutcome {
@@ -1494,6 +1496,7 @@ impl PostgresStore {
             .await
     }
 
+    #[cfg(feature = "postgres-test")]
     pub(crate) async fn lease_review_completions(
         &self,
         limit: usize,
@@ -1541,6 +1544,7 @@ impl PostgresStore {
             .collect()
     }
 
+    #[cfg(feature = "postgres-test")]
     pub(crate) async fn finish_review_completion(
         &self,
         event_id: Uuid,
@@ -1585,76 +1589,95 @@ impl PostgresStore {
     ) -> Result<u64, ReviewRuntimeError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        transaction
+        let selected = transaction
             .query(
                 "SELECT request_id FROM casework_review_requests
-                 WHERE result_available_until<=$1 OR accountability_retained_until<=$1
-                 ORDER BY request_id FOR UPDATE",
-                &[&now],
+                 WHERE (result_available_until<=$1 AND result_erased_at IS NULL)
+                    OR accountability_retained_until<=$1
+                 ORDER BY request_id LIMIT $2 FOR UPDATE SKIP LOCKED",
+                &[&now, &REVIEW_RETENTION_BATCH_SIZE],
+            )
+            .await?
+            .into_iter()
+            .map(|row| row.get::<_, Uuid>(0))
+            .collect::<Vec<_>>();
+        transaction
+            .execute(
+                "DELETE FROM casework_review_accountability
+                 WHERE request_id=ANY($2) AND retained_until<=$1",
+                &[&now, &selected],
             )
             .await?;
         transaction
             .execute(
-                "DELETE FROM casework_review_accountability WHERE retained_until<=$1",
-                &[&now],
+                "DELETE FROM casework_review_completion_outbox
+                 WHERE request_id=ANY($2) AND retained_until<=$1",
+                &[&now, &selected],
             )
             .await?;
         transaction
             .execute(
-                "DELETE FROM casework_review_completion_outbox WHERE retained_until<=$1",
-                &[&now],
+                "DELETE FROM casework_review_terminal_events
+                 WHERE request_id=ANY($2) AND retained_until<=$1",
+                &[&now, &selected],
             )
             .await?;
         transaction
             .execute(
-                "DELETE FROM casework_review_terminal_events WHERE retained_until<=$1",
-                &[&now],
+                "DELETE FROM casework_review_results
+                 WHERE request_id=ANY($2) AND available_until<=$1",
+                &[&now, &selected],
             )
             .await?;
         transaction
             .execute(
-                "DELETE FROM casework_review_results WHERE available_until<=$1",
-                &[&now],
-            )
-            .await?;
-        transaction
-            .execute(
-                "UPDATE casework_review_decisions d SET result=NULL
-                  FROM casework_review_requests r
-                 WHERE d.request_id=r.request_id AND r.result_available_until<=$1
-                   AND d.result IS NOT NULL",
-                &[&now],
+                "DELETE FROM casework_review_decisions d USING casework_review_requests r
+                 WHERE d.request_id=r.request_id AND r.request_id=ANY($2)
+                   AND r.result_available_until<=$1",
+                &[&now, &selected],
             )
             .await?;
         transaction
             .execute(
                 "UPDATE casework_idempotency i SET response=NULL
                   FROM casework_review_requests r
-                 WHERE r.result_available_until<=$1 AND i.response IS NOT NULL
-                   AND (i.resource='review-request:'||r.request_id::text
-                        OR (i.operation='review.create'
-                            AND i.response->>'requestId'=r.request_id::text)
-                        OR EXISTS (
-                            SELECT 1 FROM casework_review_tasks t
-                             WHERE t.request_id=r.request_id
-                               AND i.resource='review-task:'||t.task_id::text))",
-                &[&now],
+                 WHERE i.review_request_id=r.request_id AND r.request_id=ANY($2)
+                   AND r.result_available_until<=$1 AND i.response IS NOT NULL",
+                &[&now, &selected],
             )
             .await?;
         transaction
             .execute(
                 "UPDATE casework_review_requests
                  SET context='{}'::jsonb,result_constraints=NULL
-                 WHERE result_available_until<=$1
+                 WHERE request_id=ANY($2) AND result_available_until<=$1
                    AND (context<>'{}'::jsonb OR result_constraints IS NOT NULL)",
-                &[&now],
+                &[&now, &selected],
+            )
+            .await?;
+        transaction
+            .execute(
+                "DELETE FROM casework_review_task_drafts d
+                  USING casework_review_tasks t,casework_review_requests r
+                 WHERE d.task_id=t.task_id AND t.request_id=r.request_id
+                   AND r.request_id=ANY($2) AND r.result_available_until<=$1",
+                &[&now, &selected],
             )
             .await?;
         transaction
             .execute(
                 "DELETE FROM casework_review_history h USING casework_review_requests r
-                 WHERE h.request_id=r.request_id AND r.accountability_retained_until<=$1",
-                &[&now],
+                 WHERE h.request_id=r.request_id AND r.request_id=ANY($2)
+                   AND r.result_available_until<=$1",
+                &[&now, &selected],
+            )
+            .await?;
+        transaction
+            .execute(
+                "UPDATE casework_review_requests
+                 SET result_erased_at=COALESCE(result_erased_at,$1)
+                 WHERE request_id=ANY($2) AND result_available_until<=$1",
+                &[&now, &selected],
             )
             .await?;
         // Subject clocks intentionally span review rounds by moving their request binding to the
@@ -1663,21 +1686,45 @@ impl PostgresStore {
         transaction
             .execute(
                 "DELETE FROM casework_review_clock_occurrences c USING casework_review_requests r
-                 WHERE c.request_id=r.request_id AND r.accountability_retained_until<=$1",
-                &[&now],
+                 WHERE c.request_id=r.request_id AND r.request_id=ANY($2)
+                   AND r.accountability_retained_until<=$1",
+                &[&now, &selected],
+            )
+            .await?;
+        transaction
+            .execute(
+                "DELETE FROM casework_idempotency i USING casework_review_requests r
+                 WHERE i.review_request_id=r.request_id AND r.request_id=ANY($2)
+                   AND r.accountability_retained_until<=$1",
+                &[&now, &selected],
+            )
+            .await?;
+        transaction
+            .execute(
+                "DELETE FROM casework_review_submission_reservations s
+                  USING casework_review_requests r
+                 WHERE s.request_id=r.request_id AND r.request_id=ANY($2)
+                   AND r.accountability_retained_until<=$1",
+                &[&now, &selected],
             )
             .await?;
         let erased = transaction
             .execute(
-                "DELETE FROM casework_review_requests WHERE accountability_retained_until<=$1",
-                &[&now],
+                "DELETE FROM casework_review_requests
+                 WHERE request_id=ANY($2) AND accountability_retained_until<=$1",
+                &[&now, &selected],
             )
             .await?;
         transaction
             .execute(
                 "DELETE FROM casework_review_submission_reservations
-                  WHERE retained_until<=$1 AND request_id IS NULL",
-                &[&now],
+                 WHERE ctid IN (
+                    SELECT ctid FROM casework_review_submission_reservations
+                     WHERE retained_until<=$1 AND request_id IS NULL
+                     ORDER BY retained_until,producer_id,subject_id
+                     LIMIT $2 FOR UPDATE SKIP LOCKED
+                 )",
+                &[&now, &REVIEW_RETENTION_BATCH_SIZE],
             )
             .await?;
         transaction.commit().await?;
@@ -1762,6 +1809,7 @@ impl PostgresStore {
         let accepted = accepted(&record);
         insert_review_idempotency(
             &transaction,
+            request_id,
             actor,
             "review.create",
             &resource,
@@ -1883,6 +1931,7 @@ impl PostgresStore {
             let accepted = accepted(&record);
             insert_review_idempotency(
                 &transaction,
+                request_id,
                 actor,
                 "review.create",
                 &resource,
@@ -2052,6 +2101,7 @@ impl PostgresStore {
         };
         insert_review_idempotency(
             &transaction,
+            request_id,
             actor,
             "review.create",
             &resource,
@@ -2207,6 +2257,7 @@ impl PostgresStore {
             let response = ReviewCancelResponse::AlreadyTerminal { result };
             insert_review_idempotency(
                 &transaction,
+                request_id,
                 actor,
                 "review.cancel",
                 &resource,
@@ -2242,6 +2293,7 @@ impl PostgresStore {
         let response = ReviewCancelResponse::Cancelled { result };
         insert_review_idempotency(
             &transaction,
+            request_id,
             actor,
             "review.cancel",
             &resource,
@@ -2387,6 +2439,7 @@ impl PostgresStore {
         };
         insert_review_idempotency(
             &transaction,
+            request_id,
             actor,
             "review.task.claim",
             &resource,
@@ -2624,6 +2677,7 @@ impl PostgresStore {
         };
         insert_review_idempotency(
             &transaction,
+            request_id,
             actor,
             operation,
             &resource,
@@ -2676,7 +2730,9 @@ impl PostgresStore {
         body: Value,
         idempotency_key: &str,
     ) -> Result<ReviewTaskDraft, ReviewRuntimeError> {
-        if serde_json::to_vec(&body)?.len() > 16_384 {
+        if !registry_platform_canonical_json::canonicalize_json(&body)
+            .is_ok_and(|canonical| canonical.len() <= MAXIMUM_REVIEW_DRAFT_BYTES)
+        {
             return Err(ReviewRuntimeError::Invalid);
         }
         let now = Utc::now();
@@ -2726,8 +2782,9 @@ impl PostgresStore {
         }
         let draft_revision = transaction
             .query_opt(
-                "SELECT revision FROM casework_review_task_drafts WHERE task_id=$1 FOR UPDATE",
-                &[&task_id],
+                "SELECT revision FROM casework_review_task_drafts
+                 WHERE task_id=$1 AND actor_issuer=$2 AND actor_subject=$3 FOR UPDATE",
+                &[&task_id, &actor.principal.issuer, &actor.principal.subject],
             )
             .await?
             .map_or(1_i64, |row| row.get::<_, i64>(0) + 1);
@@ -2736,8 +2793,7 @@ impl PostgresStore {
                 "INSERT INTO casework_review_task_drafts(
                     task_id,actor_issuer,actor_subject,body,revision,updated_at)
                  VALUES($1,$2,$3,$4,$5,$6)
-                 ON CONFLICT(task_id) DO UPDATE SET actor_issuer=EXCLUDED.actor_issuer,
-                    actor_subject=EXCLUDED.actor_subject,body=EXCLUDED.body,
+                 ON CONFLICT(task_id,actor_issuer,actor_subject) DO UPDATE SET body=EXCLUDED.body,
                     revision=EXCLUDED.revision,updated_at=EXCLUDED.updated_at",
                 &[
                     &task_id,
@@ -2780,6 +2836,7 @@ impl PostgresStore {
             .await?;
         insert_review_idempotency(
             &transaction,
+            request_id,
             actor,
             "review.task.draft.save",
             &resource,
@@ -2865,6 +2922,7 @@ impl PostgresStore {
             .await?;
         insert_review_idempotency(
             &transaction,
+            request_id,
             actor,
             "review.task.draft.delete",
             &resource,
@@ -3068,6 +3126,13 @@ impl PostgresStore {
         } else {
             ensure_review_reviewer_access(&transaction, &record, actor, None, true).await?;
         }
+        let now = Utc::now();
+        if record
+            .result_available_until
+            .is_some_and(|available_until| available_until <= now)
+        {
+            return Err(ReviewRuntimeError::ResultExpired);
+        }
         let resource = format!("review-request:{request_id}");
         let request_hash = review_request_hash(&request)?;
         if let Some(response) = review_idempotent_response(
@@ -3083,7 +3148,6 @@ impl PostgresStore {
             transaction.commit().await?;
             return serde_json::from_value(response).map_err(ReviewRuntimeError::from);
         }
-        let now = Utc::now();
         let entry = ReviewHistoryEntry {
             event_id: Uuid::new_v4(),
             request_id,
@@ -3116,6 +3180,7 @@ impl PostgresStore {
             .await?;
         insert_review_idempotency(
             &transaction,
+            request_id,
             actor,
             "review.note.add",
             &resource,
@@ -3189,9 +3254,10 @@ impl PostgresStore {
                 &[&task_id, &now],
             )
             .await?;
+        let request_id = row.get(0);
         let task = ReviewerTask {
             task_id,
-            request_id: row.get(0),
+            request_id,
             stage_index,
             stage_id: row.get(2),
             queue: row.get(3),
@@ -3201,6 +3267,7 @@ impl PostgresStore {
         };
         insert_review_idempotency(
             &transaction,
+            request_id,
             actor,
             "review.task.release",
             &resource,
@@ -3483,6 +3550,7 @@ impl PostgresStore {
             .await?;
         insert_review_idempotency(
             &transaction,
+            request_id,
             actor,
             "review.task.decide",
             &resource,
@@ -3818,6 +3886,20 @@ async fn settle_review(
         now + TimeDelta::days(i64::from(record.policy.retention.accountability_days));
     let retained_until = available_until;
     let status_name = result_status_name(status);
+    transaction
+        .execute(
+            "UPDATE casework_review_accountability
+             SET retained_until=$2 WHERE request_id=$1",
+            &[&record.request_id, &accountability_until],
+        )
+        .await?;
+    transaction
+        .execute(
+            "UPDATE casework_review_submission_reservations
+             SET retained_until=$2 WHERE request_id=$1",
+            &[&record.request_id, &accountability_until],
+        )
+        .await?;
     transaction
         .execute(
             "INSERT INTO casework_review_results(
@@ -4716,6 +4798,7 @@ async fn review_idempotent_response(
 #[allow(clippy::too_many_arguments)]
 async fn insert_review_idempotency(
     transaction: &Transaction<'_>,
+    review_request_id: Uuid,
     actor: &ActorContext,
     operation: &str,
     resource: &str,
@@ -4727,8 +4810,8 @@ async fn insert_review_idempotency(
         .execute(
             "INSERT INTO casework_idempotency(
                 issuer,subject,profile_id,operation,resource,idempotency_key,
-                request_hash,response,created_at)
-             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+                request_hash,response,created_at,review_request_id)
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
             &[
                 &actor.principal.issuer,
                 &actor.principal.subject,
@@ -4739,6 +4822,7 @@ async fn insert_review_idempotency(
                 &request_hash,
                 &response,
                 &Utc::now(),
+                &review_request_id,
             ],
         )
         .await

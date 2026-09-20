@@ -35,6 +35,12 @@ struct ReviewCompletionDispatcher {
     targets: BTreeMap<String, Arc<ReviewCompletionTarget>>,
 }
 
+struct OwnedReviewCompletion {
+    delivery: crate::LeasedReviewCompletion,
+    attempt_count: i32,
+    lease_until: chrono::DateTime<chrono::Utc>,
+}
+
 impl ReviewCompletionDispatcher {
     fn new(
         store: PostgresStore,
@@ -71,25 +77,113 @@ impl ReviewCompletionDispatcher {
     }
 
     async fn pass(&self) -> Result<(), crate::ReviewRuntimeError> {
-        let lease_until = chrono::Utc::now() + chrono::TimeDelta::seconds(30);
-        let deliveries = self.store.lease_review_completions(50, lease_until).await?;
-        for delivery in deliveries {
-            let Some(target) = self.targets.get(&delivery.destination_id) else {
-                self.store
-                    .finish_review_completion(delivery.event.event_id, false, 1, chrono::Utc::now())
-                    .await?;
+        // Lease immediately before each remote call. Pre-leasing the whole pass
+        // would let later rows expire while earlier receivers are still slow.
+        for _ in 0..50 {
+            let Some(owned) = self.lease_one().await? else {
+                break;
+            };
+            let Some(target) = self.targets.get(&owned.delivery.destination_id) else {
+                self.finish(&owned, false, 1, chrono::Utc::now()).await?;
                 continue;
             };
-            let delivered = deliver_review_completion(&self.client, target, &delivery).await;
+            let delivered = deliver_review_completion(&self.client, target, &owned.delivery).await;
             let retry_at = chrono::Utc::now()
                 + chrono::TimeDelta::from_std(target.retry)
                     .unwrap_or_else(|_| chrono::TimeDelta::seconds(30));
-            self.store
-                .finish_review_completion(
-                    delivery.event.event_id,
-                    delivered,
-                    target.maximum_attempts,
-                    retry_at,
+            self.finish(&owned, delivered, target.maximum_attempts, retry_at)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn lease_one(&self) -> Result<Option<OwnedReviewCompletion>, crate::ReviewRuntimeError> {
+        let client = self.store.client().await?;
+        // Runtime validation caps receiver timeouts at 30 seconds. The longer
+        // lease avoids ordinary timeout overlap; the finish fence below still
+        // protects a replacement owner after a process stall or lease recovery.
+        let row = client
+            .query_opt(
+                "WITH due AS (
+                    SELECT event_id FROM casework_review_completion_outbox
+                    WHERE retained_until>transaction_timestamp()
+                      AND next_attempt_at<=transaction_timestamp()
+                      AND (state='pending' OR
+                           (state='leased' AND lease_until<=transaction_timestamp()))
+                    ORDER BY next_attempt_at,event_id LIMIT 1 FOR UPDATE SKIP LOCKED
+                 ), leased AS (
+                    UPDATE casework_review_completion_outbox o
+                    SET state='leased',
+                        lease_until=transaction_timestamp()+interval '60 seconds',
+                        attempt_count=attempt_count+1
+                    FROM due WHERE o.event_id=due.event_id
+                    RETURNING o.event_id,o.destination_id,o.recipient_binding,
+                              o.attempt_count,o.lease_until
+                 )
+                 SELECT l.event_id,e.request_id,e.result_id,e.completed_at,
+                        l.destination_id,l.recipient_binding,l.attempt_count,l.lease_until
+                 FROM leased l JOIN casework_review_terminal_events e ON e.event_id=l.event_id",
+                &[],
+            )
+            .await?;
+        Ok(row.map(|row| OwnedReviewCompletion {
+            delivery: crate::LeasedReviewCompletion {
+                event: registry_casework_core::ReviewCompletion {
+                    event_type: registry_casework_core::ReviewCompletionType::ReviewCompleted,
+                    event_id: row.get(0),
+                    request_id: row.get(1),
+                    result_id: row.get(2),
+                    completed_at: row.get(3),
+                },
+                destination_id: row.get(4),
+                recipient_binding: row.get(5),
+            },
+            attempt_count: row.get(6),
+            lease_until: row.get(7),
+        }))
+    }
+
+    async fn finish(
+        &self,
+        owned: &OwnedReviewCompletion,
+        delivered: bool,
+        maximum_attempts: u32,
+        retry_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::ReviewRuntimeError> {
+        let client = self.store.client().await?;
+        if delivered {
+            client
+                .execute(
+                    "UPDATE casework_review_completion_outbox
+                     SET state='delivered',delivered_at=transaction_timestamp(),
+                         lease_until=NULL,last_failure_class=NULL
+                     WHERE event_id=$1 AND state='leased'
+                       AND attempt_count=$2 AND lease_until=$3",
+                    &[
+                        &owned.delivery.event.event_id,
+                        &owned.attempt_count,
+                        &owned.lease_until,
+                    ],
+                )
+                .await?;
+        } else {
+            client
+                .execute(
+                    "UPDATE casework_review_completion_outbox
+                     SET state=CASE WHEN attempt_count >= $2 OR $3>=retained_until
+                                    THEN 'exhausted' ELSE 'pending' END,
+                         next_attempt_at=LEAST($3,retained_until - interval '1 microsecond'),
+                         lease_until=NULL,last_failure_class='delivery_failed'
+                     WHERE event_id=$1 AND state='leased'
+                       AND attempt_count=$4 AND lease_until=$5",
+                    &[
+                        &owned.delivery.event.event_id,
+                        &i32::try_from(maximum_attempts)
+                            .map_err(|_| crate::ReviewRuntimeError::Invalid)?,
+                        &retry_at,
+                        &owned.attempt_count,
+                        &owned.lease_until,
+                    ],
                 )
                 .await?;
         }
