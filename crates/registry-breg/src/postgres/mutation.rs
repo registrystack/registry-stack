@@ -1059,6 +1059,18 @@ impl PostgresRecordMutationService {
         let run = self
             .visible_run(&**client, context, entity_id, run_id)
             .await?;
+        // The read owes the run the same admission chunk submission and
+        // receipt recovery owe it: a drifted profile or claim context cannot
+        // read a run's binding, digest, counts, and progress it could not
+        // continue.
+        let claims = strict_claim_context(&self.registry, context, entity_id)
+            .map_err(|_| IngestionServiceError::RequestInvalid)?;
+        if run.profile_id != claims.access_profile() {
+            return Err(IngestionServiceError::ProfileMismatch);
+        }
+        if run.bound_context_reference != self.ingestion_context_reference(&claims)? {
+            return Err(IngestionServiceError::ProfileMismatch);
+        }
         let active = ingestion_store::active_binding(&**client)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;

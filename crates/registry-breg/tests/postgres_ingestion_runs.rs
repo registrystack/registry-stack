@@ -1953,6 +1953,34 @@ async fn run_cancellation_requires_the_runs_bound_access_context() {
     assert_eq!(body_json(cancelled).await["run"]["status"], "cancelled");
 }
 
+/// Reading a run owes the run the same bound-context admission every other
+/// run surface applies: the same principal under a drifted context is refused
+/// the run's metadata, and the creating context still reads it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn run_reading_requires_the_runs_bound_access_context() {
+    let harness = IngestionHarness::create().await;
+    let zone_a = operator_claims(PRINCIPAL, "zone-a");
+    let zone_b = operator_claims(PRINCIPAL, "zone-b");
+    let chunks = plan_chunks(&announce_items("read-bound", 2), 3);
+    let run_id = harness.create_run(&zone_a, &chunks).await;
+
+    let drifted = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}"),
+            &zone_b,
+        )
+        .await;
+    assert_eq!(drifted.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        body_json(drifted).await["code"],
+        "ingestion.profile_mismatch"
+    );
+
+    let bound = harness.read_run(&zone_a, &run_id).await;
+    assert_eq!(bound["status"], "open");
+    assert_eq!(bound["runId"], run_id.as_str());
+}
+
 /// A run may be created only under the package the database still holds
 /// active: a stale process whose compiled configuration a successor package
 /// superseded cannot insert a run bound to the retired revision, because run
