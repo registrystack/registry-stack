@@ -90,10 +90,14 @@ invariants:
     enforcementPoint: >-
       require_permission in service.rs, matching one permission whose service
       and location both equal the offering's own and whose action list contains
-      the requested action.
+      the requested action, followed by bound_window requiring the operator
+      record to name that same offering and location before any window capacity
+      is exposed or consumed.
     refusal: >-
-      Answer operation.not-authorized; a broader service or location never
-      covers a narrower one and no action is inferred from another.
+      Answer operation.not-authorized when the grant does not match, or fail
+      closed as service.unavailable when the operator record is misbound. A
+      broader service or location never covers a narrower one and no action is
+      inferred from another.
     negativeTest:
       path: crates/registry-scheduling/src/auth.rs
       name: a_grant_naming_another_resource_is_a_profile_refusal
@@ -163,16 +167,20 @@ invariants:
   - id: SCHEDULING-SEC-10
     state: enforced
     threat: >-
-      A caller commits against a policy or an appointment that changed under
-      it, so the booking rests on supply or terms the operator has withdrawn.
+      A caller commits against a policy, published window, or appointment that
+      changed under it, so the booking rests on supply or terms the operator
+      has withdrawn.
     enforcementPoint: >-
-      The policy revision the request names, compared against the revision this
-      process serves, and the observed appointment revision carried in the
-      request body; both are fenced inside the capacity transaction, after the
-      supply anchor is locked and before the claim is written.
+      The policy revision the request names, the published-window revision for
+      arrival commitments, and the observed appointment revision carried in
+      the request body. Records replacement requires changed window terms to
+      advance that public revision, and the request revisions are fenced inside
+      the capacity transaction after the supply anchor is locked and before the
+      claim is written.
     refusal: >-
       Refuse a stale policy revision with policy.changed ahead of any narrower
-      mismatch, and refuse a stale appointment revision with revision.mismatch.
+      mismatch, and refuse a stale window or appointment revision with
+      revision.mismatch.
     scopeNote: >-
       Cancellation is deliberately outside this row: it releases capacity and
       is guarded by the observed appointment revision and the cutoff, never by

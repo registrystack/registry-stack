@@ -1047,14 +1047,7 @@ impl SchedulingService {
             .arrival
             .as_ref()
             .map(|arrival| {
-                let window = facts.window(&arrival.window).ok_or_else(|| {
-                    tracing::error!(
-                        offering = %offering.id,
-                        reference = %arrival.window,
-                        "the offering names a window the records do not carry"
-                    );
-                    ServiceError::Problem(ProblemCode::ServiceUnavailable)
-                })?;
+                let window = bound_window(facts, offering, &arrival.window)?;
                 Ok::<WindowDocument, ServiceError>(WindowDocument {
                     id: window.id.clone(),
                     revision: window.revision,
@@ -1537,9 +1530,7 @@ impl ResolvedSupply {
                 })
             }
             (None, Some(arrival)) => {
-                let window = facts
-                    .window(&arrival.window)
-                    .ok_or_else(|| operator_gap(&arrival.window))?;
+                let window = bound_window(facts, offering, &arrival.window)?;
                 Ok(Self::Window {
                     window: Box::new(window.clone()),
                     lead_time_minutes: arrival.lead_time_minutes,
@@ -1592,6 +1583,33 @@ impl ResolvedSupply {
             },
         }
     }
+}
+
+/// Resolve a published window only when its operator record belongs to the
+/// offering and location whose authority the service checked. A malformed or
+/// stale records set is an operator gap, never capacity a caller may consume.
+fn bound_window<'a>(
+    facts: &'a SchedulingFacts,
+    offering: &OfferingPolicy,
+    reference: &str,
+) -> Result<&'a PublishedWindow, ServiceError> {
+    let window = facts.window(reference).ok_or_else(|| {
+        tracing::error!(
+            offering = %offering.id,
+            reference,
+            "the offering names a window the records do not carry"
+        );
+        ServiceError::Problem(ProblemCode::ServiceUnavailable)
+    })?;
+    if window.offering != offering.id || window.location != offering.location {
+        tracing::error!(
+            offering = %offering.id,
+            reference,
+            "the window record is not bound to the offering and location"
+        );
+        return Err(ServiceError::Problem(ProblemCode::ServiceUnavailable));
+    }
+    Ok(window)
 }
 
 /// The exact-time availability walk: one entry per grid slot that lies inside
@@ -2077,6 +2095,71 @@ mod tests {
             duplicate_key: None,
             expires_at: None,
         }
+    }
+
+    fn window_offering() -> OfferingPolicy {
+        OfferingPolicy {
+            id: "review-arrivals".to_owned(),
+            service: "registry-review".to_owned(),
+            label: "Review arrivals".to_owned(),
+            mode: SchedulingMode::ArrivalWindow,
+            location: "north-counter".to_owned(),
+            because: "test".to_owned(),
+            exact_time: None,
+            arrival: Some(registry_scheduling_core::ArrivalOffering {
+                window: "morning-arrivals".to_owned(),
+                lead_time_minutes: 60,
+                horizon_days: 30,
+            }),
+            cancellation_cutoff_minutes: 240,
+            reminders: Vec::new(),
+            duplicate_active_key: None,
+            requires_capabilities: Vec::new(),
+            prerequisites: Vec::new(),
+        }
+    }
+
+    fn window_facts() -> SchedulingFacts {
+        SchedulingFacts {
+            windows: vec![PublishedWindow {
+                id: "morning-arrivals".to_owned(),
+                revision: 1,
+                offering: "review-arrivals".to_owned(),
+                location: "north-counter".to_owned(),
+                start: at(2, 0),
+                end: at(4, 0),
+                units: 2,
+                units_policy: registry_scheduling_core::RequiredUnitsPolicy::Fixed {
+                    units: 1,
+                    because: "test".to_owned(),
+                },
+                subquotas: Vec::new(),
+                leftover: None,
+                staffing: None,
+                because: "test".to_owned(),
+            }],
+            ..SchedulingFacts::default()
+        }
+    }
+
+    #[test]
+    fn a_window_resolves_only_for_its_own_offering_and_location() {
+        let offering = window_offering();
+        let mut facts = window_facts();
+        assert!(bound_window(&facts, &offering, "morning-arrivals").is_ok());
+
+        facts.windows[0].offering = "other-arrivals".to_owned();
+        assert!(matches!(
+            bound_window(&facts, &offering, "morning-arrivals"),
+            Err(ServiceError::Problem(ProblemCode::ServiceUnavailable))
+        ));
+
+        facts.windows[0].offering = offering.id.clone();
+        facts.windows[0].location = "south-counter".to_owned();
+        assert!(matches!(
+            bound_window(&facts, &offering, "morning-arrivals"),
+            Err(ServiceError::Problem(ProblemCode::ServiceUnavailable))
+        ));
     }
 
     #[test]

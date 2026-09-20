@@ -40,6 +40,7 @@ entries:
     tests:
       - {path: crates/registry-scheduling/src/auth.rs, name: a_grant_naming_another_resource_is_a_profile_refusal}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_edge_refuses_unauthenticated_callers_and_unauthorized_mutations}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_window_record_must_belong_to_the_authorized_offering_and_location}
       - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: scheduling_permission_cardinality_bounds_are_enforced}
   - id: SCHEDULING-SEC-06
     tests:
@@ -77,6 +78,7 @@ entries:
       - {path: crates/registry-scheduling-core/src/admission.rs, name: window_revisions_must_match_and_policy_change_wins}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_reschedule_moves_under_the_observed_revision_and_refuses_stale_ones}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_stale_process_refuses_even_a_request_under_the_current_revision}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: changed_window_records_must_advance_the_revision_even_after_removal}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: competing_cancellations_commit_exactly_one_transition}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_reschedule_and_a_cancellation_commit_exactly_one_transition}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_stale_process_can_still_release_an_appointment}

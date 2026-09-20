@@ -63,15 +63,19 @@ const POLICY_DOCUMENT_MIGRATION: &str = include_str!("../migrations/0004_policy_
 const POLICY_DOCUMENT_MIGRATION_VERSION: i64 = 4;
 const WINDOW_RECORDS_MIGRATION: &str = include_str!("../migrations/0005_window_records.sql");
 const WINDOW_RECORDS_MIGRATION_VERSION: i64 = 5;
+const WINDOW_REVISION_HEADS_MIGRATION: &str =
+    include_str!("../migrations/0006_window_revision_heads.sql");
+const WINDOW_REVISION_HEADS_MIGRATION_VERSION: i64 = 6;
 
 /// Every schema version in ledger order.
 const MIGRATIONS: [(i64, &str); 2] = [(1, SCHEDULING_MIGRATION), (2, FACTS_REVISION_MIGRATION)];
-const SCHEMA_VERSIONS: [i64; 5] = [
+const SCHEMA_VERSIONS: [i64; 6] = [
     1,
     2,
     HOOK_DELIVERY_MIGRATION_VERSION,
     POLICY_DOCUMENT_MIGRATION_VERSION,
     WINDOW_RECORDS_MIGRATION_VERSION,
+    WINDOW_REVISION_HEADS_MIGRATION_VERSION,
 ];
 
 /// Serializes operator-run migrations on one session lock. A second migrator
@@ -119,6 +123,14 @@ pub enum StoreError {
         "the environment records retire, move, or reduce {0}, which live appointments or holds still occupy"
     )]
     FactsInUse(String),
+    #[error(
+        "window {window} changed without advancing its revision beyond {current}; proposed revision is {proposed}"
+    )]
+    WindowRevision {
+        window: String,
+        current: u64,
+        proposed: u64,
+    },
     #[error("the proposed policy would strand standing commitments: {0}")]
     PolicyInUse(String),
     // Both carry the driver's own account of what went wrong. Neither the
@@ -605,6 +617,27 @@ impl PostgresStore {
                 .execute(
                     "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
                     &[&WINDOW_RECORDS_MIGRATION_VERSION],
+                )
+                .await?;
+        }
+        transaction.commit().await?;
+
+        let transaction = client.transaction().await?;
+        let applied: bool = transaction
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM scheduling_schema_migrations WHERE version=$1)",
+                &[&WINDOW_REVISION_HEADS_MIGRATION_VERSION],
+            )
+            .await?
+            .get(0);
+        if !applied {
+            transaction
+                .batch_execute(WINDOW_REVISION_HEADS_MIGRATION)
+                .await?;
+            transaction
+                .execute(
+                    "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
+                    &[&WINDOW_REVISION_HEADS_MIGRATION_VERSION],
                 )
                 .await?;
         }
@@ -2623,6 +2656,40 @@ pub(crate) async fn replace_facts_in_transaction(
                 .map_err(|_| StoreError::Corrupt)
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let revision_heads = transaction
+        .query(
+            "SELECT window_id, window_record FROM scheduling_window_revision_heads ORDER BY window_id",
+            &[],
+        )
+        .await?
+        .iter()
+        .map(|row| {
+            let window_id: String = row.get(0);
+            let window = serde_json::from_value::<registry_scheduling_core::PublishedWindow>(
+                row.get(1),
+            )
+            .map_err(|_| StoreError::Corrupt)?;
+            if window.id != window_id {
+                return Err(StoreError::Corrupt);
+            }
+            Ok(window)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for proposed in &facts.windows {
+        let Some(current) = revision_heads
+            .iter()
+            .find(|current| current.id == proposed.id)
+        else {
+            continue;
+        };
+        if proposed != current && proposed.revision <= current.revision {
+            return Err(StoreError::WindowRevision {
+                window: proposed.id.clone(),
+                current: current.revision,
+                proposed: proposed.revision,
+            });
+        }
+    }
     let now = Utc::now();
     let rows = transaction
         .query(
@@ -2720,6 +2787,15 @@ pub(crate) async fn replace_facts_in_transaction(
             .execute(
                 "INSERT INTO scheduling_supply(supply_id, kind) VALUES($1,'window')",
                 &[&window.id],
+            )
+            .await?;
+        transaction
+            .execute(
+                "INSERT INTO scheduling_window_revision_heads(window_id, window_record, updated_at) \
+                 VALUES($1,$2,now()) \
+                 ON CONFLICT(window_id) DO UPDATE SET window_record=EXCLUDED.window_record, \
+                 updated_at=EXCLUDED.updated_at",
+                &[&window.id, &record],
             )
             .await?;
     }

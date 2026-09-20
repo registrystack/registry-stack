@@ -29,6 +29,8 @@ pub enum PolicyCheckReason {
     UnknownOffering,
     /// A referenced window does not exist.
     UnknownWindow,
+    /// A reference resolves to a record owned by another declaration.
+    MismatchedReference,
     /// A referenced holiday set does not exist.
     UnknownHolidaySet,
     /// A subquota names a channel outside the package's declared channel
@@ -51,8 +53,8 @@ pub enum PolicyCheckReason {
     InvalidBands,
     /// Channel subquotas overlap or sum above the window's published units.
     SubquotaOverdrawn,
-    /// Two declarations draw on the same supply without an attributable
-    /// partition of it.
+    /// Two declarations draw on the same supply without a partition the
+    /// ledger can enforce.
     SharedSupplyUnpartitioned,
     /// A local hook omits or changes the shared handler ABI.
     UnsupportedHookAbi,
@@ -88,6 +90,7 @@ impl PolicyCheckReason {
             Self::UnknownService => "unknown-service",
             Self::UnknownOffering => "unknown-offering",
             Self::UnknownWindow => "unknown-window",
+            Self::MismatchedReference => "mismatched-reference",
             Self::UnknownHolidaySet => "unknown-holiday-set",
             Self::UnknownChannel => "unknown-channel",
             Self::MissingModeField => "missing-mode-field",

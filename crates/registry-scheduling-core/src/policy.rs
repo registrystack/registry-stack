@@ -251,10 +251,10 @@ pub enum LeftoverCapacityPolicy {
 /// staffing in a ledger that cannot see the conflict. That mix is refused at
 /// publication whatever this block declares.
 ///
-/// `reserved_members` is the partition among windows: how many pool members
-/// the window's supply is attributed to. A window that names a pool without a
-/// partition claims the whole block, so two overlapping windows each claiming
-/// the whole pool are double-counting and are rejected at publication.
+/// `reserved_members` records how many pool members the window's supply is
+/// intended to use. The current ledger does not enforce that partition between
+/// windows, so two windows backed by the same pool may not overlap, whatever
+/// either staffing block declares. Disjoint windows may reuse the pool.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WindowStaffing {
@@ -718,11 +718,21 @@ impl SchedulingPolicy {
         check_collection_bound(windows, "windows", &mut findings);
         for (index, offering) in self.offerings.iter().enumerate() {
             if let Some(arrival) = &offering.arrival {
-                if !windows.iter().any(|window| window.id == arrival.window) {
-                    findings.push(SchedulingDiagnostic::new(
+                match windows.iter().find(|window| window.id == arrival.window) {
+                    None => findings.push(SchedulingDiagnostic::new(
                         format!("offerings[{index}].arrival.window"),
                         PolicyCheckReason::UnknownWindow,
-                    ));
+                    )),
+                    Some(window)
+                        if window.offering != offering.id
+                            || window.location != offering.location =>
+                    {
+                        findings.push(SchedulingDiagnostic::new(
+                            format!("offerings[{index}].arrival.window"),
+                            PolicyCheckReason::MismatchedReference,
+                        ));
+                    }
+                    Some(_) => {}
                 }
             }
         }
@@ -862,25 +872,23 @@ impl SchedulingPolicy {
                     PolicyCheckReason::SharedSupplyUnpartitioned,
                 ));
             }
-            // An unpartitioned staffing claim owns the whole pool block, so
-            // two overlapping windows each claiming the whole pool are
-            // double-counting the same staffing.
-            if staffing.reserved_members.is_none() {
-                let doubly_claimed = windows.iter().any(|other| {
-                    other.id != window.id
-                        && other.staffing.as_ref().is_some_and(|other_staffing| {
-                            other_staffing.pool == staffing.pool
-                                && other_staffing.reserved_members.is_none()
-                                && other.start < window.end
-                                && window.start < other.end
-                        })
-                });
-                if doubly_claimed {
-                    findings.push(SchedulingDiagnostic::new(
-                        format!("{path}.staffing.reservedMembers"),
-                        PolicyCheckReason::SharedSupplyUnpartitioned,
-                    ));
-                }
+            // Window claims occupy their window ids, so the ledger cannot
+            // enforce an authored staffing partition between two windows.
+            // Refuse every overlapping use of one pool; disjoint windows may
+            // reuse it because their staffing cannot be booked twice at once.
+            let doubly_claimed = windows.iter().any(|other| {
+                other.id != window.id
+                    && other.staffing.as_ref().is_some_and(|other_staffing| {
+                        other_staffing.pool == staffing.pool
+                            && other.start < window.end
+                            && window.start < other.end
+                    })
+            });
+            if doubly_claimed {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{path}.staffing.pool"),
+                    PolicyCheckReason::SharedSupplyUnpartitioned,
+                ));
             }
         }
     }
@@ -1532,6 +1540,19 @@ windows:
         assert!(rendered.contains(&"openings[0].holidaySet: unknown-holiday-set".to_owned()));
     }
 
+    #[test]
+    fn every_arrival_offering_must_own_its_referenced_window() {
+        let mut policy = household_window_policy();
+        let windows = household_windows();
+        let mut neighbour = policy.offerings[0].clone();
+        neighbour.id = "household-afternoon".to_owned();
+        policy.offerings.push(neighbour);
+
+        let findings = policy.check_window_records(&windows);
+        let rendered: Vec<String> = findings.iter().map(ToString::to_string).collect();
+        assert!(rendered.contains(&"offerings[1].arrival.window: mismatched-reference".to_owned()));
+    }
+
     /// The weekly expansion serves at most MAXIMUM_PATTERN_SPAN_DAYS days, and
     /// the authoring check refuses a wider span at exactly that boundary, so a
     /// checked policy never deploys into a runtime that cannot expand it.
@@ -1757,7 +1778,7 @@ windows:
     }
 
     #[test]
-    fn two_overlapping_whole_pool_claims_are_double_counting() {
+    fn overlapping_windows_may_not_share_a_staffing_pool() {
         let policy = household_window_policy();
         let mut windows = household_windows();
         windows[0].staffing = Some(WindowStaffing {
@@ -1790,11 +1811,42 @@ windows:
         // fixture; only the supply finding is asserted here.
         let findings = policy.check_window_records(&windows);
         let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(rendered
-            .iter()
-            .any(|f| f.ends_with("shared-supply-unpartitioned")));
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|finding| finding.ends_with("shared-supply-unpartitioned"))
+                .count(),
+            2
+        );
 
-        // Disjoint windows may each claim the whole pool.
+        // A whole-pool claim and an attributed subset still have independent
+        // window ledgers, so the authored subset cannot make the overlap safe.
+        windows[1].staffing.as_mut().unwrap().reserved_members = Some(1);
+        let findings = policy.check_window_records(&windows);
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|finding| finding.ends_with("shared-supply-unpartitioned"))
+                .count(),
+            2
+        );
+
+        // Two attributed subsets are equally unenforceable: their claims lock
+        // and consume separate window ids rather than a shared staffing slice.
+        windows[0].staffing.as_mut().unwrap().reserved_members = Some(1);
+        let findings = policy.check_window_records(&windows);
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|finding| finding.ends_with("shared-supply-unpartitioned"))
+                .count(),
+            2
+        );
+
+        // Disjoint windows may reuse the pool regardless of their advisory
+        // attributed member counts.
         let disjoint = PublishedWindow {
             start: Utc.with_ymd_and_hms(2026, 10, 10, 13, 0, 0).unwrap(),
             end: Utc.with_ymd_and_hms(2026, 10, 10, 15, 0, 0).unwrap(),

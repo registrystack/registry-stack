@@ -36,7 +36,7 @@ use registry_scheduling::runtime::{
 };
 use registry_scheduling::service::SchedulingService;
 use registry_scheduling::store::{
-    CommitError, CommitOutcome, Commitment, PostgresStore, SupplyContext,
+    CommitError, CommitOutcome, Commitment, PostgresStore, StoreError, SupplyContext,
 };
 use registry_scheduling_core::{
     location_closure_intervals, location_open_intervals, parse_policy_yaml, AdmissionRefusal,
@@ -560,6 +560,32 @@ fn agent_token_for(subject: &str) -> String {
             .iter()
             .map(|(key, value)| (key.clone(), value.clone())),
     );
+    token(claims)
+}
+
+fn agent_token_for_service(service: &str) -> String {
+    let mut grant = grant_claims();
+    grant["registry_grant_bounds"]["permissions"] = json!([{
+        "service": service,
+        "location": "north-counter",
+        "actions": ["appointment.create"],
+    }]);
+    let mut claims = json!({
+        "sub": format!("principal-{service}"),
+        "azp": CLIENT,
+        "registry_scopes": "scheduling-read",
+        "registry_actor_kind": "service",
+    });
+    claims
+        .as_object_mut()
+        .expect("the claims are an object")
+        .extend(
+            grant
+                .as_object()
+                .expect("the grant claims are an object")
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
     token(claims)
 }
 
@@ -3882,6 +3908,30 @@ fn policy_with_window() -> String {
     )
 }
 
+const FOREIGN_WINDOW_OFFERING: &str = "registry-review-arrivals";
+
+fn policy_with_shared_window() -> String {
+    policy_with_window().replace(
+        "holdPolicy:",
+        &format!(
+            "  - id: {FOREIGN_WINDOW_OFFERING}\n\
+             \x20   service: registry-review\n\
+             \x20   label: Review arrivals\n\
+             \x20   mode: arrival-window\n\
+             \x20   location: north-counter\n\
+             \x20   because: test\n\
+             \x20   cancellationCutoffMinutes: 240\n\
+             \x20   arrival:\n\
+             \x20     window: {WINDOW_ID}\n\
+             \x20     leadTimeMinutes: 60\n\
+             \x20     horizonDays: 60\n\
+             \x20   requiresCapabilities: []\n\
+             \x20   prerequisites: []\n\
+             holdPolicy:"
+        ),
+    )
+}
+
 /// The operator records that publish one concrete arrival window.
 fn records_with_window(start: DateTime<Utc>) -> SchedulingFacts {
     let mut facts = records_without(&[]);
@@ -3988,6 +4038,205 @@ async fn records_replacement_refuses_to_move_a_window_with_standing_commitments(
         .await
         .expect_err("a moved window cannot strand a standing appointment");
     assert!(refusal.to_string().contains(WINDOW_ID), "{refusal}");
+}
+
+#[tokio::test]
+async fn changed_window_records_must_advance_the_revision_even_after_removal() {
+    let start = (Utc::now() + TimeDelta::days(2))
+        .with_nanosecond(0)
+        .expect("second precision");
+    let fx = fixture_with_window(start).await;
+    let (initial, facts_revision) = fx.store.facts().await.expect("the initial records");
+    let audit_rows = fx
+        .store
+        .pending_audit(100)
+        .await
+        .expect("the initial audit rows")
+        .len();
+
+    let mut changed = records_with_window(start);
+    changed.windows[0].end += TimeDelta::minutes(30);
+    for proposed_revision in [WINDOW_REVISION, WINDOW_REVISION - 1] {
+        changed.windows[0].revision = proposed_revision;
+        let refusal = fx
+            .store
+            .replace_facts(SCHEDULING_ID, &changed, Uuid::new_v4(), operator_audit())
+            .await
+            .expect_err("changed terms must advance their public revision");
+        assert!(matches!(
+            refusal,
+            StoreError::WindowRevision {
+                current: WINDOW_REVISION,
+                proposed,
+                ..
+            } if proposed == proposed_revision
+        ));
+    }
+    let (after_refusals, after_refusal_revision) = fx
+        .store
+        .facts()
+        .await
+        .expect("the refused records roll back");
+    assert_eq!(after_refusals, initial);
+    assert_eq!(after_refusal_revision, facts_revision);
+    assert_eq!(
+        fx.store
+            .pending_audit(100)
+            .await
+            .expect("the audit rows after refusal")
+            .len(),
+        audit_rows,
+        "a refused replacement writes no allowed audit row"
+    );
+
+    changed.windows[0].revision = WINDOW_REVISION + 1;
+    fx.store
+        .replace_facts(SCHEDULING_ID, &changed, Uuid::new_v4(), operator_audit())
+        .await
+        .expect("an advanced revision accepts changed terms");
+    fx.store
+        .replace_facts(
+            SCHEDULING_ID,
+            &records_without(&[]),
+            Uuid::new_v4(),
+            operator_audit(),
+        )
+        .await
+        .expect("the idle window may be removed");
+    let (_, removed_revision) = fx.store.facts().await.expect("the removed records");
+    let removed_audit_rows = fx
+        .store
+        .pending_audit(100)
+        .await
+        .expect("the audit rows after removal")
+        .len();
+
+    let mut republished = changed.clone();
+    republished.windows[0].end += TimeDelta::minutes(30);
+    for proposed_revision in [WINDOW_REVISION + 1, WINDOW_REVISION] {
+        republished.windows[0].revision = proposed_revision;
+        let refusal = fx
+            .store
+            .replace_facts(
+                SCHEDULING_ID,
+                &republished,
+                Uuid::new_v4(),
+                operator_audit(),
+            )
+            .await
+            .expect_err("removal does not erase the revision high-water mark");
+        assert!(matches!(
+            refusal,
+            StoreError::WindowRevision {
+                current,
+                proposed,
+                ..
+            } if current == WINDOW_REVISION + 1 && proposed == proposed_revision
+        ));
+    }
+    let (still_removed, after_republish_refusal) = fx
+        .store
+        .facts()
+        .await
+        .expect("the refused republication rolls back");
+    assert!(still_removed.windows.is_empty());
+    assert_eq!(after_republish_refusal, removed_revision);
+    assert_eq!(
+        fx.store
+            .pending_audit(100)
+            .await
+            .expect("the audit rows after republication refusal")
+            .len(),
+        removed_audit_rows
+    );
+
+    republished.windows[0].revision = WINDOW_REVISION + 2;
+    fx.store
+        .replace_facts(
+            SCHEDULING_ID,
+            &republished,
+            Uuid::new_v4(),
+            operator_audit(),
+        )
+        .await
+        .expect("an advanced revision may republish the identifier");
+    fx.store
+        .replace_facts(
+            SCHEDULING_ID,
+            &republished,
+            Uuid::new_v4(),
+            operator_audit(),
+        )
+        .await
+        .expect("an exact unchanged reapply remains accepted");
+}
+
+#[tokio::test]
+async fn a_window_record_must_belong_to_the_authorized_offering_and_location() {
+    let start = (Utc::now() + TimeDelta::hours(3))
+        .with_nanosecond(0)
+        .expect("second precision");
+    let fx = fixture_publishing(
+        &policy_with_shared_window(),
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+    )
+    .await;
+    fx.store
+        .replace_facts(
+            SCHEDULING_ID,
+            &records_with_window(start),
+            Uuid::new_v4(),
+            operator_audit(),
+        )
+        .await
+        .expect("seed the intentionally misbound operator record");
+    let caller = agent_token_for_service("registry-review");
+    let mut request = arrival(&fx, start, None);
+    request["admission"]["offering"] = json!(FOREIGN_WINDOW_OFFERING);
+
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &caller,
+            "foreign-window-offering",
+            request.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    assert_eq!(problem["code"], "service.unavailable");
+
+    let mut wrong_location = records_with_window(start);
+    wrong_location.windows[0].revision = WINDOW_REVISION + 1;
+    wrong_location.windows[0].offering = FOREIGN_WINDOW_OFFERING.to_owned();
+    wrong_location.windows[0].location = "two-counter".to_owned();
+    fx.store
+        .replace_facts(
+            SCHEDULING_ID,
+            &wrong_location,
+            Uuid::new_v4(),
+            operator_audit(),
+        )
+        .await
+        .expect("seed the intentionally wrong-location operator record");
+    request["admission"]["windowRevision"] = json!(WINDOW_REVISION + 1);
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &caller,
+            "foreign-window-location",
+            request,
+        )
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    assert_eq!(problem["code"], "service.unavailable");
+
+    let claims: i64 = fx
+        .admin
+        .query_one("SELECT count(*) FROM scheduling_claims", &[])
+        .await
+        .expect("count the claims")
+        .get(0);
+    assert_eq!(claims, 0, "misbound records never reach a commitment");
 }
 
 #[tokio::test]

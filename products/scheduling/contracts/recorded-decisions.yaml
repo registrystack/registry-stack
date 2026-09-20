@@ -100,19 +100,25 @@ decisions:
       - {path: crates/registry-scheduling-core/src/admission.rs, name: subquota_channels_are_checked_before_the_total}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: subquota_slices_may_not_overdraw_the_window}
   - id: SCHEDULING-DEC-05
-    subject: A pool serving both an exact-time offering and a window is refused
+    subject: One staffing pool cannot back independently counted overlapping supply
     decision: >-
       The authoring check refuses a resource pool that serves an exact-time
-      offering and a published window at the same time. That is not a supported
-      configuration in this milestone.
+      offering and a published window at the same time. It also refuses two
+      overlapping windows backed by the same pool, whatever reservedMembers
+      either window declares. Those are not supported configurations in this
+      milestone; disjoint windows may reuse the pool.
     reasoning: >-
-      The two modes count the same staffing differently, so a shared pool would
-      need ledger-level partition enforcement to stay honest. Refusing the
-      configuration at authoring time is a promise the product can keep now;
-      enforcing the partition in the ledger is later work, and until it exists
-      a deployment must not be able to author its way into the unsound shape.
+      Exact-time commitments count pool members while arrival commitments count
+      window units, and two windows count separate window ids. Each shared shape
+      therefore needs ledger-level staffing partition enforcement to stay
+      honest. reservedMembers records operator intent but does not create that
+      enforcement. Refusing the configuration at authoring time is a promise
+      the product can keep now; enforcing partitions in the ledger is later
+      work, and until it exists a deployment must not be able to author its way
+      into the unsound shape.
     evidence:
       - {path: crates/registry-scheduling-core/src/policy.rs, name: an_unpartitioned_shared_staffing_block_is_rejected}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: overlapping_windows_may_not_share_a_staffing_pool}
   - id: SCHEDULING-DEC-06
     subject: Listing cursors carry no actor binding field
     decision: >-
