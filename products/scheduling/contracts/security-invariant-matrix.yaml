@@ -456,12 +456,14 @@ deferred:
     subject: Database backstop under the duplicate-key guard
     state: deferred
     reason: >-
-      The duplicate guard is evaluated in the admission path against the active
-      claims it reads. The supporting index is partial rather than unique, so
-      the guard rests on the transaction rather than on a database constraint.
+      The duplicate guard is evaluated in the admission path against an
+      offering-wide indexed read of active bookings. The supporting index is
+      partial rather than unique, so the guard rests on the transaction rather
+      than on a database constraint.
     compensatingControl: >-
-      The guard runs inside the same capacity transaction as the claim it
-      protects, so a concurrent pair cannot straddle it.
+      The offering's supply lock serializes the guard and the claim it protects,
+      so a concurrent pair cannot straddle it even when their booking intervals
+      lie under different published opening revisions.
     recordedIn: products/scheduling/SECURITY-REVIEW-NOTES.md
   - id: SCHEDULING-DEF-06
     subject: Appointment, history, outbox, and audit retention

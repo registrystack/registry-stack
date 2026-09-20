@@ -16,6 +16,8 @@ entries:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_direct_create_books_without_a_hold_and_exhausts_capacity}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: exact_time_commitments_include_buffers_outside_the_opening_range}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_records_swap_refuses_to_move_an_occupied_resource_between_pools}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: an_arrival_reschedule_persists_its_new_units_and_channel}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: window_units_must_fit_the_ledger_column}
   - id: SCHEDULING-SEC-02
     tests:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_commitment_against_an_unanchored_pool_refuses_loudly}
@@ -72,6 +74,7 @@ entries:
       - {path: crates/registry-scheduling-core/src/model.rs, name: set_order_never_changes_the_request_hash}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: cancellation_respects_the_cutoff_and_replays_its_verdict}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_concurrent_identical_request_replays_the_winning_receipt}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: concurrent_identical_admissible_requests_replay_one_winning_success}
   - id: SCHEDULING-SEC-10
     tests:
       - {path: crates/registry-scheduling-core/src/admission.rs, name: policy_change_outranks_a_window_revision_mismatch}

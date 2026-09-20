@@ -1291,9 +1291,11 @@ impl SchedulingService {
                     return Err(ServiceError::Problem(ProblemCode::ServiceUnavailable));
                 }
                 let problem = problem_of(&error);
-                // Key misuse keeps the stored attempt as the answer and
-                // records nothing new.
-                if !matches!(error, CommitError::KeyReused | CommitError::KeyExpired) {
+                // An expired receipt cannot be recreated. A reused key still
+                // passes through the insert-or-replay path: a concurrent
+                // identical winner is replayed, while a different request
+                // hash remains key-reused.
+                if !matches!(error, CommitError::KeyExpired) {
                     let receipt = self.commitment(
                         caller,
                         actor,

@@ -181,7 +181,7 @@ pub struct HolidaySetPolicy {
     pub dates: Vec<String>,
 }
 
-/// The authenticated channel a subquota reserves capacity for.
+/// The authenticated channel a subquota limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Channel {
@@ -218,7 +218,7 @@ impl Channel {
     }
 }
 
-/// A non-overlapping reserved slice of a window's published capacity.
+/// A per-channel ceiling within a window's published capacity.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WindowSubquota {
@@ -764,7 +764,7 @@ impl SchedulingPolicy {
                 PolicyCheckReason::DuplicateIdentifier,
             ));
         }
-        if window.units == 0 {
+        if window.units == 0 || window.units > i32::MAX as u32 {
             findings.push(SchedulingDiagnostic::new(
                 format!("{path}.units"),
                 PolicyCheckReason::InvalidBound,
@@ -830,7 +830,7 @@ impl SchedulingPolicy {
                     PolicyCheckReason::DuplicateIdentifier,
                 ));
             }
-            // A declared set is closed: a subquota may not reserve capacity
+            // A declared set is closed: a subquota may not limit capacity
             // for a channel the deployment does not say it serves.
             if !self.channels.is_empty() && !self.channels.contains(&subquota.channel) {
                 findings.push(SchedulingDiagnostic::new(
@@ -1639,6 +1639,25 @@ windows:
         let findings = policy.check_window_records(&windows);
         let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
         assert!(rendered.contains(&"windows[0].subquotas: subquota-overdrawn".to_owned()));
+    }
+
+    #[test]
+    fn window_units_must_fit_the_ledger_column() {
+        let policy = household_window_policy();
+        let mut windows = household_windows();
+        windows[0].units = i32::MAX as u32;
+        assert!(
+            policy.check_window_records(&windows).is_empty(),
+            "the largest ledger allocation must remain valid"
+        );
+
+        windows[0].units = i32::MAX as u32 + 1;
+        let rendered: Vec<String> = policy
+            .check_window_records(&windows)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(rendered, vec!["windows[0].units: invalid-bound".to_owned()]);
     }
 
     #[test]

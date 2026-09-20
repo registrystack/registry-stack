@@ -1416,6 +1416,104 @@ async fn duplicate_active_keys_are_scoped_to_the_offering() {
     assert_eq!(status, StatusCode::CREATED, "{appointment}");
 }
 
+/// A policy may move an exact-time offering's opening dates while retaining
+/// its offering and pool. The standing appointment then falls outside the new
+/// opening span, but its offering-scoped duplicate key remains active and must
+/// still prevent a second booking.
+#[tokio::test]
+async fn a_duplicate_active_key_survives_an_opening_shift_on_the_same_pool() {
+    let keyed = POLICY.replacen(
+        "    requiresCapabilities: []",
+        "    duplicateActiveKey: subject\n    requiresCapabilities: []",
+        1,
+    );
+    let mut fx = fixture_publishing(
+        &keyed,
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+    )
+    .await;
+    let first = first_slot(&fx, OFFERING, 300, 440).await;
+    let mut first_admission = admission(&fx, OFFERING, first);
+    first_admission["duplicateKey"] = json!("subject:opening-shift");
+    let (status, appointment) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "duplicate-before-opening-shift",
+            json!({"hold": null, "admission": first_admission}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{appointment}");
+
+    let next_date = first
+        .date_naive()
+        .succ_opt()
+        .expect("the next opening date is representable");
+    let mut replacement = parse_policy_yaml(&keyed).expect("the replacement policy");
+    replacement.scheduling.version += 1;
+    replacement.openings[0].effective_from = next_date.format("%Y-%m-%d").to_string();
+    let replacement_digest = replacement.policy_digest();
+    let revision = fx
+        .store
+        .apply_policy(
+            SCHEDULING_ID,
+            &replacement_digest,
+            &["north-counter".to_owned(), "two-counter".to_owned()],
+            &replacement,
+        )
+        .await
+        .expect("shift the opening while retaining the offering and pool");
+
+    let keying = AuditHashSecret::new(vec![0x42; 32]).expect("the test audit hash secret");
+    let service = Arc::new(SchedulingService::new(
+        fx.store.clone(),
+        replacement,
+        SCHEDULING_ID.to_owned(),
+        revision,
+        replacement_digest,
+        AuditKeyHasher::Keyed(keying),
+        7,
+    ));
+    fx.http = router(HttpState {
+        service,
+        authenticator: Arc::new(authenticator()),
+        store: fx.store.clone(),
+    });
+    fx.revision = u64::try_from(revision).expect("a bounded policy revision");
+
+    let second = DateTime::<Utc>::from_naive_utc_and_offset(
+        next_date.and_hms_opt(2, 0, 0).expect("a morning slot"),
+        Utc,
+    );
+    let mut second_admission = admission(&fx, OFFERING, second);
+    second_admission["duplicateKey"] = json!("subject:opening-shift");
+    let (status, refusal) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "duplicate-after-opening-shift",
+            json!({"hold": null, "admission": second_admission}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["code"], "booking.duplicate-active");
+
+    let active = fx
+        .admin
+        .query_one(
+            "SELECT count(*) FROM scheduling_claims \
+             WHERE offering=$1 AND kind='booking' AND state='active'",
+            &[&OFFERING],
+        )
+        .await
+        .expect("count active bookings after the refusal");
+    assert_eq!(
+        active.get::<_, i64>(0),
+        1,
+        "the duplicate refusal leaves the first booking as the only active one"
+    );
+}
+
 #[tokio::test]
 async fn a_reschedule_moves_under_the_observed_revision_and_refuses_stale_ones() {
     let fx = fixture().await;
@@ -2423,6 +2521,83 @@ async fn a_concurrent_identical_request_replays_the_winning_receipt() {
     let (status, replayed) = contender.await.expect("the contending request answers");
     assert_eq!(status, StatusCode::CREATED, "{replayed}");
     assert_eq!(replayed["appointmentId"], appointment["appointmentId"]);
+}
+
+/// A success-side idempotency race differs from the exhausted-capacity race
+/// above: the contender still has capacity to admit when it reaches the
+/// completed-attempt insert. The winner's uncommitted key is invisible at the
+/// initial replay read, then wins the insert conflict. The contender must roll
+/// back its tentative claim and replay that receipt.
+#[tokio::test]
+async fn concurrent_identical_admissible_requests_replay_one_winning_success() {
+    let start = (Utc::now() + TimeDelta::hours(3))
+        .with_nanosecond(0)
+        .expect("second precision");
+    let fx = fixture_with_window(start).await;
+    let body = arrival(&fx, start, Some("public"));
+    let (status, winner) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "same-admissible-seed",
+            body.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{winner}");
+
+    // Stage the same completed attempt under the contested key without
+    // committing it. The two-unit window still has one unit free, so the
+    // contender evaluates successfully and reaches this row conflict.
+    fx.admin
+        .batch_execute(
+            "BEGIN; \
+             INSERT INTO scheduling_attempts(attempt_id, actor_issuer, actor_subject, scope, \
+             idempotency_key, request_hash, state, status_code, receipt, expires_at) \
+             SELECT gen_random_uuid(), actor_issuer, actor_subject, scope, \
+             'same-admissible-request', request_hash, state, status_code, receipt, expires_at \
+             FROM scheduling_attempts WHERE idempotency_key = 'same-admissible-seed'",
+        )
+        .await
+        .expect("hold the winning success from another writer");
+
+    let contender = tokio::spawn(send(
+        fx.http.clone(),
+        "POST".to_owned(),
+        "/v1/appointments".to_owned(),
+        fx.agent.clone(),
+        Some("same-admissible-request".to_owned()),
+        Some(body),
+    ));
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        !contender.is_finished(),
+        "the contender waits on the completed-attempt conflict"
+    );
+
+    fx.admin
+        .batch_execute("COMMIT")
+        .await
+        .expect("release the winning success");
+    let replayed = contender.await.expect("the contender answers");
+    assert_eq!(replayed.0, StatusCode::CREATED, "{replayed:?}");
+    assert_eq!(
+        replayed.1["appointmentId"], winner["appointmentId"],
+        "the contender receives the winning receipt"
+    );
+
+    let claims = fx
+        .admin
+        .query_one(
+            "SELECT count(*) FROM scheduling_claims WHERE offering=$1 AND kind='booking'",
+            &[&WINDOW_OFFERING],
+        )
+        .await
+        .expect("count committed window claims");
+    assert_eq!(
+        claims.get::<_, i64>(0),
+        1,
+        "the losing transaction rolls back its tentative claim"
+    );
 }
 
 /// The revision a commitment is admitted under is the one the deployment
@@ -3961,18 +4136,17 @@ fn records_with_window(start: DateTime<Utc>) -> SchedulingFacts {
 }
 
 async fn fixture_with_window(start: DateTime<Utc>) -> Fixture {
+    fixture_with_window_records(records_with_window(start)).await
+}
+
+async fn fixture_with_window_records(facts: SchedulingFacts) -> Fixture {
     let fx = fixture_publishing(
         &policy_with_window(),
         &["north-counter".to_owned(), "two-counter".to_owned()],
     )
     .await;
     fx.store
-        .replace_facts(
-            SCHEDULING_ID,
-            &records_with_window(start),
-            Uuid::new_v4(),
-            operator_audit(),
-        )
+        .replace_facts(SCHEDULING_ID, &facts, Uuid::new_v4(), operator_audit())
         .await
         .expect("publish the window records");
     fx
@@ -4480,6 +4654,97 @@ async fn an_arrival_window_allocates_its_units_and_holds_its_channel_ceiling() {
         .await;
     assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{mismatch}");
     assert_eq!(mismatch["code"], "revision.mismatch");
+}
+
+#[tokio::test]
+async fn an_arrival_reschedule_persists_its_new_units_and_channel() {
+    let start = (Utc::now() + TimeDelta::hours(3))
+        .with_nanosecond(0)
+        .expect("second precision");
+    let mut facts = records_with_window(start);
+    facts.windows[0].units = 6;
+    facts.windows[0].units_policy = RequiredUnitsPolicy::PerRecipient {
+        per_recipient: 1,
+        because: "test".to_owned(),
+    };
+    let fx = fixture_with_window_records(facts).await;
+
+    let (status, appointment) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "arrival-resize-create",
+            arrival(&fx, start, Some("assisted")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{appointment}");
+    assert_eq!(appointment["units"], 1);
+    assert_eq!(appointment["channel"], "assisted");
+    let appointment_id = appointment["appointmentId"]
+        .as_str()
+        .expect("an appointment identifier");
+    let observed_revision = appointment["revision"]
+        .as_u64()
+        .expect("an appointment revision");
+
+    let mut moved_admission = arrival(&fx, start, Some("public"))["admission"].clone();
+    moved_admission["party"] = json!({"recipients": 5, "attendees": 5});
+    let (status, moved) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/reschedule"),
+            &fx.agent,
+            "arrival-resize-move",
+            json!({
+                "observedRevision": observed_revision,
+                "admission": moved_admission,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    assert_eq!(moved["units"], 5);
+    assert_eq!(moved["channel"], "public");
+
+    let stored = fx
+        .admin
+        .query_one(
+            "SELECT units, channel FROM scheduling_claims WHERE claim_id=$1",
+            &[&Uuid::parse_str(appointment_id).expect("a stored appointment identifier")],
+        )
+        .await
+        .expect("read the rescheduled allocation");
+    assert_eq!(stored.get::<_, i32>(0), 5);
+    assert_eq!(
+        stored.get::<_, Option<String>>(1).as_deref(),
+        Some("public")
+    );
+
+    // Moving out of the assisted channel frees that subquota, while the five
+    // recalculated units leave exactly one unit in the window's total.
+    let (status, last) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "arrival-resize-last-unit",
+            arrival(&fx, start, Some("assisted")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{last}");
+    assert_eq!(last["channel"], "assisted");
+    assert!(
+        window_entry(&fx, 60, 300).await.is_none(),
+        "the resized appointment and final assisted unit exhaust the window"
+    );
+
+    let (status, refusal) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "arrival-resize-over-capacity",
+            arrival(&fx, start, Some("public")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["code"], "capacity.exhausted");
 }
 
 // ---------------------------------------------------------------------------

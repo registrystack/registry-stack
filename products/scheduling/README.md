@@ -71,10 +71,9 @@ scheduling --runtime-config "$PWD/runtime.yaml" serve
 scheduling id, which every later start verifies before it writes anything.
 A `serve` that finds a schema older than the one its binary carries refuses
 at the readiness check rather than serving against it, so an upgrade runs
-`migrate` before it restarts the new runtime; the few minutes in between,
-an old runtime may still be serving, and its in-flight availability
-continuation cursors answer `cursor.invalid` once the new binary holds
-them, so a caller mid-pagination restarts that listing from its first page.
+`migrate` before it restarts the new runtime. Availability cursors last at
+most 15 minutes; callers should deduplicate entries by their start when a
+policy, records, or runtime change overlaps an in-flight listing.
 The migration also retains the current policy document beside its digest. On
 an upgrade from an earlier schema, start once with the unchanged policy to
 backfill that document before publishing a policy change.

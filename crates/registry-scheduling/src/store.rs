@@ -1170,7 +1170,14 @@ impl PostgresStore {
             None => {}
         }
         check_grant_current(&commitment)?;
-        let snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
+        let mut snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
+        include_active_duplicate(
+            &transaction,
+            &mut snapshot,
+            offering,
+            request.duplicate_key.as_deref(),
+        )
+        .await?;
         // The caller lock is taken after the supply lock, never before: every
         // hold transaction acquires the two in that one order, so no pair of
         // them can hold what the other is waiting for.
@@ -1207,7 +1214,7 @@ impl PostgresStore {
                 displayed_end: admission.end,
                 occupied_start: admission.occupied_start,
                 occupied_end: admission.occupied_end,
-                units: i32::try_from(admission.units).unwrap_or(i32::MAX),
+                units: i32::try_from(admission.units).map_err(|_| StoreError::Corrupt)?,
                 duplicate_key: request.duplicate_key.as_deref(),
                 hold_expires_at: Some(expires_at),
                 revision: 1,
@@ -1275,7 +1282,14 @@ impl PostgresStore {
             None => {}
         }
         check_grant_current(&commitment)?;
-        let snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
+        let mut snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
+        include_active_duplicate(
+            &transaction,
+            &mut snapshot,
+            offering,
+            request.duplicate_key.as_deref(),
+        )
+        .await?;
         guard_revisions(&transaction, &commitment).await?;
         let admission = evaluate(offering, supply, request, &snapshot, &commitment, None)?;
         self.recheck_grant(&commitment)?;
@@ -1295,7 +1309,7 @@ impl PostgresStore {
                 displayed_end: admission.end,
                 occupied_start: admission.occupied_start,
                 occupied_end: admission.occupied_end,
-                units: i32::try_from(admission.units).unwrap_or(i32::MAX),
+                units: i32::try_from(admission.units).map_err(|_| StoreError::Corrupt)?,
                 duplicate_key: request.duplicate_key.as_deref(),
                 hold_expires_at: None,
                 revision: 1,
@@ -1599,7 +1613,14 @@ impl PostgresStore {
             None => {}
         }
         check_grant_current(&commitment)?;
-        let snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
+        let mut snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
+        include_active_duplicate(
+            &transaction,
+            &mut snapshot,
+            offering,
+            request.duplicate_key.as_deref(),
+        )
+        .await?;
         let appointment = transaction
             .claim_in_transaction(appointment_id)
             .await?
@@ -1634,6 +1655,7 @@ impl PostgresStore {
         )?;
         self.recheck_grant(&commitment)?;
         let next_revision = appointment.revision + 1;
+        let next_units = i32::try_from(admission.units).map_err(|_| StoreError::Corrupt)?;
         if !transaction
             .move_claim(
                 &ClaimMove {
@@ -1646,6 +1668,8 @@ impl PostgresStore {
                     displayed_end: admission.end,
                     occupied_start: admission.occupied_start,
                     occupied_end: admission.occupied_end,
+                    channel: request.channel.as_deref(),
+                    units: next_units,
                     policy_revision: commitment.policy_revision,
                     next_revision,
                 },
@@ -1677,6 +1701,8 @@ impl PostgresStore {
             occupied_start: admission.occupied_start,
             occupied_end: admission.occupied_end,
             supply_id: admission.resource.unwrap_or(appointment.supply_id.clone()),
+            channel: request.channel.clone(),
+            units: next_units,
             revision: next_revision,
             policy_revision: commitment.policy_revision,
             ..appointment.clone()
@@ -2365,6 +2391,43 @@ async fn lock_and_snapshot(
     }
 }
 
+/// Add the offering-wide duplicate fact that a time-bounded capacity snapshot
+/// may omit. The existing supply lock serializes this read with every writer
+/// for the offering's frozen supply; the supporting partial index keeps the
+/// lookup independent of the age or span of its openings.
+async fn include_active_duplicate(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    snapshot: &mut LedgerSnapshot,
+    offering: &registry_scheduling_core::OfferingPolicy,
+    duplicate_key: Option<&str>,
+) -> Result<(), StoreError> {
+    if offering.duplicate_active_key.is_none() {
+        return Ok(());
+    }
+    let Some(duplicate_key) = duplicate_key else {
+        return Ok(());
+    };
+    let rows = transaction
+        .query(
+            "SELECT claim_id, offering, supply_id, kind, channel, occupied_start, \
+             occupied_end, units, duplicate_key, hold_expires_at \
+             FROM scheduling_claims \
+             WHERE state='active' AND kind='booking' AND offering=$1 AND duplicate_key=$2",
+            &[&offering.id, &duplicate_key],
+        )
+        .await?;
+    for claim in snapshot_from_rows(rows).claims {
+        if !snapshot
+            .claims
+            .iter()
+            .any(|existing| existing.id == claim.id)
+        {
+            snapshot.claims.push(claim);
+        }
+    }
+    Ok(())
+}
+
 /// The task-grant re-check at the door of the transaction: a request whose
 /// grant already lapsed fails before any lock is taken.
 fn check_grant_current(commitment: &Commitment<'_>) -> Result<(), CommitError> {
@@ -2918,6 +2981,8 @@ struct ClaimMove<'c> {
     displayed_end: DateTime<Utc>,
     occupied_start: DateTime<Utc>,
     occupied_end: DateTime<Utc>,
+    channel: Option<&'c str>,
+    units: i32,
     policy_revision: i64,
     next_revision: i64,
 }
@@ -3093,8 +3158,9 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
         let moved = self
             .execute(
                 "UPDATE scheduling_claims SET supply_id=$2, displayed_start=$3, displayed_end=$4, \
-                 occupied_start=$5, occupied_end=$6, policy_revision=$7, revision=$8, \
-                 changed_at=now() WHERE claim_id=$1 AND state='active' AND revision=$9",
+                 occupied_start=$5, occupied_end=$6, channel=$7, units=$8, policy_revision=$9, \
+                 revision=$10, changed_at=now() \
+                 WHERE claim_id=$1 AND state='active' AND revision=$11",
                 &[
                     &movement.claim_id,
                     &movement.supply_id,
@@ -3102,6 +3168,8 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
                     &movement.displayed_end,
                     &movement.occupied_start,
                     &movement.occupied_end,
+                    &movement.channel,
+                    &movement.units,
                     &movement.policy_revision,
                     &movement.next_revision,
                     &observed_revision,
@@ -3206,9 +3274,8 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
         if written == 0 {
             // The replay read at the head of this transaction saw no stored
             // attempt because the writer that owns the key had not committed
-            // yet. The key is not this caller's to answer under, and the
-            // whole transaction rolls back behind the refusal, so nothing was
-            // decided.
+            // yet. Roll back this transaction's tentative effects; the
+            // service then reconciles against the winning receipt.
             return Err(CommitError::KeyReused);
         }
         Ok(())
