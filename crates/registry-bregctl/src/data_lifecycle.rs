@@ -2082,6 +2082,122 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
+    /// The registry whose batch byte bound is the protocol's highest, with one
+    /// text field large enough to fill it, so a plan can place a chunk's
+    /// canonical batch body exactly at the batch byte ceiling.
+    fn ceiling_compiled() -> registry_breg::CompiledRegistry {
+        let source = json!({
+            "apiVersion": "registry.registrystack.org/v1alpha1",
+            "kind": "RegistryProject",
+            "registry": {"id": "ctl-data", "version": "1", "defaultLanguage": "en",
+                         "canonicalBaseIri": "https://ctl-data.example.test"},
+            "entities": [{
+                "id": ENTITY,
+                "primaryDataset": "test-dataset",
+                "route": "records",
+                "mutationMode": "create_only",
+                "batch": {
+                    "maximumItems": 2,
+                    "maximumBytes": registry_breg::compiler::MAX_BATCH_BYTES
+                },
+                "fields": [
+                    {"id": "payload", "type": "text", "maxLength": 3_000_000,
+                     "required": true, "classification": "internal"}
+                ]
+            }],
+            "accessProfiles": [{
+                "id": PROFILE,
+                "principalClaim": "principal",
+                "permissions": [{
+                    "entity": ENTITY,
+                    "operations": ["create", "batch", "list"],
+                    "readableFields": ["payload"],
+                    "writableFields": ["payload"],
+                    "allowDataExport": true,
+                    "rowBoundaries": []
+                }]
+            }]
+        });
+        let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+        compile_project(&project, &[], CompileProfile::Authoring).unwrap()
+    }
+
+    /// One padded item: each padding character adds one encoded byte to every
+    /// body the item appears in, and nothing else moves.
+    fn ceiling_item(padding: usize) -> Value {
+        json!({
+            "operation": "create",
+            "data": {"payload": "x".repeat(padding)}
+        })
+    }
+
+    /// The canonical batch body of one padded item.
+    fn ceiling_items_body(padding: usize) -> Vec<u8> {
+        canonicalize_json(&json!({ "items": [ceiling_item(padding)] })).unwrap()
+    }
+
+    #[test]
+    fn a_chunk_at_the_batch_byte_ceiling_encodes_within_the_envelope_headroom() {
+        // The client ceiling mirrors the engine's chunk request ceiling: the
+        // batch byte ceiling plus the chunk envelope's own members. If the two
+        // drift apart, a chunk one side admits is refused by the other.
+        assert_eq!(
+            registry_breg_client::MAXIMUM_BREG_INGESTION_CHUNK_BODY_BYTES,
+            usize::try_from(registry_breg::compiler::INGESTION_CHUNK_REQUEST_CEILING).unwrap()
+        );
+        let ceiling = usize::try_from(registry_breg::compiler::MAX_BATCH_BYTES).unwrap();
+
+        // One item whose canonical batch body is exactly the batch byte
+        // ceiling: the largest chunk the planner may lawfully produce.
+        let padding = ceiling - ceiling_items_body(0).len();
+        assert_eq!(ceiling_items_body(padding).len(), ceiling);
+        let mut input = canonicalize_json(&ceiling_item(padding)).unwrap();
+        input.push(b'\n');
+
+        // The planner and the validator accept a chunk at the ceiling.
+        let registry = ceiling_compiled();
+        let plan = DataImportPlan::from_jsonl(
+            &registry,
+            ENTITY,
+            DataImportOperation::Create,
+            PROFILE,
+            &input,
+        )
+        .unwrap();
+        assert_eq!(plan.maximum_bytes() as usize, ceiling);
+        assert_eq!(plan.chunks().len(), 1);
+        assert_eq!(plan.chunks()[0].canonical_body().len(), ceiling);
+
+        // The envelope the importer submits carries that body plus its own
+        // members, so it passes the plain mutation ceiling while staying
+        // within the chunk request ceiling: exactly the headroom both sides
+        // reserve.
+        let encoded = encode_ingestion_chunk(&plan, &input, 0).unwrap();
+        assert!(
+            encoded.body_len() > registry_breg_client::MAXIMUM_BREG_MUTATION_BODY_BYTES,
+            "the ceiling-sized chunk must actually exercise the envelope headroom"
+        );
+        assert!(
+            encoded.body_len() <= registry_breg_client::MAXIMUM_BREG_INGESTION_CHUNK_BODY_BYTES
+        );
+
+        // One envelope byte beyond the ceiling is still refused, so the
+        // allowance is bounded, not open-ended.
+        let probe = BRegIngestionChunk::new(0, vec![ceiling_item(0)], ingestion_prefix_digest(&[]))
+            .unwrap();
+        let overhead = probe.body_len() - ceiling_items_body(0).len();
+        let beyond = registry_breg_client::MAXIMUM_BREG_INGESTION_CHUNK_BODY_BYTES + 1
+            - overhead
+            - ceiling_items_body(0).len();
+        let refused =
+            BRegIngestionChunk::new(0, vec![ceiling_item(beyond)], ingestion_prefix_digest(&[]))
+                .unwrap_err();
+        assert_eq!(
+            refused,
+            registry_breg_client::BRegIngestionError::BodyTooLarge
+        );
+    }
+
     #[test]
     fn a_rerun_resumes_the_named_run_at_the_servers_next_chunk() {
         let input = import_input();

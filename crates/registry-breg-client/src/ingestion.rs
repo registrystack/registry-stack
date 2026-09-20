@@ -32,6 +32,15 @@ use crate::{
 /// reinterpreted under a different chunking contract.
 pub const BREG_INGESTION_CHUNK_ALGORITHM_VERSION: &str = "greedy-canonical-http-batch-v1";
 
+/// The encoded-byte ceiling one chunk-submission request body may reach. The
+/// Base Registry Engine reads a chunk envelope under its own
+/// `INGESTION_CHUNK_REQUEST_CEILING`, the batch byte ceiling plus a fixed
+/// envelope allowance; this client mirrors that number (it cannot link the
+/// engine's crate) so a chunk whose canonical batch body sits exactly at the
+/// batch ceiling still encodes, envelope included. Run creation stays at the
+/// plain mutation body ceiling.
+pub const MAXIMUM_BREG_INGESTION_CHUNK_BODY_BYTES: usize = MAXIMUM_BREG_MUTATION_BODY_BYTES + 1024;
+
 const SHA256_HEX_LENGTH: usize = 64;
 const MAXIMUM_BOUND_TEXT_BYTES: usize = 256;
 const MAXIMUM_TIMESTAMP_BYTES: usize = 128;
@@ -60,7 +69,7 @@ pub enum BRegIngestionError {
     EmptyChunk,
     #[error("a Base Registry Engine ingestion chunk item is not a valid batch item")]
     InvalidItem,
-    #[error("the Base Registry Engine ingestion request body exceeds 2097152 encoded bytes")]
+    #[error("the Base Registry Engine ingestion request body exceeds its encoded-byte ceiling")]
     BodyTooLarge,
     #[error("the Base Registry Engine ingestion request body could not be encoded")]
     BodyEncoding,
@@ -978,7 +987,7 @@ impl BRegIngestionChunk {
             prefix_digest: &prefix_digest,
         };
         let body = serde_json::to_vec(&envelope).map_err(|_| BRegIngestionError::BodyEncoding)?;
-        if body.len() > MAXIMUM_BREG_MUTATION_BODY_BYTES {
+        if body.len() > MAXIMUM_BREG_INGESTION_CHUNK_BODY_BYTES {
             return Err(BRegIngestionError::BodyTooLarge);
         }
         Ok(Self {

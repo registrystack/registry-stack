@@ -13,6 +13,7 @@
 //! `Idempotency-Key` is accepted on these routes.
 
 use super::*;
+use crate::compiler::IngestionApiOperation;
 use crate::postgres::{
     IngestionChunkSubmitInput, IngestionRunCreateInput, IngestionRunListQuery,
     IngestionServiceError,
@@ -457,8 +458,15 @@ async fn submit_chunk(
     // The body is bounded by the stable protocol ceilings, never the current
     // package's batch limits: an exact replay of a chunk a previous package
     // admitted must still reach the service, which enforces the run's own
-    // stored bounds.
-    let Ok(body) = bounded_body_to(body, crate::compiler::MAX_BATCH_BYTES as usize).await else {
+    // stored bounds. The ceiling is the batch byte ceiling plus the chunk
+    // envelope's own members, so a chunk whose canonical batch body sits
+    // exactly at the batch ceiling is read, not refused before parsing.
+    let Ok(body) = bounded_body_to(
+        body,
+        crate::compiler::INGESTION_CHUNK_REQUEST_CEILING as usize,
+    )
+    .await
+    else {
         return audited_mutation_refusal(
             mutations,
             &binding.base,
@@ -980,14 +988,7 @@ pub(super) fn append_openapi(
                 "responses": ingestion_responses(
                     "201",
                     create_run_answer(),
-                    &[
-                        crate::problem::ProblemCode::RequestInvalid,
-                        crate::problem::ProblemCode::AuthenticationRefused,
-                        crate::problem::ProblemCode::IngestionProfileMismatch,
-                        crate::problem::ProblemCode::PreconditionFailed,
-                        crate::problem::ProblemCode::UnsupportedMediaType,
-                        crate::problem::ProblemCode::ServiceUnavailable,
-                    ],
+                    IngestionApiOperation::CreateRun.problem_codes(),
                 ),
             }),
         );
@@ -1041,11 +1042,7 @@ pub(super) fn append_openapi(
                 "responses": ingestion_responses(
                     "200",
                     list_runs_answer(),
-                    &[
-                        crate::problem::ProblemCode::RequestInvalid,
-                        crate::problem::ProblemCode::AuthenticationRefused,
-                        crate::problem::ProblemCode::ServiceUnavailable,
-                    ],
+                    IngestionApiOperation::ListRuns.problem_codes(),
                 ),
             }),
         );
@@ -1066,12 +1063,7 @@ pub(super) fn append_openapi(
                 "responses": ingestion_responses(
                     "200",
                     run_answer(),
-                    &[
-                        crate::problem::ProblemCode::RequestInvalid,
-                        crate::problem::ProblemCode::AuthenticationRefused,
-                        crate::problem::ProblemCode::ResourceNotFound,
-                        crate::problem::ProblemCode::ServiceUnavailable,
-                    ],
+                    IngestionApiOperation::ReadRun.problem_codes(),
                 ),
             }),
         );
@@ -1112,19 +1104,7 @@ pub(super) fn append_openapi(
                             }
                         }
                     }),
-                    &[
-                        crate::problem::ProblemCode::RequestInvalid,
-                        crate::problem::ProblemCode::AuthenticationRefused,
-                        crate::problem::ProblemCode::IngestionProfileMismatch,
-                        crate::problem::ProblemCode::ResourceNotFound,
-                        crate::problem::ProblemCode::IngestionRunNotOpen,
-                        crate::problem::ProblemCode::IngestionRunBlocked,
-                        crate::problem::ProblemCode::IngestionChunkMismatch,
-                        crate::problem::ProblemCode::IngestionReceiptErased,
-                        crate::problem::ProblemCode::PreconditionFailed,
-                        crate::problem::ProblemCode::UnsupportedMediaType,
-                        crate::problem::ProblemCode::ServiceUnavailable,
-                    ],
+                    IngestionApiOperation::SubmitChunk.problem_codes(),
                 ),
             }),
         );
@@ -1145,15 +1125,7 @@ pub(super) fn append_openapi(
                 "responses": ingestion_responses(
                     "200",
                     run_answer(),
-                    &[
-                        crate::problem::ProblemCode::RequestInvalid,
-                        crate::problem::ProblemCode::AuthenticationRefused,
-                        crate::problem::ProblemCode::IngestionProfileMismatch,
-                        crate::problem::ProblemCode::ResourceNotFound,
-                        crate::problem::ProblemCode::IngestionRunNotOpen,
-                        crate::problem::ProblemCode::UnsupportedMediaType,
-                        crate::problem::ProblemCode::ServiceUnavailable,
-                    ],
+                    IngestionApiOperation::CancelRun.problem_codes(),
                 ),
             }),
         );
@@ -1183,13 +1155,7 @@ pub(super) fn append_openapi(
                 "responses": ingestion_responses(
                     "200",
                     json!({"$ref": "#/components/schemas/IngestionChunkReceipt"}),
-                    &[
-                        crate::problem::ProblemCode::RequestInvalid,
-                        crate::problem::ProblemCode::AuthenticationRefused,
-                        crate::problem::ProblemCode::ResourceNotFound,
-                        crate::problem::ProblemCode::IngestionReceiptErased,
-                        crate::problem::ProblemCode::ServiceUnavailable,
-                    ],
+                    IngestionApiOperation::ChunkReceipt.problem_codes(),
                 ),
             }),
         );
