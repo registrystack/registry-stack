@@ -22,7 +22,9 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::client::{access_profile_query, valid_breg_identifier, validate_entity_route};
-use crate::mutation::{validate_json_values, MAXIMUM_BREG_MUTATION_BODY_BYTES};
+use crate::mutation::{
+    validate_json_values, MAXIMUM_BREG_MUTATION_BODY_BYTES, MAXIMUM_BREG_PATCH_OPERATIONS,
+};
 use crate::{
     BRegBatchOperation, BRegComplete, BRegRawDocument, BaseRegistryClient, BaseRegistryClientError,
 };
@@ -971,6 +973,10 @@ pub struct BRegIngestionChunk {
 impl BRegIngestionChunk {
     /// Encode one chunk submission.
     ///
+    /// Every item must carry the closed create-or-patch shape the entity's
+    /// batch route parses, so a chunk no run could ever accept is refused
+    /// before it encodes.
+    ///
     /// `prefix_digest` is required: it is the lowercase SHA-256 of the
     /// complete raw source input through the end of this chunk, which
     /// [`ingestion_prefix_digest`] derives, and the encoded envelope always
@@ -987,7 +993,7 @@ impl BRegIngestionChunk {
         if items.len() > MAXIMUM_BREG_INGESTION_CHUNK_ITEMS {
             return Err(BRegIngestionError::TooManyItems);
         }
-        if items.iter().any(|item| !item.is_object()) {
+        if items.iter().any(|item| !valid_batch_item(item)) {
             return Err(BRegIngestionError::InvalidItem);
         }
         validate_json_values(&items, 2).map_err(|_| BRegIngestionError::InvalidItem)?;
@@ -1241,6 +1247,81 @@ fn bound_member(value: impl Into<String>) -> Result<String, BRegIngestionError> 
         return Err(BRegIngestionError::InvalidBinding);
     }
     Ok(value)
+}
+
+/// Whether one chunk item carries the closed create-or-patch shape the Base
+/// Registry Engine's batch route parses. A create carries exactly the
+/// operation and its domain data object; a patch carries exactly the
+/// operation, the record reference, the expected etag, and the JSON Patch
+/// document. Anything else is refused here rather than answered
+/// request.invalid by a run that could never accept it.
+fn valid_batch_item(item: &Value) -> bool {
+    let Some(object) = item.as_object() else {
+        return false;
+    };
+    match object.get("operation").and_then(Value::as_str) {
+        Some("create") => object.len() == 2 && object.get("data").is_some_and(Value::is_object),
+        Some("patch") => {
+            object.len() == 4
+                && object
+                    .get("recordId")
+                    .and_then(Value::as_str)
+                    .is_some_and(canonical_record_id)
+                && object
+                    .get("ifMatch")
+                    .and_then(Value::as_str)
+                    .is_some_and(valid_strong_etag)
+                && object.get("patch").is_some_and(valid_json_patch_document)
+        }
+        _ => false,
+    }
+}
+
+/// One record id in the canonical lowercase UUID form the engine parses a
+/// patch item's reference with.
+fn canonical_record_id(value: &str) -> bool {
+    Uuid::parse_str(value).is_ok_and(|id| id.to_string() == value)
+}
+
+/// One strong etag in the quoted `breg-` form, within the byte bounds and
+/// visible-ASCII rung, the engine compares a patch item's expectation with.
+fn valid_strong_etag(value: &str) -> bool {
+    value.len() > 7
+        && value.len() <= 256
+        && value.starts_with("\"breg-")
+        && value.ends_with('"')
+        && value.as_bytes()[1..value.len() - 1]
+            .iter()
+            .all(|byte| matches!(byte, 0x21 | 0x23..=0x7e))
+}
+
+/// One JSON Patch document as the engine parses a patch item's document: a
+/// bounded, non-empty array whose operations come from the closed
+/// add/replace/test/remove vocabulary and carry exactly the members that
+/// operation admits.
+fn valid_json_patch_document(patch: &Value) -> bool {
+    let Some(operations) = patch.as_array() else {
+        return false;
+    };
+    if operations.is_empty() || operations.len() > MAXIMUM_BREG_PATCH_OPERATIONS {
+        return false;
+    }
+    operations.iter().all(|operation| {
+        let Some(object) = operation.as_object() else {
+            return false;
+        };
+        let Some(op) = object.get("op").and_then(Value::as_str) else {
+            return false;
+        };
+        if !object.get("path").is_some_and(Value::is_string) {
+            return false;
+        }
+        match op {
+            "add" | "replace" | "test" => object.len() == 3 && object.contains_key("value"),
+            "remove" => object.len() == 2,
+            _ => false,
+        }
+    })
 }
 
 fn timestamp(value: &str) -> Option<&str> {
@@ -1896,6 +1977,73 @@ mod tests {
         assert_eq!(
             BRegIngestionChunk::new(0, over_ceiling, PREFIX_DIGEST).unwrap_err(),
             BRegIngestionError::TooManyItems
+        );
+    }
+
+    #[test]
+    fn a_chunk_refuses_items_outside_the_closed_batch_item_shapes() {
+        let create = json!({"operation": "create", "data": {"legalName": "Example Ltd"}});
+        let etag = "\"breg-record-v1-abcdef012345\"";
+        let patch = json!({
+            "operation": "patch",
+            "recordId": RUN_ID,
+            "ifMatch": etag,
+            "patch": [{"op": "replace", "path": "/data/legalName", "value": "Renamed Ltd"}]
+        });
+        BRegIngestionChunk::new(0, vec![create.clone()], PREFIX_DIGEST).expect("a create item");
+        BRegIngestionChunk::new(0, vec![patch.clone()], PREFIX_DIGEST).expect("a patch item");
+
+        let malformed: Vec<Value> = vec![
+            json!({}),
+            json!({"operation": "create"}),
+            json!({"operation": "create", "data": {"legalName": "Example Ltd"}, "extra": 1}),
+            json!({"operation": "create", "data": "not-an-object"}),
+            json!({"operation": "delete", "data": {}}),
+            // A patch carries exactly the record reference, the expected etag,
+            // and the JSON Patch document.
+            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": etag}),
+            json!({"operation": "patch", "recordId": "not-a-uuid", "ifMatch": etag, "patch": [
+                {"op": "remove", "path": "/data/legalName"}
+            ]}),
+            json!({"operation": "patch", "recordId": "00000000000040008000000000000001",
+                   "ifMatch": etag, "patch": [{"op": "remove", "path": "/data/legalName"}]}),
+            json!({"operation": "patch", "recordId": "00000000-0000-4000-8000-00000000000A",
+                   "ifMatch": etag, "patch": [{"op": "remove", "path": "/data/legalName"}]}),
+            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": "\"breg-\"", "patch": [
+                {"op": "remove", "path": "/data/legalName"}
+            ]}),
+            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": "breg-record-v1-abcdef012345",
+                   "patch": [{"op": "remove", "path": "/data/legalName"}]}),
+            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": etag,
+                   "patch": {"op": "remove", "path": "/data/legalName"}}),
+            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": etag, "patch": []}),
+            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": etag, "patch": [
+                {"op": "rename", "path": "/data/legalName", "value": "Renamed Ltd"}
+            ]}),
+            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": etag, "patch": [
+                {"op": "replace", "path": "/data/legalName"}
+            ]}),
+            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": etag, "patch": [
+                {"op": "remove", "path": "/data/legalName", "value": null}
+            ]}),
+            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": etag, "patch": [
+                {"op": "remove", "path": 7}
+            ]}),
+            json!({"operation": "patch", "recordId": RUN_ID, "ifMatch": etag, "patch": [
+                {"op": 7, "path": "/data/legalName"}
+            ]}),
+        ];
+        for item in malformed {
+            assert_eq!(
+                BRegIngestionChunk::new(0, vec![item.clone()], PREFIX_DIGEST).unwrap_err(),
+                BRegIngestionError::InvalidItem,
+                "the item {item} is outside the closed batch item shapes"
+            );
+        }
+        // One malformed item refuses the whole chunk.
+        assert_eq!(
+            BRegIngestionChunk::new(0, vec![create, json!({})], PREFIX_DIGEST).unwrap_err(),
+            BRegIngestionError::InvalidItem
         );
     }
 
