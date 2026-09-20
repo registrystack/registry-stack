@@ -715,8 +715,8 @@ jobs:
 
   scheduling-contracts:
     name: Scheduling product contracts
-    needs: changes
-    if: needs.changes.outputs.scheduling_contracts == 'true'
+    needs: [changes, rust-policy]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.scheduling_contracts == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:

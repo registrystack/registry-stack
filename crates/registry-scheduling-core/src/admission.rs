@@ -74,7 +74,7 @@ pub enum AdmissionRefusal {
     PrerequisiteMissing { missing: Vec<String> },
     #[error("the request names a channel the closed vocabulary or the policy does not serve")]
     ChannelUnknown,
-    #[error("no backing member carries the required capabilities")]
+    #[error("the party or backing supply lacks a required capability")]
     CapabilityUnmatched,
     #[error("an active booking already holds this party's duplicate key")]
     DuplicateActiveBooking,
@@ -200,6 +200,7 @@ pub fn evaluate_exact_time_admission(
     if request.party.recipients == 0 || request.party.recipients > exact.max_recipients {
         return Err(AdmissionRefusal::PartyCapacityInadequate);
     }
+    check_capabilities(offering, request)?;
     check_prerequisites(offering, request)?;
     check_duplicate(offering, request, snapshot, exclude, *now)?;
 
@@ -355,6 +356,7 @@ pub fn evaluate_window_admission(
     if required > window.units {
         return Err(AdmissionRefusal::PartyCapacityInadequate);
     }
+    check_capabilities(offering, request)?;
     check_prerequisites(offering, request)?;
     check_duplicate(offering, request, snapshot, exclude, *now)?;
 
@@ -452,6 +454,21 @@ fn check_prerequisites(
     }
 }
 
+fn check_capabilities(
+    offering: &OfferingPolicy,
+    request: &AdmissionRequest,
+) -> Result<(), AdmissionRefusal> {
+    if offering
+        .requires_capabilities
+        .iter()
+        .all(|wanted| request.capabilities.contains(wanted))
+    {
+        Ok(())
+    } else {
+        Err(AdmissionRefusal::CapabilityUnmatched)
+    }
+}
+
 fn check_duplicate(
     offering: &OfferingPolicy,
     request: &AdmissionRequest,
@@ -467,7 +484,7 @@ fn check_duplicate(
         // key: skipping the check would let the same party hold two active
         // bookings by omission.
         None => Err(AdmissionRefusal::DuplicateKeyRequired),
-        Some(key) if snapshot.duplicate_active(key, exclude, now) => {
+        Some(key) if snapshot.duplicate_active(&offering.id, key, exclude, now) => {
             Err(AdmissionRefusal::DuplicateActiveBooking)
         }
         Some(_) => Ok(()),
@@ -606,6 +623,7 @@ mod tests {
     ) -> LedgerClaim {
         LedgerClaim {
             id: id.to_owned(),
+            offering: "registry-update-30".to_owned(),
             supply_id: supply.to_owned(),
             kind: LedgerKind::Booking,
             channel: None,
@@ -620,6 +638,7 @@ mod tests {
     fn window_claim(id: &str, units: u32, channel: &str) -> LedgerClaim {
         LedgerClaim {
             id: id.to_owned(),
+            offering: "household-renewal".to_owned(),
             supply_id: "household-morning-window".to_owned(),
             kind: LedgerKind::Booking,
             channel: Some(channel.to_owned()),
@@ -907,6 +926,7 @@ mod tests {
         let now = utc(4, 4, 0);
         let expired_hold = LedgerClaim {
             id: "hold-1".to_owned(),
+            offering: "registry-update-30".to_owned(),
             supply_id: "station-1".to_owned(),
             kind: LedgerKind::Hold,
             channel: None,
@@ -938,6 +958,7 @@ mod tests {
         let now = utc(4, 4, 0);
         let live_hold = LedgerClaim {
             id: "hold-1".to_owned(),
+            offering: "registry-update-30".to_owned(),
             supply_id: "station-1".to_owned(),
             kind: LedgerKind::Hold,
             channel: None,
@@ -1060,8 +1081,27 @@ mod tests {
         }];
         let wanting_context =
             exact_context(&wanting, &exact_wanting, &capable_members, &snapshot, now);
+        let capable_request = AdmissionRequest {
+            capabilities: vec!["interpreter".to_owned()],
+            ..exact_request(utc(5, 2, 30))
+        };
         assert_eq!(
-            evaluate_exact_time_admission(&wanting_context, &exact_request(utc(5, 2, 30)), None)
+            evaluate_exact_time_admission(&wanting_context, &capable_request, None)
+                .err()
+                .map(|refusal| refusal.public_code()),
+            Some(ProblemCode::CapabilityUnmatched)
+        );
+
+        // The request must carry the offering capability too; a capable
+        // backing member does not make up for a party that lacks it.
+        let available = vec![PoolMember {
+            resource_id: "station-1".to_owned(),
+            capabilities: vec!["interpreter".to_owned()],
+            available: true,
+        }];
+        let available_context = exact_context(&wanting, &exact_wanting, &available, &snapshot, now);
+        assert_eq!(
+            evaluate_exact_time_admission(&available_context, &exact_request(utc(5, 2, 30)), None,)
                 .err()
                 .map(|refusal| refusal.public_code()),
             Some(ProblemCode::CapabilityUnmatched)
@@ -1076,12 +1116,8 @@ mod tests {
         }];
         let unavailable_context =
             exact_context(&wanting, &exact_wanting, &unavailable, &snapshot, now);
-        let refused = evaluate_exact_time_admission(
-            &unavailable_context,
-            &exact_request(utc(5, 2, 30)),
-            None,
-        )
-        .expect_err("refused");
+        let refused = evaluate_exact_time_admission(&unavailable_context, &capable_request, None)
+            .expect_err("refused");
         assert_eq!(refused.public_code(), ProblemCode::CapacityExhausted);
         assert_eq!(refused.detailed_code(), ProblemCode::ResourceUnavailable);
     }
@@ -1246,6 +1282,35 @@ mod tests {
         };
         let single = evaluate_window_admission(&context, &unchanneled, None);
         assert_eq!(single.map(|admission| admission.units), Ok(1));
+    }
+
+    #[test]
+    fn an_arrival_window_requires_the_partys_capabilities() {
+        let mut offering = arrival_offering();
+        offering.requires_capabilities = vec!["interpreter".to_owned()];
+        let window = window();
+        let snapshot = LedgerSnapshot::default();
+        let now = utc(4, 9, 0);
+        let context = WindowContext {
+            offering: &offering,
+            window: &window,
+            lead_time_minutes: 1,
+            horizon_days: 60,
+            snapshot: &snapshot,
+            policy_revision: 1,
+            channels: &[],
+            now,
+        };
+        let missing = evaluate_window_admission(&context, &window_request(1, 1), None);
+        assert_eq!(
+            missing.err().map(|refusal| refusal.public_code()),
+            Some(ProblemCode::CapabilityUnmatched)
+        );
+        let held = AdmissionRequest {
+            capabilities: vec!["interpreter".to_owned()],
+            ..window_request(1, 1)
+        };
+        assert!(evaluate_window_admission(&context, &held, None).is_ok());
     }
 
     #[test]

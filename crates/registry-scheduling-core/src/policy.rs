@@ -1776,6 +1776,7 @@ holdPolicy:
         let now = utc(6, 0);
         let claim = LedgerClaim {
             id: "claim-1".to_owned(),
+            offering: "household-renewal".to_owned(),
             supply_id: "household-morning-window".to_owned(),
             kind: LedgerKind::Booking,
             channel: Some("public".to_owned()),
@@ -1827,6 +1828,7 @@ holdPolicy:
         let now = utc(6, 0);
         let claim = LedgerClaim {
             id: "claim-1".to_owned(),
+            offering: "household-renewal".to_owned(),
             supply_id: "household-morning-window".to_owned(),
             kind: LedgerKind::Booking,
             channel: Some("public".to_owned()),
@@ -1888,6 +1890,7 @@ holdPolicy:
         let now = utc(6, 0);
         let claim = LedgerClaim {
             id: "claim-1".to_owned(),
+            offering: "household-renewal".to_owned(),
             supply_id: "household-morning-window".to_owned(),
             kind: LedgerKind::Booking,
             channel: Some("public".to_owned()),
@@ -1941,6 +1944,7 @@ holdPolicy:
         let now = utc(6, 0);
         let claim = LedgerClaim {
             id: "claim-1".to_owned(),
+            offering: "household-renewal".to_owned(),
             supply_id: "household-morning-window".to_owned(),
             kind: LedgerKind::Booking,
             channel: Some("public".to_owned()),
@@ -1974,6 +1978,7 @@ holdPolicy:
         // the morning claim still meets the window, the late one does not.
         let late = LedgerClaim {
             id: "claim-2".to_owned(),
+            offering: "household-renewal".to_owned(),
             supply_id: "household-morning-window".to_owned(),
             kind: LedgerKind::Booking,
             channel: Some("assisted".to_owned()),

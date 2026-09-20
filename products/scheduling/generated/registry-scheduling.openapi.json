@@ -860,7 +860,7 @@
                 "const": "capability.unmatched"
               },
               "detail": {
-                "const": "No backing member carries every capability this offering requires."
+                "const": "The party or backing supply does not carry every capability this offering requires."
               },
               "status": {
                 "const": 422

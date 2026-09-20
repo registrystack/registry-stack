@@ -360,7 +360,7 @@ async fn fixture_publishing_with_hook_url(
     let policy = parse_policy_yaml(policy_yaml).expect("the scheduling test policy");
     let digest = policy.policy_digest();
     let revision = store
-        .apply_policy(SCHEDULING_ID, &digest, pool_ids, window_ids)
+        .apply_policy(SCHEDULING_ID, &digest, pool_ids, window_ids, &policy)
         .await
         .expect("publish the scheduling policy");
     let keying = AuditHashSecret::new(vec![0x42; 32]).expect("the test audit hash secret");
@@ -1323,6 +1323,89 @@ async fn a_direct_create_books_without_a_hold_and_exhausts_capacity() {
 }
 
 #[tokio::test]
+async fn exact_time_commitments_include_buffers_outside_the_opening_range() {
+    let buffered = POLICY
+        .replacen("endTime: \"23:30\"", "endTime: \"23:59\"", 1)
+        .replacen("bufferBeforeMinutes: 0", "bufferBeforeMinutes: 30", 1)
+        .replacen("durationMinutes: 60", "durationMinutes: 45", 1);
+    let fx = fixture_publishing(
+        &buffered,
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+        &[],
+    )
+    .await;
+    let day = (Utc::now() + TimeDelta::days(2)).date_naive();
+    let midnight = DateTime::<Utc>::from_naive_utc_and_offset(
+        day.and_hms_opt(0, 0, 0).expect("midnight"),
+        Utc,
+    );
+    let earlier = midnight - TimeDelta::hours(1);
+    let (status, first) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "buffer-boundary-first",
+            json!({
+                "hold": null,
+                "admission": admission(&fx, OVERLAPPING_OFFERING, earlier),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "buffer-boundary-second",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, midnight)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert_eq!(problem["code"], "capacity.exhausted");
+}
+
+#[tokio::test]
+async fn duplicate_active_keys_are_scoped_to_the_offering() {
+    let keyed = POLICY.replacen(
+        "    requiresCapabilities: []",
+        "    duplicateActiveKey: subject\n    requiresCapabilities: []",
+        2,
+    );
+    let fx = fixture_publishing(
+        &keyed,
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+        &[],
+    )
+    .await;
+    let first = first_slot(&fx, OFFERING, 300, 440).await;
+    let second = first_slot(&fx, OVERLAPPING_OFFERING, 480, 620).await;
+    let mut first_admission = admission(&fx, OFFERING, first);
+    first_admission["duplicateKey"] = json!("subject:shared");
+    let (status, appointment) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "duplicate-offering-first",
+            json!({"hold": null, "admission": first_admission}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{appointment}");
+
+    let mut second_admission = admission(&fx, OVERLAPPING_OFFERING, second);
+    second_admission["duplicateKey"] = json!("subject:shared");
+    let (status, appointment) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "duplicate-offering-second",
+            json!({"hold": null, "admission": second_admission}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{appointment}");
+}
+
+#[tokio::test]
 async fn a_reschedule_moves_under_the_observed_revision_and_refuses_stale_ones() {
     let fx = fixture().await;
     let from = first_slot(&fx, OFFERING, 300, 440).await;
@@ -1369,6 +1452,38 @@ async fn a_reschedule_moves_under_the_observed_revision_and_refuses_stale_ones()
         .await;
     assert_eq!(status, StatusCode::PRECONDITION_FAILED);
     assert_eq!(problem["code"], "revision.mismatch");
+}
+
+#[tokio::test]
+async fn a_reschedule_refuses_an_admission_for_another_offering() {
+    let fx = fixture().await;
+    let from = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, appointment) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "resched-offering-create",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, from)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{appointment}");
+    let appointment_id = appointment["appointmentId"].as_str().unwrap();
+    let observed = appointment["revision"].as_u64().unwrap();
+    let other = first_slot(&fx, SECOND_OFFERING, 480, 620).await;
+
+    let (status, problem) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/reschedule"),
+            &fx.agent,
+            "resched-offering-mismatch",
+            json!({
+                "observedRevision": observed,
+                "admission": admission(&fx, SECOND_OFFERING, other),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{problem}");
+    assert_eq!(problem["code"], "request.unprocessable");
 }
 
 /// COR-1. A reschedule must never compete with the appointment it is moving.
@@ -2158,6 +2273,51 @@ async fn a_concurrent_writer_of_one_idempotency_key_is_refused_not_failed() {
     assert!(slot_offered(&fx, OFFERING, 90, 260, second).await);
 }
 
+#[tokio::test]
+async fn a_concurrent_identical_request_replays_the_winning_receipt() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 90, 260).await;
+    let body = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+    let (status, appointment) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "race-same-seed",
+            body.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{appointment}");
+
+    fx.admin
+        .batch_execute(
+            "BEGIN; \
+             INSERT INTO scheduling_attempts(attempt_id, actor_issuer, actor_subject, scope, \
+             idempotency_key, request_hash, state, status_code, receipt, expires_at) \
+             SELECT gen_random_uuid(), actor_issuer, actor_subject, scope, 'race-same', \
+             request_hash, state, status_code, receipt, expires_at \
+             FROM scheduling_attempts WHERE idempotency_key = 'race-same-seed'",
+        )
+        .await
+        .expect("hold the winning receipt from another writer");
+
+    let contender = tokio::spawn(send(
+        fx.http.clone(),
+        "POST".to_owned(),
+        "/v1/appointments".to_owned(),
+        fx.agent.clone(),
+        Some("race-same".to_owned()),
+        Some(body),
+    ));
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    fx.admin
+        .batch_execute("COMMIT")
+        .await
+        .expect("release the winning receipt");
+    let (status, replayed) = contender.await.expect("the contending request answers");
+    assert_eq!(status, StatusCode::CREATED, "{replayed}");
+    assert_eq!(replayed["appointmentId"], appointment["appointmentId"]);
+}
+
 /// The revision a commitment is admitted under is the one the deployment
 /// stores, not the one this process read when it started. Operator tooling
 /// and a rolling deploy both move the stored revision under a running
@@ -2181,13 +2341,17 @@ async fn a_policy_applied_under_a_running_process_refuses_the_older_revision() {
 
     // Operator tooling publishes a different policy against the same
     // deployment, exactly as `schedulingctl` does beside a running runtime.
+    let mut replacement = parse_policy_yaml(POLICY).expect("the replacement policy");
+    replacement.scheduling.version += 1;
+    let replacement_digest = replacement.policy_digest();
     let moved = fx
         .store
         .apply_policy(
             SCHEDULING_ID,
-            "a-policy-this-process-never-loaded",
+            &replacement_digest,
             &["north-counter".to_owned(), "two-counter".to_owned()],
             &[],
+            &replacement,
         )
         .await
         .expect("publish a second policy revision");
@@ -2405,6 +2569,37 @@ async fn a_records_swap_refuses_to_strand_a_resource_an_active_claim_occupies() 
         Some(0),
         "the idle member is gone"
     );
+}
+
+#[tokio::test]
+async fn a_records_swap_refuses_to_move_an_occupied_resource_between_pools() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let (status, appointment) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "records-move-create",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{appointment}");
+
+    let mut moved = records_without(&[]);
+    let station = moved.pools[0].members.remove(0);
+    moved.pools[1].members.push(station);
+    let refusal = fx
+        .store
+        .replace_facts(&moved, Uuid::new_v4(), operator_audit())
+        .await
+        .expect_err("an occupied resource cannot move to another pool");
+    assert!(refusal.to_string().contains("station-1"), "{refusal}");
+
+    let (standing, _) = fx.store.facts().await.expect("the records survive");
+    assert!(standing.pool("north-counter").is_some_and(|pool| pool
+        .members
+        .iter()
+        .any(|member| member.resource_id == "station-1")));
 }
 
 #[tokio::test]
@@ -3650,6 +3845,50 @@ async fn window_entry(fx: &Fixture, from_minutes: i64, to_minutes: i64) -> Optio
         .cloned()
 }
 
+#[tokio::test]
+async fn policy_publication_refuses_to_move_a_window_with_standing_commitments() {
+    let day = (Utc::now() + TimeDelta::days(2)).date_naive();
+    let start = DateTime::<Utc>::from_naive_utc_and_offset(
+        day.and_hms_opt(9, 0, 0).expect("a morning instant"),
+        Utc,
+    );
+    let authored = policy_with_window(start);
+    let fx = fixture_publishing(
+        &authored,
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+        &[WINDOW_ID.to_owned()],
+    )
+    .await;
+    let (status, appointment) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "window-publication-standing",
+            arrival(&fx, start, None),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{appointment}");
+
+    let current = parse_policy_yaml(&authored).expect("the current policy");
+    let mut moved = current.clone();
+    moved.scheduling.version += 1;
+    moved.windows[0].start += TimeDelta::days(1);
+    moved.windows[0].end += TimeDelta::days(1);
+    let digest = moved.policy_digest();
+    let refusal = fx
+        .store
+        .apply_policy(
+            SCHEDULING_ID,
+            &digest,
+            &["north-counter".to_owned(), "two-counter".to_owned()],
+            &[WINDOW_ID.to_owned()],
+            &moved,
+        )
+        .await
+        .expect_err("a moved window cannot strand a standing appointment");
+    assert!(refusal.to_string().contains(WINDOW_ID), "{refusal}");
+}
+
 /// An arrival window is a second admission mode with a ledger of its own: its
 /// claims occupy the window rather than a member of a pool, its capacity is
 /// counted in units rather than in slots, and a channel subquota is a ceiling
@@ -4086,13 +4325,17 @@ async fn every_mutation_rechecks_expiry_after_its_writes() {
 #[tokio::test]
 async fn a_stale_process_refuses_even_a_request_under_the_current_revision() {
     let fx = fixture().await;
+    let mut replacement = parse_policy_yaml(POLICY).expect("the replacement policy");
+    replacement.scheduling.version += 1;
+    let replacement_digest = replacement.policy_digest();
     let moved = fx
         .store
         .apply_policy(
             SCHEDULING_ID,
-            "a-policy-this-process-never-loaded",
+            &replacement_digest,
             &["north-counter".to_owned(), "two-counter".to_owned()],
             &[],
+            &replacement,
         )
         .await
         .expect("publish a second policy revision");
@@ -4112,19 +4355,24 @@ async fn a_stale_process_refuses_even_a_request_under_the_current_revision() {
 }
 
 #[tokio::test]
-async fn a_stale_process_cannot_cancel_under_its_cached_cutoff() {
+async fn a_stale_process_can_still_release_an_appointment() {
     let fx = fixture().await;
     let (id, revision) = booked(&fx, 480, 620, "before-policy-change").await;
+    let mut replacement = parse_policy_yaml(POLICY).expect("the replacement policy");
+    replacement.scheduling.version += 1;
+    replacement.offerings[0].cancellation_cutoff_minutes += 1;
+    let replacement_digest = replacement.policy_digest();
     fx.store
         .apply_policy(
             SCHEDULING_ID,
-            "policy-with-a-different-cancellation-cutoff",
+            &replacement_digest,
             &["north-counter".to_owned(), "two-counter".to_owned()],
             &[],
+            &replacement,
         )
         .await
         .expect("publish the replacement policy");
-    let (status, problem) = fx
+    let (status, cancelled) = fx
         .post(
             &format!("/v1/appointments/{id}/cancel"),
             &fx.agent,
@@ -4132,8 +4380,8 @@ async fn a_stale_process_cannot_cancel_under_its_cached_cutoff() {
             json!({"observedRevision": revision, "reason": null}),
         )
         .await;
-    assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{problem}");
-    assert_eq!(problem["code"], "policy.changed");
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+    assert_eq!(cancelled["state"], "cancelled");
     let row = fx
         .admin
         .query_one(
@@ -4141,9 +4389,9 @@ async fn a_stale_process_cannot_cancel_under_its_cached_cutoff() {
             &[&Uuid::parse_str(&id).expect("appointment id")],
         )
         .await
-        .expect("read unchanged appointment");
-    assert_eq!(row.get::<_, String>(0), "active");
-    assert_eq!(row.get::<_, i64>(1), i64::try_from(revision).unwrap());
+        .expect("read cancelled appointment");
+    assert_eq!(row.get::<_, String>(0), "cancelled");
+    assert_eq!(row.get::<_, i64>(1), i64::try_from(revision + 1).unwrap());
 }
 
 /// A records replacement moves the records revision under the supply

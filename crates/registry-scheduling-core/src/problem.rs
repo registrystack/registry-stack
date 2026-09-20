@@ -272,7 +272,7 @@ impl ProblemCode {
                 "The cancellation cutoff for this appointment has passed, so it can no longer be cancelled."
             }
             Self::CapabilityUnmatched => {
-                "No backing member carries every capability this offering requires."
+                "The party or backing supply does not carry every capability this offering requires."
             }
             Self::CapacityExhausted => {
                 "The supply is fully committed for the requested interval. Choose another time."

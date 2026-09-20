@@ -14,6 +14,8 @@ entries:
       - {path: crates/registry-scheduling-core/src/model.rs, name: a_confirmed_booking_consumes_but_an_expired_hold_does_not}
       - {path: crates/registry-scheduling-core/src/model.rs, name: supply_occupancy_is_half_open_and_honors_the_excluded_claim}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_direct_create_books_without_a_hold_and_exhausts_capacity}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: exact_time_commitments_include_buffers_outside_the_opening_range}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_records_swap_refuses_to_move_an_occupied_resource_between_pools}
   - id: SCHEDULING-SEC-02
     tests:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_commitment_against_an_unanchored_pool_refuses_loudly}
@@ -65,6 +67,7 @@ entries:
       - {path: crates/registry-scheduling-core/src/model.rs, name: the_same_request_always_hashes_identically}
       - {path: crates/registry-scheduling-core/src/model.rs, name: set_order_never_changes_the_request_hash}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: cancellation_respects_the_cutoff_and_replays_its_verdict}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_concurrent_identical_request_replays_the_winning_receipt}
   - id: SCHEDULING-SEC-10
     tests:
       - {path: crates/registry-scheduling-core/src/admission.rs, name: policy_change_outranks_a_window_revision_mismatch}
@@ -73,6 +76,7 @@ entries:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_stale_process_refuses_even_a_request_under_the_current_revision}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: competing_cancellations_commit_exactly_one_transition}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_reschedule_and_a_cancellation_commit_exactly_one_transition}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_stale_process_can_still_release_an_appointment}
   - id: SCHEDULING-SEC-11
     tests:
       - {path: crates/registry-scheduling-core/src/admission.rs, name: an_expired_hold_consumes_nothing_and_cannot_be_confirmed}
@@ -163,3 +167,9 @@ entries:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: hook_delivery_sends_the_canonical_event_audits_egress_and_refuses_proposals}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: hook_delivery_audit_failure_prevents_egress}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: changed_retained_hook_destination_binding_is_refused}
+  - id: SCHEDULING-SEC-25
+    tests:
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: a_reduction_below_standing_commitments_is_rejected_with_its_deficit}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: a_subquota_reduction_strands_its_channel_even_at_an_unchanged_total}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: moving_a_published_window_reports_no_reduction}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: policy_publication_refuses_to_move_a_window_with_standing_commitments}

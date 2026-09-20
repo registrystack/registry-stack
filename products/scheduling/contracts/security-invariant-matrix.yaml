@@ -402,6 +402,21 @@ invariants:
     negativeTest:
       path: crates/registry-scheduling/src/hooks.rs
       name: projections_disclose_only_the_requested_closed_fields
+  - id: SCHEDULING-SEC-25
+    state: enforced
+    threat: >-
+      A rolling policy publication drops, moves, or reduces a published window
+      below the bookings and live holds that already consume it.
+    enforcementPoint: >-
+      Policy publication locks every existing supply anchor, loads the retained
+      current policy and the standing window ledger, and assesses the proposal
+      before advancing the durable revision.
+    refusal: >-
+      Refuse publication with an operator-facing deficit and leave the policy
+      revision unchanged; an ordinary restart never strands commitments.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments.rs
+      name: policy_publication_refuses_to_move_a_window_with_standing_commitments
 deferred:
   - id: SCHEDULING-DEF-01
     subject: Full task-grant bounds re-checked inside the capacity transaction

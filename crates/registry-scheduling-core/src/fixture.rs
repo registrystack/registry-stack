@@ -536,6 +536,7 @@ fn record_admission(
     }
     snapshot.claims.push(LedgerClaim {
         id: format!("case:{case}"),
+        offering: request.offering.clone(),
         supply_id: supply_id.to_owned(),
         kind: LedgerKind::Booking,
         channel: request.channel.clone(),
@@ -722,6 +723,7 @@ facts:
           available: true
 initial:
   - id: booking-9
+    offering: registry-update-30
     supplyId: station-1
     kind: booking
     start: 2026-10-05T02:00:00Z

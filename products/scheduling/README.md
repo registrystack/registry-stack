@@ -74,6 +74,12 @@ at the readiness check rather than serving against it, so an upgrade runs
 an old runtime may still be serving, and its in-flight availability
 continuation cursors answer `cursor.invalid` once the new binary holds
 them, so a caller mid-pagination restarts that listing from its first page.
+The migration also retains the current policy document beside its digest. On
+an upgrade from an earlier schema, start once with the unchanged policy to
+backfill that document before publishing a policy change. A later start locks
+the standing supply while it checks the proposal and refuses a change that
+would move, remove, or reduce a window below its live bookings and holds; the
+operator error names the affected window and deficit.
 `records apply` is the one attributable operator write of a deployment's
 environment records: the locations with their time zones, the resource pools
 and their members, and the dated exceptions such as closures. The policy

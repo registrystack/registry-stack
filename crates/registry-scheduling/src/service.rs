@@ -816,6 +816,9 @@ impl SchedulingService {
         let grant = self
             .require_permission(caller, offering, APPOINTMENT_RESCHEDULE_ACTION)
             .await?;
+        if request.admission.offering != appointment.offering {
+            return Err(ServiceError::Problem(ProblemCode::RequestUnprocessable));
+        }
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let (supply, facts_revision) = self.supply(offering).await?;
         let request_hash = canonical_hash(&json!({
@@ -1283,7 +1286,7 @@ impl SchedulingService {
                     );
                     match receipt {
                         Ok(commitment) => {
-                            if let Err(failure) = self
+                            match self
                                 .store
                                 .record_refused_attempt(
                                     &commitment,
@@ -1293,7 +1296,21 @@ impl SchedulingService {
                                 )
                                 .await
                             {
-                                tracing::error!(%failure, "the refused attempt receipt could not be recorded");
+                                Ok(Some((status_code, receipt))) => {
+                                    return Ok(CommitmentAnswer::Replay {
+                                        status_code,
+                                        receipt,
+                                    });
+                                }
+                                Ok(None) => {}
+                                Err(
+                                    failure @ (CommitError::KeyReused | CommitError::KeyExpired),
+                                ) => {
+                                    return Err(ServiceError::Problem(problem_of(&failure)));
+                                }
+                                Err(failure) => {
+                                    tracing::error!(%failure, "the refused attempt receipt could not be recorded");
+                                }
                             }
                         }
                         Err(refused) => {
@@ -1975,6 +1992,7 @@ mod tests {
     ) -> registry_scheduling_core::LedgerClaim {
         registry_scheduling_core::LedgerClaim {
             id: id.to_owned(),
+            offering: "registry-update-30".to_owned(),
             supply_id: supply_id.to_owned(),
             kind: LedgerKind::Booking,
             channel: None,

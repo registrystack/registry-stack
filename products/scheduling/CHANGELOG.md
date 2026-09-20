@@ -34,3 +34,9 @@
 - Re-check hold expiry after locking its supply during confirmation, so a
   delayed confirmation cannot claim capacity that became bookable and was
   committed elsewhere after the hold expired.
+- Close the beta review races and contract gaps: include exact-time buffers in
+  locked snapshots, scope duplicate keys to their offering, enforce requested
+  capabilities, reject cross-offering reschedules, keep cancellations
+  available during rolling policy changes, prevent occupied resources moving
+  between pools, replay the winning idempotency receipt, and refuse policy
+  publications that strand standing window commitments.

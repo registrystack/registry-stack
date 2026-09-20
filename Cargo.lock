@@ -6160,6 +6160,7 @@ dependencies = [
  "chrono",
  "registry-platform-calendar",
  "registry-platform-canonical-json",
+ "registry-platform-hooks",
  "serde",
  "serde_json",
  "serde_norway",

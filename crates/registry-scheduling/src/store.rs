@@ -32,6 +32,7 @@
 //! dispatch lease: a claimed intent is not claimable again until its lease
 //! passes, and an outcome write only lands for the attempt that owns it.
 
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -40,10 +41,10 @@ use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use registry_platform_calendar::CalendarInterval;
 use registry_platform_config::SecretResolver;
 use registry_scheduling_core::{
-    evaluate_exact_time_admission, evaluate_hold_state, evaluate_window_admission,
-    AdmissionRefusal, ExactTimeContext, LedgerClaim, LedgerKind, LedgerSnapshot, PoolMember,
-    SchedulingFacts, APPOINTMENT_CANCELLED_TRIGGER, APPOINTMENT_CONFIRMED_TRIGGER,
-    APPOINTMENT_RESCHEDULED_TRIGGER,
+    assess_publication_impact, evaluate_exact_time_admission, evaluate_hold_state,
+    evaluate_window_admission, AdmissionRefusal, ExactTimeContext, LedgerClaim, LedgerKind,
+    LedgerSnapshot, PoolMember, SchedulingFacts, SchedulingPolicy, APPOINTMENT_CANCELLED_TRIGGER,
+    APPOINTMENT_CONFIRMED_TRIGGER, APPOINTMENT_RESCHEDULED_TRIGGER,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -58,10 +59,17 @@ const SCHEDULING_MIGRATION: &str = include_str!("../migrations/0001_scheduling.s
 const FACTS_REVISION_MIGRATION: &str =
     include_str!("../migrations/0002_facts_revision_and_suppressed.sql");
 const HOOK_DELIVERY_MIGRATION_VERSION: i64 = 3;
+const POLICY_DOCUMENT_MIGRATION: &str = include_str!("../migrations/0004_policy_document.sql");
+const POLICY_DOCUMENT_MIGRATION_VERSION: i64 = 4;
 
 /// Every schema version in ledger order.
 const MIGRATIONS: [(i64, &str); 2] = [(1, SCHEDULING_MIGRATION), (2, FACTS_REVISION_MIGRATION)];
-const SCHEMA_VERSIONS: [i64; 3] = [1, 2, HOOK_DELIVERY_MIGRATION_VERSION];
+const SCHEMA_VERSIONS: [i64; 4] = [
+    1,
+    2,
+    HOOK_DELIVERY_MIGRATION_VERSION,
+    POLICY_DOCUMENT_MIGRATION_VERSION,
+];
 
 /// Serializes operator-run migrations on one session lock. A second migrator
 /// waits here instead of racing the ledger primary key. The key spells the
@@ -102,8 +110,12 @@ pub enum StoreError {
     /// The environment records would retire resources that live appointments
     /// or holds still occupy. The swap is refused whole, so the operator
     /// either keeps the resource or closes what stands on it first.
-    #[error("the environment records retire {0}, which live appointments or holds still occupy")]
+    #[error(
+        "the environment records retire or move {0}, which live appointments or holds still occupy"
+    )]
     FactsInUse(String),
+    #[error("the proposed policy would strand standing commitments: {0}")]
+    PolicyInUse(String),
     // Both carry the driver's own account of what went wrong. Neither the
     // pool nor the driver repeats the connection string in its message, so
     // naming the cause costs no credential.
@@ -552,6 +564,25 @@ impl PostgresStore {
                 .await?;
         }
         transaction.commit().await?;
+
+        let transaction = client.transaction().await?;
+        let applied: bool = transaction
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM scheduling_schema_migrations WHERE version=$1)",
+                &[&POLICY_DOCUMENT_MIGRATION_VERSION],
+            )
+            .await?
+            .get(0);
+        if !applied {
+            transaction.batch_execute(POLICY_DOCUMENT_MIGRATION).await?;
+            transaction
+                .execute(
+                    "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
+                    &[&POLICY_DOCUMENT_MIGRATION_VERSION],
+                )
+                .await?;
+        }
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -623,28 +654,35 @@ impl PostgresStore {
         ))
     }
 
-    /// Publish a policy: bump the revision when the digest changed, and make
-    /// sure every supply anchor the policy needs exists. Re-applying the
-    /// same policy is a no-op that still verifies the anchors.
+    /// Publish a policy after proving it does not strand standing window
+    /// commitments. Re-applying the same digest backfills its retained policy
+    /// document and remains a no-op for the revision.
     ///
-    /// Lock order, load-bearing: this method takes `scheduling_meta`
-    /// exclusively and then only inserts `scheduling_supply` rows with
-    /// `ON CONFLICT DO NOTHING`, which never waits on a row lock a capacity
-    /// transaction holds on that table. The capacity transactions take a
-    /// supply anchor first and `scheduling_meta` for share after, and the
-    /// records swap takes every anchor before `scheduling_meta`. Those three
-    /// orders cannot cycle only while this method keeps to inserts here:
-    /// an update or a locking read of `scheduling_supply` under the meta
-    /// lock would close a cycle.
+    /// Lock order, load-bearing: policy publication takes every existing
+    /// supply anchor in order before `scheduling_meta`, the same order as the
+    /// records swap. Capacity transactions take one anchor and then the meta
+    /// row, so an older runtime cannot add a commitment between this method's
+    /// impact assessment and publication.
     pub async fn apply_policy(
         &self,
         scheduling_id: &str,
         policy_digest: &str,
         pool_ids: &[String],
         window_ids: &[String],
+        policy: &SchedulingPolicy,
     ) -> Result<i64, StoreError> {
+        if policy.policy_digest() != policy_digest {
+            return Err(StoreError::Corrupt);
+        }
+        let policy_document = serde_json::to_value(policy).map_err(|_| StoreError::Corrupt)?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
+        transaction
+            .execute(
+                "SELECT supply_id FROM scheduling_supply ORDER BY supply_id FOR UPDATE",
+                &[],
+            )
+            .await?;
         let row = transaction
             .query_one(
                 "SELECT scheduling_id, policy_revision, policy_digest FROM scheduling_meta WHERE singleton FOR UPDATE",
@@ -655,13 +693,66 @@ impl PostgresStore {
             return Err(StoreError::Corrupt);
         }
         let revision;
-        if row.get::<_, String>(2) != policy_digest {
+        let stored_revision = row.get::<_, i64>(1);
+        let stored_digest = row.get::<_, String>(2);
+        if stored_digest != policy_digest {
+            if !stored_digest.is_empty() {
+                let current_document: Option<Value> = transaction
+                    .query_opt(
+                        "SELECT policy_document FROM scheduling_policy_revisions \
+                         WHERE policy_revision=$1 AND policy_digest=$2",
+                        &[&stored_revision, &stored_digest],
+                    )
+                    .await?
+                    .and_then(|stored| stored.get(0));
+                let Some(current_document) = current_document else {
+                    return Err(StoreError::PolicyInUse(
+                        "the current policy document is unavailable; reapply the current policy before publishing a change"
+                            .to_owned(),
+                    ));
+                };
+                let current: SchedulingPolicy =
+                    serde_json::from_value(current_document).map_err(|_| StoreError::Corrupt)?;
+                let now = self.observed_now();
+                let rows = transaction
+                    .query(
+                        "SELECT c.claim_id, c.offering, c.supply_id, c.kind, c.channel, \
+                         c.occupied_start, c.occupied_end, c.units, c.duplicate_key, \
+                         c.hold_expires_at FROM scheduling_claims AS c \
+                         JOIN scheduling_supply AS s ON s.supply_id=c.supply_id \
+                         WHERE s.kind='window' AND c.state='active' \
+                           AND (c.kind='booking' OR (c.kind='hold' AND c.hold_expires_at > $1)) \
+                         ORDER BY c.occupied_start",
+                        &[&now],
+                    )
+                    .await?;
+                let reductions =
+                    assess_publication_impact(&current, policy, &snapshot_from_rows(rows), now);
+                if !reductions.is_empty() {
+                    let details = reductions
+                        .iter()
+                        .map(|reduction| {
+                            format!(
+                                "{}:{} has {} committed units but proposes {}",
+                                reduction.window,
+                                reduction
+                                    .channel
+                                    .map_or("total", |channel| channel.as_str()),
+                                reduction.committed_units,
+                                reduction.proposed_units
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(StoreError::PolicyInUse(details));
+                }
+            }
             revision = row.get::<_, i64>(1) + 1;
             transaction
                 .execute(
-                    "INSERT INTO scheduling_policy_revisions(policy_revision, policy_digest) \
-                     VALUES($1,$2)",
-                    &[&revision, &policy_digest],
+                    "INSERT INTO scheduling_policy_revisions(\
+                     policy_revision, policy_digest, policy_document) VALUES($1,$2,$3)",
+                    &[&revision, &policy_digest, &policy_document],
                 )
                 .await?;
             transaction
@@ -672,7 +763,14 @@ impl PostgresStore {
                 )
                 .await?;
         } else {
-            revision = row.get(1);
+            revision = stored_revision;
+            transaction
+                .execute(
+                    "UPDATE scheduling_policy_revisions SET policy_document=$2 \
+                     WHERE policy_revision=$1 AND policy_document IS NULL",
+                    &[&revision, &policy_document],
+                )
+                .await?;
         }
         for (id, kind) in pool_ids
             .iter()
@@ -940,7 +1038,7 @@ impl PostgresStore {
         let client = self.client().await?;
         let rows = client
             .query(
-                "SELECT claim_id, supply_id, kind, channel, occupied_start, occupied_end, \
+                "SELECT claim_id, offering, supply_id, kind, channel, occupied_start, occupied_end, \
                  units, duplicate_key, hold_expires_at \
                  FROM scheduling_claims \
                  WHERE state='active' \
@@ -1552,16 +1650,6 @@ impl PostgresStore {
         if appointment.actor != commitment.actor {
             return Err(CommitError::Unauthorized);
         }
-        let current_policy: i64 = transaction
-            .query_one(
-                "SELECT policy_revision FROM scheduling_meta WHERE singleton FOR SHARE",
-                &[],
-            )
-            .await?
-            .get(0);
-        if current_policy != commitment.policy_revision {
-            return Err(AdmissionRefusal::PolicyChanged.into());
-        }
         if let Some(cutoff) = cancellation_cutoff_minutes {
             let earliest_cancel_end = appointment
                 .displayed_start
@@ -1891,9 +1979,10 @@ impl PostgresStore {
         scope: &str,
         status_code: u16,
         receipt: Value,
-    ) -> Result<(), StoreError> {
-        let client = self.client().await?;
-        client
+    ) -> Result<Option<(u16, Value)>, CommitError> {
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        let written = transaction
             .execute(
                 "INSERT INTO scheduling_attempts(attempt_id, actor_issuer, actor_subject, scope, \
                  idempotency_key, request_hash, state, status_code, receipt, expires_at) \
@@ -1911,7 +2000,21 @@ impl PostgresStore {
                 ],
             )
             .await?;
-        Ok(())
+        if written == 1 {
+            transaction.commit().await?;
+            return Ok(None);
+        }
+        match replay_stored_attempt(&transaction, commitment, scope).await? {
+            Some(ReplayOutcome::Replay {
+                status_code,
+                receipt,
+            }) => {
+                transaction.commit().await?;
+                Ok(Some((status_code, receipt)))
+            }
+            Some(ReplayOutcome::Refused(error)) => Err(error),
+            None => Err(StoreError::Corrupt.into()),
+        }
     }
 
     /// Record an authorization refusal in the audit journal. The capacity
@@ -1998,7 +2101,8 @@ const SELECT_CLAIM: &str = "SELECT claim_id, kind, state, offering, supply_id, c
 /// is the sentence the whole capacity contract turns on: an expired hold
 /// stops consuming capacity at its expiry, whether or not any worker has
 /// touched it.
-const CONSUMING_CLAUSES: &str = "SELECT claim_id, supply_id, kind, channel, occupied_start, \
+const CONSUMING_CLAUSES: &str =
+    "SELECT claim_id, offering, supply_id, kind, channel, occupied_start, \
      occupied_end, units, duplicate_key, hold_expires_at \
      FROM scheduling_claims \
      WHERE state='active' \
@@ -2046,17 +2150,18 @@ fn snapshot_from_rows(rows: Vec<Row>) -> LedgerSnapshot {
             .iter()
             .map(|row| LedgerClaim {
                 id: row.get::<_, Uuid>(0).to_string(),
-                supply_id: row.get(1),
-                kind: match row.get::<_, String>(2).as_str() {
+                offering: row.get(1),
+                supply_id: row.get(2),
+                kind: match row.get::<_, String>(3).as_str() {
                     "booking" => LedgerKind::Booking,
                     _ => LedgerKind::Hold,
                 },
-                channel: row.get(3),
-                start: row.get(4),
-                end: row.get(5),
-                units: u32::try_from(row.get::<_, i32>(6)).unwrap_or(u32::MAX),
-                duplicate_key: row.get(7),
-                expires_at: row.get(8),
+                channel: row.get(4),
+                start: row.get(5),
+                end: row.get(6),
+                units: u32::try_from(row.get::<_, i32>(7)).unwrap_or(u32::MAX),
+                duplicate_key: row.get(8),
+                expires_at: row.get(9),
             })
             .collect(),
     }
@@ -2106,6 +2211,16 @@ async fn lock_and_snapshot(
                 .map(|interval| interval.end)
                 .max()
                 .unwrap_or(now);
+            let buffer = TimeDelta::minutes(
+                i64::from(exact.buffer_before_minutes) + i64::from(exact.buffer_after_minutes),
+            );
+            let duration = TimeDelta::minutes(i64::from(exact.duration_minutes));
+            let earliest = earliest
+                .checked_sub_signed(buffer)
+                .ok_or(StoreError::Corrupt)?;
+            let latest = latest
+                .checked_add_signed(duration + buffer)
+                .ok_or(StoreError::Corrupt)?;
             let rows = transaction
                 .query(CONSUMING_CLAUSES, &[&member_ids, &earliest, &latest, &now])
                 .await?;
@@ -2117,7 +2232,7 @@ async fn lock_and_snapshot(
                 .await?;
             let rows = transaction
                 .query(
-                    "SELECT claim_id, supply_id, kind, channel, occupied_start, occupied_end, \
+                    "SELECT claim_id, offering, supply_id, kind, channel, occupied_start, occupied_end, \
                      units, duplicate_key, hold_expires_at \
                      FROM scheduling_claims \
                      WHERE state='active' \
@@ -2212,6 +2327,7 @@ fn evaluate(
 fn hold_ledger_claim(hold: &ClaimRow) -> LedgerClaim {
     LedgerClaim {
         id: hold.claim_id.to_string(),
+        offering: hold.offering.clone(),
         supply_id: hold.supply_id.clone(),
         kind: hold.kind,
         channel: hold.channel.clone(),
@@ -2374,7 +2490,7 @@ pub(crate) async fn replace_facts_in_transaction(
             &[],
         )
         .await?;
-    let occupied = occupied_resources_retired_by(transaction, facts).await?;
+    let occupied = occupied_resources_changed_by(transaction, facts).await?;
     if !occupied.is_empty() {
         return Err(StoreError::FactsInUse(occupied.join(", ")));
     }
@@ -2463,7 +2579,7 @@ pub(crate) async fn replace_facts_in_transaction(
     Ok(())
 }
 
-/// The resources live claims occupy that the incoming records do not carry.
+/// The resources live claims occupy that the incoming records retire or move.
 ///
 /// An exact-time claim names its member in `supply_id`, so a swap that drops
 /// a member out from under a live booking would leave that booking pointing
@@ -2471,29 +2587,43 @@ pub(crate) async fn replace_facts_in_transaction(
 /// snapshot, counted against nothing, and still promised to its caller. A
 /// window claim names the window instead, which records never carry, so the
 /// window anchors are excluded rather than reported as missing members.
-async fn occupied_resources_retired_by(
+async fn occupied_resources_changed_by(
     transaction: &deadpool_postgres::Transaction<'_>,
     facts: &SchedulingFacts,
 ) -> Result<Vec<String>, StoreError> {
-    let incoming: Vec<String> = facts
+    let incoming: HashMap<&str, &str> = facts
         .pools
         .iter()
-        .flat_map(|pool| pool.members.iter())
-        .map(|member| member.resource_id.clone())
+        .flat_map(|pool| {
+            pool.members
+                .iter()
+                .map(move |member| (member.resource_id.as_str(), pool.id.as_str()))
+        })
         .collect();
     let rows = transaction
         .query(
-            "SELECT DISTINCT supply_id FROM scheduling_claims \
-             WHERE state='active' \
-               AND (kind='booking' OR (kind='hold' AND hold_expires_at > now())) \
-               AND supply_id <> ALL($1::text[]) \
-               AND supply_id NOT IN \
-                   (SELECT supply_id FROM scheduling_supply WHERE kind='window') \
-             ORDER BY supply_id",
-            &[&incoming],
+            "SELECT DISTINCT c.supply_id, m.pool_id FROM scheduling_claims AS c \
+             JOIN scheduling_pool_members AS m ON m.resource_id = c.supply_id \
+             WHERE c.state='active' \
+               AND (c.kind='booking' OR (c.kind='hold' AND c.hold_expires_at > now())) \
+             ORDER BY c.supply_id",
+            &[],
         )
         .await?;
-    Ok(rows.iter().map(|row| row.get(0)).collect())
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let resource: String = row.get(0);
+            let current_pool: String = row.get(1);
+            match incoming.get(resource.as_str()) {
+                Some(incoming_pool) if *incoming_pool == current_pool => None,
+                Some(incoming_pool) => {
+                    Some(format!("{resource} from {current_pool} to {incoming_pool}"))
+                }
+                None => Some(resource),
+            }
+        })
+        .collect())
 }
 
 /// A claim about to be written.

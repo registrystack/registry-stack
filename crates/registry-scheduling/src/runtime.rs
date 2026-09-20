@@ -273,7 +273,13 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     let pool_ids = offering_pool_ids(&policy);
     let window_ids = offering_window_ids(&policy);
     let policy_revision = store
-        .apply_policy(&scheduling_id, &policy_digest, &pool_ids, &window_ids)
+        .apply_policy(
+            &scheduling_id,
+            &policy_digest,
+            &pool_ids,
+            &window_ids,
+            &policy,
+        )
         .await
         .map_err(database_step("policy publication"))?;
 

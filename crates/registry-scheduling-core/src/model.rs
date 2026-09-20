@@ -71,6 +71,8 @@ pub enum LedgerKind {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LedgerClaim {
     pub id: String,
+    /// The offering whose duplicate-active policy owns this claim.
+    pub offering: String,
     /// The pool member resource (exact time) or the window (arrival) this
     /// claim occupies.
     pub supply_id: String,
@@ -158,12 +160,14 @@ impl LedgerSnapshot {
     /// ignoring `exclude`.
     pub fn duplicate_active(
         &self,
+        offering: &str,
         duplicate_key: &str,
         exclude: Option<&str>,
         now: DateTime<Utc>,
     ) -> bool {
         self.consuming(now).any(|claim| {
-            claim.duplicate_key.as_deref() == Some(duplicate_key)
+            claim.offering == offering
+                && claim.duplicate_key.as_deref() == Some(duplicate_key)
                 && Some(claim.id.as_str()) != exclude
         })
     }
@@ -398,6 +402,7 @@ mod tests {
         let now = utc(4, 0);
         let booking = LedgerClaim {
             id: "claim-1".to_owned(),
+            offering: "offering-a".to_owned(),
             supply_id: "station-1".to_owned(),
             kind: LedgerKind::Booking,
             channel: None,
@@ -409,6 +414,7 @@ mod tests {
         };
         let live_hold = LedgerClaim {
             id: "claim-2".to_owned(),
+            offering: "offering-a".to_owned(),
             supply_id: "station-2".to_owned(),
             kind: LedgerKind::Hold,
             channel: None,
@@ -420,6 +426,7 @@ mod tests {
         };
         let expired_hold = LedgerClaim {
             id: "claim-3".to_owned(),
+            offering: "offering-a".to_owned(),
             supply_id: "station-3".to_owned(),
             kind: LedgerKind::Hold,
             channel: None,
@@ -450,6 +457,7 @@ mod tests {
         let now = utc(4, 0);
         let claim = LedgerClaim {
             id: "claim-1".to_owned(),
+            offering: "offering-a".to_owned(),
             supply_id: "station-1".to_owned(),
             kind: LedgerKind::Booking,
             channel: None,
@@ -477,6 +485,7 @@ mod tests {
         let now = utc(4, 0);
         let claim = |id: &str, channel: Option<&str>, units: u32| LedgerClaim {
             id: id.to_owned(),
+            offering: "offering-a".to_owned(),
             supply_id: "morning-window".to_owned(),
             kind: LedgerKind::Booking,
             channel: channel.map(str::to_owned),
@@ -516,6 +525,7 @@ mod tests {
         let now = utc(4, 0);
         let claim = |id: &str, units: u32| LedgerClaim {
             id: id.to_owned(),
+            offering: "offering-a".to_owned(),
             supply_id: "morning-window".to_owned(),
             kind: LedgerKind::Booking,
             channel: None,
@@ -541,6 +551,7 @@ mod tests {
         let now = utc(4, 0);
         let expired_hold = LedgerClaim {
             id: "claim-1".to_owned(),
+            offering: "offering-a".to_owned(),
             supply_id: "morning-window".to_owned(),
             kind: LedgerKind::Hold,
             channel: None,
@@ -550,10 +561,18 @@ mod tests {
             duplicate_key: Some("subject:one".to_owned()),
             expires_at: Some(utc(3, 0)),
         };
-        let snapshot = LedgerSnapshot {
-            claims: vec![expired_hold],
+        let other_offering = LedgerClaim {
+            id: "claim-2".to_owned(),
+            offering: "offering-b".to_owned(),
+            kind: LedgerKind::Booking,
+            expires_at: None,
+            ..expired_hold.clone()
         };
-        assert!(!snapshot.duplicate_active("subject:one", None, now));
+        let snapshot = LedgerSnapshot {
+            claims: vec![expired_hold, other_offering],
+        };
+        assert!(!snapshot.duplicate_active("offering-a", "subject:one", None, now));
+        assert!(snapshot.duplicate_active("offering-b", "subject:one", None, now));
     }
 
     #[test]
@@ -638,7 +657,8 @@ mod tests {
 
     #[test]
     fn ledger_and_request_shapes_refuse_unknown_fields() {
-        let claim_yaml = "id: claim-1\nsupplyId: station-1\nkind: booking\n\
+        let claim_yaml =
+            "id: claim-1\noffering: registry-update-30\nsupplyId: station-1\nkind: booking\n\
                           start: 2026-10-05T02:00:00Z\nend: 2026-10-05T03:00:00Z\nunits: 1\n";
         assert!(serde_norway::from_str::<LedgerClaim>(claim_yaml).is_ok());
         assert!(
