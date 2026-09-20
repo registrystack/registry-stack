@@ -1515,7 +1515,7 @@ pub async fn run_one_cancellation(
                        AND (lease_until IS NULL OR lease_until < transaction_timestamp())
                      ORDER BY next_attempt_at,created_at FOR UPDATE SKIP LOCKED LIMIT 1)
               RETURNING request_entity_id,request_id,proposal_version,authority,
-                        idempotency_key,accepted_binding",
+                        idempotency_key,accepted_binding,lease_until",
             &[&SUBMISSION_LEASE_SECONDS, &authority_id],
         )
         .await
@@ -1530,6 +1530,7 @@ pub async fn run_one_cancellation(
     let key = format!("{}-cancel", row.get::<_, String>(4));
     let accepted: ReviewRequestAccepted =
         serde_json::from_value(row.get(5)).map_err(|_| MutationError::Unavailable)?;
+    let lease_until: chrono::DateTime<chrono::Utc> = row.get(6);
     let cancellation = registry_review_client::ReviewCancelRequest {
         subject: accepted.subject.clone(),
         reason: "source proposal withdrawn or superseded".to_owned(),
@@ -1549,18 +1550,25 @@ pub async fn run_one_cancellation(
                 .transaction()
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-            reconcile_result(&transaction, &authority, &accepted, &result).await?;
-            transaction
+            let updated = transaction
                 .execute(
                     "UPDATE registry_internal.registry_request_review_submissions
                         SET state='cancelled',lease_until=NULL,last_error_code=NULL,
                             updated_at=transaction_timestamp()
                       WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
-                        AND state='cancelling'",
-                    &[&entity_id, &request_id, &version],
+                        AND state='cancelling' AND lease_until=$4",
+                    &[&entity_id, &request_id, &version, &lease_until],
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
+            if updated == 0 {
+                transaction
+                    .rollback()
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?;
+                return Ok(true);
+            }
+            reconcile_result(&transaction, &authority, &accepted, &result).await?;
             transaction
                 .commit()
                 .await
@@ -1574,8 +1582,8 @@ pub async fn run_one_cancellation(
                             next_attempt_at=transaction_timestamp()+interval '5 seconds',
                             updated_at=transaction_timestamp()
                       WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
-                        AND state='cancelling'",
-                    &[&entity_id, &request_id, &version],
+                        AND state='cancelling' AND lease_until=$4",
+                    &[&entity_id, &request_id, &version, &lease_until],
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;

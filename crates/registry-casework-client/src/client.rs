@@ -112,7 +112,10 @@ impl CaseworkClient {
             );
         let complete: CaseworkComplete<ReviewRequestAccepted> =
             self.send_json(outgoing, StatusCode::CREATED).await?;
-        if complete.value.subject != request.subject
+        if complete.value.subject.check().is_err()
+            || complete.value.policy.check().is_err()
+            || complete.value.policy.id != request.kind
+            || complete.value.subject != request.subject
             || &complete.value.submission_digest != expected_submission_digest
         {
             return Err(protocol(

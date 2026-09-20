@@ -18,8 +18,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use registry_breg::mutation::MutationError;
 use registry_breg::review_store::{
-    install_review_storage_for_test, poll_one_result, receive_completion, run_one_submission,
-    run_review_application_once_for_test, run_review_authority_once_for_test,
+    install_review_storage_for_test, poll_one_result, receive_completion, run_one_cancellation,
+    run_one_submission, run_review_application_once_for_test, run_review_authority_once_for_test,
     verify_retained_bindings, ReviewAuthorityClient, ReviewAuthorityRegistry, ReviewExecutorClient,
 };
 use registry_review_client::{
@@ -194,6 +194,32 @@ async fn serve_failing_authority(
 ) -> (reqwest::Url, tokio::task::JoinHandle<()>) {
     let app = Router::new()
         .route("/v1/review-requests", post(fail_review_submission))
+        .with_state(gate);
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap())
+        .parse()
+        .unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (endpoint, server)
+}
+
+async fn fail_review_cancellation(
+    State(gate): State<Arc<RemoteGate>>,
+    Json(_request): Json<Value>,
+) -> StatusCode {
+    gate.entered.notify_one();
+    gate.release.notified().await;
+    StatusCode::SERVICE_UNAVAILABLE
+}
+
+async fn serve_failing_cancellation(
+    gate: Arc<RemoteGate>,
+) -> (reqwest::Url, tokio::task::JoinHandle<()>) {
+    let app = Router::new()
+        .route(
+            "/v1/review-requests/{request_id}/cancel",
+            post(fail_review_cancellation),
+        )
         .with_state(gate);
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
     let endpoint = format!("http://{}/", listener.local_addr().unwrap())
@@ -1404,6 +1430,108 @@ async fn stale_submission_failure_cannot_replace_a_reclaimed_lease() {
         .await
         .expect("retained replacement lease");
     assert_eq!(retained.get::<_, String>(0), "submitting");
+    assert_eq!(
+        retained.get::<_, chrono::DateTime<chrono::Utc>>(1),
+        replacement_lease
+    );
+    assert_eq!(retained.get::<_, Option<String>>(2), None);
+
+    worker_task.abort();
+    server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn stale_cancellation_failure_cannot_replace_a_reclaimed_lease() {
+    let database = TestDatabase::create(2).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+    let source_request_id = Uuid::from_u128(0xc4);
+    seed_submission(
+        &database.admin,
+        source_request_id,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    let request = create_request(source_request_id, "policy-a");
+    let submission_digest = submission_digest("producer-a", "registry-a", &request).unwrap();
+    let accepted = json!({
+        "requestId": Uuid::from_u128(0xc5),
+        "subject": request.subject,
+        "policy": {"id":"policy-a","version":"1","digest":DIGEST},
+        "submissionDigest": submission_digest,
+    });
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state='cancelling',withdrawn=true,accepted_binding=$2
+              WHERE request_id=$1",
+            &[&source_request_id, &accepted],
+        )
+        .await
+        .expect("seed cancellation");
+
+    let gate = Arc::new(RemoteGate::default());
+    let (endpoint, server) = serve_failing_cancellation(Arc::clone(&gate)).await;
+    let review_client = authority_client(endpoint, "producer-profile-a");
+    let token = BearerToken::new("token-a").unwrap();
+    let (mut worker, worker_task) = database.connect_admin().await;
+    let cancellation = tokio::spawn(async move {
+        run_one_cancellation(&mut worker, "casework-a", &review_client, &token).await
+    });
+    gate.entered.notified().await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET lease_until=lease_until+interval '1 second'
+              WHERE request_id=$1 AND state='cancelling'",
+            &[&source_request_id],
+        )
+        .await
+        .expect("simulate replacement cancellation lease owner");
+    let replacement_lease = database
+        .admin
+        .query_one(
+            "SELECT lease_until FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&source_request_id],
+        )
+        .await
+        .expect("replacement cancellation lease")
+        .get::<_, chrono::DateTime<chrono::Utc>>(0);
+    gate.release.notify_one();
+    assert!(cancellation
+        .await
+        .expect("cancellation worker joins")
+        .expect("stale cancellation failure is fenced"));
+    let retained = database
+        .admin
+        .query_one(
+            "SELECT state,lease_until,last_error_code
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&source_request_id],
+        )
+        .await
+        .expect("retained replacement cancellation lease");
+    assert_eq!(retained.get::<_, String>(0), "cancelling");
     assert_eq!(
         retained.get::<_, chrono::DateTime<chrono::Utc>>(1),
         replacement_lease

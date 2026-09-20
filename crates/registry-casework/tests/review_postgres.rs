@@ -1742,6 +1742,13 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
             .await,
         Err(ReviewRuntimeError::ResultExpired)
     ));
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_clocks(&fixture.producer, request_id, None, "producer-token")
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
     let idempotency = fixture
         .database
         .query_one(
@@ -3711,6 +3718,55 @@ async fn source_context_task_inbox_honors_the_configured_source_read_budget() {
 }
 
 #[tokio::test]
+async fn source_context_task_inbox_reports_a_first_read_deadline_without_losing_the_task() {
+    let fixture = fixture().await;
+    let mut bounded_project = project("2");
+    bounded_project.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    bounded_project.inbox.page_deadline_milliseconds = 100;
+    bounded_project
+        .check()
+        .expect("deadline-bounded review project");
+    let bounded_service = CaseworkService::new(
+        fixture.store.clone(),
+        bounded_project,
+        [Arc::new(ReviewSource {
+            revoked: Arc::clone(&fixture.source_revoked),
+            state: Arc::clone(&fixture.source_state),
+            read_blocked: Arc::clone(&fixture.source_read_blocked),
+            read_started: Arc::clone(&fixture.source_read_started),
+            read_continue: Arc::clone(&fixture.source_read_continue),
+        }) as Arc<dyn SourceAdapter>],
+    )
+    .expect("deadline-bounded review service");
+    let mut source_request = request("record-source-deadline", "producer-ref-source-deadline");
+    source_request.context = ReviewContext::Source {
+        binding: SourceContextBinding {
+            reference: "registry:record:record-source-deadline".to_owned(),
+        },
+    };
+    fixture
+        .service_v2
+        .create_review_request(&fixture.producer, source_request, "create-source-deadline")
+        .await
+        .expect("create deadline-bounded source review");
+    fixture.source_read_blocked.store(true, Ordering::SeqCst);
+
+    assert!(matches!(
+        bounded_service
+            .review_tasks(
+                &fixture.reviewer_a,
+                Some("staff"),
+                "human-bearer",
+                None,
+                None,
+                10,
+            )
+            .await,
+        Err(ReviewRuntimeError::SourceUnavailable)
+    ));
+}
+
+#[tokio::test]
 async fn source_history_and_clocks_recheck_membership_after_source_io() {
     let fixture = fixture().await;
     let mut source_request = request("record-source-race", "producer-ref-source-race");
@@ -3803,6 +3859,35 @@ async fn review_task_pagination_rejects_a_cursor_removed_by_retention() {
                 "",
                 Some("review"),
                 Some(cursor),
+                10,
+            )
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+}
+
+#[tokio::test]
+async fn review_history_rejects_an_unknown_cursor_instead_of_truncating_the_page() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("record-history-cursor", "producer-ref-history-cursor"),
+            "create-history-cursor",
+        )
+        .await
+        .expect("create review with history");
+
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_history(
+                &fixture.producer,
+                created.accepted.request_id,
+                None,
+                "producer-token",
+                Some(Uuid::new_v4()),
                 10,
             )
             .await,
@@ -3963,6 +4048,31 @@ async fn review_activity_clock_recovers_after_holiday_publication_and_applies_ef
         .await
         .expect("place unresolved activity clock in the past");
 
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("defer review clock with unavailable holiday facts"),
+        0
+    );
+    assert!(fixture
+        .database
+        .query_one(
+            "SELECT next_action_at>transaction_timestamp()
+             FROM casework_review_clock_occurrences WHERE clock_occurrence_id=$1",
+            &[&occurrence_id],
+        )
+        .await
+        .expect("deferred review clock retry")
+        .get::<_, bool>(0));
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("immediate missing-facts retry is backed off"),
+        0
+    );
+
     service
         .create_holiday_revision(
             &actor("admin", CaseworkRole::Administrator, "administrator"),
@@ -3975,6 +4085,16 @@ async fn review_activity_clock_recovers_after_holiday_publication_and_applies_ef
         )
         .await
         .expect("publish holiday revision");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_clock_occurrences
+             SET next_action_at='2020-01-06T09:00:00Z'
+             WHERE clock_occurrence_id=$1",
+            &[&occurrence_id],
+        )
+        .await
+        .expect("make the deferred clock eligible after holiday publication");
     assert_eq!(
         service
             .process_due_review_clocks(100)

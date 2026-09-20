@@ -350,6 +350,7 @@ impl CaseworkService {
         let mut examined = 0usize;
         let mut source_reads = 0usize;
         let mut continuation = None;
+        let mut completed_preflights = 0usize;
         let mut budget_exhausted = false;
         while items.len() <= limit
             && examined < policy.maximum_candidate_scan
@@ -396,6 +397,9 @@ impl CaseworkService {
                         Err(error) => return Err(error),
                     },
                     Err(_) => {
+                        if completed_preflights == 0 {
+                            return Err(ReviewRuntimeError::SourceUnavailable);
+                        }
                         budget_exhausted = true;
                         break;
                     }
@@ -407,6 +411,7 @@ impl CaseworkService {
                     )) => {}
                     Ok(Err(error)) => return Err(error),
                 }
+                completed_preflights += 1;
                 continuation = Some(task.task_id);
                 if items.len() > limit {
                     break;
@@ -428,9 +433,6 @@ impl CaseworkService {
             }
             scan_cursor = Some(next_cursor);
             continuation = Some(next_cursor);
-        }
-        if examined == 0 && started.elapsed() >= deadline {
-            return Err(ReviewRuntimeError::SourceUnavailable);
         }
         let next_cursor = if items.len() > limit {
             Some(items[limit - 1].task_id)
@@ -1027,7 +1029,8 @@ impl PostgresStore {
                 "SELECT task_id
                    FROM casework_review_clock_occurrences
                   WHERE scope='activity' AND task_id IS NOT NULL
-                    AND (state='source_facts_missing'
+                    AND ((state='source_facts_missing'
+                          AND (next_action_at IS NULL OR next_action_at<=now()))
                          OR (state='running' AND next_action_at<=now()))
                   GROUP BY task_id
                   ORDER BY min(COALESCE(next_action_at,updated_at)),task_id
@@ -1045,12 +1048,11 @@ impl PostgresStore {
         client
             .execute(
                 "UPDATE casework_review_clock_occurrences
-                    SET next_action_at=CASE WHEN state='running'
-                            THEN transaction_timestamp()+interval '30 seconds'
-                            ELSE next_action_at END,
+                    SET next_action_at=transaction_timestamp()+interval '30 seconds',
                         updated_at=transaction_timestamp()
                   WHERE task_id=$1 AND scope='activity'
-                    AND (state='source_facts_missing'
+                    AND ((state='source_facts_missing'
+                          AND (next_action_at IS NULL OR next_action_at<=now()))
                          OR (state='running' AND next_action_at<=now()))",
                 &[&task_id],
             )
@@ -1077,11 +1079,12 @@ impl PostgresStore {
                  FROM casework_review_clock_occurrences
                  WHERE scope='activity'
                    AND task_id=ANY($2)
-                   AND (state='source_facts_missing'
+                   AND ((state='source_facts_missing'
+                        AND (next_action_at IS NULL OR next_action_at<=$3))
                         OR (state='running' AND next_action_at<=now()))
                  ORDER BY COALESCE(next_action_at,updated_at),clock_occurrence_id
                  LIMIT $1",
-                &[&limit, &verified_tasks],
+                &[&limit, &verified_tasks, &now],
             )
             .await?;
         let mut applied = 0usize;
@@ -1118,7 +1121,8 @@ impl PostgresStore {
                     "SELECT policy,state,anchor_at,holiday_document,reminders,steps
                      FROM casework_review_clock_occurrences
                      WHERE clock_occurrence_id=$1 AND scope='activity'
-                       AND (state='source_facts_missing'
+                       AND ((state='source_facts_missing'
+                            AND (next_action_at IS NULL OR next_action_at<=$2))
                             OR (state='running' AND next_action_at<=$2))
                      FOR UPDATE",
                     &[&occurrence_id, &now],
@@ -1149,7 +1153,8 @@ impl PostgresStore {
                 else {
                     transaction
                         .execute(
-                            "UPDATE casework_review_clock_occurrences SET updated_at=$2
+                            "UPDATE casework_review_clock_occurrences
+                             SET next_action_at=$2::timestamptz+interval '30 seconds',updated_at=$2
                              WHERE clock_occurrence_id=$1 AND state='source_facts_missing'",
                             &[&occurrence_id, &now],
                         )
@@ -3174,6 +3179,26 @@ impl PostgresStore {
         if limit == 0 || limit > 100 {
             return Err(ReviewRuntimeError::Invalid);
         }
+        let cursor_anchor = if let Some(cursor) = cursor {
+            Some(
+                client
+                    .query_opt(
+                        "SELECT occurred_at,event_id FROM casework_review_history
+                         WHERE request_id=$1 AND event_id=$2 AND (
+                            NOT $3 OR kind IN ('request_created','stage_advanced','review_settled','review_cancelled')
+                            OR (kind='note' AND detail->>'audience'='requester')
+                         )",
+                        &[&request_id, &cursor, &producer_id.is_some()],
+                    )
+                    .await?
+                    .map(|row| (row.get::<_, DateTime<Utc>>(0), row.get::<_, Uuid>(1)))
+                    .ok_or(ReviewRuntimeError::ResultExpired)?,
+            )
+        } else {
+            None
+        };
+        let cursor_occurred_at = cursor_anchor.as_ref().map(|anchor| anchor.0);
+        let cursor_event_id = cursor_anchor.as_ref().map(|anchor| anchor.1);
         let query_limit = i64::try_from(limit + 1).map_err(|_| ReviewRuntimeError::Invalid)?;
         let rows = client
             .query(
@@ -3183,12 +3208,15 @@ impl PostgresStore {
                     NOT $2 OR kind IN ('request_created','stage_advanced','review_settled','review_cancelled')
                     OR (kind='note' AND detail->>'audience'='requester')
                  )
-                 AND ($3::uuid IS NULL OR (occurred_at,event_id)>(
-                    SELECT occurred_at,event_id FROM casework_review_history
-                    WHERE request_id=$1 AND event_id=$3
-                 ))
-                 ORDER BY occurred_at,event_id LIMIT $4",
-                &[&request_id, &producer_id.is_some(), &cursor, &query_limit],
+                 AND ($3::timestamptz IS NULL OR (occurred_at,event_id)>($3,$4))
+                 ORDER BY occurred_at,event_id LIMIT $5",
+                &[
+                    &request_id,
+                    &producer_id.is_some(),
+                    &cursor_occurred_at,
+                    &cursor_event_id,
+                    &query_limit,
+                ],
             )
             .await?;
         let mut items = rows
@@ -3216,6 +3244,12 @@ impl PostgresStore {
     ) -> Result<Vec<ReviewClockOccurrence>, ReviewRuntimeError> {
         let client = self.client().await?;
         let record = load_request_by_id(&client, request_id, false).await?;
+        if record
+            .result_available_until
+            .is_some_and(|available_until| available_until <= Utc::now())
+        {
+            return Err(ReviewRuntimeError::ResultExpired);
+        }
         if let Some(producer_id) = producer_id {
             if client
                 .query_opt(

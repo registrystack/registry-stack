@@ -347,7 +347,7 @@ async fn attachment_verification_quarantines_exact_mime_retries_leases_and_erase
     let pending = store::claim(&tx, policy).await.unwrap().unwrap();
     assert_eq!(pending.content_type(), "application/pdf");
     tx.commit().await.unwrap();
-    migration.execute("UPDATE registry_internal.registry_request_state SET state='canceled' WHERE request_id=$1", &[&request_id]).await.unwrap();
+    migration.execute("UPDATE registry_internal.registry_request_state SET state='cancelled' WHERE request_id=$1", &[&request_id]).await.unwrap();
     erase_request_detail(
         &mut migration,
         &registry,
@@ -489,7 +489,7 @@ async fn first_attachment_write_pins_backend_across_concurrent_distinct_hashes_a
         .unwrap()
         .get(0);
     assert_eq!(backend, "database");
-    migration.execute("UPDATE registry_internal.registry_request_state SET state='canceled' WHERE request_id=$1", &[&request_id]).await.unwrap();
+    migration.execute("UPDATE registry_internal.registry_request_state SET state='cancelled' WHERE request_id=$1", &[&request_id]).await.unwrap();
     erase_request_detail(
         &mut migration,
         &registry,
@@ -764,7 +764,7 @@ async fn attachment_retention_preserves_shared_bytes_until_last_request_erasure(
         .await,
         Err(RequestRetentionError::ActiveDetailPinned)
     );
-    migration.execute("UPDATE registry_internal.registry_request_state SET state='canceled' WHERE request_id=$1", &[&second]).await.unwrap();
+    migration.execute("UPDATE registry_internal.registry_request_state SET state='cancelled' WHERE request_id=$1", &[&second]).await.unwrap();
     let erased = erase_request_detail(
         &mut migration,
         &registry,
@@ -1323,8 +1323,8 @@ async fn seed_canceled_draft_without_proposal(
             "INSERT INTO registry_internal.registry_request_state
                  (request_entity_id, request_id, owner_reference, state,
                   proposal_version, workflow_revision)
-             VALUES ($1, $2, 'owner-ref', 'canceled', 1, 4),
-                    ('other-request-entity', $2, 'other-owner', 'canceled', 1, 4)",
+             VALUES ($1, $2, 'owner-ref', 'cancelled', 1, 4),
+                    ('other-request-entity', $2, 'other-owner', 'cancelled', 1, 4)",
             &[&REQUEST_ENTITY, &request_id],
         )
         .await
@@ -1500,7 +1500,7 @@ async fn seed_second_retention_list_row(client: &Client, contract_fingerprint: &
             "INSERT INTO registry_internal.registry_request_state
                  (request_entity_id, request_id, owner_reference, state,
                   proposal_version, workflow_revision, detail_erased_at)
-             VALUES ($1, $2, 'owner-ref', 'canceled', 1, 2, transaction_timestamp())",
+             VALUES ($1, $2, 'owner-ref', 'cancelled', 1, 2, transaction_timestamp())",
             &[&REQUEST_ENTITY, &request_id],
         )
         .await

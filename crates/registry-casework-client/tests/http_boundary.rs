@@ -9,8 +9,9 @@ use registry_casework_client::{
     AbsencesQuery, BearerToken, CaseworkAction, CaseworkAuth, CaseworkClient, CaseworkClientConfig,
     CaseworkClientError, CaseworkProblemCode, CaseworkProtocolFailure, ContentDigest,
     DecideRequest, DirectoryTargetPurpose, DirectoryTargetsQuery, HoldingsQuery,
-    RecoverAttemptRequest, ReviewCancelRequest, ReviewCancelResponse, ReviewHistoryAudience,
-    ReviewNoteRequest, ReviewTaskContextData, ReviewValidationReason, SourceBinding,
+    RecoverAttemptRequest, ReviewCancelRequest, ReviewCancelResponse, ReviewContext,
+    ReviewCreateRequest, ReviewHistoryAudience, ReviewNoteRequest, ReviewTaskContextData,
+    ReviewValidationReason, SourceBinding, SourceContextBinding,
 };
 use registry_casework_core::SubjectBinding;
 use serde_json::{json, Value};
@@ -19,6 +20,82 @@ use uuid::Uuid;
 
 const TRACEPARENT: &str = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
 type HistoryObservations = Arc<Mutex<Vec<(String, HeaderMap)>>>;
+
+#[tokio::test]
+async fn review_create_refuses_an_accepted_binding_for_another_policy() {
+    let digest = ContentDigest::for_bytes(b"submission");
+    let request = ReviewCreateRequest {
+        kind: "registry-correction".to_owned(),
+        subject: SubjectBinding {
+            source: "registry".to_owned(),
+            subject_type: "change-request".to_owned(),
+            id: "proposal-7".to_owned(),
+            version: "3".to_owned(),
+            digest: ContentDigest::for_bytes(b"proposal-7"),
+        },
+        requester_reference: "proposal-7".to_owned(),
+        initiator: None,
+        context: ReviewContext::Source {
+            binding: SourceContextBinding {
+                reference: "proposal-7".to_owned(),
+            },
+        },
+        result_constraints: None,
+    };
+    let response = json!({
+        "requestId": Uuid::from_u128(7),
+        "subject": request.subject.clone(),
+        "policy": {
+            "id": "another-review-kind",
+            "version": "1",
+            "digest": ContentDigest::for_bytes(b"another-review-kind")
+        },
+        "submissionDigest": digest.clone(),
+    });
+    let app = Router::new()
+        .route("/v1/review-requests", post(review_create_fixture_response))
+        .with_state(response);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .create_or_recover_review_request(
+                CaseworkAuth::new(&token, "requester"),
+                "submission-7",
+                &request,
+                &digest,
+            )
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 201,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+async fn review_create_fixture_response(State(response): State<Value>) -> impl IntoResponse {
+    (
+        StatusCode::CREATED,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        response.to_string(),
+    )
+}
 
 #[tokio::test]
 async fn review_task_context_preserves_the_frozen_source_neutral_shape() {

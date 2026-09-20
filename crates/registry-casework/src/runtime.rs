@@ -10,7 +10,7 @@ use registry_casework_breg::BregBinding;
 use registry_casework_core::{CaseworkProject, SourceAdapter};
 use registry_platform_audit::{AuditEnvelope, AuditProfile, ChainState, JsonlFileSink};
 use registry_platform_config::{SecretProvider, SecretResolver};
-use registry_platform_httputil::OutboundClientBuilder;
+use registry_platform_httputil::{BearerToken, OutboundClientBuilder};
 use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -24,7 +24,7 @@ use crate::{
 
 struct ReviewCompletionTarget {
     url: String,
-    bearer_token: zeroize::Zeroizing<String>,
+    bearer_token: BearerToken,
     timeout: Duration,
     maximum_attempts: u32,
     retry: Duration,
@@ -53,14 +53,12 @@ impl ReviewCompletionDispatcher {
             let secret = secrets
                 .resolve(&target.bearer_token_ref)
                 .map_err(|_| RuntimeError::CompletionConfiguration)?;
-            let token = std::str::from_utf8(secret.expose_secret())
-                .map_err(|_| RuntimeError::CompletionConfiguration)?
-                .to_owned();
+            let token = completion_bearer_token(secret.expose_secret())?;
             targets.insert(
                 id.clone(),
                 Arc::new(ReviewCompletionTarget {
                     url: target.url.clone(),
-                    bearer_token: zeroize::Zeroizing::new(token),
+                    bearer_token: token,
                     timeout: Duration::from_millis(target.timeout_milliseconds),
                     maximum_attempts: target.maximum_attempts,
                     retry: Duration::from_secs(target.retry_seconds),
@@ -191,6 +189,11 @@ impl ReviewCompletionDispatcher {
     }
 }
 
+fn completion_bearer_token(bytes: &[u8]) -> Result<BearerToken, RuntimeError> {
+    let token = std::str::from_utf8(bytes).map_err(|_| RuntimeError::CompletionConfiguration)?;
+    BearerToken::new(token.to_owned()).map_err(|_| RuntimeError::CompletionConfiguration)
+}
+
 async fn validate_retained_completion_destinations(
     store: &PostgresStore,
     configured: &BTreeMap<String, crate::ReviewCompletionRuntimeConfig>,
@@ -257,7 +260,8 @@ pub async fn dispatch_review_completions_once_for_test(
             destination_id.to_owned(),
             Arc::new(ReviewCompletionTarget {
                 url,
-                bearer_token: zeroize::Zeroizing::new(bearer_token.to_owned()),
+                bearer_token: BearerToken::new(bearer_token.to_owned())
+                    .map_err(|_| crate::ReviewRuntimeError::Invalid)?,
                 timeout: Duration::from_secs(30),
                 maximum_attempts: 3,
                 retry: Duration::from_secs(1),
@@ -275,7 +279,10 @@ async fn deliver_review_completion(
     client
         .post(&target.url)
         .timeout(target.timeout)
-        .bearer_auth(target.bearer_token.as_str())
+        .header(
+            reqwest::header::AUTHORIZATION,
+            target.bearer_token.authorization_header_value(),
+        )
         .header("idempotency-key", delivery.event.event_id.to_string())
         .header("registry-recipient-binding", &delivery.recipient_binding)
         .json(&delivery.event)
@@ -884,7 +891,7 @@ mod tests {
             .expect("completion client");
         let target = ReviewCompletionTarget {
             url: format!("{}/completion", server.uri()),
-            bearer_token: zeroize::Zeroizing::new("dispatch-secret".to_owned()),
+            bearer_token: BearerToken::new("dispatch-secret").expect("completion token"),
             timeout: Duration::from_secs(1),
             maximum_attempts: 3,
             retry: Duration::from_secs(1),
@@ -915,12 +922,23 @@ mod tests {
             .await;
         let redirect_target = ReviewCompletionTarget {
             url: format!("{}/redirect", server.uri()),
-            bearer_token: zeroize::Zeroizing::new("dispatch-secret".to_owned()),
+            bearer_token: BearerToken::new("dispatch-secret").expect("completion token"),
             timeout: Duration::from_secs(1),
             maximum_attempts: 3,
             retry: Duration::from_secs(1),
         };
         assert!(!deliver_review_completion(&client, &redirect_target, &delivery).await);
+    }
+
+    #[test]
+    fn review_completion_bearer_tokens_are_validated_before_dispatch() {
+        assert!(completion_bearer_token(b"dispatch-secret").is_ok());
+        for invalid in [b"dispatch-secret\n".as_slice(), &[0xff]] {
+            assert!(matches!(
+                completion_bearer_token(invalid),
+                Err(RuntimeError::CompletionConfiguration)
+            ));
+        }
     }
 
     #[cfg(unix)]
