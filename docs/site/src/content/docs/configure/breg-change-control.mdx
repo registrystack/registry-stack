@@ -11,7 +11,8 @@ locale: en
 standards_referenced: []
 ---
 
-You are authoring a registry project whose profiles already check, and some writes need more than one caller holding the right grant.
+You are authoring a Base Registry Engine (BReg) project whose profiles already check, and some
+writes need more than one caller holding the right grant.
 A registry has three write paths.
 A direct mutation is a create, patch, or tombstone that a profile performs on a record and that commits at once.
 A change request is a record of its own that proposes a change to another entity's record, waits for review, and is applied later by a profile that holds apply authority.

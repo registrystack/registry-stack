@@ -376,6 +376,44 @@ def review_schemas() -> dict:
         ],
         "discriminator": {"propertyName": "type"},
     }
+    cancel_response = {
+        "oneOf": [
+            obj(
+                {"outcome": {"const": "cancelled"}, "result": ref("ReviewResult")},
+                ["outcome", "result"],
+            ),
+            obj(
+                {
+                    "outcome": {"const": "already_terminal"},
+                    "result": ref("ReviewResult"),
+                },
+                ["outcome", "result"],
+            ),
+        ],
+        "discriminator": {"propertyName": "outcome"},
+    }
+    clock_correlation = {
+        "oneOf": [
+            obj(
+                {
+                    "scope": {"const": "subject"},
+                    "source": text,
+                    "subjectType": text,
+                    "id": text,
+                },
+                ["scope", "source", "subjectType", "id"],
+            ),
+            obj(
+                {
+                    "scope": {"const": "activity"},
+                    "taskId": uuid,
+                    "stageId": text,
+                },
+                ["scope", "taskId", "stageId"],
+            ),
+        ],
+        "discriminator": {"propertyName": "scope"},
+    }
     review_note = {
         "type": "string",
         "minLength": 1,
@@ -410,7 +448,7 @@ def review_schemas() -> dict:
         "ReviewResultFeedEntry": obj({"eventId": uuid, "requestId": uuid, "resultId": uuid, "completedAt": instant}, ["eventId", "requestId", "resultId", "completedAt"]),
         "ReviewResultFeedPage": obj({"items": array(ref("ReviewResultFeedEntry")), "nextCursor": nullable(text)}, ["items"]),
         "ReviewCancelRequest": obj({"subject": subject, "reason": text}, ["subject", "reason"]),
-        "ReviewCancelResponse": value,
+        "ReviewCancelResponse": cancel_response,
         "ReviewerTask": task,
         "ReviewTaskPage": obj({"items": array(task), "nextCursor": nullable(uuid)}, ["items"]),
         "ReviewTaskContext": obj({"taskId": uuid, "requestId": uuid, "subject": subject, "requesterReference": text, "policy": policy, "resultConstraints": result_payload, "context": value}, ["taskId", "requestId", "subject", "requesterReference", "policy", "context"]),
@@ -421,7 +459,37 @@ def review_schemas() -> dict:
         "ReviewHistoryPage": obj({"items": array(ref("ReviewHistoryEntry")), "nextCursor": nullable(uuid)}, ["items"]),
         "ReviewNoteRequest": obj({"audience": {"type": "string", "enum": ["reviewers", "requester"]}, "note": review_note}, ["audience", "note"]),
         "ReviewAccountabilityRecord": obj({"eventId": uuid, "requestId": uuid, "taskId": uuid, "actorRef": text, "actor": ref("IssuerPrincipal"), "profileId": text, "decision": text, "privateReason": nullable(text), "resultDigest": nullable(text), "occurredAt": instant, "retainedUntil": instant}, ["eventId", "requestId", "taskId", "actorRef", "actor", "profileId", "decision", "occurredAt", "retainedUntil"]),
-        "ReviewClockOccurrence": value,
+        "ReviewClockCorrelation": clock_correlation,
+        "ReviewClockOccurrence": obj(
+            {
+                "clockOccurrenceId": uuid,
+                "clockId": text,
+                "correlation": ref("ReviewClockCorrelation"),
+                "state": {
+                    "type": "string",
+                    "enum": [
+                        "running",
+                        "paused",
+                        "completed",
+                        "cancelled",
+                        "source_facts_missing",
+                    ],
+                },
+                "policyDigest": policy_digest,
+                "anchorAt": instant,
+                "dueAt": instant,
+                "atRiskAt": instant,
+                "completedAt": instant,
+            },
+            [
+                "clockOccurrenceId",
+                "clockId",
+                "correlation",
+                "state",
+                "policyDigest",
+                "anchorAt",
+            ],
+        ),
         "ReviewClockOccurrenceList": array(ref("ReviewClockOccurrence")),
     }
     return result
@@ -1391,7 +1459,7 @@ def document(contract: dict) -> dict:
         },
         "/v1/review-tasks/{task_id}/decisions": {"post": operation("Record a held review-task decision", source=True, source_required=False, mutation=True, body="ReviewTaskDecisionRequest", parameters=[TASK_ID], status="204")},
         "/v1/review-requests/{request_id}/history": {"get": operation("Read audience-filtered review history", "ReviewHistoryPage", source=True, source_required=False, parameters=[REQUEST_ID, parameter("cursor", "query", "Last delivered history event UUID.", required=False), parameter("limit", "query", "Bounded page size.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Requester history remains bound to the admitted producer. Human reviewer history requires current Casework queue authority; source context also requires the current caller's source profile and token to disclose the pinned source binding, while submitted context rejects a source profile.")},
-        "/v1/review-requests/{request_id}/clocks": {"get": operation("Read review clock occurrences", "ReviewClockOccurrenceList", parameters=[REQUEST_ID])},
+        "/v1/review-requests/{request_id}/clocks": {"get": operation("Read review clock occurrences", "ReviewClockOccurrenceList", source=True, source_required=False, parameters=[REQUEST_ID], description="Requester clock reads remain bound to the admitted producer and reject a source profile. Human reviewer reads require current Casework queue authority; source context also requires the current caller's source profile and token to disclose the pinned source binding, while submitted context rejects a source profile.")},
         "/v1/review-requests/{request_id}/notes": {"post": operation("Add an explicitly audience-bound review note", "ReviewHistoryEntry", source=True, source_required=False, idempotency=True, body="ReviewNoteRequest", parameters=[REQUEST_ID], description="Requester notes remain bound to the admitted producer and reject a source profile. Human reviewer notes require current Casework queue authority; source context also requires the current caller's source profile and token to disclose the pinned source binding, while submitted context rejects a source profile.")},
         "/v1/review-accountability/{event_id}": {"get": operation("Resolve protected review accountability", "ReviewAccountabilityRecord", parameters=[EVENT_ID])},
         "/v1/review-tasks/{task_id}/task-templates": {"get": operation("Preview task grants for a held review task", "TaskTemplatePreviews", source=True, parameters=[TASK_ID])},

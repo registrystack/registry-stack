@@ -512,6 +512,25 @@ impl CaseworkClient {
     }
 
     #[napi]
+    pub async fn review_clocks(
+        &self,
+        token: String,
+        profile: String,
+        request_id: String,
+        source_profile: Option<String>,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        outcome(
+            self.inner
+                .review_clocks(
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    uuid(&request_id)?,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
     pub async fn review_accountability(
         &self,
         token: String,

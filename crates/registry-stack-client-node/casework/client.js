@@ -124,6 +124,7 @@ for (const [method, jsonIndexes] of [
   ['decideReviewTask', [5]],
   ['reviewHistory', [3]],
   ['addReviewNote', [4]],
+  ['reviewClocks', []],
   ['reviewAccountability', []],
   ['listWorkItems', [3]],
   ['nextWorkItem', [3]],

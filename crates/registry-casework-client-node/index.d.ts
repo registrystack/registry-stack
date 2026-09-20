@@ -23,6 +23,7 @@ export declare class CaseworkClient {
   decideReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, decision: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   reviewHistory(token: string, profile: string, requestId: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   addReviewNote(token: string, profile: string, requestId: string, idempotencyKey: string, note: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  reviewClocks(token: string, profile: string, requestId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   reviewAccountability(token: string, profile: string, eventId: string): Promise<CaseworkOutcome>
   listWorkItems(token: string, profile: string, sourceProfile: string, query: any): Promise<CaseworkOutcome>
   nextWorkItem(token: string, profile: string, sourceProfile: string, query?: any | undefined | null): Promise<CaseworkOutcome>

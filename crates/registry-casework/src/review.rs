@@ -712,16 +712,27 @@ impl CaseworkService {
         &self,
         actor: &ActorContext,
         request_id: Uuid,
+        source_profile_id: Option<&str>,
+        token: &str,
     ) -> Result<Vec<ReviewClockOccurrence>, ReviewRuntimeError> {
         let producer_id = if actor.role == CaseworkRole::Requester {
+            if source_profile_id.is_some() {
+                return Err(ReviewRuntimeError::SourceProfileNotApplicable);
+            }
             Some(self.producer_for_actor(actor)?.producer.id)
         } else {
             require_human_reviewer(actor)?;
             None
         };
-        self.store
+        let clocks = self
+            .store
             .review_clocks(actor, request_id, producer_id.as_deref())
-            .await
+            .await?;
+        if producer_id.is_none() {
+            self.preflight_review_request_source(request_id, source_profile_id, token)
+                .await?;
+        }
+        Ok(clocks)
     }
 
     pub async fn review_accountability(
@@ -1628,8 +1639,13 @@ impl PostgresStore {
         let transaction = client.transaction().await?;
         let selected = transaction
             .query(
-                "SELECT request_id FROM casework_review_requests
-                 WHERE (result_available_until<=$1 AND result_erased_at IS NULL)
+                "SELECT request_id FROM casework_review_requests r
+                 WHERE (result_available_until<=$1 AND (
+                           result_erased_at IS NULL OR EXISTS(
+                               SELECT 1 FROM casework_review_tasks t
+                               WHERE t.request_id=r.request_id
+                           )
+                       ))
                     OR accountability_retained_until<=$1
                  ORDER BY request_id LIMIT $2 FOR UPDATE SKIP LOCKED",
                 &[&now, &REVIEW_RETENTION_BATCH_SIZE],
@@ -1705,6 +1721,14 @@ impl PostgresStore {
             .execute(
                 "DELETE FROM casework_review_history h USING casework_review_requests r
                  WHERE h.request_id=r.request_id AND r.request_id=ANY($2)
+                   AND r.result_available_until<=$1",
+                &[&now, &selected],
+            )
+            .await?;
+        transaction
+            .execute(
+                "DELETE FROM casework_review_tasks t USING casework_review_requests r
+                 WHERE t.request_id=r.request_id AND r.request_id=ANY($2)
                    AND r.result_available_until<=$1",
                 &[&now, &selected],
             )
@@ -2508,6 +2532,28 @@ impl PostgresStore {
                 holder: actor.principal.clone(),
             },
         };
+        if state == "open" {
+            let actor_ref = actor_reference(&actor.principal);
+            transaction
+                .execute(
+                    "INSERT INTO casework_review_history(
+                        event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
+                     VALUES($1,$2,$3,'task_claimed',$4,$5,$6)",
+                    &[
+                        &Uuid::new_v4(),
+                        &request_id,
+                        &task_id,
+                        &actor_ref,
+                        &json!({
+                            "assignmentKind": "claim",
+                            "targetRef": &actor_ref,
+                            "staffingBlocked": false,
+                        }),
+                        &now,
+                    ],
+                )
+                .await?;
+        }
         insert_review_idempotency(
             &transaction,
             request_id,
@@ -3346,6 +3392,25 @@ impl PostgresStore {
             eligible_profiles: stage.deciding_profiles.clone(),
             state: ReviewerTaskState::Open,
         };
+        let actor_ref = actor_reference(&actor.principal);
+        transaction
+            .execute(
+                "INSERT INTO casework_review_history(
+                    event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
+                 VALUES($1,$2,$3,'task_released',$4,$5,$6)",
+                &[
+                    &Uuid::new_v4(),
+                    &request_id,
+                    &task_id,
+                    &actor_ref,
+                    &json!({
+                        "assignmentKind": "release",
+                        "previousHolderRef": &actor_ref,
+                    }),
+                    &now,
+                ],
+            )
+            .await?;
         insert_review_idempotency(
             &transaction,
             request_id,

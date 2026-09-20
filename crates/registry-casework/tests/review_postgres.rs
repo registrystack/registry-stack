@@ -135,7 +135,10 @@ impl SourceAdapter for ReviewSource {
                 generation: self.binding_generation().to_owned(),
             },
             display_reference: None,
-            disclosed: BTreeMap::new(),
+            disclosed: BTreeMap::from([(
+                "summary".to_owned(),
+                json!(format!("Review {}", subject.id)),
+            )]),
             permitted_operations: Vec::new(),
         })
     }
@@ -905,6 +908,17 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         .expect("active review reservation remains")
         .get(0);
     assert_eq!(active_reservations, 1);
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_submission_reservations
+             SET recovery_deadline=now()+interval '1 day',
+                 retained_until=now()+interval '1 day'
+             WHERE request_id=$1",
+            &[&first.accepted.request_id],
+        )
+        .await
+        .expect("keep the later result-expiry recovery assertion inside its recovery window");
 
     let primary = task_id(&fixture, first.accepted.request_id, 0).await;
     assert!(matches!(
@@ -1184,7 +1198,8 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         .database
         .execute(
             "UPDATE casework_review_results
-                SET result=jsonb_set(result,'{numericExpansionProbe}',$2::jsonb)
+                SET status='changes_requested',outcome='needs-correction',
+                    result=jsonb_build_object('numericExpansionProbe',$2::jsonb)
               WHERE request_id=$1",
             &[&first.accepted.request_id, &json!(exponent_values)],
         )
@@ -1469,6 +1484,45 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
         .await
         .expect("settle retention review");
 
+    let grant_id = Uuid::new_v4();
+    let primary_revision: i64 = fixture
+        .database
+        .query_one(
+            "SELECT revision FROM casework_review_tasks WHERE task_id=$1",
+            &[&primary],
+        )
+        .await
+        .expect("read retained task revision")
+        .get(0);
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_review_task_grants(
+                grant_id,task_id,request_id,task_revision,holder_issuer,holder_subject,
+                approver_profile,approver_role,idempotency_key,request_hash,record,
+                approved_at,expires_at)
+             VALUES($1,$2,$3,$4,$5,$6,'staff','staff','retention-grant',
+                    repeat('a',64),$7,now(),now()+interval '10 minutes')",
+            &[
+                &grant_id,
+                &primary,
+                &request_id,
+                &primary_revision,
+                &fixture.reviewer_b.principal.issuer,
+                &fixture.reviewer_b.principal.subject,
+                &json!({
+                    "holder": fixture.reviewer_b.principal,
+                    "subject": {
+                        "source": "registry",
+                        "subjectType": "record",
+                        "id": "record-retention"
+                    }
+                }),
+            ],
+        )
+        .await
+        .expect("retain identity-bearing review task grant");
+
     let deadlines = fixture
         .database
         .query_one(
@@ -1532,7 +1586,8 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
         .database
         .execute(
             "UPDATE casework_review_requests
-             SET terminal_at=$2,result_available_until=$3 WHERE request_id=$1",
+             SET terminal_at=$2,result_available_until=$3,result_erased_at=$3
+             WHERE request_id=$1",
             &[
                 &request_id,
                 &(now - TimeDelta::days(2)),
@@ -1540,7 +1595,7 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
             ],
         )
         .await
-        .expect("expire terminal payload retention");
+        .expect("simulate an earlier cleanup that left terminal tasks behind");
     fixture
         .service_v1
         .erase_expired_reviews()
@@ -1570,13 +1625,53 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
         .get(0);
     assert_eq!(retained_draft_count, 0);
     assert_eq!(
+        count_for_request(&fixture, "casework_review_tasks", request_id).await,
+        0,
+        "terminal-expired task rows must not retain holder or assigner identities"
+    );
+    let retained_grant_count: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_task_grants WHERE grant_id=$1",
+            &[&grant_id],
+        )
+        .await
+        .expect("count terminal-expired review task grant")
+        .get(0);
+    assert_eq!(
+        retained_grant_count, 0,
+        "terminal-expired grants must not retain holder or governed subjects"
+    );
+    assert_eq!(
         count_for_request(&fixture, "casework_review_accountability", request_id).await,
         2
+    );
+    let accountability = fixture
+        .database
+        .query_one(
+            "SELECT count(*),bool_and(task_id IS NULL),bool_and(retained_until>now())
+             FROM casework_review_accountability WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("inspect protected accountability rows");
+    assert_eq!(accountability.get::<_, i64>(0), 2);
+    assert!(accountability.get::<_, bool>(1));
+    assert!(
+        accountability.get::<_, bool>(2),
+        "terminalDays expires before accountabilityDays in this fixture"
     );
     assert_eq!(
         count_for_request(&fixture, "casework_review_requests", request_id).await,
         1
     );
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_task(&fixture.reviewer_b, primary, None, "")
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
     let idempotency = fixture
         .database
         .query_one(
@@ -2982,6 +3077,22 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
         )
         .await
         .expect("claim reviewer replay task");
+    let claimed_history = fixture
+        .database
+        .query_one(
+            "SELECT actor_ref,detail FROM casework_review_history
+             WHERE request_id=$1 AND task_id=$2 AND kind='task_claimed'",
+            &[&created.accepted.request_id, &task],
+        )
+        .await
+        .expect("claimed holder transition history");
+    let claimed_actor_ref = claimed_history.get::<_, String>(0);
+    let claimed_detail = claimed_history.get::<_, serde_json::Value>(1);
+    assert!(claimed_actor_ref.starts_with("actor_"));
+    assert!(!claimed_actor_ref.contains(&fixture.reviewer_a.principal.subject));
+    assert_eq!(claimed_detail["assignmentKind"], "claim");
+    assert_eq!(claimed_detail["targetRef"], claimed_actor_ref);
+    assert_eq!(claimed_detail["staffingBlocked"], false);
 
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
     assert!(matches!(
@@ -3014,6 +3125,17 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
             .expect("replay claim through restored staff authority"),
         claimed
     );
+    let claim_history_count = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE request_id=$1 AND task_id=$2 AND kind='task_claimed'",
+            &[&created.accepted.request_id, &task],
+        )
+        .await
+        .expect("count replayed claim history")
+        .get::<_, i64>(0);
+    assert_eq!(claim_history_count, 1);
 
     let released = fixture
         .service_v1
@@ -3025,6 +3147,20 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
         )
         .await
         .expect("release reviewer replay task");
+    let released_history = fixture
+        .database
+        .query_one(
+            "SELECT actor_ref,detail FROM casework_review_history
+             WHERE request_id=$1 AND task_id=$2 AND kind='task_released'",
+            &[&created.accepted.request_id, &task],
+        )
+        .await
+        .expect("released holder transition history");
+    let released_actor_ref = released_history.get::<_, String>(0);
+    let released_detail = released_history.get::<_, serde_json::Value>(1);
+    assert_eq!(released_actor_ref, claimed_actor_ref);
+    assert_eq!(released_detail["assignmentKind"], "release");
+    assert_eq!(released_detail["previousHolderRef"], released_actor_ref);
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
     assert!(matches!(
         fixture
@@ -3052,6 +3188,51 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
             .expect("replay release through restored staff authority"),
         released
     );
+    let release_history_count = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE request_id=$1 AND task_id=$2 AND kind='task_released'",
+            &[&created.accepted.request_id, &task],
+        )
+        .await
+        .expect("count replayed release history")
+        .get::<_, i64>(0);
+    assert_eq!(release_history_count, 1);
+    let history = fixture
+        .service_v1
+        .review_history(
+            &fixture.reviewer_a,
+            created.accepted.request_id,
+            None,
+            "",
+            None,
+            100,
+        )
+        .await
+        .expect("reviewer holder transition history");
+    let claimed_entry = history
+        .items
+        .iter()
+        .find(|entry| entry.kind == "task_claimed")
+        .expect("claimed transition is readable");
+    let released_entry = history
+        .items
+        .iter()
+        .find(|entry| entry.kind == "task_released")
+        .expect("released transition is readable");
+    assert_eq!(
+        claimed_entry.actor_ref.as_deref(),
+        Some(claimed_actor_ref.as_str())
+    );
+    assert_eq!(
+        released_entry.actor_ref.as_deref(),
+        Some(claimed_actor_ref.as_str())
+    );
+    let holder_history_json = serde_json::to_string(&[claimed_entry, released_entry])
+        .expect("holder transition history JSON");
+    assert!(!holder_history_json.contains(&fixture.reviewer_a.principal.issuer));
+    assert!(!holder_history_json.contains(&fixture.reviewer_a.principal.subject));
 
     let answer_service = CaseworkService::new(
         fixture.store.clone(),
@@ -3307,13 +3488,12 @@ async fn source_context_task_disclosure_requires_a_current_caller_source_read() 
         .expect("create source-context review");
     let task = task_id(&fixture, created.accepted.request_id, 0).await;
 
-    assert!(matches!(
-        fixture
-            .service_v2
-            .review_tasks(&fixture.reviewer_a, None, "human-bearer", None, None, 10)
-            .await,
-        Err(ReviewRuntimeError::SourceProfileRequired)
-    ));
+    let concealed_without_source_profile = fixture
+        .service_v2
+        .review_tasks(&fixture.reviewer_a, None, "human-bearer", None, None, 10)
+        .await
+        .expect("source-context task is omitted without a source profile");
+    assert!(concealed_without_source_profile.items.is_empty());
 
     let visible = fixture
         .service_v2
@@ -3376,7 +3556,12 @@ async fn subject_clock_pauses_and_continues_across_review_rounds() {
         .expect("create first clock round");
     let initial = fixture
         .service_v1
-        .review_clocks(&fixture.producer, first.accepted.request_id)
+        .review_clocks(
+            &fixture.producer,
+            first.accepted.request_id,
+            None,
+            "producer-token",
+        )
         .await
         .expect("read initial review clocks");
     assert_eq!(initial.len(), 1);
@@ -3411,7 +3596,12 @@ async fn subject_clock_pauses_and_continues_across_review_rounds() {
         .expect("request changes for first round");
     let paused = fixture
         .service_v1
-        .review_clocks(&fixture.producer, first.accepted.request_id)
+        .review_clocks(
+            &fixture.producer,
+            first.accepted.request_id,
+            None,
+            "producer-token",
+        )
         .await
         .expect("read paused subject clock");
     assert_eq!(paused[0].state, ReviewClockState::Paused);
@@ -3428,7 +3618,12 @@ async fn subject_clock_pauses_and_continues_across_review_rounds() {
         .expect("create corrected clock round");
     let resumed = fixture
         .service_v1
-        .review_clocks(&fixture.producer, second.accepted.request_id)
+        .review_clocks(
+            &fixture.producer,
+            second.accepted.request_id,
+            None,
+            "producer-token",
+        )
         .await
         .expect("read resumed subject clock");
     assert_eq!(resumed.len(), 1);

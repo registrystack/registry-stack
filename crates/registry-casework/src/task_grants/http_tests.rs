@@ -9,6 +9,7 @@ use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use registry_casework_core::*;
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
+use std::collections::BTreeMap;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -1086,6 +1087,153 @@ async fn review_task_grants_bind_holder_revision_subject_and_revocation() {
             .1["active"],
         false
     );
+
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn review_task_grant_database_bound_allows_postgres_jsonb_rendering_overhead() {
+    let f = fixture(900).await;
+    let actor = ActorContext {
+        principal: IssuerPrincipal {
+            issuer: ISSUER.into(),
+            subject: "human".into(),
+        },
+        profile_id: "staff".into(),
+        role: CaseworkRole::Staff,
+    };
+    let mut template = f.project.task_templates[1].clone();
+    template.id = "review-jsonb-boundary".into();
+    template.bounds = TaskGrantBounds::Breg {
+        permissions: (0..64)
+            .map(|permission| TaskPermission {
+                collection: format!("collection_{permission}"),
+                operations: (0..32)
+                    .map(|operation| {
+                        let suffix = if operation < 26 {
+                            char::from(b'a' + operation).to_string()
+                        } else {
+                            format!("a{}", char::from(b'a' + operation - 26))
+                        };
+                        format!("operation_{suffix}")
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
+
+    let database = f.store.client().await.unwrap();
+    let base_document = serde_json::to_value(&template).unwrap();
+    let base_rendered: i32 = database
+        .query_one("SELECT octet_length($1::jsonb::text)", &[&base_document])
+        .await
+        .unwrap()
+        .get(0);
+    let target_document_bytes = 65_400_i32;
+    assert!(base_rendered < target_document_bytes);
+    let TaskGrantBounds::Breg { permissions } = &mut template.bounds else {
+        unreachable!("the test template uses BREG bounds")
+    };
+    let padding = usize::try_from(target_document_bytes - base_rendered).unwrap();
+    let operation_count = permissions.len() * permissions[0].operations.len();
+    for (index, operation) in permissions
+        .iter_mut()
+        .flat_map(|permission| permission.operations.iter_mut())
+        .enumerate()
+    {
+        let extra = padding / operation_count + usize::from(index < padding % operation_count);
+        operation.insert_str(0, &"x".repeat(extra));
+    }
+    template.check(&f.project).unwrap();
+    let document = serde_json::to_value(&template).unwrap();
+    assert!(serde_json::to_vec(&document).unwrap().len() <= 65_536);
+    let rendered_document: i32 = database
+        .query_one("SELECT octet_length($1::jsonb::text)", &[&document])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(rendered_document, target_document_bytes);
+    f.store
+        .activate_task_templates(&[template.clone()])
+        .await
+        .unwrap();
+
+    let request_id: Uuid = database
+        .query_one(
+            "SELECT request_id FROM casework_review_tasks WHERE task_id=$1",
+            &[&f.review_task],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let now = u64::try_from(Utc::now().timestamp()).unwrap();
+    let grant = ReviewTaskGrant {
+        id: Uuid::new_v4(),
+        task_id: f.review_task,
+        request_id,
+        task_revision: 1,
+        holder: actor.principal.clone(),
+        template: template.clone(),
+        template_digest: template_digest(&template).unwrap(),
+        source_issuer: "https://task-authority.test".into(),
+        approver_profile: actor.profile_id.clone(),
+        subject: SubjectBinding {
+            source: "source".into(),
+            subject_type: "request".into(),
+            id: "request-1".into(),
+            version: "proposal-1".into(),
+            digest: ContentDigest::for_bytes(b"request-1"),
+        },
+        source_subject: SubjectRef {
+            source_id: "source".into(),
+            kind: "request".into(),
+            id: "request-1".into(),
+        },
+        proposal: TaskProposalIdentity::from(&binding()),
+        subjects: BTreeMap::from([("person_reference".into(), json!("synthetic-person"))]),
+        approved_at: now,
+        expires_at: now + 900,
+    };
+    let record = serde_json::to_value(&grant).unwrap();
+    let admitted_bytes = serde_json::to_vec(&record).unwrap().len();
+    assert!(admitted_bytes <= 65_536);
+    let rendered_record: i32 = database
+        .query_one("SELECT octet_length($1::jsonb::text)", &[&record])
+        .await
+        .unwrap()
+        .get(0);
+    assert!(rendered_record > 65_536);
+    assert!(rendered_record <= 131_072);
+
+    f.store
+        .approve_review_task_grant(&actor, "jsonb-boundary", grant.clone())
+        .await
+        .unwrap();
+    let stored_bytes: i32 = database
+        .query_one(
+            "SELECT octet_length(record::text) FROM casework_review_task_grants WHERE grant_id=$1",
+            &[&grant.id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(stored_bytes, rendered_record);
+
+    let mut oversized = grant;
+    oversized.id = Uuid::new_v4();
+    oversized
+        .subjects
+        .insert("oversized".into(), json!("x".repeat(65_536)));
+    assert!(serde_json::to_vec(&oversized).unwrap().len() > 65_536);
+    assert!(matches!(
+        f.store
+            .approve_review_task_grant(&actor, "jsonb-boundary-oversized", oversized)
+            .await,
+        Err(StoreError::Invalid)
+    ));
 
     f.admin
         .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))

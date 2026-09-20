@@ -277,6 +277,60 @@ async fn capture_review_note(
 }
 
 #[tokio::test]
+async fn review_clocks_forward_the_selected_source_profile() {
+    let observations = Arc::new(Mutex::new(Vec::<HeaderMap>::new()));
+    let app = Router::new()
+        .route(
+            "/v1/review-requests/{request}/clocks",
+            get(capture_review_clocks),
+        )
+        .with_state(observations.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let response = client
+        .review_clocks(
+            CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+            Uuid::nil(),
+        )
+        .await
+        .expect("source-context review clocks");
+
+    assert!(response.value.is_empty());
+    let observations = observations.lock().expect("observations");
+    assert_eq!(observations.len(), 1, "review clocks are never retried");
+    assert_eq!(observations[0]["authorization"], "Bearer one-call-secret");
+    assert_eq!(observations[0]["registry-casework-profile"], "staff");
+    assert_eq!(observations[0]["registry-source-profile"], "reviewer");
+    server.abort();
+}
+
+async fn capture_review_clocks(
+    State(observations): State<Arc<Mutex<Vec<HeaderMap>>>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    observations.lock().expect("observations").push(headers);
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        "[]",
+    )
+}
+
+#[tokio::test]
 async fn cancellation_accepts_only_a_valid_result_bound_to_the_request_and_subject() {
     let request_id = Uuid::from_u128(7);
     let subject = SubjectBinding {

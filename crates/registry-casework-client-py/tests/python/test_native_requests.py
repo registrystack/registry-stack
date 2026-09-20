@@ -136,6 +136,8 @@ class _Handler(BaseHTTPRequestHandler):
             self.respond({"items": [], "nextCursor": "next-cursor", "status": "complete"})
         elif self.path.startswith(f"/tenant/v1/review-requests/{ITEM_ID}/history?"):
             self.respond({"items": [], "nextCursor": EXPIRED_CURSOR})
+        elif self.path == f"/tenant/v1/review-requests/{ITEM_ID}/clocks":
+            self.respond([])
         elif self.path.startswith("/tenant/v1/holdings?"):
             self.respond({"items": [], "nextCursor": "next-holdings", "status": "complete"})
         elif self.path.startswith("/tenant/v1/work-items/next?"):
@@ -458,6 +460,19 @@ class NativeRequestTests(unittest.TestCase):
         )
         self.assertEqual(_Handler.observations[2]["source_profile"], "source-one")
         self.assertEqual(_Handler.observations[2]["idempotency_key"], "note-1")
+
+        clocks = self.client.review_clocks(
+            "staff-token",
+            "staff",
+            ITEM_ID,
+            "source-one",
+        )
+        self.assertEqual(clocks["value"], [])
+        self.assertEqual(
+            _Handler.observations[3]["path"],
+            f"/tenant/v1/review-requests/{ITEM_ID}/clocks",
+        )
+        self.assertEqual(_Handler.observations[3]["source_profile"], "source-one")
 
     def test_holdings_forwards_page_query_and_returns_continuation(self) -> None:
         page = self.client.holdings(

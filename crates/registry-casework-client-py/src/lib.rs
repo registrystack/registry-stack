@@ -882,6 +882,28 @@ impl CaseworkClient {
         )
     }
 
+    #[pyo3(signature = (token, profile, request_id, source_profile=None))]
+    fn review_clocks<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        request_id: &str,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let request_id = uuid(py, request_id)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .review_clocks(auth(&token, profile, source_profile), request_id),
+                )
+            }),
+        )
+    }
+
     fn review_accountability<'py>(
         &self,
         py: Python<'py>,

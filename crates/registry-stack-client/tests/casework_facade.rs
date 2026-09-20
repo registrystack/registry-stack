@@ -201,6 +201,9 @@ async fn every_casework_method_names_its_types(
             review_note,
         )
         .await?;
+    let _: CaseworkComplete<Vec<registry_casework_client::ReviewClockOccurrence>> = client
+        .review_clocks(CaseworkAuth::new(token, profile), item_id)
+        .await?;
     let _: CaseworkComplete<ReviewAccountabilityRecord> = client
         .review_accountability(CaseworkAuth::new(token, profile), event_id)
         .await?;

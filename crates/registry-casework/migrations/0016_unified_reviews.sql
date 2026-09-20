@@ -326,7 +326,10 @@ CREATE TABLE casework_review_task_grants (
     approver_role text NOT NULL CHECK (approver_role IN ('staff','supervisor')),
     idempotency_key text NOT NULL CHECK (octet_length(idempotency_key) BETWEEN 1 AND 256),
     request_hash text NOT NULL CHECK (request_hash ~ '^[0-9a-f]{64}$'),
-    record jsonb NOT NULL CHECK (octet_length(record::text) <= 65536),
+    -- Application admission remains capped at 65,536 compact JSON bytes. JSONB
+    -- text rendering inserts separator whitespace, so retain a bounded 2x
+    -- storage envelope for every application-admitted review grant.
+    record jsonb NOT NULL CHECK (octet_length(record::text) <= 131072),
     approved_at timestamptz NOT NULL,
     expires_at timestamptz NOT NULL CHECK (
         expires_at > approved_at AND expires_at <= approved_at + interval '900 seconds'

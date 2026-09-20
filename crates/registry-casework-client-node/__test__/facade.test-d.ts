@@ -101,6 +101,7 @@ client.reviewTaskContext(token, profile, item.itemId, sourceProfile).then((respo
 void client.reviewHistory(token, profile, item.itemId, { limit: 25 })
 void client.reviewHistory(token, profile, item.itemId, { limit: 25 }, sourceProfile)
 void client.addReviewNote(token, profile, item.itemId, 'note-1', { audience: 'reviewers', note: 'Review note' }, sourceProfile)
+void client.reviewClocks(token, profile, item.itemId, sourceProfile)
 void client.reviewAccountability(token, 'supervisor', '00000000-0000-0000-0000-000000000000')
   .then((record) => {
     const resultDigest: string | undefined = record.value.resultDigest

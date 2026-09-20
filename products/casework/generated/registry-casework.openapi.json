@@ -3165,8 +3165,151 @@
         ],
         "type": "object"
       },
-      "ReviewCancelResponse": {},
-      "ReviewClockOccurrence": {},
+      "ReviewCancelResponse": {
+        "discriminator": {
+          "propertyName": "outcome"
+        },
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "outcome": {
+                "const": "cancelled"
+              },
+              "result": {
+                "$ref": "#/components/schemas/ReviewResult"
+              }
+            },
+            "required": [
+              "outcome",
+              "result"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "outcome": {
+                "const": "already_terminal"
+              },
+              "result": {
+                "$ref": "#/components/schemas/ReviewResult"
+              }
+            },
+            "required": [
+              "outcome",
+              "result"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ReviewClockCorrelation": {
+        "discriminator": {
+          "propertyName": "scope"
+        },
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "scope": {
+                "const": "subject"
+              },
+              "source": {
+                "type": "string"
+              },
+              "subjectType": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope",
+              "source",
+              "subjectType",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "scope": {
+                "const": "activity"
+              },
+              "stageId": {
+                "type": "string"
+              },
+              "taskId": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope",
+              "taskId",
+              "stageId"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ReviewClockOccurrence": {
+        "additionalProperties": false,
+        "properties": {
+          "anchorAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "atRiskAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "clockId": {
+            "type": "string"
+          },
+          "clockOccurrenceId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "completedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "correlation": {
+            "$ref": "#/components/schemas/ReviewClockCorrelation"
+          },
+          "dueAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "policyDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "paused",
+              "completed",
+              "cancelled",
+              "source_facts_missing"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "clockOccurrenceId",
+          "clockId",
+          "correlation",
+          "state",
+          "policyDigest",
+          "anchorAt"
+        ],
+        "type": "object"
+      },
       "ReviewClockOccurrenceList": {
         "items": {
           "$ref": "#/components/schemas/ReviewClockOccurrence"
@@ -12105,6 +12248,7 @@
     },
     "/v1/review-requests/{request_id}/clocks": {
       "get": {
+        "description": "Requester clock reads remain bound to the admitted producer and reject a source profile. Human reviewer reads require current Casework queue authority; source context also requires the current caller's source profile and token to disclose the pinned source binding, while submitted context rejects a source profile.",
         "operationId": "getReviewClocks",
         "parameters": [
           {
@@ -12121,6 +12265,18 @@
             "in": "header",
             "name": "Registry-Casework-Profile",
             "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit source profile used for the caller-scoped BReg read or action.",
+            "in": "header",
+            "name": "Registry-Source-Profile",
+            "required": false,
             "schema": {
               "maxLength": 128,
               "minLength": 1,

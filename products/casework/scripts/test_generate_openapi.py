@@ -156,6 +156,15 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertFalse(
             review_note_parameters["Registry-Source-Profile"]["required"]
         )
+        review_clock_parameters = {
+            parameter["name"]: parameter
+            for parameter in self.openapi["paths"][
+                "/v1/review-requests/{request_id}/clocks"
+            ]["get"]["parameters"]
+        }
+        self.assertFalse(
+            review_clock_parameters["Registry-Source-Profile"]["required"]
+        )
         review_note = schemas["ReviewNoteRequest"]["properties"]["note"]
         self.assertEqual(1, review_note["minLength"])
         self.assertNotIn("maxLength", review_note)
@@ -783,6 +792,106 @@ class GeneratedOpenApiTests(unittest.TestCase):
                     variant["properties"]["reason"],
                 )
                 self.assertEqual({}, variant["properties"]["result"])
+
+    def test_review_cancel_response_is_the_closed_outcome_union(self) -> None:
+        response = self.openapi["components"]["schemas"]["ReviewCancelResponse"]
+        self.assertEqual({"propertyName": "outcome"}, response["discriminator"])
+        variants = {
+            variant["properties"]["outcome"]["const"]: variant
+            for variant in response["oneOf"]
+        }
+        self.assertEqual({"cancelled", "already_terminal"}, set(variants))
+        for outcome, variant in variants.items():
+            with self.subTest(outcome=outcome):
+                self.assertFalse(variant["additionalProperties"])
+                self.assertEqual({"outcome", "result"}, set(variant["properties"]))
+                self.assertEqual(["outcome", "result"], variant["required"])
+                self.assertEqual(
+                    {"$ref": "#/components/schemas/ReviewResult"},
+                    variant["properties"]["result"],
+                )
+
+    def test_review_clock_occurrence_is_the_closed_runtime_shape(self) -> None:
+        schemas = self.openapi["components"]["schemas"]
+        occurrence = schemas["ReviewClockOccurrence"]
+        self.assertFalse(occurrence["additionalProperties"])
+        self.assertEqual(
+            {
+                "clockOccurrenceId",
+                "clockId",
+                "correlation",
+                "state",
+                "policyDigest",
+                "anchorAt",
+                "dueAt",
+                "atRiskAt",
+                "completedAt",
+            },
+            set(occurrence["properties"]),
+        )
+        self.assertEqual(
+            [
+                "clockOccurrenceId",
+                "clockId",
+                "correlation",
+                "state",
+                "policyDigest",
+                "anchorAt",
+            ],
+            occurrence["required"],
+        )
+        self.assertEqual(
+            {"$ref": "#/components/schemas/ReviewClockCorrelation"},
+            occurrence["properties"]["correlation"],
+        )
+        self.assertEqual(
+            {"type": "string", "format": "uuid"},
+            occurrence["properties"]["clockOccurrenceId"],
+        )
+        self.assertEqual({"type": "string"}, occurrence["properties"]["clockId"])
+        self.assertEqual(
+            ["running", "paused", "completed", "cancelled", "source_facts_missing"],
+            occurrence["properties"]["state"]["enum"],
+        )
+        self.assertEqual(
+            {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            occurrence["properties"]["policyDigest"],
+        )
+        for timestamp in ("anchorAt", "dueAt", "atRiskAt", "completedAt"):
+            self.assertEqual(
+                {"type": "string", "format": "date-time"},
+                occurrence["properties"][timestamp],
+            )
+
+        correlation = schemas["ReviewClockCorrelation"]
+        self.assertEqual({"propertyName": "scope"}, correlation["discriminator"])
+        variants = {
+            variant["properties"]["scope"]["const"]: variant
+            for variant in correlation["oneOf"]
+        }
+        self.assertEqual({"subject", "activity"}, set(variants))
+        self.assertEqual(
+            {"scope", "source", "subjectType", "id"},
+            set(variants["subject"]["properties"]),
+        )
+        self.assertEqual(
+            ["scope", "source", "subjectType", "id"],
+            variants["subject"]["required"],
+        )
+        self.assertEqual(
+            {"scope", "taskId", "stageId"},
+            set(variants["activity"]["properties"]),
+        )
+        self.assertEqual(
+            ["scope", "taskId", "stageId"],
+            variants["activity"]["required"],
+        )
+        self.assertEqual(
+            {"type": "string", "format": "uuid"},
+            variants["activity"]["properties"]["taskId"],
+        )
+        for variant in variants.values():
+            self.assertFalse(variant["additionalProperties"])
 
     def test_review_validation_headers_are_paired_value_free_metadata(self) -> None:
         for method, path in GENERATOR.REVIEW_VALIDATION_OPERATIONS:

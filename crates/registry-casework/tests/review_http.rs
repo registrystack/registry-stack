@@ -897,7 +897,7 @@ async fn requester_history_and_notes_require_the_admitted_producer_id_over_http(
 }
 
 #[tokio::test]
-async fn source_context_review_history_and_notes_require_current_pinned_source_visibility_over_http(
+async fn source_context_review_history_notes_and_clocks_require_current_pinned_source_visibility_over_http(
 ) {
     let idp = MockIdp::start().await;
     let (app, _, source_revoked, _, _) = app(&idp).await;
@@ -918,7 +918,68 @@ async fn source_context_review_history_and_notes_require_current_pinned_source_v
     )
     .expect("source-context create JSON");
 
+    let requester_clocks = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-requests/{}/clocks", created.request_id))
+                .header("authorization", format!("Bearer {producer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .body(Body::empty())
+                .expect("requester source-context clocks"),
+        )
+        .await
+        .expect("requester source-context clocks response");
+    assert_eq!(requester_clocks.status(), StatusCode::OK);
+    let requester_clocks_with_source_profile = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-requests/{}/clocks", created.request_id))
+                .header("authorization", format!("Bearer {producer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("requester clocks with source profile"),
+        )
+        .await
+        .expect("requester source-profile clocks response");
+    assert_eq!(
+        requester_clocks_with_source_profile.status(),
+        StatusCode::BAD_REQUEST
+    );
+
     let reviewer_token = reviewer_token(&idp);
+    let missing_clock_source_profile = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-requests/{}/clocks", created.request_id))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .body(Body::empty())
+                .expect("source clocks without source profile"),
+        )
+        .await
+        .expect("source clocks response without source profile");
+    assert_eq!(
+        missing_clock_source_profile.status(),
+        StatusCode::BAD_REQUEST
+    );
+    let authorized_clocks = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-requests/{}/clocks", created.request_id))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("authorized source clocks"),
+        )
+        .await
+        .expect("authorized source clocks response");
+    assert_eq!(authorized_clocks.status(), StatusCode::OK);
     let note_canary = "SOURCE_HISTORY_NOTE_CANARY";
     let missing_note_source_profile = app
         .clone()
@@ -993,6 +1054,20 @@ async fn source_context_review_history_and_notes_require_current_pinned_source_v
     assert!(authorized.contains(note_canary));
 
     source_revoked.store(true, Ordering::SeqCst);
+    let revoked_clocks = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-requests/{}/clocks", created.request_id))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("revoked source clocks"),
+        )
+        .await
+        .expect("revoked source clocks response");
+    assert_eq!(revoked_clocks.status(), StatusCode::FORBIDDEN);
     let revoked_note_canary = "REVOKED_SOURCE_NOTE_CANARY";
     let revoked_note = app
         .clone()
@@ -1237,6 +1312,38 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
         .expect("submitted-context source-profile response");
     assert_eq!(
         submitted_history_with_source_profile.status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    let submitted_clocks = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-requests/{}/clocks", created.request_id))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .body(Body::empty())
+                .expect("submitted-context clocks request"),
+        )
+        .await
+        .expect("submitted-context clocks response");
+    assert_eq!(submitted_clocks.status(), StatusCode::OK);
+
+    let submitted_clocks_with_source_profile = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-requests/{}/clocks", created.request_id))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("submitted-context clocks with source profile"),
+        )
+        .await
+        .expect("submitted-context source-profile clocks response");
+    assert_eq!(
+        submitted_clocks_with_source_profile.status(),
         StatusCode::BAD_REQUEST
     );
 

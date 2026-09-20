@@ -107,6 +107,42 @@ test('review note forwards the optional source profile and idempotency key', asy
   assert.equal(observed.headers['idempotency-key'], 'note-1');
 });
 
+test('review clocks forward the optional source profile', async (context) => {
+  let observed;
+  const server = http.createServer((request, response) => {
+    observed = { path: request.url, headers: request.headers };
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end('[]');
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { port } = server.address();
+  const { CaseworkClient } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${port}/` });
+  const result = await client.reviewClocks(
+    'one-call-secret',
+    'staff',
+    '00000000-0000-0000-0000-000000000000',
+    'reviewer',
+  );
+
+  assert.deepEqual(result.value, []);
+  assert.equal(observed.path, '/v1/review-requests/00000000-0000-0000-0000-000000000000/clocks');
+  assert.equal(observed.headers.authorization, 'Bearer one-call-secret');
+  assert.equal(observed.headers['registry-casework-profile'], 'staff');
+  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
+});
+
 test('decision forwards the selected source profile with mutation headers', async (context) => {
   let observed;
   const server = http.createServer((request, response) => {

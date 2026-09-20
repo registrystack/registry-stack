@@ -646,9 +646,14 @@ async fn review_clocks(
     headers: HeaderMap,
     Path(request_id): Path<Uuid>,
 ) -> Result<Json<Vec<registry_casework_core::ReviewClockOccurrence>>, HttpError> {
-    reject_source_profile(&headers)?;
-    let (actor, _) = authenticate(&state, &headers).await?;
-    Ok(Json(state.service.review_clocks(&actor, request_id).await?))
+    let source_profile_id = source_profile_optional(&headers)?;
+    let (actor, token) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .review_clocks(&actor, request_id, source_profile_id, token)
+            .await?,
+    ))
 }
 
 async fn add_review_note(

@@ -10,15 +10,15 @@ use registry_casework_core::{
     DirectoryTargetsQuery, DraftResponse, HistoryPage, HoldingsPage, HoldingsQuery,
     HolidaySetDocument, HolidaySetRevisionInput, ListWorkItemsQuery, MutationResponse,
     NextWorkItemQuery, RecoverAttemptRequest, ReleaseRequest, ReviewAccountabilityRecord,
-    ReviewCancelRequest, ReviewCancelResponse, ReviewCreateRequest, ReviewHistoryEntry,
-    ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewRequestAccepted,
-    ReviewRequestView, ReviewResult, ReviewResultFeedPage, ReviewResultStatus, ReviewTaskContext,
-    ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage, ReviewValidationError,
-    ReviewValidationReason, ReviewerTask, SaveDraftRequest, WorkItem, WorkItemPage,
-    CASEWORK_PROBLEM_TYPE_BASE, CASEWORK_PROFILE_HEADER, DIRECTORY_TARGETS_PATH, HOLDINGS_PATH,
-    IDEMPOTENCY_KEY_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES,
-    NEXT_WORK_ITEM_PATH, SOURCE_PROFILE_HEADER, VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
-    WORK_ITEMS_PATH,
+    ReviewCancelRequest, ReviewCancelResponse, ReviewClockOccurrence, ReviewCreateRequest,
+    ReviewHistoryEntry, ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest,
+    ReviewRequestAccepted, ReviewRequestView, ReviewResult, ReviewResultFeedPage,
+    ReviewResultStatus, ReviewTaskContext, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage,
+    ReviewValidationError, ReviewValidationReason, ReviewerTask, SaveDraftRequest, WorkItem,
+    WorkItemPage, CASEWORK_PROBLEM_TYPE_BASE, CASEWORK_PROFILE_HEADER, DIRECTORY_TARGETS_PATH,
+    HOLDINGS_PATH, IDEMPOTENCY_KEY_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES,
+    MAXIMUM_CASEWORK_PROFILE_BYTES, NEXT_WORK_ITEM_PATH, SOURCE_PROFILE_HEADER,
+    VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER, WORK_ITEMS_PATH,
 };
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
@@ -575,6 +575,19 @@ impl CaseworkClient {
                 idempotency_key,
             );
         self.send_json(request, StatusCode::OK).await
+    }
+
+    pub async fn review_clocks(
+        &self,
+        auth: CaseworkAuth<'_>,
+        request_id: Uuid,
+    ) -> Result<CaseworkComplete<Vec<ReviewClockOccurrence>>, CaseworkClientError> {
+        self.get_json(
+            &auth,
+            &["v1", "review-requests", &request_id.to_string(), "clocks"],
+            &[],
+        )
+        .await
     }
 
     pub async fn review_accountability(
