@@ -249,7 +249,11 @@ impl BRegProblemCode {
         }
     }
 
-    pub(crate) const fn detail(self) -> &'static str {
+    /// The sentence the service answers this code under. It is the catalogue's
+    /// own published sentence, so a caller can state what a matching problem
+    /// said without keeping a second copy of the catalogue.
+    #[must_use]
+    pub const fn detail(self) -> &'static str {
         match self {
             Self::ActionEvidenceFailed => "The declared Evidence dependency could not be accepted.",
             Self::ActionHandlerFailed => "The action handler could not produce an accepted result.",
@@ -258,19 +262,13 @@ impl BRegProblemCode {
             Self::ActionRefused => "The action was refused by a declared business rule.",
             Self::AuthenticationRefused => "The bearer credential is missing or refused.",
             Self::IdempotencyConflict => "The idempotency key is bound to another request.",
-            Self::IngestionChunkMismatch => {
-                "The chunk does not match the run's announced digest plan."
-            }
+            Self::IngestionChunkMismatch => "The chunk does not match the expected next chunk.",
             Self::IngestionProfileMismatch => {
-                "The ingestion run does not belong to the selected access profile."
+                "The selected access profile does not match the run's bound profile."
             }
-            Self::IngestionReceiptErased => {
-                "The chunk receipt was erased with the record history it described."
-            }
-            Self::IngestionRunBlocked => {
-                "The ingestion run is blocked because the active package changed."
-            }
-            Self::IngestionRunNotOpen => "The ingestion run is not open for chunk submissions.",
+            Self::IngestionReceiptErased => "The stored receipt of the chunk was erased.",
+            Self::IngestionRunBlocked => "The active package no longer matches the run binding.",
+            Self::IngestionRunNotOpen => "The ingestion run is not open for this transition.",
             Self::LookupUnresolved => "The lookup did not resolve exactly one record.",
             Self::MutationConflict => "The mutation conflicts with current state.",
             Self::PreconditionFailed => "The mutation precondition failed.",

@@ -1716,7 +1716,10 @@ impl MutationCoordinator {
             };
             // The terminal chunk closes the run, so it must satisfy the
             // announced totals exactly and bind the whole-input digest its
-            // prefix digest equals on the last chunk.
+            // prefix digest equals on the last chunk. The chunk digest itself
+            // was already verified against the submitted items at the ingestion
+            // boundary, before field-id normalization, so it is not re-derived
+            // here: these items are the normalized form of the same bytes.
             let terminal_chunk = chunk_binding.chunk_index + 1 == run.chunk_count;
             let not_open = run.status != IngestionRunStatus::Open;
             if not_open
@@ -1731,7 +1734,6 @@ impl MutationCoordinator {
                     .items
                     .iter()
                     .any(|item| item.operation() != announced_operation)
-                || canonical_chunk_digest(&request.items)? != chunk_binding.chunk_digest
             {
                 record_attempt(
                     transaction.transaction(),
@@ -3584,20 +3586,6 @@ fn canonical_batch_request_digest(
     }))
     .map_err(|_| MutationError::InvalidRequest)?;
     Ok(Sha256::digest(canonical).into())
-}
-
-/// The canonical chunk digest an ingestion run binds for these items. It is
-/// the same derivation the announcing client made over its own item array, so
-/// a submission can never bind a digest the mutation body does not hash to.
-fn canonical_chunk_digest(items: &[BatchMutationItem]) -> Result<String, MutationError> {
-    let canonical = canonicalize_json(&json!({
-        "items": items
-            .iter()
-            .map(BatchMutationItem::canonical_json)
-            .collect::<Vec<_>>(),
-    }))
-    .map_err(|_| MutationError::InvalidRequest)?;
-    Ok(hex_bytes(&Sha256::digest(canonical)))
 }
 
 impl MutationBody {

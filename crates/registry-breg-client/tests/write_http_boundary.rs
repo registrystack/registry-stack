@@ -1558,17 +1558,13 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         Code::ActionRefused => REFUSAL_LABEL,
         Code::AuthenticationRefused => "The bearer credential is missing or refused.",
         Code::IdempotencyConflict => "The idempotency key is bound to another request.",
-        Code::IngestionChunkMismatch => "The chunk does not match the run's announced digest plan.",
+        Code::IngestionChunkMismatch => "The chunk does not match the expected next chunk.",
         Code::IngestionProfileMismatch => {
-            "The ingestion run does not belong to the selected access profile."
+            "The selected access profile does not match the run's bound profile."
         }
-        Code::IngestionReceiptErased => {
-            "The chunk receipt was erased with the record history it described."
-        }
-        Code::IngestionRunBlocked => {
-            "The ingestion run is blocked because the active package changed."
-        }
-        Code::IngestionRunNotOpen => "The ingestion run is not open for chunk submissions.",
+        Code::IngestionReceiptErased => "The stored receipt of the chunk was erased.",
+        Code::IngestionRunBlocked => "The active package no longer matches the run binding.",
+        Code::IngestionRunNotOpen => "The ingestion run is not open for this transition.",
         Code::LookupUnresolved => "The lookup did not resolve exactly one record.",
         Code::MutationConflict => "The mutation conflicts with current state.",
         Code::PreconditionFailed => "The mutation precondition failed.",

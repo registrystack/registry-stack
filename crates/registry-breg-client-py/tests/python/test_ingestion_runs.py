@@ -112,8 +112,8 @@ class IngestionRunTests(unittest.TestCase):
                             "registry-breg/ingestion/receipt_erased",
                             "title": "Gone",
                             "status": 410,
-                            "detail": "The chunk receipt was erased with the "
-                            "record history it described.",
+                            "detail": "The stored receipt of the chunk was "
+                            "erased.",
                             "code": "ingestion.receipt_erased",
                             "traceId": TRACE_ID,
                         }

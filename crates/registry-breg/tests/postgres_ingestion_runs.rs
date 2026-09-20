@@ -816,6 +816,65 @@ async fn terminal_chunks_must_satisfy_the_announced_operation_totals_and_prefix(
     assert_eq!(durable_widget_count(&harness).await, 4);
 }
 
+/// A chunk digest binds the items as the caller submits them, so a field whose
+/// API name differs from its field id must not break the binding: the digest
+/// is verified at the ingestion boundary, and the field-id normalization the
+/// mutation performs afterwards is not a different chunk.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chunk_digests_bind_the_submitted_api_names_not_the_field_ids() {
+    let fixture = format!("{FIXTURE_HEAD}{FIXTURE_TAIL}")
+        .replacen(
+            concat!(
+                r#"      {"id":"quantity","type":"int64","required":true,"classification":"public"}"#,
+                "\n",
+            ),
+            concat!(
+                r#"      {"id":"quantity","type":"int64","required":true,"classification":"public"},"#,
+                "\n",
+                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maxLength":64,"classification":"public"}"#,
+                "\n",
+            ),
+            1,
+        )
+        .replace(
+            r#""writableFields":["jurisdiction","label","quantity"]"#,
+            r#""writableFields":["jurisdiction","label","quantity","serial-number"]"#,
+        );
+    let project = parse_project_json(fixture.as_bytes()).expect("the api-name fixture parses");
+    let registry = Arc::new(
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("the api-name fixture compiles to trusted inventories"),
+    );
+    let harness = IngestionHarness::from_registry(registry).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+
+    let items: Vec<Value> = (0..2)
+        .map(|index| {
+            json!({"operation":"create", "data": {
+                "jurisdiction": "zone-a",
+                "label": format!("api-name-{index}"),
+                "quantity": index,
+                "serialNumber": format!("SN-{index:04}")
+            }})
+        })
+        .collect();
+    let chunks = plan_chunks(&items, 3);
+    let run_id = harness.create_run(&claims, &chunks).await;
+
+    let submitted = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(submitted.status(), StatusCode::OK);
+    let body = body_json(submitted).await;
+    assert_eq!(body["run"]["status"], "complete");
+    assert_eq!(body["receipt"]["digest"], chunks.digests[0]);
+    assert_eq!(durable_widget_count(&harness).await, 2);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn listing_runs_filters_by_status_and_input_digest() {
     let harness = IngestionHarness::create().await;
@@ -1028,9 +1087,14 @@ struct IngestionHarness {
 
 impl IngestionHarness {
     async fn create() -> Self {
+        Self::from_registry(Arc::new(compiled_registry())).await
+    }
+
+    /// Build the same harness around one caller-chosen compiled registry, so a
+    /// test can pin authored shapes the shared fixture does not carry.
+    async fn from_registry(registry: Arc<registry_breg::CompiledRegistry>) -> Self {
         let database = TestDatabase::create(8).await;
         let (migration, migration_task) = database.connect_migration().await;
-        let registry = Arc::new(compiled_registry());
         install_compiled_schema(&migration, &registry, &database.runtime_role)
             .await
             .expect("migration installs the compiler-owned schema");
