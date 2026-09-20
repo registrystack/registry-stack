@@ -40,9 +40,16 @@ submitted chunk digest and the submitted prefix digest match the stored ones.
 Chunk mutations, record revisions, run audit, the idempotency receipt, and the
 checkpoint advancement commit in one transaction. A fault after that commit is
 recovered by reading the run and replaying the chunk, never by a second
-mutation. Both receipt releases, the replay and the recovery read, append a
-value-free disclosure record to the run audit before the answer leaves, so an
-audit outage gates the release instead of passing silently.
+mutation. Every release of a stored receipt appends a value-free disclosure
+record to the run audit before the answer leaves, so an audit outage gates the
+release instead of passing silently. The service-level replay and the recovery
+read append it in a transaction of their own, and the row-lock replay a
+duplicate submission takes when a concurrent submission already committed the
+chunk appends it in the same transaction as its attempt record, inside the run
+lock that decided the replay. A fresh submission's first release needs no
+disclosure record of its own: its terminal and run-committed audit records,
+written in the same transaction as the receipt it stores, already account for
+that release.
 
 ## States
 
@@ -90,6 +97,13 @@ is erased, through the revision the erasure names: a receipt describing only
 later revisions of the same record survives. A later receipt read answers
 `410 ingestion.receipt_erased`; the chunk and its counts stay visible in the
 run.
+
+Over an entity with encrypted fields, a receipt stores the sealed field
+envelopes exactly as the ordinary batch route stores them, and every release
+path, the fresh answer, the replay, and the recovery read, opens those members
+at the same serve edge the batch route opens its answers. The stored receipt
+bytes stay sealed, and a process without key state, or one whose open fails,
+answers `service.unavailable` instead of releasing an envelope.
 
 ## Contract material
 

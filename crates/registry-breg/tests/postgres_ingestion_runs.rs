@@ -12,6 +12,8 @@ use std::time::Duration;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use postgres_harness::TestDatabase;
 use registry_breg::api::{
     router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
@@ -20,6 +22,7 @@ use registry_breg::api::{
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
+use registry_breg::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
 use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
@@ -27,6 +30,7 @@ use registry_breg::postgres::{
     RegistryStateTestIdentity,
 };
 use registry_platform_audit::AuditProfile;
+use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tower::Service as _;
@@ -1303,6 +1307,176 @@ async fn a_row_lock_replay_discloses_an_audited_receipt() {
     );
 }
 
+/// A chunk receipt over an encrypted field stores the sealed envelope exactly
+/// as the batch route's idempotency cache does, and opens it at the same
+/// release edge: the fresh answer carries the plaintext member, no envelope
+/// marker reaches the caller, and the stored receipt bytes stay sealed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_fresh_receipt_opens_encrypted_members_and_stays_sealed_at_rest() {
+    let harness =
+        IngestionHarness::from_registry_with_encryption(encrypted_widget_registry()).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&encrypted_items("encrypted-fresh", 2), 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+
+    let submitted = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(submitted.status(), StatusCode::OK);
+    let raw = body_bytes(submitted).await;
+    assert!(
+        !contains_envelope_marker(&raw),
+        "the fresh receipt answer carries no sealed envelope"
+    );
+    let body: Value = serde_json::from_slice(&raw).expect("receipt answer is JSON");
+    let results = body["receipt"]["batch"]["results"]
+        .as_array()
+        .expect("receipt results");
+    assert_eq!(results[0]["data"]["serialNumber"], "SN-0000");
+    assert_eq!(results[1]["data"]["serialNumber"], "SN-0001");
+
+    assert_receipt_stays_sealed(&harness, &run_id).await;
+}
+
+/// Replays and the receipt recovery release the same stored bytes, so both
+/// open the sealed members before the answer leaves while the receipt stays
+/// sealed at rest.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn replayed_and_recovered_receipts_open_encrypted_members() {
+    let harness =
+        IngestionHarness::from_registry_with_encryption(encrypted_widget_registry()).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&encrypted_items("encrypted-replay", 1), 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+
+    let replay = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    let raw = body_bytes(replay).await;
+    assert!(
+        !contains_envelope_marker(&raw),
+        "the replayed receipt answer carries no sealed envelope"
+    );
+    let body: Value = serde_json::from_slice(&raw).expect("replay answer is JSON");
+    assert_eq!(body["receipt"]["replayed"], true);
+    assert_eq!(
+        body["receipt"]["batch"]["results"][0]["data"]["serialNumber"],
+        "SN-0000"
+    );
+
+    let recovered = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::OK);
+    let raw = body_bytes(recovered).await;
+    assert!(
+        !contains_envelope_marker(&raw),
+        "the recovered receipt answer carries no sealed envelope"
+    );
+    let body: Value = serde_json::from_slice(&raw).expect("recovery answer is JSON");
+    assert_eq!(
+        body["batch"]["results"][0]["data"]["serialNumber"],
+        "SN-0000"
+    );
+
+    assert_receipt_stays_sealed(&harness, &run_id).await;
+}
+
+/// Without key state, no receipt release may answer sealed members: a fresh
+/// submission, a replay, and a recovery all answer an outage, no envelope
+/// reaches any caller, and the stored receipt stays sealed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn receipt_releases_fail_closed_without_key_state() {
+    let harness =
+        IngestionHarness::from_registry_with_encryption(encrypted_widget_registry()).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&encrypted_items("encrypted-closed", 2), 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    assert_eq!(durable_widget_count(&harness).await, 2);
+
+    // A restarted process without key state can still admit the run surface,
+    // but no receipt it holds may leave sealed.
+    let closed = harness.restart_without_field_encryption().await;
+    let replay = closed
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!contains_envelope_marker(&body_bytes(replay).await));
+
+    let recovered = closed
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!contains_envelope_marker(&body_bytes(recovered).await));
+
+    // A fresh submission under the same process cannot even seal its items,
+    // so it answers an outage and commits nothing.
+    let fresh_chunks = plan_chunks(&encrypted_items("encrypted-closed-fresh", 1), 2);
+    let created = closed
+        .post_json(
+            "/v1/records/widgets/ingestion-runs",
+            &claims,
+            harness.run_body("create", &fresh_chunks),
+        )
+        .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let fresh_run = body_json(created).await["run"]["runId"]
+        .as_str()
+        .expect("run id")
+        .to_owned();
+    let fresh = closed
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{fresh_run}/chunks"),
+            &claims,
+            chunk_body(&fresh_chunks, 0),
+        )
+        .await;
+    assert_eq!(fresh.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!contains_envelope_marker(&body_bytes(fresh).await));
+    assert_eq!(
+        durable_widget_count(&harness).await,
+        2,
+        "the refused fresh chunk commits nothing"
+    );
+
+    assert_receipt_stays_sealed(&harness, &run_id).await;
+}
+
 /// The binding a stale serving instance reports and enforces is the one the
 /// database holds active, not the retired identity the process started
 /// under: reads report the run blocked, and the next chunk submission takes
@@ -1972,6 +2146,11 @@ struct IngestionHarness {
     identity: registry_breg::postgres::ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
     audit_profile: AuditProfile,
+    field_encryption: Option<Arc<FieldEncryptionService>>,
+    /// Held, never read: the activated service keeps its key in memory, and
+    /// the secret file must outlive every restart that shares the service.
+    #[allow(dead_code)]
+    secrets_root: Option<tempfile::TempDir>,
     app: axum::Router,
 }
 
@@ -1983,6 +2162,32 @@ impl IngestionHarness {
     /// Build the same harness around one caller-chosen compiled registry, so a
     /// test can pin authored shapes the shared fixture does not carry.
     async fn from_registry(registry: Arc<registry_breg::CompiledRegistry>) -> Self {
+        Self::from_registry_with_secrets(registry, None).await
+    }
+
+    /// The same harness with local-file field-encryption key state activated,
+    /// so chunks over the encrypted field seal at rest under the key this
+    /// harness holds for every restart that keeps it.
+    async fn from_registry_with_encryption(registry: Arc<registry_breg::CompiledRegistry>) -> Self {
+        let secrets_root = tempfile::Builder::new()
+            .prefix("breg-ingestion-field-dek-")
+            .tempdir_in(
+                std::env::temp_dir()
+                    .canonicalize()
+                    .expect("temporary parent canonicalizes"),
+            )
+            .expect("field-encryption secret root creates");
+        write_secret(
+            &secrets_root.path().join("field-dek"),
+            BASE64.encode([0x71_u8; 32]).as_bytes(),
+        );
+        Self::from_registry_with_secrets(registry, Some(secrets_root)).await
+    }
+
+    async fn from_registry_with_secrets(
+        registry: Arc<registry_breg::CompiledRegistry>,
+        secrets_root: Option<tempfile::TempDir>,
+    ) -> Self {
         let database = TestDatabase::create(8).await;
         let (migration, migration_task) = database.connect_migration().await;
         install_compiled_schema(&migration, &registry, &database.runtime_role)
@@ -2003,6 +2208,26 @@ impl IngestionHarness {
         )
         .await
         .expect("active package identity is initialized");
+        let field_encryption = match &secrets_root {
+            Some(root) => {
+                let dek_ref = SecretReference::parse("secret:file/field-dek")
+                    .expect("local-file key reference parses");
+                let secrets = SecretResolver::new([SecretProvider::File], root.path())
+                    .expect("local-file secret resolver builds");
+                Some(Arc::new(
+                    FieldEncryptionService::activate(
+                        &FieldEncryptionProvider::LocalFile { dek_ref },
+                        registry.registry_id(),
+                        PACKAGE_REVISION,
+                        &secrets,
+                        &migration,
+                    )
+                    .await
+                    .expect("field-encryption key state activates"),
+                ))
+            }
+            None => None,
+        };
         migration_task.abort();
         let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
         let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
@@ -2018,6 +2243,7 @@ impl IngestionHarness {
             lock_key,
             audit_profile.clone(),
             None,
+            field_encryption.clone(),
         );
         Self {
             database,
@@ -2025,6 +2251,8 @@ impl IngestionHarness {
             identity,
             lock_key,
             audit_profile,
+            field_encryption,
+            secrets_root,
             app,
         }
     }
@@ -2032,6 +2260,29 @@ impl IngestionHarness {
     /// Rebuild the HTTP surface from the same database, as a restarted
     /// process would, optionally under an injected mutation fault.
     async fn restart(&self, fault: Option<MutationFaultPoint>) -> Surface {
+        self.build_surface(
+            self.registry.clone(),
+            self.identity.clone(),
+            fault,
+            self.field_encryption.clone(),
+        )
+        .await
+    }
+
+    /// Rebuild the HTTP surface without field-encryption key state, as a
+    /// restarted process whose key material is unavailable would.
+    async fn restart_without_field_encryption(&self) -> Surface {
+        self.build_surface(self.registry.clone(), self.identity.clone(), None, None)
+            .await
+    }
+
+    async fn build_surface(
+        &self,
+        registry: Arc<registry_breg::CompiledRegistry>,
+        identity: registry_breg::postgres::ExpectedRegistryIdentity,
+        fault: Option<MutationFaultPoint>,
+        field_encryption: Option<Arc<FieldEncryptionService>>,
+    ) -> Surface {
         let pool = self
             .database
             .runtime_config
@@ -2040,11 +2291,12 @@ impl IngestionHarness {
         Surface {
             app: build_router(
                 pool,
-                self.registry.clone(),
-                self.identity.clone(),
+                registry,
+                identity,
                 self.lock_key,
                 self.audit_profile.clone(),
                 fault,
+                field_encryption,
             ),
         }
     }
@@ -2090,21 +2342,8 @@ impl IngestionHarness {
             .await
             .expect("successor revision activates");
         assert_eq!(changed, 1);
-        let pool = self
-            .database
-            .runtime_config
-            .build_pool()
-            .expect("bounded runtime pool builds");
-        Surface {
-            app: build_router(
-                pool,
-                registry,
-                successor,
-                self.lock_key,
-                self.audit_profile.clone(),
-                None,
-            ),
-        }
+        self.build_surface(registry, successor, None, self.field_encryption.clone())
+            .await
     }
 
     async fn post_empty(
@@ -2212,6 +2451,7 @@ fn build_router(
     lock_key: RegistryLockKey,
     profile: AuditProfile,
     fault: Option<MutationFaultPoint>,
+    field_encryption: Option<Arc<FieldEncryptionService>>,
 ) -> axum::Router {
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x53; 32]), Duration::from_secs(300))
@@ -2234,6 +2474,10 @@ fn build_router(
         Duration::from_secs(2),
         profile,
     );
+    let mutations = match field_encryption {
+        Some(service) => mutations.with_field_encryption(service),
+        None => mutations,
+    };
     let mutations = match fault {
         Some(fault) => mutations.with_fault_for_test(fault),
         None => mutations,
@@ -2415,6 +2659,38 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
         .expect("ingestion fixture compiles to trusted inventories")
 }
 
+/// A widget registry carrying one restricted, encrypted field, so chunk
+/// receipts hold sealed envelope members only key state can open.
+fn encrypted_widget_registry() -> Arc<registry_breg::CompiledRegistry> {
+    let fixture = format!("{FIXTURE_HEAD}{FIXTURE_TAIL}")
+        .replacen(
+            concat!(
+                r#"      {"id":"quantity","type":"int64","required":true,"classification":"public"}"#,
+                "\n",
+            ),
+            concat!(
+                r#"      {"id":"quantity","type":"int64","required":true,"classification":"public"},"#,
+                "\n",
+                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maxLength":64,"classification":"restricted","encrypted":true}"#,
+                "\n",
+            ),
+            1,
+        )
+        .replace(
+            r#""readableFields":["jurisdiction","label","quantity"]"#,
+            r#""readableFields":["jurisdiction","label","quantity","serial-number"]"#,
+        )
+        .replace(
+            r#""writableFields":["jurisdiction","label","quantity"]"#,
+            r#""writableFields":["jurisdiction","label","quantity","serial-number"]"#,
+        );
+    let project = parse_project_json(fixture.as_bytes()).expect("the encrypted fixture parses");
+    Arc::new(
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("the encrypted fixture compiles to trusted inventories"),
+    )
+}
+
 /// The client-side chunk plan over the full item array, derived exactly the
 /// way the durable-run client contract derives it: greedy fixed-size chunks
 /// of canonical items, each chunk bound to its digest, and prefix digests
@@ -2441,6 +2717,65 @@ fn announce_items(label_prefix: &str, count: i64) -> Vec<Value> {
             }})
         })
         .collect()
+}
+
+/// Items over the encrypted fixture, so every receipt the run stores carries
+/// one sealed serial-number envelope per created record.
+fn encrypted_items(label_prefix: &str, count: i64) -> Vec<Value> {
+    (0..count)
+        .map(|index| {
+            json!({"operation":"create", "data": {
+                "jurisdiction": "zone-a",
+                "label": format!("{label_prefix}-{index}"),
+                "quantity": index,
+                "serialNumber": format!("SN-{index:04}")
+            }})
+        })
+        .collect()
+}
+
+/// The sealed-envelope member tag an opened answer must never carry.
+const ENVELOPE_MARKER: &[u8] = b"__bregEncryptedV1";
+
+fn contains_envelope_marker(bytes: &[u8]) -> bool {
+    bytes
+        .windows(ENVELOPE_MARKER.len())
+        .any(|window| window == ENVELOPE_MARKER)
+}
+
+/// Assert one stored chunk receipt keeps its serial-number member sealed: the
+/// envelope marker is present and no plaintext serial survives at rest.
+async fn assert_receipt_stays_sealed(harness: &IngestionHarness, run_id: &str) {
+    let row = harness
+        .database
+        .admin
+        .query_one(
+            "SELECT position('__bregEncryptedV1' in convert_from(receipt, 'UTF8')) > 0,
+                    position('SN-0000' in convert_from(receipt, 'UTF8')) = 0
+               FROM registry_internal.registry_ingestion_run_chunks
+              WHERE run_id = $1 AND chunk_index = 0 AND erased_at IS NULL",
+            &[&Uuid::parse_str(run_id).expect("run id parses")],
+        )
+        .await
+        .expect("the stored chunk receipt reads");
+    assert!(
+        row.get::<_, bool>(0),
+        "the stored receipt keeps the sealed envelope"
+    );
+    assert!(
+        row.get::<_, bool>(1),
+        "the stored receipt carries no plaintext serial"
+    );
+}
+
+fn write_secret(path: &std::path::Path, value: &[u8]) {
+    std::fs::write(path, value).expect("test secret writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .expect("test secret permissions set");
+    }
 }
 
 fn hex_digest(bytes: &[u8]) -> String {
@@ -2604,6 +2939,13 @@ async fn body_json(response: axum::response::Response) -> Value {
         .await
         .expect("response body");
     serde_json::from_slice(&bytes).expect("JSON response")
+}
+
+async fn body_bytes(response: axum::response::Response) -> Vec<u8> {
+    to_bytes(response.into_body(), 2 * 1024 * 1024)
+        .await
+        .expect("response body")
+        .to_vec()
 }
 
 async fn durable_widget_count(harness: &IngestionHarness) -> i64 {

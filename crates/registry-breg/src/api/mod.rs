@@ -5074,6 +5074,7 @@ fn opened_held_body(
             }
         }
     };
+    let mut opened = false;
     if let Some(record) = root.get_mut("data").and_then(Value::as_object_mut) {
         // A single-record body names its record once, beside the domain data
         // its sealed members live in.
@@ -5093,27 +5094,19 @@ fn opened_held_body(
                 true,
             )
             .map_err(|_| ())?;
+            opened = true;
         }
     }
     if let Some(results) = root.get_mut("results").and_then(Value::as_array_mut) {
-        // A batch body names each record beside its item's domain data. The
-        // immediate-action body's results member is an object, not an array,
-        // and carries no domain data, so it never reaches this loop.
-        for item in results {
-            let record_id = item
-                .get("id")
-                .and_then(Value::as_str)
-                .filter(|identifier| !identifier.is_empty())
-                .ok_or(())?
-                .to_owned();
-            if let Some(data) = item.get_mut("data").and_then(Value::as_object_mut) {
-                let service = key_state()?;
-                crate::field_encryption::open_member_map(entity, &record_id, data, service, true)
-                    .map_err(|_| ())?;
-            }
-        }
+        // A batch body names each record beside its item's domain data, and
+        // the shared per-record opening serves it. The immediate-action
+        // body's results member is an object, not an array, and carries no
+        // domain data, so it never reaches the helper.
+        opened |=
+            crate::field_encryption::open_batch_result_members(entity, results, field_encryption)
+                .map_err(|_| ())?;
     }
-    if service.is_none() {
+    if !opened {
         // Nothing needed opening; the held bytes serve exactly as stored.
         return Ok(response.body().to_vec());
     }

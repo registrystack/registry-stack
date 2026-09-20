@@ -44,6 +44,7 @@ pub struct PostgresRecordMutationService {
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
     audit_profile: AuditProfile,
+    field_encryption: Option<Arc<crate::field_encryption::FieldEncryptionService>>,
     action_timeout: Duration,
     evidence_timeout: Duration,
     evidence_evaluator: Option<Arc<crate::action_evidence::ActionEvidenceEvaluator>>,
@@ -133,6 +134,7 @@ impl PostgresRecordMutationService {
         mut self,
         service: Arc<crate::field_encryption::FieldEncryptionService>,
     ) -> Self {
+        self.field_encryption = Some(Arc::clone(&service));
         self.coordinator = self.coordinator.with_field_encryption(service);
         self
     }
@@ -546,6 +548,7 @@ impl PostgresRecordMutationService {
             lock_key,
             lock_timeout,
             audit_profile,
+            field_encryption: None,
             action_timeout: REQUEST_ACTION_TIMEOUT,
             evidence_timeout: REQUEST_ACTION_TIMEOUT,
             evidence_evaluator: None,
@@ -1228,8 +1231,12 @@ impl PostgresRecordMutationService {
             let Some(receipt) = stored.receipt else {
                 return Err(IngestionServiceError::ReceiptErased);
             };
-            let batch: Value =
+            let mut batch: Value =
                 serde_json::from_slice(&receipt).map_err(|_| IngestionServiceError::Unavailable)?;
+            // The stored answer opens its sealed members before any release
+            // step runs, so a process without key state refuses here instead
+            // of writing a disclosure record for an answer it cannot serve.
+            self.open_receipt_members(&input.entity_id, &mut batch)?;
             // The replay releases the retained batch answer a second time,
             // so its disclosure record commits before the answer leaves: an
             // audit outage gates the release instead of passing silently.
@@ -1409,6 +1416,34 @@ impl PostgresRecordMutationService {
 
     /// Render the submission answer from the mutation outcome, mapping every
     /// refusal to the closed run vocabulary and recording the attempt.
+    /// Open the sealed members a receipt's batch answer carries before it
+    /// leaves the service. Receipts store sealed envelopes exactly as the
+    /// ordinary batch route's idempotency cache does and open them at this
+    /// same serve edge: an entity without encrypted fields serves unchanged
+    /// without touching key state, and absent key state or any open failure
+    /// refuses the release instead of handing a caller sealed envelopes.
+    fn open_receipt_members(
+        &self,
+        entity_id: &str,
+        batch: &mut Value,
+    ) -> Result<(), IngestionServiceError> {
+        let Some(results) = batch.get_mut("results").and_then(Value::as_array_mut) else {
+            // A stored answer with no results array carries no domain data to
+            // open, so it serves exactly as stored.
+            return Ok(());
+        };
+        let Some(entity) = self.registry.entities().get(entity_id) else {
+            return Err(IngestionServiceError::Unavailable);
+        };
+        crate::field_encryption::open_batch_result_members(
+            entity,
+            results,
+            self.field_encryption.as_deref(),
+        )
+        .map_err(|_| IngestionServiceError::Unavailable)?;
+        Ok(())
+    }
+
     async fn finish_ingestion_submission(
         &self,
         context: &AuthorizedRequestContext,
@@ -1469,8 +1504,12 @@ impl PostgresRecordMutationService {
                 return Err(refusal.unwrap_or(IngestionServiceError::Unavailable));
             }
         };
-        let batch: Value = serde_json::from_slice(outcome.response().body())
+        let mut batch: Value = serde_json::from_slice(outcome.response().body())
             .map_err(|_| IngestionServiceError::Unavailable)?;
+        // The fresh answer and the coordinator's replayed receipt both reach
+        // this arm with sealed members still inside; they open here, at the
+        // same serve edge the ordinary batch route opens its answers.
+        self.open_receipt_members(&input.entity_id, &mut batch)?;
         let client = self.client().await?;
         let run = self
             .visible_run(&**client, context, &input.entity_id, input.run_id)
@@ -1532,8 +1571,12 @@ impl PostgresRecordMutationService {
         let Some(receipt) = stored.receipt else {
             return Err(IngestionServiceError::ReceiptErased);
         };
-        let batch: Value =
+        let mut batch: Value =
             serde_json::from_slice(&receipt).map_err(|_| IngestionServiceError::Unavailable)?;
+        // The stored answer opens its sealed members before any release step
+        // runs, so a process without key state refuses here instead of writing
+        // a disclosure record for an answer it cannot serve.
+        self.open_receipt_members(entity_id, &mut batch)?;
         // Recovery releases the same retained batch answer a replay does,
         // so it owes the journal the same disclosure record, committed
         // before the answer leaves: an audit outage gates the release.

@@ -710,6 +710,56 @@ pub(crate) fn open_member_map(
     Ok(())
 }
 
+/// The failure of opening one batch answer's sealed result members at a serve
+/// edge. Value-free by construction: neither variant carries member material.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BatchOpenError {
+    /// Key state is absent while a result carries members that need opening.
+    KeyStateUnavailable,
+    /// A result lacks the record id its sealed members are bound to, or an
+    /// open failed, so the answer cannot serve opened.
+    OpenFailed,
+}
+
+/// Open the sealed members of one batch answer's results at a serve edge.
+///
+/// Fresh batch bodies, retained ingestion receipts, and their replays all
+/// name each record by `id` beside a `data` member map keyed by API name;
+/// this is the one per-record opening for every such results array. Entities
+/// without encrypted fields and results without a `data` map never touch key
+/// state, which resolves lazily on the first map that needs opening. Returns
+/// whether any map was opened, so a caller can serve unopened bytes through
+/// exactly as stored.
+pub(crate) fn open_batch_result_members(
+    entity: &crate::model::CompiledEntity,
+    results: &mut [Value],
+    service: Option<&FieldEncryptionService>,
+) -> Result<bool, BatchOpenError> {
+    if !entity
+        .fields
+        .values()
+        .any(|field| field.encryption.is_some())
+    {
+        return Ok(false);
+    }
+    let mut opened = false;
+    for item in results {
+        let record_id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|identifier| !identifier.is_empty())
+            .ok_or(BatchOpenError::OpenFailed)?
+            .to_owned();
+        if let Some(data) = item.get_mut("data").and_then(Value::as_object_mut) {
+            let service = service.ok_or(BatchOpenError::KeyStateUnavailable)?;
+            open_member_map(entity, &record_id, data, service, true)
+                .map_err(|_| BatchOpenError::OpenFailed)?;
+            opened = true;
+        }
+    }
+    Ok(opened)
+}
+
 /// Default Transit request timeout, matching the attachment transports.
 const DEFAULT_TRANSIT_TIMEOUT_MILLISECONDS: u64 = 5_000;
 /// Upper bound on a configured Unix-socket path.
