@@ -527,7 +527,7 @@ async fn test_field_encryption_service(
     let secrets = SecretResolver::new([SecretProvider::File], root.path())
         .expect("field-encryption secret resolver builds");
     Arc::new(
-        FieldEncryptionService::initialize(
+        FieldEncryptionService::activate(
             &FieldEncryptionProvider::LocalFile { dek_ref },
             "hook-proposal-registry",
             PACKAGE_REVISION,

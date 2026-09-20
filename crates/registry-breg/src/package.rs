@@ -1091,10 +1091,13 @@ impl CompiledRegistryChangeCode {
                 "registry.version is bound to the database for its lifetime: an installed database keeps the registry identity it was initialized with, so a package that changes the version can only initialize a new database, never migrate this one",
             ),
             Self::FieldEncryptionChanged => Some(
-                "turning field encryption on rekeys storage behind a reviewed backfill before the plaintext column retires; turning it off discards the envelope and is destructive",
+                "turning field encryption on rekeys storage behind a reviewed backfill before the plaintext column retires; Phase 1 does not support turning encryption off",
             ),
             Self::FieldLookupChanged => Some(
-                "gaining or rekeying a blind index needs a reviewed backfill of the index column; losing the lookup or its uniqueness retires storage",
+                "Phase 1 does not support changing the blind-index lookup of an already-encrypted field; keep its lookup unchanged",
+            ),
+            Self::FieldAddedRequired => Some(
+                "a required field on an existing entity needs a reviewed backfill; when the field is encrypted, add it as optional, populate it through authorized Registry writes, then make it required in a later package",
             ),
             _ => None,
         }
@@ -1399,7 +1402,10 @@ fn compare_fields(
             let class = if candidate_field.encryption.is_some() {
                 CompiledRegistryChangeClass::DataBackfillRequired
             } else {
-                CompiledRegistryChangeClass::DestructiveOrIrreversible
+                // Phase 1 has no keyed engine path that can open envelopes into
+                // a replacement plaintext column. Refuse the evolution instead
+                // of accepting authored SQL that cannot perform it safely.
+                CompiledRegistryChangeClass::Unsupported
             };
             push_change(
                 changes,
@@ -1416,34 +1422,12 @@ fn compare_fields(
             && candidate_field.encryption.is_some()
             && previous_field.encryption != candidate_field.encryption
         {
-            // A lookup change on an already-encrypted field keeps the envelope
-            // column: gaining or rekeying a blind index needs a backfill of
-            // the index column, losing the lookup or its uniqueness retires
-            // storage the way any non-additive index change does.
-            let previous_blind = previous_field
-                .encryption
-                .as_ref()
-                .and_then(|encryption| encryption.blind_index.as_ref());
-            let candidate_blind = candidate_field
-                .encryption
-                .as_ref()
-                .and_then(|encryption| encryption.blind_index.as_ref());
-            let class = match (previous_blind, candidate_blind) {
-                (None, Some(_)) => CompiledRegistryChangeClass::DataBackfillRequired,
-                (Some(previous), Some(candidate)) => {
-                    if previous.normalization != candidate.normalization
-                        || (!previous.unique && candidate.unique)
-                    {
-                        CompiledRegistryChangeClass::DataBackfillRequired
-                    } else {
-                        CompiledRegistryChangeClass::DestructiveOrIrreversible
-                    }
-                }
-                (_, None) => CompiledRegistryChangeClass::DestructiveOrIrreversible,
-            };
             push_change(
                 changes,
-                class,
+                // Existing envelopes are the only source value. Authored SQL
+                // cannot open them to derive a changed keyed blind index, and
+                // the Phase 1 engine backfill only seals predecessor plaintext.
+                CompiledRegistryChangeClass::Unsupported,
                 CompiledRegistryChangeCode::FieldLookupChanged,
                 target(
                     CompiledRegistryChangeTargetKind::Field,
@@ -1552,7 +1536,12 @@ fn compare_fields(
         if previous.fields.contains_key(field_id) {
             continue;
         }
-        let class = if field.required {
+        let class = if field.required && field.encryption.is_some() {
+            // A new encrypted field has no predecessor plaintext for the keyed
+            // engine backfill, while authored SQL cannot create envelopes.
+            // Optional-first lets ordinary authorized writes populate it.
+            CompiledRegistryChangeClass::Unsupported
+        } else if field.required {
             CompiledRegistryChangeClass::DataBackfillRequired
         } else {
             CompiledRegistryChangeClass::CompatibleAdditive

@@ -798,10 +798,9 @@ async fn finish_prepared_server(
             .get()
             .await
             .map_err(|_| StartupError::FieldEncryption)?;
-        let service = FieldEncryptionService::initialize(
+        let service = FieldEncryptionService::open_existing(
             provider,
             registry.registry_id(),
-            expected.package_revision.as_str(),
             &secrets,
             &**key_client,
         )

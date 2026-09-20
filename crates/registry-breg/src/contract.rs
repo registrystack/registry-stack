@@ -1113,6 +1113,22 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// Maximum canonical plaintext bytes one Phase 1 encrypted field may seal.
+///
+/// This mirrors the runtime cryptographic envelope limit while keeping the
+/// configuration compiler usable without the optional runtime feature.
+pub const MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES: u32 = 64 * 1024;
+#[cfg(feature = "runtime")]
+const _: () = assert!(
+    MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES as usize
+        == registry_platform_crypto::field_encryption::MAX_FIELD_PLAINTEXT_BYTES
+);
+/// Maximum authored characters for encrypted string and text fields. One
+/// Unicode scalar value can occupy four UTF-8 bytes.
+pub const MAX_ENCRYPTED_FIELD_STRING_CHARACTERS: u32 = MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES / 4;
+/// Maximum number of transformations in one blind-index normalization pipeline.
+pub const MAX_FIELD_LOOKUP_NORMALIZATION_STEPS: usize = 8;
+
 /// A normalization step applied to the canonical string form of an encrypted
 /// value before its blind index is derived. The vocabulary is closed.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1135,6 +1151,7 @@ pub enum NormalizationStep {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct FieldLookupSource {
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(length(max = 8)))]
     pub normalization: Vec<NormalizationStep>,
     #[serde(default)]
     pub unique: bool,

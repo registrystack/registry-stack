@@ -104,6 +104,10 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
             metadata = archive.read(f"{dist_info}/METADATA").decode()
             self.assertIn("Name: registry-stack-client\n", metadata)
             self.assertIn(f"Version: {self.version}\n", metadata)
+            self.assertEqual(
+                archive.read(f"{dist_info}/licenses/THIRD_PARTY_NOTICES"),
+                (ROOT / "THIRD_PARTY_NOTICES").read_bytes(),
+            )
             facade = archive.read("registry_client/__init__.py").decode()
             self.assertIn(f'__version__ = "{self.version}"', facade)
             for product in PRODUCTS:

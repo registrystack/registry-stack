@@ -4360,7 +4360,7 @@ async fn encrypted_entities_serve_once_key_state_is_active() {
     )
     .expect("fixture resolver builds");
     let field_encryption = Arc::new(
-        registry_breg::field_encryption::FieldEncryptionService::initialize(
+        registry_breg::field_encryption::FieldEncryptionService::activate(
             &registry_breg::field_encryption::FieldEncryptionProvider::LocalFile { dek_ref },
             "field-encryption-surface",
             "package-read-test",

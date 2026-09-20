@@ -111,6 +111,8 @@ args = sys.argv[1:]
 version = os.environ["FAKE_VERSION"]
 if os.environ.get("REGISTRY_RELEASE_TAG") != f"v{version}":
     raise SystemExit(43)
+if os.environ.get("AWS_LC_FIPS_SYS_STATIC") != "1":
+    raise SystemExit(44)
 binary_version = os.environ.get("FAKE_BINARY_VERSION", version)
 log = Path(os.environ["FAKE_CARGO_LOG"])
 calls = []
@@ -149,6 +151,27 @@ fi
             encoding="utf-8",
         )
         self.fake_cargo.chmod(0o755)
+        self.fake_otool = self.root / "otool"
+        self.fake_otool.write_text(
+            """#!/usr/bin/env python3
+import os
+import sys
+
+print(f"{sys.argv[-1]}:")
+if os.environ.get("FAKE_OTOOL_FIPS_SHARED") == "1":
+    print(
+        "\t@rpath/libaws_lc_fips_0_14_2_crypto.dylib "
+        "(compatibility version 0.0.0, current version 0.0.0)"
+    )
+else:
+    print(
+        "\t/usr/lib/libSystem.B.dylib "
+        "(compatibility version 1.0.0, current version 1356.0.0)"
+    )
+""",
+            encoding="utf-8",
+        )
+        self.fake_otool.chmod(0o755)
 
     def build(
         self,
@@ -160,6 +183,7 @@ fi
         fail_call: int | None = None,
         binary_version: str | None = None,
         include_casework: bool = False,
+        fips_shared: bool = False,
     ) -> tuple[subprocess.CompletedProcess[str], Path, list[list[str]]]:
         stem = name or group
         output = self.root / stem
@@ -173,12 +197,15 @@ fi
                 "FAKE_CARGO_LOG": str(log),
                 "FAKE_BINARY_SMOKE_LOG": str(self.root / f"{stem}-smoke.log"),
                 "FAKE_VERSION": version,
+                "PATH": f"{self.root}{os.pathsep}{environment['PATH']}",
             }
         )
         if fail_call is not None:
             environment["FAKE_CARGO_FAIL_CALL"] = str(fail_call)
         if binary_version is not None:
             environment["FAKE_BINARY_VERSION"] = binary_version
+        if fips_shared:
+            environment["FAKE_OTOOL_FIPS_SHARED"] = "1"
         result = subprocess.run(
             [
                 "bash",
@@ -364,6 +391,15 @@ fi
             "relayctl\n", (self.root / "wrong-version-smoke.log").read_text()
         )
         self.assertFalse(wrong_output.exists())
+
+    def test_shared_fips_dependency_exposes_no_shard(self) -> None:
+        result, output, calls = self.build(
+            "breg", name="shared-fips", fips_shared=True
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual([BREG_ARGS], calls)
+        self.assertIn("unpackaged AWS-LC-FIPS dylib", result.stderr)
+        self.assertFalse(output.exists())
 
     def test_merge_rejects_invalid_inputs_before_exposing_output(self) -> None:
         mutations = {

@@ -2059,6 +2059,11 @@ on:
                 outputs = classify(self.workspace, (workflow.as_posix(),))
                 self.assertTrue(outputs["release_tool"])
 
+    def test_third_party_notice_selects_release_packaging_checks(self) -> None:
+        outputs = classify(self.workspace, ("THIRD_PARTY_NOTICES",))
+
+        self.assertTrue(outputs["release_tool"])
+
     def test_unclassified_root_workflow_fails_closed_to_release_checks(self) -> None:
         for workflow in (
             ".github/workflows/dco.yml",

@@ -609,7 +609,69 @@ pub(crate) fn validate_reviewed_migration_plan(
     {
         return Err(ReviewedMigrationError::Coverage);
     }
+    validate_field_encryption_step_grouping(&migrations)?;
     Ok(ValidatedReviewedMigrationPlan { migrations })
+}
+
+/// Every simultaneous plaintext-to-envelope transition for one entity shares
+/// one engine step. History capture projects the successor entity, so splitting
+/// those fields across steps would record later envelope columns as null before
+/// their predecessor plaintext had been sealed.
+#[cfg(feature = "tooling")]
+fn validate_field_encryption_step_grouping(
+    migrations: &[ValidatedReviewedMigration],
+) -> Result<(), ReviewedMigrationError> {
+    let mut expected = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut steps = BTreeMap::<String, Vec<BTreeSet<String>>>::new();
+    for migration in migrations {
+        for cover in &migration.descriptor.covers {
+            if cover.code != CompiledRegistryChangeCode::FieldEncryptionChanged {
+                continue;
+            }
+            let entity_id = cover
+                .target
+                .entity_id
+                .as_ref()
+                .ok_or(ReviewedMigrationError::Coverage)?;
+            let field_id = cover
+                .target
+                .member_id
+                .as_ref()
+                .ok_or(ReviewedMigrationError::Coverage)?;
+            expected
+                .entry(entity_id.clone())
+                .or_default()
+                .insert(field_id.clone());
+        }
+        for step in &migration.steps {
+            let ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
+                entity_id, objects, ..
+            } = &step.descriptor
+            else {
+                continue;
+            };
+            let fields = objects
+                .iter()
+                .filter_map(|object| {
+                    let member_id = object.member_id.as_deref()?;
+                    (!member_id.ends_with("#lookup")).then(|| member_id.to_owned())
+                })
+                .collect::<BTreeSet<_>>();
+            steps.entry(entity_id.clone()).or_default().push(fields);
+        }
+    }
+    if expected.len() != steps.len() {
+        return Err(ReviewedMigrationError::Coverage);
+    }
+    for (entity_id, fields) in expected {
+        let entity_steps = steps
+            .get(&entity_id)
+            .ok_or(ReviewedMigrationError::Coverage)?;
+        if entity_steps.len() != 1 || entity_steps[0] != fields {
+            return Err(ReviewedMigrationError::Coverage);
+        }
+    }
+    Ok(())
 }
 
 /// A plaintext column covered by a field-encryption flip must remain available

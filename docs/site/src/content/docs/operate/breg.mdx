@@ -280,15 +280,17 @@ and only Transit unwraps. If startup or restart cannot reach Transit or unwrap t
 Registry Engine stops before serving any entity. After a successful start, an envelope that cannot
 be opened fails the affected encrypted-field read or write with the HTTP `503` problem
 `runtime.field_encryption.unavailable`; sibling entities without encrypted fields keep serving.
-Base Registry Engine stores only the wrapped key and offers no recovery, so escrow the Transit key
-before enabling. The local file provider is development custody: startup refuses it unless the
+Base Registry Engine stores only the Transit-wrapped key or a nonsecret identifier for a local
+key, and offers no recovery, so escrow the Transit key before enabling. The local file provider is
+development custody: startup refuses it unless the
 runtime file's `identity.databaseInitializationEnvironment` is `local`, and `bregctl doctor
 --runtime-config <absolute-file>` reports the same refusal.
 :::
 
 {/* Evidence: crates/registry-breg/src/field_encryption.rs, RawFieldEncryptionConfig,
     RawFieldEncryptionProvider, FieldEncryptionConfig::from_raw(), and
-    FieldEncryptionService::initialize(); crates/registry-breg/src/problem.rs,
+    FieldEncryptionService::activate() and FieldEncryptionService::open_existing();
+    crates/registry-breg/src/problem.rs,
     RuntimeFieldEncryptionUnavailable; crates/registry-breg/src/api/mod.rs,
     field_encryption_refusal(); crates/registry-breg/src/startup.rs, FieldEncryptionCustody;
     crates/registry-bregctl/src/doctor.rs, startup_diagnostic(). */}

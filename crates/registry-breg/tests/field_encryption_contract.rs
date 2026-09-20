@@ -12,7 +12,8 @@ mod membership_fixture;
 use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{
     parse_project_json, ActionInputSource, Classification, DerivedFieldSource, FieldSource,
-    ModuleAssetSource, NormalizationStep,
+    ModuleAssetSource, NormalizationStep, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
+    MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
 };
 use registry_breg::generated_ddl::field_lookup_index_name;
 use registry_breg::{CompileFailure, CompiledRegistry};
@@ -276,6 +277,109 @@ fn encrypted_field_refuses_pattern_with_a_pinned_diagnostic() {
     assert_eq!(
         diagnostic.message,
         "an encrypted field cannot declare pattern in Phase 1; remove pattern or store the field as plaintext"
+    );
+}
+
+#[test]
+fn encrypted_field_bounds_fit_the_phase_one_seal_limit() {
+    let mut string = encrypted_project();
+    string["entities"][0]["fields"][1]["maxLength"] = json!(MAX_ENCRYPTED_FIELD_STRING_CHARACTERS);
+    compile_value(&string).expect("the worst-case UTF-8 string boundary compiles");
+
+    string["entities"][0]["fields"][1]["maxLength"] =
+        json!(MAX_ENCRYPTED_FIELD_STRING_CHARACTERS + 1);
+    let failure = compile_value(&string).expect_err("an oversized encrypted string is refused");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "field.encrypted.size_bound_exceeds_seal_limit")
+        .expect("the encrypted string bound diagnostic is present");
+    assert_eq!(diagnostic.path, "entities[case].fields[secret].maxLength");
+    assert_eq!(
+        diagnostic.message,
+        "an encrypted string or text field maxLength must be at most 16384 characters so every valid UTF-8 value fits the 65536-byte Phase 1 seal limit"
+    );
+
+    let mut text = encrypted_project();
+    text["entities"][0]["fields"][1]["type"] = json!("text");
+    text["entities"][0]["fields"][1]["maxLength"] =
+        json!(MAX_ENCRYPTED_FIELD_STRING_CHARACTERS + 1);
+    expect_code(&text, "field.encrypted.size_bound_exceeds_seal_limit");
+
+    let mut structured = encrypted_project();
+    structured["entities"][0]["fields"][1] = json!({
+        "id":"secret", "type":"structured",
+        "maxBytes":MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
+        "schema":{"type":"object","additionalProperties":false},
+        "classification":"restricted", "encrypted":true
+    });
+    compile_value(&structured).expect("the canonical structured byte boundary compiles");
+
+    structured["entities"][0]["fields"][1]["maxBytes"] =
+        json!(MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES + 1);
+    let failure =
+        compile_value(&structured).expect_err("an oversized encrypted structured field is refused");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "field.encrypted.size_bound_exceeds_seal_limit")
+        .expect("the encrypted structured bound diagnostic is present");
+    assert_eq!(diagnostic.path, "entities[case].fields[secret].maxBytes");
+    assert_eq!(
+        diagnostic.message,
+        "an encrypted structured field maxBytes must be at most 65536 bytes to fit the Phase 1 seal limit"
+    );
+}
+
+#[test]
+fn encrypted_lookup_refuses_structured_values_and_unbounded_normalization() {
+    let mut structured = encrypted_project();
+    structured["entities"][0]["fields"][1] = json!({
+        "id":"secret", "type":"structured", "maxBytes":1024,
+        "schema":{"type":"object","additionalProperties":false},
+        "classification":"restricted", "encrypted":true,
+        "lookup":{"normalization":["trim"]}
+    });
+    let failure = compile_value(&structured).expect_err("a structured encrypted lookup is refused");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "field.encrypted.lookup_type_unsupported")
+        .expect("the structured lookup diagnostic is present");
+    assert_eq!(diagnostic.path, "entities[case].fields[secret].lookup");
+    assert_eq!(
+        diagnostic.message,
+        "a structured encrypted field cannot declare lookup in Phase 1; remove lookup or use an encrypted string field for exact-match lookup"
+    );
+
+    let mut bounded = encrypted_project();
+    bounded["entities"][0]["fields"][1]["lookup"]["normalization"] =
+        json!(
+            std::iter::repeat_n("trim", MAX_FIELD_LOOKUP_NORMALIZATION_STEPS).collect::<Vec<_>>()
+        );
+    compile_value(&bounded).expect("the normalization-step boundary compiles");
+
+    bounded["entities"][0]["fields"][1]["lookup"]["normalization"] = json!(std::iter::repeat_n(
+        "trim",
+        MAX_FIELD_LOOKUP_NORMALIZATION_STEPS + 1
+    )
+    .collect::<Vec<_>>());
+    let failure =
+        compile_value(&bounded).expect_err("an unbounded normalization pipeline is refused");
+    let diagnostics = failure.diagnostics();
+    assert_eq!(diagnostics.len(), 1, "the refusal stays stable and focused");
+    let diagnostic = &diagnostics[0];
+    assert_eq!(
+        diagnostic.code,
+        "field.encrypted.lookup_normalization_too_long"
+    );
+    assert_eq!(
+        diagnostic.path,
+        "entities[case].fields[secret].lookup.normalization"
+    );
+    assert_eq!(
+        diagnostic.message,
+        "an encrypted field lookup may declare at most 8 normalization steps"
     );
 }
 
@@ -748,49 +852,58 @@ fn encryption_flip_change_sets_classify_without_a_physical_rename() {
         .all(|change| change.code != Code::FieldPhysicalNameChanged));
     assert!(change_set_to_applicable_migration_plan(&flip_on).is_err());
 
-    // Turning encryption off discards the envelope and is destructive.
+    // Phase 1 cannot open envelopes into a replacement plaintext column, so
+    // turning encryption off is rejected rather than delegated to authored SQL.
     let flip_off = compiled_registry_change_set(&encrypted_unique, &plaintext, prior);
     assert!(flip_off
         .changes
         .iter()
         .any(|change| change.code == Code::FieldEncryptionChanged
-            && change.class == Class::DestructiveOrIrreversible));
+            && change.class == Class::Unsupported));
     assert!(flip_off
         .changes
         .iter()
         .all(|change| change.code != Code::FieldPhysicalNameChanged));
     assert!(change_set_to_applicable_migration_plan(&flip_off).is_err());
 
-    // Lookup changes on an already-encrypted field keep the envelope: gaining
-    // or rekeying the blind index needs a backfill, losing the lookup or its
-    // uniqueness retires storage.
+    // Existing envelopes are the only source values, so every lookup change on
+    // an already-encrypted field stays unsupported until a dedicated keyed
+    // blind-index backfill exists.
     let lookup_on = compiled_registry_change_set(&encrypted_plain_lookup, &encrypted_unique, prior);
-    assert!(lookup_on
-        .changes
-        .iter()
-        .any(|change| change.code == Code::FieldLookupChanged
-            && change.class == Class::DataBackfillRequired));
+    assert!(lookup_on.changes.iter().any(
+        |change| change.code == Code::FieldLookupChanged && change.class == Class::Unsupported
+    ));
     let lookup_off =
         compiled_registry_change_set(&encrypted_unique, &encrypted_plain_lookup, prior);
-    assert!(lookup_off
-        .changes
-        .iter()
-        .any(|change| change.code == Code::FieldLookupChanged
-            && change.class == Class::DestructiveOrIrreversible));
+    assert!(lookup_off.changes.iter().any(
+        |change| change.code == Code::FieldLookupChanged && change.class == Class::Unsupported
+    ));
     let rekeyed = compile(Some(json!({"normalization":["lowercase"],"unique":true})));
     let lookup_rekeyed = compiled_registry_change_set(&encrypted_unique, &rekeyed, prior);
-    assert!(lookup_rekeyed
-        .changes
-        .iter()
-        .any(|change| change.code == Code::FieldLookupChanged
-            && change.class == Class::DataBackfillRequired));
+    assert!(lookup_rekeyed.changes.iter().any(
+        |change| change.code == Code::FieldLookupChanged && change.class == Class::Unsupported
+    ));
     let lookup_lost =
         compiled_registry_change_set(&encrypted_plain_lookup, &encrypted_no_lookup, prior);
-    assert!(lookup_lost
-        .changes
-        .iter()
-        .any(|change| change.code == Code::FieldLookupChanged
-            && change.class == Class::DestructiveOrIrreversible));
+    assert!(lookup_lost.changes.iter().any(
+        |change| change.code == Code::FieldLookupChanged && change.class == Class::Unsupported
+    ));
+
+    let mut without_secret = encrypted_project();
+    without_secret["entities"][0]["fields"]
+        .as_array_mut()
+        .expect("fields are an array")
+        .retain(|field| field["id"] != "secret");
+    without_secret["accessProfiles"][0]["permissions"][0]["readableFields"] = json!(["label"]);
+    without_secret["accessProfiles"][0]["permissions"][0]["writableFields"] = json!(["label"]);
+    let without_secret = compile_value(&without_secret).unwrap();
+    let mut required_encrypted = encrypted_project();
+    required_encrypted["entities"][0]["fields"][1]["required"] = json!(true);
+    let required_encrypted = compile_value(&required_encrypted).unwrap();
+    let added_required = compiled_registry_change_set(&without_secret, &required_encrypted, prior);
+    assert!(added_required.changes.iter().any(|change| {
+        change.code == Code::FieldAddedRequired && change.class == Class::Unsupported
+    }));
     assert!(
         compiled_registry_change_set(&encrypted_unique, &encrypted_unique, prior)
             .changes

@@ -611,6 +611,34 @@ fn reviewed_encryption_flip_refuses_a_chunk_size_beyond_the_commit_budget() {
 }
 
 #[test]
+fn reviewed_encryption_flip_refuses_multiple_backfill_steps_for_one_entity() {
+    let previous = compile_variant(Variant::EncryptedBase, 1);
+    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let mut artifacts = encryption_flip_artifacts("encryption-flip", &previous, &candidate);
+    let mut second = artifacts.descriptor.steps[0].clone();
+    let ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { id, .. } = &mut second else {
+        panic!("the flip step is the engine-executed backfill");
+    };
+    *id = "backfill-second".to_owned();
+    artifacts.descriptor.steps.push(second);
+    artifacts
+        .receipt
+        .row_assertions
+        .push(RehearsalRowAssertion {
+            step_id: "backfill-second".to_owned(),
+            affected_rows: 10,
+        });
+    artifacts.rebind();
+
+    assert_refused(
+        Variant::EncryptedFlipOn,
+        previous,
+        vec![artifacts.source()],
+        "multiple field-encryption steps for one entity",
+    );
+}
+
+#[test]
 fn reviewed_encryption_flip_refuses_plaintext_drop_before_backfill() {
     let previous = compile_variant(Variant::EncryptedBase, 1);
     let candidate = compile_variant(Variant::EncryptedFlipOn, 2);

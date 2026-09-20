@@ -19,7 +19,9 @@ use crate::contract::{
     ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation,
     ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
     SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole, WebhookAuthenticationProfile,
-    WebhookDeadLetterMode, MAX_STRUCTURED_VALUE_BYTES,
+    WebhookDeadLetterMode, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
+    MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
+    MAX_STRUCTURED_VALUE_BYTES,
 };
 use crate::derived_sql::validate_derived_sql;
 use crate::diagnostics::{CompileFailure, Diagnostic};
@@ -2036,6 +2038,51 @@ fn validate_entity_fields(
                     &path,
                     "an encrypted field must use a persisted string, text, date, decimal, or structured type",
                 ));
+            }
+            match &field.field_type {
+                FieldTypeSource::String { max_length, .. }
+                | FieldTypeSource::Text { max_length }
+                    if *max_length > MAX_ENCRYPTED_FIELD_STRING_CHARACTERS =>
+                {
+                    errors.push(Diagnostic::error(
+                        "field.encrypted.size_bound_exceeds_seal_limit",
+                        format!("entities[{}].fields[{}].maxLength", entity.id, field.id),
+                        &format!(
+                            "an encrypted string or text field maxLength must be at most {MAX_ENCRYPTED_FIELD_STRING_CHARACTERS} characters so every valid UTF-8 value fits the {MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES}-byte Phase 1 seal limit"
+                        ),
+                    ));
+                }
+                FieldTypeSource::Structured { max_bytes, .. }
+                    if *max_bytes > MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES =>
+                {
+                    errors.push(Diagnostic::error(
+                        "field.encrypted.size_bound_exceeds_seal_limit",
+                        format!("entities[{}].fields[{}].maxBytes", entity.id, field.id),
+                        &format!(
+                            "an encrypted structured field maxBytes must be at most {MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES} bytes to fit the Phase 1 seal limit"
+                        ),
+                    ));
+                }
+                _ => {}
+            }
+            if let Some(lookup) = &field.lookup {
+                let lookup_path = format!("entities[{}].fields[{}].lookup", entity.id, field.id);
+                if matches!(field.field_type, FieldTypeSource::Structured { .. }) {
+                    errors.push(Diagnostic::error(
+                        "field.encrypted.lookup_type_unsupported",
+                        &lookup_path,
+                        "a structured encrypted field cannot declare lookup in Phase 1; remove lookup or use an encrypted string field for exact-match lookup",
+                    ));
+                }
+                if lookup.normalization.len() > MAX_FIELD_LOOKUP_NORMALIZATION_STEPS {
+                    errors.push(Diagnostic::error(
+                        "field.encrypted.lookup_normalization_too_long",
+                        format!("{lookup_path}.normalization"),
+                        &format!(
+                            "an encrypted field lookup may declare at most {MAX_FIELD_LOOKUP_NORMALIZATION_STEPS} normalization steps"
+                        ),
+                    ));
+                }
             }
             if field.valid_time_role.is_some() {
                 errors.push(Diagnostic::error(

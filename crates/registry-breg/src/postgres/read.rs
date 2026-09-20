@@ -33,6 +33,7 @@ use crate::cursor::{
     CursorProjectionField, CursorQueryScope, CursorRepresentation, CursorSpatialQuery,
 };
 use crate::field_encryption::{open_member_value, FieldEncryptionService};
+use crate::history_schema::HistorySchemaCompatibility;
 use crate::model::{
     request_query_field_api_name, request_query_field_type, CompiledEntity, CompiledQueryKind,
     CompiledQueryOperation, CompiledQuerySortDirection, CompiledReadPath, CompiledRegistry,
@@ -1395,16 +1396,15 @@ pub(super) async fn load_retained_plaintext_fields(
 /// after the boundary carry the tagged envelope member, and rows before it
 /// carry the plaintext the revision recorded under the declared choice.
 /// Snapshot decode has already validated each member against its own
-/// revision's descriptor, so for a declared field a tagged member opens and
-/// any other non-null member serves as the recorded plaintext. Fields with
-/// no declared choice keep the strict rule: anything but a tagged envelope
-/// fails the read closed with the field-encryption problem, value-free.
+/// revision's descriptor. That descriptor compatibility says whether the
+/// member is retained plaintext or an envelope; value shape never decides.
+/// Recorded envelope members keep the strict authenticated-open rule.
 pub(super) fn open_history_row_members(
     entity: &CompiledEntity,
     record_id: &str,
     data: &mut Map<String, Value>,
     field_encryption: Option<&FieldEncryptionService>,
-    retained_plaintext_fields: &BTreeSet<String>,
+    compatibility: &HistorySchemaCompatibility,
 ) -> Result<(), ReadServiceError> {
     let encrypted_fields = entity
         .stored_fields
@@ -1414,20 +1414,22 @@ pub(super) fn open_history_row_members(
     if encrypted_fields.is_empty() {
         return Ok(());
     }
-    let service = field_encryption.ok_or(ReadServiceError::FieldEncryptionUnavailable)?;
     for field in &encrypted_fields {
         let key = field.logical.api_name.as_str();
         let Some(member) = data.get_mut(key) else {
             continue;
         };
-        if retained_plaintext_fields.contains(field.logical.id.as_str())
-            && !member.is_null()
-            && registry_platform_crypto::field_encryption::parse_envelope_member(member).is_none()
-        {
-            // The plaintext this revision recorded, already validated against
-            // the descriptor that revision was written under.
+        let recorded = compatibility
+            .fields
+            .get(field.logical.id.as_str())
+            .ok_or(ReadServiceError::Unavailable)?;
+        if recorded.retained_plaintext {
+            // Representation comes from the hash-bound descriptor, never the
+            // user-controlled JSON shape. A legitimate plaintext object may
+            // have the same shape as the envelope tag.
             continue;
         }
+        let service = field_encryption.ok_or(ReadServiceError::FieldEncryptionUnavailable)?;
         let opened = open_member_value(
             service,
             &entity.id,
@@ -3347,7 +3349,7 @@ fn valid_canonical_uuid(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::time::Duration;
 
     use serde_json::{json, Map};
@@ -3365,14 +3367,81 @@ mod tests {
         CursorProjectionField, CursorQuery, CursorQueryScope, CursorRepresentation,
         CursorSpatialQuery,
     };
+    use crate::history_schema::{
+        HistoryFieldCompatibility, HistoryFieldSource, HistorySchemaCompatibility,
+        HistoryValueSource,
+    };
     use crate::model::{CompiledQueryKind, CompiledQuerySortDirection, HttpMethod};
     use zeroize::Zeroizing;
 
     use super::{
-        cursor_binding_references, feature_value, list_sql, projection, quote_identifier,
-        temporal_instant_expression, ExpectedRegistryIdentity, ReadPlan, ReadRelations,
-        ReadServiceError, RecordEnvelope,
+        cursor_binding_references, feature_value, list_sql, open_history_row_members, projection,
+        quote_identifier, temporal_instant_expression, ExpectedRegistryIdentity, ReadPlan,
+        ReadRelations, ReadServiceError, RecordEnvelope,
     };
+
+    #[test]
+    fn retained_plaintext_representation_comes_from_revision_descriptor_not_value_shape() {
+        let registry = compile_project(
+            &parse_project_json(
+                br#"{
+                  "apiVersion":"registry.registrystack.org/v1alpha1",
+                  "kind":"RegistryProject",
+                  "registry":{"id":"retained-plaintext-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+                  "entities":[{
+                    "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
+                    "fields":[{"id":"details","type":"structured","maxBytes":256,"classification":"restricted","encrypted":true,"schema":{"type":"object","additionalProperties":false,"properties":{"__bregEncryptedV1":{"type":"string"}},"required":["__bregEncryptedV1"]}}]
+                  }],
+                  "accessProfiles":[{"id":"reader","default":true,"principalClaim":"principal","permissions":[{"entity":"asset","operations":["get"],"readableFields":["details"],"rowBoundaries":[]}]}]
+                }"#,
+            )
+            .expect("fixture parses"),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .expect("fixture compiles");
+        let entity = &registry.entities()["asset"];
+        let field = &entity.fields["details"];
+        let api_name = entity
+            .stored_fields
+            .iter()
+            .find(|stored| stored.logical.id == field.id)
+            .expect("stored field exists")
+            .logical
+            .api_name
+            .clone();
+        let compatibility = HistorySchemaCompatibility {
+            entity_id: entity.id.clone(),
+            fields: BTreeMap::from([(
+                field.id.clone(),
+                HistoryFieldCompatibility {
+                    field_id: field.id.clone(),
+                    active_api_name: api_name.clone(),
+                    source: HistoryValueSource::Retained(HistoryFieldSource::SnapshotKey {
+                        key: field.id.clone(),
+                    }),
+                    field_type: field.field_type.clone(),
+                    required: field.required,
+                    nullable: !field.required,
+                    encrypted: false,
+                    retained_plaintext: true,
+                },
+            )]),
+        };
+        let plaintext = json!({"__bregEncryptedV1": "AAAA"});
+        let mut data = Map::from_iter([(api_name.clone(), plaintext.clone())]);
+
+        open_history_row_members(
+            entity,
+            "00000000-0000-4000-8000-000000000001",
+            &mut data,
+            None,
+            &compatibility,
+        )
+        .expect("descriptor-declared plaintext does not require an encryption key");
+
+        assert_eq!(data.get(&api_name), Some(&plaintext));
+    }
 
     #[test]
     fn temporal_query_instant_uses_utc_calendar_dates_without_session_timezone_dependence() {

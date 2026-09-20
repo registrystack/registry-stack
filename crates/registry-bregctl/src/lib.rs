@@ -4055,6 +4055,21 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                     SuggestedAction::ReviewFieldEncryptionBackfill,
                 );
             }
+            registry_breg::migration::MigrationError::FieldEncryptionRetainedRequestSnapshots {
+                entity_id,
+                field_id,
+            } => {
+                return source_failure(
+                    "apply",
+                    diagnostic(
+                        "field_encryption.history.retained_request_snapshot",
+                        &format!("entities[{entity_id}].fields[{field_id}].encryption"),
+                        "Retained change-request snapshots still contain plaintext for this field. Choose erase-and-rebaseline history handling, or remove the retained snapshots through the documented operator workflow before retrying the exact pinned target.",
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::ReviewFieldEncryptionBackfill,
+                );
+            }
             registry_breg::migration::MigrationError::PackageBinding
             | registry_breg::migration::MigrationError::EmptyPlan => (
                 "apply.package.refused",

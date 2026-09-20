@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Field-encryption key state over real PostgreSQL: the local-file data key
-//! activates without a key row, a package with encrypted fields but no
-//! configured provider refuses startup, and the Transit provider creates and
-//! re-derives the wrapped key row through a scripted Unix-socket provider.
+//! Field-encryption key state over real PostgreSQL: governed activation binds
+//! the local-file data key to a durable identifier, a package with encrypted
+//! fields but no configured provider refuses startup, and the Transit provider
+//! creates and re-derives the wrapped key row through a scripted Unix socket.
 
 #![cfg(all(feature = "postgres-test", feature = "tooling", unix))]
 
@@ -13,7 +13,7 @@ mod postgres_harness;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
@@ -21,6 +21,7 @@ use base64::Engine as _;
 use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
+use registry_breg::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
 use registry_breg::package::{
     load_package, prepare_package, PackageBuildRequest, PackageIntent, PackageLoadContext,
     PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, SignaturePolicy,
@@ -34,6 +35,8 @@ use registry_breg::startup::{
     prepare_with_connection_config_for_test, PreparedServer, StartupError,
 };
 use registry_breg::CompiledRegistry;
+use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
+use registry_platform_crypto::transit_datakey::TransitDataKeyConfig;
 use registry_platform_testing::{
     fixtures as testing_fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt,
 };
@@ -111,7 +114,7 @@ entities:
       - {id: secret, type: string, maxLength: 256, required: true, classification: restricted, encrypted: true,
          lookup: {normalization: [trim, uppercase], unique: true}}
       - {id: code, type: string, maxLength: 32, classification: restricted, encrypted: true}
-      - {id: big, type: string, maxLength: 1000000, classification: restricted, encrypted: true}
+      - {id: big, type: string, maxLength: 16384, classification: restricted, encrypted: true}
     constraints:
       - {kind: unique, fields: [label]}
   - id: note
@@ -496,12 +499,31 @@ async fn key_row_count(client: &tokio_postgres::Client) -> i64 {
         .get(0)
 }
 
-/// The runtime role holds exactly SELECT and INSERT on the key table, and the
-/// public pseudo-role holds nothing.
+async fn activate_local_field_key(booted: &BootedDatabase, secrets_root: &Path) {
+    let (migration, migration_task) = booted.database.connect_migration().await;
+    let dek_ref =
+        SecretReference::parse("secret:file/field-dek").expect("local-file key reference parses");
+    let secrets = SecretResolver::new([SecretProvider::File], secrets_root)
+        .expect("local-file secret resolver builds");
+    FieldEncryptionService::activate(
+        &FieldEncryptionProvider::LocalFile { dek_ref },
+        booted.registry.registry_id(),
+        &booted.fixture.revision,
+        &secrets,
+        &migration,
+    )
+    .await
+    .expect("governed apply activates local-file key state");
+    drop(migration);
+    migration_task.abort();
+}
+
+/// The runtime role can only read the key table. Governed apply writes through
+/// the migration role, and the public pseudo-role holds nothing.
 async fn assert_key_table_grants(client: &tokio_postgres::Client, runtime_role: &str) {
     let privileges = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE"];
     for privilege in privileges {
-        let expected = matches!(privilege, "SELECT" | "INSERT");
+        let expected = privilege == "SELECT";
         let granted: bool = client
             .query_one(
                 "SELECT has_table_privilege($1, $2, $3)",
@@ -527,7 +549,7 @@ async fn assert_key_table_grants(client: &tokio_postgres::Client, runtime_role: 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn local_file_data_key_prepares_ready_and_never_writes_a_key_row() {
+async fn local_file_data_key_is_bound_during_apply_and_prepares_ready() {
     let booted = boot_encrypted_database().await;
     let (migration, migration_task) = booted.database.connect_migration().await;
     assert_key_table_grants(&migration, booted.database.runtime_role.as_str()).await;
@@ -542,6 +564,7 @@ async fn local_file_data_key_prepares_ready_and_never_writes_a_key_row() {
         )
         .as_bytes(),
     );
+    activate_local_field_key(&booted, &secrets).await;
     let config = write_runtime_config(
         &booted,
         Some(
@@ -555,9 +578,23 @@ async fn local_file_data_key_prepares_ready_and_never_writes_a_key_row() {
             .expect("local file key state prepares the encrypted registry");
     assert_ready(&prepared, StatusCode::OK).await;
 
-    // The local-file provider keeps key version 1 implicit in the file, so
-    // first activation leaves the key table empty.
-    assert_eq!(key_row_count(&migration).await, 0);
+    // The local key stays in its owner-only file. The database stores only a
+    // nonsecret identifier so restart can refuse a changed or mis-mounted key.
+    assert_eq!(key_row_count(&migration).await, 1);
+    let row = migration
+        .query_one(
+            &format!(
+                "SELECT provider_kind, key_identifier, wrapped_dek, transit_key_version
+                   FROM {KEY_TABLE}"
+            ),
+            &[],
+        )
+        .await
+        .expect("local-file key identity row reads");
+    assert_eq!(row.get::<_, String>(0), "local_datakey_file");
+    assert!(row.get::<_, String>(1).starts_with("sha256:"));
+    assert_eq!(row.get::<_, Option<String>>(2), None);
+    assert_eq!(row.get::<_, Option<i32>>(3), None);
     drop(prepared);
     migration_task.abort();
     booted.database.cleanup().await;
@@ -588,14 +625,37 @@ async fn transit_provider_activates_the_first_key_row_and_restart_unwraps_it() {
     let booted = boot_encrypted_database().await;
     let (migration, migration_task) = booted.database.connect_migration().await;
 
-    // First activation: the provider answers custody validation (metadata,
-    // generate, unwrap self-test) and then the activation generate.
+    // Governed apply activates the first row. Startup then validates custody
+    // and unwraps that row without holding INSERT authority.
     let first = spawn_transit_mock(vec![
         metadata_reply(),
         datakey_reply(),
         decrypt_reply(),
         datakey_reply(),
+        metadata_reply(),
+        datakey_reply(),
+        decrypt_reply(),
+        decrypt_reply(),
     ]);
+    let transit = TransitDataKeyConfig::new(
+        first.socket_path.clone(),
+        "transit",
+        "breg-field-dek",
+        Duration::from_secs(2),
+    )
+    .expect("Transit fixture config validates");
+    let secret_root = booted.directory.join("secrets");
+    fs::create_dir_all(&secret_root).expect("fixture secret root creates");
+    FieldEncryptionService::activate(
+        &FieldEncryptionProvider::Transit(transit),
+        booted.registry.registry_id(),
+        &booted.fixture.revision,
+        &SecretResolver::new([SecretProvider::File], secret_root)
+            .expect("fixture secret resolver builds"),
+        &migration,
+    )
+    .await
+    .expect("governed apply activates Transit key state");
     let config = write_runtime_config(
         &booted,
         Some(format!(
@@ -613,7 +673,7 @@ async fn transit_provider_activates_the_first_key_row_and_restart_unwraps_it() {
     let row = migration
         .query_one(
             &format!(
-                "SELECT key_version, provider_kind, algorithm, wrapped_dek, transit_key_version,
+                "SELECT key_version, provider_kind, algorithm, key_identifier, wrapped_dek, transit_key_version,
                         activated_package_revision
                  FROM {KEY_TABLE}"
             ),
@@ -624,14 +684,15 @@ async fn transit_provider_activates_the_first_key_row_and_restart_unwraps_it() {
     assert_eq!(row.get::<_, i32>(0), 1, "first activation is key version 1");
     assert_eq!(row.get::<_, String>(1), "transit_datakey");
     assert_eq!(row.get::<_, String>(2), "aes-256-gcm");
-    assert_eq!(row.get::<_, String>(3), WRAPPED);
+    assert!(row.get::<_, String>(3).starts_with("sha256:"));
+    assert_eq!(row.get::<_, String>(4), WRAPPED);
     assert_eq!(
-        row.get::<_, i32>(4),
+        row.get::<_, i32>(5),
         3,
         "the wrapped form names Transit key version 3"
     );
     assert_eq!(
-        row.get::<_, String>(5),
+        row.get::<_, String>(6),
         booted.fixture.revision,
         "the row records the activating package revision"
     );
@@ -856,6 +917,7 @@ async fn boot_live_server() -> LiveServer {
         )
         .as_bytes(),
     );
+    activate_local_field_key(&booted, &secrets).await;
     let config = write_runtime_config(&booted, Some(LOCAL_FILE_FIELD_ENCRYPTION.to_owned()));
     let prepared =
         prepare_with_connection_config_for_test(&config, booted.database.runtime_config.clone())

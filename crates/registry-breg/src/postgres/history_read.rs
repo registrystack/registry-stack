@@ -373,24 +373,18 @@ impl PostgresSnapshotReadService {
         } else {
             None
         };
-        let mut rows = rows
+        let rows = rows
             .iter()
-            .map(|row| row_to_record(row, &selected_fields, &descriptors))
+            .map(|row| {
+                row_to_record(
+                    row,
+                    &selected_fields,
+                    &descriptors,
+                    &plan.entity,
+                    self.field_encryption.as_deref(),
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
-        // The decoded rows keep tagged members until this response edge; the
-        // retained snapshot itself stays sealed so journal comparison never
-        // depends on decryption. Retained-plaintext members of a declared
-        // retain-plaintext-history flip serve as the plaintext the revision
-        // recorded instead of opening.
-        for record in &mut rows {
-            open_history_row_members(
-                &plan.entity,
-                &record.id,
-                &mut record.data,
-                self.field_encryption.as_deref(),
-                &retained_plaintext_fields,
-            )?;
-        }
         guarded
             .commit()
             .await
@@ -1400,6 +1394,8 @@ fn row_to_record(
     row: &tokio_postgres::Row,
     selected_fields: &[String],
     descriptors: &BTreeMap<String, CompatibleDescriptor>,
+    entity: &CompiledEntity,
+    field_encryption: Option<&FieldEncryptionService>,
 ) -> Result<RecordEnvelope, ReadServiceError> {
     let id = row
         .try_get::<_, String>(0)
@@ -1424,7 +1420,16 @@ fn row_to_record(
         .descriptor
         .decode_snapshot_for_fields(&descriptor.compatibility, &snapshot, Some(&id))
         .map_err(|_| ReadServiceError::Unavailable)?;
-    let data = projected_data(&decoded, &descriptor.compatibility, selected_fields)?;
+    let mut data = projected_data(&decoded, &descriptor.compatibility, selected_fields)?;
+    // Open at the response edge while this row's descriptor compatibility is
+    // still available. The retained snapshot itself remains byte-identical.
+    open_history_row_members(
+        entity,
+        &id,
+        &mut data,
+        field_encryption,
+        &descriptor.compatibility,
+    )?;
     Ok(RecordEnvelope {
         id,
         revision: u64::try_from(revision).map_err(|_| ReadServiceError::Unavailable)?,

@@ -523,6 +523,8 @@ impl DedicatedApplyConnection {
                             .get(entity_id)
                             .ok_or(PostgresKernelError::RegistryUnavailable)?
                             .physical_table;
+                        self.refuse_retained_plaintext_request_snapshots(history_choice, &covered)
+                            .await?;
                         self.field_encryption_duplicate_preflight(&service, table, &covered)
                             .await?;
                         loop {
@@ -905,20 +907,40 @@ impl DedicatedApplyConnection {
         Ok(true)
     }
 
-    /// Resolve the field-encryption data key on the dedicated apply connection.
-    /// First-activation Transit key material lands through the same idempotent
-    /// first-row insert the runtime uses, so a resumed apply and the runtime
-    /// after activation agree on one key version.
-    async fn initialize_field_encryption_service(
+    /// Activate the package's field-encryption key state on the dedicated
+    /// migration connection. Runtime startup and diagnostics are read-only;
+    /// only governed apply may select the first custodian.
+    pub(crate) async fn activate_field_encryption_key_state(
         &self,
         context: &ReviewedFieldEncryptionContext<'_>,
         registry: &CompiledRegistry,
         target_package_revision: &str,
-    ) -> Result<FieldEncryptionService> {
-        FieldEncryptionService::initialize(
+    ) -> Result<()> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        FieldEncryptionService::activate(
             context.provider,
             registry.registry_id(),
             target_package_revision,
+            context.secrets,
+            &self.client,
+        )
+        .await
+        .map(drop)
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)
+    }
+
+    /// Open the already-activated field-encryption key for one backfill step.
+    /// The package-level apply path above has created or verified the singleton
+    /// row before any reviewed step can run.
+    async fn initialize_field_encryption_service(
+        &self,
+        context: &ReviewedFieldEncryptionContext<'_>,
+        registry: &CompiledRegistry,
+        _target_package_revision: &str,
+    ) -> Result<FieldEncryptionService> {
+        FieldEncryptionService::open_existing(
+            context.provider,
+            registry.registry_id(),
             context.secrets,
             &self.client,
         )
@@ -1012,6 +1034,68 @@ impl DedicatedApplyConnection {
                 });
             }
         }
+        Ok(())
+    }
+
+    /// Phase 1 cannot safely reinterpret retained change-request copies after
+    /// a plaintext-to-envelope boundary. Refuse before the first chunk commits,
+    /// while the operator-facing preflight counts identify what must be cleared.
+    async fn refuse_retained_plaintext_request_snapshots(
+        &mut self,
+        history_choice: ReviewedFieldEncryptionHistory,
+        covered: &[FieldEncryptionCoveredField<'_>],
+    ) -> Result<()> {
+        if history_choice != ReviewedFieldEncryptionHistory::RetainPlaintextHistory {
+            return Ok(());
+        }
+        let transaction = self.client.transaction().await?;
+        for field in covered {
+            let retained: bool = transaction
+                .query_one(
+                    "SELECT
+                         EXISTS (
+                             SELECT 1
+                               FROM registry_internal.registry_request_targets
+                              WHERE target_entity_id = $1
+                                AND (base_snapshot ? $2 OR after_snapshot ? $2)
+                         )
+                         OR EXISTS (
+                             SELECT 1
+                               FROM registry_internal.registry_request_proposals AS proposal
+                              WHERE proposal.snapshot IS NOT NULL
+                                AND EXISTS (
+                                    SELECT 1
+                                      FROM jsonb_array_elements(
+                                          COALESCE(
+                                              proposal.snapshot -> 'effects',
+                                              '[]'::jsonb
+                                          )
+                                      ) AS effect
+                                      CROSS JOIN LATERAL jsonb_array_elements(
+                                          COALESCE(
+                                              effect -> 'fieldChanges',
+                                              '[]'::jsonb
+                                          )
+                                      ) AS field_change
+                                     WHERE effect -> 'target' ->> 'entityId' = $1
+                                       AND field_change ->> 'field' = $2
+                                )
+                         )",
+                    &[&field.entity_id, &field.candidate.id.as_str()],
+                )
+                .await
+                .map_err(|_| PostgresKernelError::Connection)?
+                .get(0);
+            if retained {
+                return Err(
+                    PostgresKernelError::FieldEncryptionRetainedRequestSnapshots {
+                        entity_id: field.entity_id.to_owned(),
+                        field_id: field.candidate.id.clone(),
+                    },
+                );
+            }
+        }
+        transaction.commit().await?;
         Ok(())
     }
 

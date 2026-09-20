@@ -174,7 +174,10 @@ impl From<PostgresKernelError> for ReconcileError {
             PostgresKernelError::Configuration(_)
             | PostgresKernelError::FieldPatternSyntax { .. }
             | PostgresKernelError::FieldPatternExistingRows { .. }
-            | PostgresKernelError::FieldEncryptionBlindCollision { .. } => Self::InvalidInput,
+            | PostgresKernelError::FieldEncryptionBlindCollision { .. }
+            | PostgresKernelError::FieldEncryptionRetainedRequestSnapshots { .. } => {
+                Self::InvalidInput
+            }
             PostgresKernelError::Connection
             | PostgresKernelError::Pool
             | PostgresKernelError::PoolBuild
@@ -192,6 +195,7 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::FieldPatternSyntax { .. }
             | MigrationError::FieldPatternExistingRows { .. }
             | MigrationError::FieldEncryptionLookupCollision { .. }
+            | MigrationError::FieldEncryptionRetainedRequestSnapshots { .. }
             | MigrationError::ActiveRequestProposals
             | MigrationError::BackupEvidence => Self::Unavailable,
         }

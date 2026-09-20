@@ -817,6 +817,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             clients["env"]["CLIENT_VERSION"],
             "${{ needs.validate.outputs.version }}",
         )
+        self.assertEqual(clients["env"]["AWS_LC_FIPS_SYS_STATIC"], "1")
         setup_node = next(
             step for step in clients["steps"] if step.get("name") == "Setup Node"
         )

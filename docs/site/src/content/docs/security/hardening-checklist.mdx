@@ -116,8 +116,9 @@ bundle, or the sealed Relay package. It assumes you have already configured your
   expects a signature over a Relay response or a Relay package, that expectation is not met by this
   product.
 
-{/* Evidence: crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::initialize()
-    and insert_first_field_key(); crates/registry-platform-crypto/src/transit_datakey.rs,
+{/* Evidence: crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::activate(),
+    FieldEncryptionService::open_existing(), and insert_first_field_key();
+    crates/registry-platform-crypto/src/transit_datakey.rs,
     TransitDataKeyClient; crates/registry-breg/src/startup.rs, FieldEncryptionCustody;
     crates/registry-bregctl/src/doctor.rs, startup_diagnostic() and CHECKED_DEPENDENCIES. */}
 

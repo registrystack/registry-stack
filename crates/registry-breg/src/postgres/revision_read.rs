@@ -260,31 +260,19 @@ impl PostgresRevisionReadService {
             .map_err(|error| snapshot_read_error(&error, stored_bytes::Reader::RevisionRead))?;
         let mut descriptors = BTreeMap::new();
         let mut context_visibility = BTreeMap::new();
-        let mut rows = revision_rows_from_rows(
+        let rows = revision_rows_from_rows(
             transaction.transaction(),
             &rows,
             &plan.entity,
             &request.context,
             &request.selected_fields,
             plan.provenance_fields.as_slice(),
+            self.field_encryption.as_deref(),
             &retained_plaintext_fields,
             &mut descriptors,
             &mut context_visibility,
         )
         .await?;
-        // The decoded rows keep tagged members until this response edge; the
-        // retained journal snapshot itself stays sealed. Retained-plaintext
-        // members of a declared retain-plaintext-history flip serve as the
-        // plaintext the revision recorded instead of opening.
-        for record in &mut rows {
-            open_history_row_members(
-                &plan.entity,
-                &record.id,
-                &mut record.data,
-                self.field_encryption.as_deref(),
-                &retained_plaintext_fields,
-            )?;
-        }
         transaction
             .commit()
             .await
@@ -720,6 +708,7 @@ async fn revision_rows_from_rows(
     context: &AuthorizedRequestContext,
     selected_fields: &BTreeSet<String>,
     provenance_fields: &[ProvenanceFieldSource],
+    field_encryption: Option<&FieldEncryptionService>,
     retained_plaintext_fields: &BTreeSet<String>,
     descriptors: &mut BTreeMap<String, HistorySchemaDescriptor>,
     context_visibility: &mut BTreeMap<i64, bool>,
@@ -733,6 +722,7 @@ async fn revision_rows_from_rows(
             context,
             selected_fields,
             provenance_fields,
+            field_encryption,
             retained_plaintext_fields,
             descriptors,
             context_visibility,
@@ -753,6 +743,7 @@ async fn revision_from_row(
     context: &AuthorizedRequestContext,
     selected_fields: &BTreeSet<String>,
     provenance_fields: &[ProvenanceFieldSource],
+    field_encryption: Option<&FieldEncryptionService>,
     retained_plaintext_fields: &BTreeSet<String>,
     descriptors: &mut BTreeMap<String, HistorySchemaDescriptor>,
     context_visibility: &mut BTreeMap<i64, bool>,
@@ -843,6 +834,16 @@ async fn revision_from_row(
             .ok_or(ReadServiceError::Unavailable)?;
         data.insert(field.active_api_name.clone(), value.clone());
     }
+    // Open at the response edge while this exact revision's hash-bound
+    // descriptor compatibility is still available. User JSON shape never
+    // selects plaintext versus envelope handling.
+    open_history_row_members(
+        entity,
+        &record_id.to_string(),
+        &mut data,
+        field_encryption,
+        &compatibility,
+    )?;
     let change_context = revision_change_context(
         transaction,
         row,

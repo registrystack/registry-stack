@@ -2364,6 +2364,7 @@
           "items": {
             "$ref": "#/$defs/NormalizationStep"
           },
+          "maxItems": 8,
           "type": "array"
         },
         "unique": {

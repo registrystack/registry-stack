@@ -49,6 +49,13 @@ class SyncRegistryClientNodeReadmeTest(unittest.TestCase):
                     text,
                 )
 
+    def test_each_native_platform_package_carries_third_party_notices(self) -> None:
+        expected = (ROOT / "THIRD_PARTY_NOTICES").read_bytes()
+        for platform in PLATFORM_TRIPLES:
+            with self.subTest(platform=platform):
+                path = TARGET / "npm" / platform / "THIRD_PARTY_NOTICES"
+                self.assertEqual(self.files[path], expected)
+
     def test_the_root_package_gets_no_generated_readme(self) -> None:
         # The root README is authored by hand, not generated; only the three
         # platform packages get one written for them.

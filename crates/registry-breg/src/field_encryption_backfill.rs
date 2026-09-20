@@ -46,8 +46,8 @@ use crate::model::CompiledRegistry;
 use crate::package::CompiledRegistryMigrationBaseline;
 use crate::postgres::{
     covered_field_encryption_fields, field_plaintext_string, prior_plaintext_projection,
-    recursive_member_path, verify_migration_role, ConnectionConfig, ExpectedRegistryIdentity,
-    FieldEncryptionCoveredField, RegistryLockKey, SqlIdentifier,
+    recursive_member_path, set_force_row_security, verify_migration_role, ConnectionConfig,
+    ExpectedRegistryIdentity, FieldEncryptionCoveredField, RegistryLockKey, SqlIdentifier,
 };
 
 pub use crate::history_maintenance::HistoryMaintenanceTimeouts as FieldEncryptionBackfillTimeouts;
@@ -226,6 +226,13 @@ pub async fn preflight_field_encryption_backfill(
                 .get(entity_id.as_str())
                 .ok_or(FieldEncryptionBackfillPreflightError::InvalidInput)?
                 .physical_table;
+            // Entity tables normally FORCE RLS. The migration role owns them
+            // but deliberately has no BYPASSRLS authority, so the value-free
+            // operator preflight must use the same bounded maintenance bracket
+            // as the authoritative apply scan or it would report zero rows.
+            set_force_row_security(&transaction, std::slice::from_ref(table), false)
+                .await
+                .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?;
             let mut fields = Vec::new();
             for field in &covered {
                 fields.push(
@@ -233,6 +240,9 @@ pub async fn preflight_field_encryption_backfill(
                         .await?,
                 );
             }
+            set_force_row_security(&transaction, std::slice::from_ref(table), true)
+                .await
+                .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?;
             steps.push(FieldEncryptionBackfillStepPreflight {
                 entity_id: entity_id.clone(),
                 history_choice,

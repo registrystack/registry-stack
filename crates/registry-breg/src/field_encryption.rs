@@ -16,9 +16,9 @@
 //! activation refuses a store that already holds more than one row or a row
 //! from any other version, because envelopes sealed under a superseded
 //! version cannot be opened and a second row would strand every earlier one.
-//! The local-file provider never writes a row: it keeps key version 1
-//! implicit and refuses to start when rows from another provider exist,
-//! because the file cannot represent more than one version.
+//! The local-file provider stores only a domain-separated SHA-256 identifier
+//! for its uniformly random DEK. The identifier lets startup refuse a changed
+//! or mis-mounted file before admitting writes, without persisting the key.
 //!
 //! Call sites hold an `Option<Arc<FieldEncryptionService>>`; `None` means
 //! field encryption is not ready, which is only acceptable while the active
@@ -43,6 +43,7 @@ use registry_platform_crypto::transit_datakey::{
 use registry_platform_crypto::KeyProviderKind;
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use tokio_postgres::GenericClient;
 use zeroize::Zeroizing;
@@ -95,7 +96,8 @@ pub struct StoredFieldKey {
     pub key_version: i32,
     pub provider_kind: String,
     pub algorithm: String,
-    pub wrapped_dek: String,
+    pub key_identifier: String,
+    pub wrapped_dek: Option<String>,
     pub transit_key_version: Option<i32>,
 }
 
@@ -105,8 +107,9 @@ pub struct NewFieldKey {
     pub key_version: i32,
     pub provider_kind: &'static str,
     pub algorithm: &'static str,
-    pub wrapped_dek: String,
-    pub transit_key_version: i32,
+    pub key_identifier: String,
+    pub wrapped_dek: Option<String>,
+    pub transit_key_version: Option<i32>,
     pub activated_package_revision: String,
 }
 
@@ -134,7 +137,8 @@ impl<T: GenericClient + Send + Sync> FieldKeyStore for T {
     async fn latest_field_key(&self) -> Result<Option<StoredFieldKey>, FieldEncryptionError> {
         let row = self
             .query_opt(
-                "SELECT key_version, provider_kind, algorithm, wrapped_dek, transit_key_version
+                "SELECT key_version, provider_kind, algorithm, key_identifier,
+                        wrapped_dek, transit_key_version
                  FROM registry_internal.registry_field_encryption_keys
                  ORDER BY key_version DESC
                  LIMIT 1",
@@ -146,8 +150,9 @@ impl<T: GenericClient + Send + Sync> FieldKeyStore for T {
             key_version: row.get(0),
             provider_kind: row.get(1),
             algorithm: row.get(2),
-            wrapped_dek: row.get(3),
-            transit_key_version: row.get(4),
+            key_identifier: row.get(3),
+            wrapped_dek: row.get(4),
+            transit_key_version: row.get(5),
         }))
     }
 
@@ -170,14 +175,15 @@ impl<T: GenericClient + Send + Sync> FieldKeyStore for T {
         let changed = self
             .execute(
                 "INSERT INTO registry_internal.registry_field_encryption_keys (
-                     key_version, provider_kind, algorithm, wrapped_dek,
-                     transit_key_version, activated_package_revision
-                 ) VALUES ($1, $2, $3, $4, $5, $6)
+                     key_version, provider_kind, algorithm, key_identifier,
+                     wrapped_dek, transit_key_version, activated_package_revision
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7)
                  ON CONFLICT (key_version) DO NOTHING",
                 &[
                     &key.key_version,
                     &key.provider_kind,
                     &key.algorithm,
+                    &key.key_identifier,
                     &key.wrapped_dek,
                     &key.transit_key_version,
                     &key.activated_package_revision,
@@ -201,14 +207,14 @@ pub struct FieldEncryptionService {
 }
 
 impl FieldEncryptionService {
-    /// Resolve the active data key from the configured provider and the stored
-    /// key rows, activating key version 1 on first Transit use.
+    /// Activate key version 1 during governed package apply, or open the
+    /// already-activated key on an exact-target retry.
     ///
     /// # Errors
     /// [`FieldEncryptionError`] when the provider is unreachable, the stored
     /// rows disagree with the configured provider, or the data key cannot be
     /// unwrapped or decoded. Every failure is fail-closed.
-    pub async fn initialize(
+    pub async fn activate(
         provider: &FieldEncryptionProvider,
         registry_id: &str,
         activated_package_revision: &str,
@@ -222,27 +228,19 @@ impl FieldEncryptionService {
                 // provider is reached, because the runtime below opens
                 // envelopes only under the active version and a second row
                 // would strand every earlier one.
-                let stored_rows = store.field_key_row_count().await?;
-                if stored_rows > 1 {
+                let stored = singleton_stored_key(store).await?;
+                if stored
+                    .as_ref()
+                    .is_some_and(|stored| stored.key_version != 1)
+                {
                     return Err(FieldEncryptionError::KeyStateInvalid);
                 }
-                let stored = if stored_rows == 1 {
-                    let stored = store
-                        .latest_field_key()
-                        .await?
-                        .ok_or(FieldEncryptionError::KeyStateInvalid)?;
-                    if stored.key_version != 1 {
-                        return Err(FieldEncryptionError::KeyStateInvalid);
-                    }
-                    Some(stored)
-                } else {
-                    None
-                };
                 let client = TransitDataKeyClient::initialize(config.clone())
                     .await
                     .map_err(|_| FieldEncryptionError::DataKeyUnavailable)?;
                 if let Some(stored) = stored {
                     let (key_version, dek) = unwrap_stored_transit_key(&client, &stored).await?;
+                    verify_key_identifier(registry_id, &dek, &stored.key_identifier)?;
                     return Ok(Self::from_data_key(
                         registry_id.to_owned(),
                         key_version,
@@ -260,9 +258,12 @@ impl FieldEncryptionService {
                     key_version: 1,
                     provider_kind: TRANSIT_PROVIDER_KIND,
                     algorithm: FIELD_ENCRYPTION_ALGORITHM,
-                    wrapped_dek: wrapped,
-                    transit_key_version: i32::try_from(transit_key_version)
-                        .map_err(|_| FieldEncryptionError::KeyStateInvalid)?,
+                    key_identifier: key_identifier(registry_id, &dek),
+                    wrapped_dek: Some(wrapped),
+                    transit_key_version: Some(
+                        i32::try_from(transit_key_version)
+                            .map_err(|_| FieldEncryptionError::KeyStateInvalid)?,
+                    ),
                     activated_package_revision: activated_package_revision.to_owned(),
                 };
                 if store.insert_first_field_key(&proposed).await? {
@@ -281,6 +282,7 @@ impl FieldEncryptionService {
                     .await?
                     .ok_or(FieldEncryptionError::KeyStateInvalid)?;
                 let (key_version, dek) = unwrap_stored_transit_key(&client, &stored).await?;
+                verify_key_identifier(registry_id, &dek, &stored.key_identifier)?;
                 Ok(Self::from_data_key(
                     registry_id.to_owned(),
                     key_version,
@@ -292,23 +294,76 @@ impl FieldEncryptionService {
                 if dek_ref.provider() != SecretProvider::File {
                     return Err(FieldEncryptionError::DataKeyUnavailable);
                 }
-                if store.latest_field_key().await?.is_some() {
-                    return Err(FieldEncryptionError::ProviderMismatch);
+                let dek = resolve_local_dek(dek_ref, secrets)?;
+                let identifier = key_identifier(registry_id, &dek);
+                if let Some(stored) = singleton_stored_key(store).await? {
+                    validate_local_stored_key(&stored, &identifier)?;
+                } else {
+                    let proposed = NewFieldKey {
+                        key_version: 1,
+                        provider_kind: LOCAL_FILE_PROVIDER_KIND,
+                        algorithm: FIELD_ENCRYPTION_ALGORITHM,
+                        key_identifier: identifier.clone(),
+                        wrapped_dek: None,
+                        transit_key_version: None,
+                        activated_package_revision: activated_package_revision.to_owned(),
+                    };
+                    if !store.insert_first_field_key(&proposed).await? {
+                        let stored = store
+                            .latest_field_key()
+                            .await?
+                            .ok_or(FieldEncryptionError::KeyStateInvalid)?;
+                        validate_local_stored_key(&stored, &identifier)?;
+                    }
                 }
-                let secret = secrets.resolve_reference(dek_ref)?;
-                let decoded = Zeroizing::new(
-                    STANDARD
-                        .decode(secret.expose_secret().trim_ascii())
-                        .map_err(|_| FieldEncryptionError::DataKeyUnavailable)?,
-                );
-                let dek: [u8; 32] = decoded
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| FieldEncryptionError::DataKeyUnavailable)?;
                 Ok(Self::from_data_key(
                     registry_id.to_owned(),
                     1,
-                    Zeroizing::new(dek),
+                    dek,
+                    KeyProviderKind::LocalDatakeyFile,
+                ))
+            }
+        }
+    }
+
+    /// Open only previously activated key state. Runtime startup and
+    /// diagnostics use this path, so neither can select a first custodian.
+    pub async fn open_existing(
+        provider: &FieldEncryptionProvider,
+        registry_id: &str,
+        secrets: &SecretResolver,
+        store: &impl FieldKeyStore,
+    ) -> Result<Self, FieldEncryptionError> {
+        let stored = singleton_stored_key(store)
+            .await?
+            .ok_or(FieldEncryptionError::KeyStateInvalid)?;
+        if stored.key_version != 1 {
+            return Err(FieldEncryptionError::KeyStateInvalid);
+        }
+        match provider {
+            FieldEncryptionProvider::Transit(config) => {
+                let client = TransitDataKeyClient::initialize(config.clone())
+                    .await
+                    .map_err(|_| FieldEncryptionError::DataKeyUnavailable)?;
+                let (key_version, dek) = unwrap_stored_transit_key(&client, &stored).await?;
+                verify_key_identifier(registry_id, &dek, &stored.key_identifier)?;
+                Ok(Self::from_data_key(
+                    registry_id.to_owned(),
+                    key_version,
+                    dek,
+                    KeyProviderKind::TransitDatakey,
+                ))
+            }
+            FieldEncryptionProvider::LocalFile { dek_ref } => {
+                if dek_ref.provider() != SecretProvider::File {
+                    return Err(FieldEncryptionError::DataKeyUnavailable);
+                }
+                let dek = resolve_local_dek(dek_ref, secrets)?;
+                validate_local_stored_key(&stored, &key_identifier(registry_id, &dek))?;
+                Ok(Self::from_data_key(
+                    registry_id.to_owned(),
+                    1,
+                    dek,
                     KeyProviderKind::LocalDatakeyFile,
                 ))
             }
@@ -459,6 +514,81 @@ impl fmt::Debug for FieldEncryptionService {
     }
 }
 
+async fn singleton_stored_key(
+    store: &impl FieldKeyStore,
+) -> Result<Option<StoredFieldKey>, FieldEncryptionError> {
+    match store.field_key_row_count().await? {
+        0 => Ok(None),
+        1 => store
+            .latest_field_key()
+            .await?
+            .ok_or(FieldEncryptionError::KeyStateInvalid)
+            .map(Some),
+        _ => Err(FieldEncryptionError::KeyStateInvalid),
+    }
+}
+
+fn resolve_local_dek(
+    dek_ref: &SecretReference,
+    secrets: &SecretResolver,
+) -> Result<Zeroizing<[u8; 32]>, FieldEncryptionError> {
+    let secret = secrets.resolve_reference(dek_ref)?;
+    let decoded = Zeroizing::new(
+        STANDARD
+            .decode(secret.expose_secret().trim_ascii())
+            .map_err(|_| FieldEncryptionError::DataKeyUnavailable)?,
+    );
+    let dek: [u8; 32] = decoded
+        .as_slice()
+        .try_into()
+        .map_err(|_| FieldEncryptionError::DataKeyUnavailable)?;
+    Ok(Zeroizing::new(dek))
+}
+
+fn key_identifier(registry_id: &str, dek: &[u8; 32]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"breg-field-dek-identifier/v1");
+    digest.update(
+        u32::try_from(registry_id.len())
+            .expect("registry identifiers are bounded")
+            .to_be_bytes(),
+    );
+    digest.update(registry_id.as_bytes());
+    digest.update(dek);
+    format!("sha256:{}", hex::encode(digest.finalize()))
+}
+
+fn verify_key_identifier(
+    registry_id: &str,
+    dek: &[u8; 32],
+    stored: &str,
+) -> Result<(), FieldEncryptionError> {
+    if stored == key_identifier(registry_id, dek) {
+        Ok(())
+    } else {
+        Err(FieldEncryptionError::KeyStateInvalid)
+    }
+}
+
+fn validate_local_stored_key(
+    stored: &StoredFieldKey,
+    identifier: &str,
+) -> Result<(), FieldEncryptionError> {
+    if stored.key_version == 1
+        && stored.provider_kind == LOCAL_FILE_PROVIDER_KIND
+        && stored.algorithm == FIELD_ENCRYPTION_ALGORITHM
+        && stored.key_identifier == identifier
+        && stored.wrapped_dek.is_none()
+        && stored.transit_key_version.is_none()
+    {
+        Ok(())
+    } else if stored.provider_kind != LOCAL_FILE_PROVIDER_KIND {
+        Err(FieldEncryptionError::ProviderMismatch)
+    } else {
+        Err(FieldEncryptionError::KeyStateInvalid)
+    }
+}
+
 /// Validate one stored Transit row and unwrap its data key.
 async fn unwrap_stored_transit_key(
     client: &TransitDataKeyClient,
@@ -472,11 +602,17 @@ async fn unwrap_stored_transit_key(
         || stored
             .transit_key_version
             .is_none_or(|version| version <= 0)
+        || stored.wrapped_dek.as_deref().is_none_or(str::is_empty)
     {
         return Err(FieldEncryptionError::KeyStateInvalid);
     }
     let dek = client
-        .unwrap_datakey(&stored.wrapped_dek)
+        .unwrap_datakey(
+            stored
+                .wrapped_dek
+                .as_deref()
+                .ok_or(FieldEncryptionError::KeyStateInvalid)?,
+        )
         .await
         .map_err(|_| FieldEncryptionError::DataKeyUnavailable)?;
     let key_version =
@@ -684,6 +820,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt as _;
     use std::path::PathBuf;
+    use std::sync::Mutex;
 
     const REGISTRY_ID: &str = "example-licensing";
     const ENTITY_ID: &str = "professional_licence";
@@ -703,30 +840,52 @@ mod tests {
     /// In-memory key store for activation logic that must not touch
     /// PostgreSQL.
     struct MemoryKeyStore {
-        rows: Vec<StoredFieldKey>,
+        rows: Mutex<Vec<StoredFieldKey>>,
     }
 
     impl MemoryKeyStore {
         fn new(rows: Vec<StoredFieldKey>) -> Self {
-            Self { rows }
+            Self {
+                rows: Mutex::new(rows),
+            }
         }
     }
 
     #[async_trait]
     impl FieldKeyStore for MemoryKeyStore {
         async fn latest_field_key(&self) -> Result<Option<StoredFieldKey>, FieldEncryptionError> {
-            Ok(self.rows.last().cloned())
+            Ok(self
+                .rows
+                .lock()
+                .expect("test key store locks")
+                .last()
+                .cloned())
         }
 
         async fn field_key_row_count(&self) -> Result<u32, FieldEncryptionError> {
-            Ok(u32::try_from(self.rows.len()).expect("test rows fit a u32"))
+            Ok(
+                u32::try_from(self.rows.lock().expect("test key store locks").len())
+                    .expect("test rows fit a u32"),
+            )
         }
 
         async fn insert_first_field_key(
             &self,
-            _key: &NewFieldKey,
+            key: &NewFieldKey,
         ) -> Result<bool, FieldEncryptionError> {
-            unreachable!("local-file activation never writes a key row");
+            let mut rows = self.rows.lock().expect("test key store locks");
+            if rows.iter().any(|row| row.key_version == key.key_version) {
+                return Ok(false);
+            }
+            rows.push(StoredFieldKey {
+                key_version: key.key_version,
+                provider_kind: key.provider_kind.to_owned(),
+                algorithm: key.algorithm.to_owned(),
+                key_identifier: key.key_identifier.clone(),
+                wrapped_dek: key.wrapped_dek.clone(),
+                transit_key_version: key.transit_key_version,
+            });
+            Ok(true)
         }
     }
 
@@ -735,7 +894,8 @@ mod tests {
             key_version,
             provider_kind: provider_kind.to_owned(),
             algorithm: FIELD_ENCRYPTION_ALGORITHM.to_owned(),
-            wrapped_dek: String::new(),
+            key_identifier: key_identifier(REGISTRY_ID, &DEK),
+            wrapped_dek: Some(String::new()),
             transit_key_version: Some(3),
         }
     }
@@ -847,20 +1007,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_file_provider_activates_implicit_version_one() {
+    async fn local_file_provider_activates_bound_version_one() {
         let root = secret_root("activates");
         let dek_ref = write_local_dek(&root, format!("{}\n", STANDARD.encode(DEK)).as_bytes());
         let secrets =
             SecretResolver::new([SecretProvider::File], &root).expect("fixture resolver builds");
-        let service = FieldEncryptionService::initialize(
+        let store = MemoryKeyStore::new(Vec::new());
+        let service = FieldEncryptionService::activate(
             &FieldEncryptionProvider::LocalFile { dek_ref },
             REGISTRY_ID,
             "sha256:fixture",
             &secrets,
-            &MemoryKeyStore::new(Vec::new()),
+            &store,
         )
         .await
         .expect("local file activates");
+        assert_eq!(store.field_key_row_count().await.unwrap(), 1);
         assert_eq!(service.key_version(), 1);
         assert_eq!(service.provider_kind(), KeyProviderKind::LocalDatakeyFile);
         let envelope = service
@@ -887,7 +1049,7 @@ mod tests {
             "not base64!".to_owned(),
         ] {
             let dek_ref = write_local_dek(&root, contents.as_bytes());
-            let result = FieldEncryptionService::initialize(
+            let result = FieldEncryptionService::activate(
                 &FieldEncryptionProvider::LocalFile { dek_ref },
                 REGISTRY_ID,
                 "sha256:fixture",
@@ -902,7 +1064,7 @@ mod tests {
         }
         let dek_ref = write_local_dek(&root, STANDARD.encode(DEK).as_bytes());
         let conflicting = MemoryKeyStore::new(vec![stored_row(1, TRANSIT_PROVIDER_KIND)]);
-        let result = FieldEncryptionService::initialize(
+        let result = FieldEncryptionService::activate(
             &FieldEncryptionProvider::LocalFile { dek_ref },
             REGISTRY_ID,
             "sha256:fixture",
@@ -914,6 +1076,48 @@ mod tests {
             matches!(result, Err(FieldEncryptionError::ProviderMismatch)),
             "stored key rows from another provider must block local-file activation"
         );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn local_file_provider_binds_restart_to_the_activated_key() {
+        let root = secret_root("restart-key-binding");
+        let dek_ref = write_local_dek(&root, STANDARD.encode(DEK).as_bytes());
+        let secrets =
+            SecretResolver::new([SecretProvider::File], &root).expect("fixture resolver builds");
+        let store = MemoryKeyStore::new(Vec::new());
+
+        FieldEncryptionService::activate(
+            &FieldEncryptionProvider::LocalFile {
+                dek_ref: dek_ref.clone(),
+            },
+            REGISTRY_ID,
+            "sha256:fixture",
+            &secrets,
+            &store,
+        )
+        .await
+        .expect("governed apply activates the local key identifier");
+        FieldEncryptionService::open_existing(
+            &FieldEncryptionProvider::LocalFile {
+                dek_ref: dek_ref.clone(),
+            },
+            REGISTRY_ID,
+            &secrets,
+            &store,
+        )
+        .await
+        .expect("the unchanged key opens on restart");
+
+        write_local_dek(&root, STANDARD.encode([0x6B; 32]).as_bytes());
+        let result = FieldEncryptionService::open_existing(
+            &FieldEncryptionProvider::LocalFile { dek_ref },
+            REGISTRY_ID,
+            &secrets,
+            &store,
+        )
+        .await;
+        assert!(matches!(result, Err(FieldEncryptionError::KeyStateInvalid)));
         fs::remove_dir_all(&root).ok();
     }
 
@@ -940,7 +1144,7 @@ mod tests {
             stored_row(1, TRANSIT_PROVIDER_KIND),
             stored_row(2, TRANSIT_PROVIDER_KIND),
         ]);
-        let result = FieldEncryptionService::initialize(
+        let result = FieldEncryptionService::activate(
             &transit_provider_config(),
             REGISTRY_ID,
             "sha256:fixture",
@@ -961,7 +1165,7 @@ mod tests {
         let secrets =
             SecretResolver::new([SecretProvider::File], &root).expect("fixture resolver builds");
         let conflicting = MemoryKeyStore::new(vec![stored_row(2, TRANSIT_PROVIDER_KIND)]);
-        let result = FieldEncryptionService::initialize(
+        let result = FieldEncryptionService::activate(
             &transit_provider_config(),
             REGISTRY_ID,
             "sha256:fixture",

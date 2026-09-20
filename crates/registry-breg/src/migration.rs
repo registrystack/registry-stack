@@ -53,6 +53,10 @@ pub enum MigrationError {
         entity_id: String,
         record_ids: Vec<String>,
     },
+    #[error(
+        "retain-plaintext-history requires clearing retained request snapshots before encrypting field `{field_id}` on entity `{entity_id}`"
+    )]
+    FieldEncryptionRetainedRequestSnapshots { entity_id: String, field_id: String },
     #[error("active request proposals require rebase or cancellation before this package can be activated")]
     ActiveRequestProposals,
     #[error("destructive backup evidence is invalid")]
@@ -387,6 +391,20 @@ pub async fn apply_verified_package(
         }
     };
     let reviewed_plan = request.package.reviewed_migration_plan();
+    let declares_encrypted_fields = request
+        .package
+        .registry()
+        .entities()
+        .values()
+        .any(|entity| {
+            entity
+                .fields
+                .values()
+                .any(|field| field.encryption.is_some())
+        });
+    if declares_encrypted_fields && request.field_encryption.is_none() {
+        return Err(MigrationError::PackageBinding);
+    }
     if manifest.migration_plan.reviewed_descriptors.is_empty() != reviewed_plan.is_none()
         || reviewed_plan.is_some() && current.is_none()
     {
@@ -507,6 +525,27 @@ pub async fn apply_verified_package(
     if began.is_err() {
         let _ = connection.release().await;
         return Err(MigrationError::ApplyFailed);
+    }
+
+    if declares_encrypted_fields {
+        let key_source = request
+            .field_encryption
+            .as_ref()
+            .ok_or(MigrationError::PackageBinding)?;
+        if connection
+            .activate_field_encryption_key_state(
+                &ReviewedFieldEncryptionContext {
+                    provider: key_source.provider,
+                    secrets: key_source.secrets,
+                },
+                request.package.registry(),
+                &target.package_revision,
+            )
+            .await
+            .is_err()
+        {
+            return fail_and_release(connection, &target, &ledger).await;
+        }
     }
 
     if let Some((predecessor_baseline, predecessor_descriptor)) = successor_history {
@@ -732,6 +771,13 @@ async fn fail_with_error_and_release(
         } => MigrationError::FieldEncryptionLookupCollision {
             entity_id,
             record_ids,
+        },
+        crate::postgres::PostgresKernelError::FieldEncryptionRetainedRequestSnapshots {
+            entity_id,
+            field_id,
+        } => MigrationError::FieldEncryptionRetainedRequestSnapshots {
+            entity_id,
+            field_id,
         },
         _ => MigrationError::ApplyFailed,
     })

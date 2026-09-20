@@ -168,4 +168,14 @@
   pre-flip revisions as written, scoped by the flip boundary. A plan with no
   choice refuses, and `retain-plaintext-history` is an accepted-risk option
   that does not satisfy the database-read guarantee. Preflight and audit
-  report records, revisions, and counts, never values.
+  report records, revisions, and counts, never values. In Phase 1, a
+  `retain-plaintext-history` apply refuses before sealing any row when its
+  preflight reports retained request target or proposal copies for a covered
+  field; operators must clear those copies through the request lifecycle and
+  retention policy first. All simultaneous field-encryption flips for one
+  entity share one backfill step so migration history never records a partial
+  successor shape.
+- Phase 1 does not support removing encryption, changing the lookup of an
+  already-encrypted field, or adding a required encrypted field to an existing
+  entity. Add a new encrypted field as optional, populate it through authorized
+  Registry writes, then make it required in a later package.

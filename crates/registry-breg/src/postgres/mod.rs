@@ -185,6 +185,10 @@ pub enum PostgresKernelError {
         entity_id: String,
         record_ids: Vec<String>,
     },
+    #[error(
+        "retain-plaintext-history requires clearing retained request snapshots before encrypting the field"
+    )]
+    FieldEncryptionRetainedRequestSnapshots { entity_id: String, field_id: String },
     #[error("PostgreSQL connection failed")]
     Connection,
     #[error("PostgreSQL pool operation failed")]

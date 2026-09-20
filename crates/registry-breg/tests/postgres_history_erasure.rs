@@ -2220,7 +2220,7 @@ async fn snapshot_client_http(
     let secrets = SecretResolver::new([SecretProvider::File], secret_root.path())
         .expect("field-encryption secret resolver builds");
     let field_encryption = Arc::new(
-        FieldEncryptionService::initialize(
+        FieldEncryptionService::activate(
             &FieldEncryptionProvider::LocalFile { dek_ref },
             registry.registry_id(),
             &identity.package_revision,

@@ -40,7 +40,7 @@ async fn field_encryption_catalog_enforces_key_state_and_runtime_authority() {
         (
             "registry_internal.registry_field_encryption_keys",
             "INSERT",
-            true,
+            false,
         ),
         (
             "registry_internal.registry_field_encryption_flips",
@@ -76,9 +76,11 @@ async fn field_encryption_catalog_enforces_key_state_and_runtime_authority() {
         let invalid = migration
             .execute(
                 "INSERT INTO registry_internal.registry_field_encryption_keys (
-                     key_version, provider_kind, algorithm, wrapped_dek,
+                     key_version, provider_kind, algorithm, key_identifier, wrapped_dek,
                      transit_key_version, activated_package_revision
-                 ) VALUES ($1, $2, 'aes-256-gcm', 'wrapped', $3, 'package-1')",
+                 ) VALUES ($1, $2, 'aes-256-gcm',
+                           'sha256:4242424242424242424242424242424242424242424242424242424242424242',
+                           'wrapped', $3, 'package-1')",
                 &[&key_version, &provider_kind, &transit_key_version],
             )
             .await;
@@ -91,9 +93,11 @@ async fn field_encryption_catalog_enforces_key_state_and_runtime_authority() {
     migration
         .execute(
             "INSERT INTO registry_internal.registry_field_encryption_keys (
-                 key_version, provider_kind, algorithm, wrapped_dek,
+                 key_version, provider_kind, algorithm, key_identifier, wrapped_dek,
                  transit_key_version, activated_package_revision
-             ) VALUES (1, 'transit_datakey', 'aes-256-gcm', 'wrapped', 1, 'package-1')",
+             ) VALUES (1, 'transit_datakey', 'aes-256-gcm',
+                       'sha256:4242424242424242424242424242424242424242424242424242424242424242',
+                       'wrapped', 1, 'package-1')",
             &[],
         )
         .await

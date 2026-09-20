@@ -57,7 +57,10 @@ impl From<PostgresKernelError> for HistoryMaintenanceError {
             PostgresKernelError::Configuration(_)
             | PostgresKernelError::FieldPatternSyntax { .. }
             | PostgresKernelError::FieldPatternExistingRows { .. }
-            | PostgresKernelError::FieldEncryptionBlindCollision { .. } => Self::InvalidInput,
+            | PostgresKernelError::FieldEncryptionBlindCollision { .. }
+            | PostgresKernelError::FieldEncryptionRetainedRequestSnapshots { .. } => {
+                Self::InvalidInput
+            }
             PostgresKernelError::Connection
             | PostgresKernelError::Pool
             | PostgresKernelError::PoolBuild

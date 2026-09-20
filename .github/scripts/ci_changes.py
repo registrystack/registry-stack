@@ -763,6 +763,7 @@ def classify(
             path.startswith("release/")
             or path
             in {
+                "THIRD_PARTY_NOTICES",
                 "docs/site/src/content/docs/reference/errors.mdx",
             }
             for path in paths

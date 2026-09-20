@@ -638,6 +638,9 @@ jobs:
       CLIENT_VERSION: ${{ needs.validate.outputs.version }}
       CLIENT_TAG: ${{ needs.validate.outputs.tag }}
       RUSTUP_TOOLCHAIN: "1.95.0"
+      # Native client packages are self-contained. aws-lc-fips-sys otherwise
+      # defaults to a build-directory dylib on macOS.
+      AWS_LC_FIPS_SYS_STATIC: "1"
       NODE_GLIBC_BASELINE_IMAGE: node:22.12.0-bullseye-slim@sha256:52e4282a01d63eb4cfce7a395364d366cee488c278079110d3aa49dd21b2bf18
     permissions:
       contents: read

@@ -469,7 +469,8 @@ status. Registry Stack does not claim certification of itself.
 
 {/* Evidence: crates/registry-platform-crypto/src/field_encryption.rs, seal_field(),
     open_field(), FieldAad, and blind_index_hmac();
-    crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::initialize();
+    crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::activate() and
+    FieldEncryptionService::open_existing();
     crates/registry-platform-crypto/src/transit_datakey.rs, TransitDataKeyClient;
     crates/registry-breg/src/problem.rs, RuntimeFieldEncryptionUnavailable;
     crates/registry-breg/src/api/mod.rs, field_encryption_refusal();

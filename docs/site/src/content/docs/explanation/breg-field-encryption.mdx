@@ -61,19 +61,21 @@ patterns are PostgreSQL checks, while encrypted plaintext must not reach Postgre
 
 ## Where the key lives
 
-The DEK is generated per registry database and is wrapped by HashiCorp Vault or OpenBao Transit
-through its datakey endpoint, reached over a workload-local Unix-socket proxy; the wrapped key is
-stored in `registry_internal.registry_field_encryption_keys`. A base64 local-file DEK also exists
-for local assurance, and it is refused outside local initialization: startup refuses it unless the
-runtime file's `identity.databaseInitializationEnvironment` is `local`, and
+For the Transit provider, a DEK is generated per registry database and wrapped by HashiCorp Vault
+or OpenBao Transit through its datakey endpoint, reached over a workload-local Unix-socket proxy;
+the wrapped key is stored in `registry_internal.registry_field_encryption_keys`. A base64
+local-file DEK also exists for local assurance. Governed apply stores only its nonsecret,
+registry-bound identifier so startup can refuse a changed or mis-mounted file. The local provider
+is refused outside local initialization: startup refuses it unless the runtime file's
+`identity.databaseInitializationEnvironment` is `local`, and
 `bregctl doctor --runtime-config <absolute-file>` reports the same refusal.
 
 Losing the wrapping key loses the data. There is no recovery path inside Base Registry Engine, and
 key escrow before enabling is an operator duty, not a compiler check. Key custody belongs on the
 [hardening checklist](../../security/hardening-checklist/).
 
-{/* Evidence: crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::initialize(),
-    insert_first_field_key(), and TRANSIT_PROVIDER_KIND;
+{/* Evidence: crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::activate(),
+    FieldEncryptionService::open_existing(), insert_first_field_key(), and TRANSIT_PROVIDER_KIND;
     crates/registry-platform-crypto/src/transit_datakey.rs, TransitDataKeyClient;
     crates/registry-breg/src/startup.rs, FieldEncryptionCustody;
     crates/registry-bregctl/src/doctor.rs, startup_diagnostic(). */}
@@ -119,7 +121,8 @@ rather than at the first reviewed change.
 
 ## Startup and stored-envelope failures fail closed
 
-Startup resolves the field-encryption provider and unwraps or creates the active DEK before the
+Package apply activates the field-encryption key state. Startup resolves the configured provider
+and unwraps the already-active DEK before the
 deployment can serve. If an active package declares encrypted fields and Transit is missing or
 unreachable, or the DEK cannot be unwrapped, startup fails the deployment. BReg does not start in a
 degraded mode and does not fall back to plaintext.
@@ -129,8 +132,9 @@ bad envelope answer with the HTTP `503` problem `runtime.field_encryption.unavai
 entities whose rows do not contain that bad envelope keep serving. BReg does not cache an unsealed
 copy.
 
-{/* Evidence: crates/registry-breg/src/startup.rs, prepare() and
-    FieldEncryptionService::initialize(); crates/registry-breg/src/problem.rs,
+{/* Evidence: crates/registry-breg/src/migration.rs, apply_verified_package();
+    crates/registry-breg/src/startup.rs, prepare() and
+    FieldEncryptionService::open_existing(); crates/registry-breg/src/problem.rs,
     RuntimeFieldEncryptionUnavailable;
     crates/registry-breg/src/api/mod.rs, field_encryption_refusal(),
     field_encryption_unavailable(), and opened_held_body();
@@ -162,7 +166,9 @@ may recommend, but only the authored choice enables the migration.
 - `history: retain-plaintext-history` encrypts going forward and leaves pre-flip revision
   snapshots serving as written, scoped by the flip boundary. It is an explicit risk acceptance:
   those snapshots stay readable to any database reader the feature exists to defend against, so it
-  does not satisfy the database-read guarantee.
+  does not satisfy the database-read guarantee. In Phase 1, activation refuses before sealing any
+  row when a covered field still appears in a retained request target or proposal. Clear those
+  copies through the request lifecycle and retention policy, then run the preflight again.
 
 The preflight is value-free. Before anything is applied, it reports counts per covered field: the
 live rows still carrying plaintext, the retained journal revisions that carry the field member,
@@ -174,13 +180,23 @@ around the apply are `bregctl field-encryption preflight` and
 `bregctl field-encryption erase-history`, shown with the rest of the lifecycle in
 [Deploy a registry](../../operate/breg/).
 
+Phase 1 also keeps three package evolutions closed. You cannot remove encryption, change the
+lookup of an already-encrypted field, or add a required encrypted field to an existing entity.
+For the last case, add the encrypted field as optional, populate the field through authorized
+Registry writes, then make the field required in a later package. Every field that becomes
+encrypted on one entity in the same successor package must share one `fieldEncryptionBackfill`
+step.
+
 {/* Evidence: crates/registry-breg/src/migration_plan.rs, ReviewedFieldEncryptionHistory,
-    validate_descriptor_shape(), and descriptor_covers_field_encryption_flip();
+    validate_descriptor_shape(), descriptor_covers_field_encryption_flip(), and
+    validate_field_encryption_step_grouping(); crates/registry-breg/src/package.rs,
+    compiled_registry_change_set();
     crates/registry-breg/src/field_encryption_backfill.rs,
     FieldEncryptionBackfillPreflightReport, FieldEncryptionBackfillFieldPreflight,
     MAX_NAMED_DUPLICATE_RECORDS, pending_erase_targets(), and
     erase_field_encryption_history(); crates/registry-breg/src/postgres/interlock.rs,
-    field_encryption_duplicate_preflight(); crates/registry-bregctl/src/lib.rs,
+    field_encryption_duplicate_preflight() and refuse_retained_plaintext_request_snapshots();
+    crates/registry-bregctl/src/lib.rs,
     FieldEncryptionCommand; crates/registry-bregctl/src/field_encryption_lifecycle.rs,
     run_preflight() and run_erase_history(). */}
 

@@ -339,7 +339,7 @@ impl ExpectedManagedCatalog {
         );
         catalog.table(
             "registry_internal.registry_field_encryption_keys",
-            ["INSERT", "SELECT"],
+            ["SELECT"],
             std::iter::empty::<&str>(),
             Some((false, false)),
         );
@@ -687,21 +687,28 @@ pub(crate) async fn install_registry_state_schema(
                      CONSTRAINT registry_field_encryption_key_version_one
                      CHECK (key_version = 1),
                  provider_kind text NOT NULL
-                     CONSTRAINT registry_field_encryption_provider_kind_transit
-                     CHECK (provider_kind = 'transit_datakey'),
+                     CONSTRAINT registry_field_encryption_provider_kind_closed
+                     CHECK (provider_kind IN ('transit_datakey', 'local_datakey_file')),
                  algorithm text NOT NULL
                      CONSTRAINT registry_field_encryption_algorithm_closed
                      CHECK (algorithm = '{FIELD_ENCRYPTION_ALGORITHM}'),
-                 wrapped_dek text NOT NULL
-                     CONSTRAINT registry_field_encryption_wrapped_nonempty
-                     CHECK (wrapped_dek <> ''),
-                 transit_key_version integer NOT NULL
-                     CONSTRAINT registry_field_encryption_transit_version_positive
-                     CHECK (transit_key_version > 0),
+                 key_identifier text NOT NULL
+                     CONSTRAINT registry_field_encryption_identifier_sha256
+                     CHECK (key_identifier ~ '^sha256:[0-9a-f]{{64}}$'),
+                 wrapped_dek text,
+                 transit_key_version integer,
                  activated_package_revision text NOT NULL
                      CONSTRAINT registry_field_encryption_revision_nonempty
                      CHECK (activated_package_revision <> ''),
-                 created_at timestamptz NOT NULL DEFAULT transaction_timestamp()
+                 created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 CONSTRAINT registry_field_encryption_provider_shape CHECK (
+                     (provider_kind = 'transit_datakey'
+                      AND wrapped_dek IS NOT NULL AND wrapped_dek <> ''
+                      AND transit_key_version IS NOT NULL AND transit_key_version > 0)
+                     OR
+                     (provider_kind = 'local_datakey_file'
+                      AND wrapped_dek IS NULL AND transit_key_version IS NULL)
+                 )
              );
              REVOKE ALL ON TABLE registry_internal.registry_field_encryption_keys FROM PUBLIC;
              CREATE TABLE IF NOT EXISTS registry_internal.registry_field_encryption_flips (
@@ -765,7 +772,7 @@ pub(crate) async fn install_registry_state_schema(
              REVOKE ALL ON TABLE registry_internal.registry_state FROM {};\n\
              GRANT SELECT ON TABLE registry_internal.registry_state TO {};\n\
              REVOKE ALL ON TABLE registry_internal.registry_field_encryption_keys FROM {};\n\
-             GRANT SELECT, INSERT ON TABLE registry_internal.registry_field_encryption_keys TO {};\n\
+             GRANT SELECT ON TABLE registry_internal.registry_field_encryption_keys TO {};\n\
              REVOKE ALL ON TABLE registry_internal.registry_field_encryption_flips FROM {};\n\
              GRANT SELECT ON TABLE registry_internal.registry_field_encryption_flips TO {};",
             runtime_role.quoted(),
