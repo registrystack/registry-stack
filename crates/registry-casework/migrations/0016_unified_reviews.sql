@@ -9,6 +9,10 @@ BEGIN
     IF EXISTS (SELECT 1 FROM casework_items LIMIT 1)
        OR EXISTS (SELECT 1 FROM casework_hosted_items LIMIT 1)
        OR EXISTS (SELECT 1 FROM casework_task_grants LIMIT 1)
+       OR EXISTS (SELECT 1 FROM casework_hosted_accountability LIMIT 1)
+       OR EXISTS (SELECT 1 FROM casework_hosted_actor_references LIMIT 1)
+       OR EXISTS (SELECT 1 FROM casework_hosted_idempotency_tombstones LIMIT 1)
+       OR EXISTS (SELECT 1 FROM casework_hosted_cursors LIMIT 1)
     THEN
         RAISE EXCEPTION USING
             ERRCODE = '55000',

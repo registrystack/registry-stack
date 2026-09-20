@@ -751,7 +751,7 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
         .oneshot(create_http_request(&request, Some(&token)))
         .await
         .expect("recovered response");
-    assert_eq!(recovered.status(), StatusCode::CREATED);
+    assert_eq!(recovered.status(), StatusCode::OK);
     let created: ReviewRequestAccepted = serde_json::from_slice(
         &to_bytes(recovered.into_body(), 32 * 1024)
             .await

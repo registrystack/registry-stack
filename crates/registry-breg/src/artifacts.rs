@@ -1921,6 +1921,7 @@ fn openapi_document(
         .map(|(id, schema)| (id.clone(), schema.clone()))
         .collect();
     component_schemas.extend(input_schemas);
+    append_review_completion_openapi(&mut paths, &mut component_schemas);
     let has_request_actions = routes
         .routes
         .iter()
@@ -1931,6 +1932,68 @@ fn openapi_document(
         "paths": paths,
         "components": openapi_components(component_schemas, has_request_actions, has_immediate_actions)
     })
+}
+
+pub(crate) fn append_review_completion_openapi(
+    paths: &mut Map<String, Value>,
+    schemas: &mut Map<String, Value>,
+) {
+    schemas.insert(
+        "ReviewCompletion".to_owned(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "type": {"const": "review.completed"},
+                "eventId": {"type": "string", "format": "uuid"},
+                "requestId": {"type": "string", "format": "uuid"},
+                "resultId": {"type": "string", "format": "uuid"},
+                "completedAt": {"type": "string", "format": "date-time"}
+            },
+            "required": ["type", "eventId", "requestId", "resultId", "completedAt"]
+        }),
+    );
+    paths.insert(
+        "/v1/review-completions".to_owned(),
+        json!({
+            "post": {
+                "operationId": "receiveReviewCompletion",
+                "summary": "Receive a Casework review completion",
+                "description": "Available when a review authority configures a completion token and recipient binding.",
+                "security": [{"bearerAuth": []}],
+                "parameters": [
+                    {
+                        "name": "Registry-Recipient-Binding",
+                        "in": "header",
+                        "required": true,
+                        "schema": {"type": "string", "minLength": 1, "maxLength": 256}
+                    },
+                    {
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": true,
+                        "description": "Must equal eventId.",
+                        "schema": {"type": "string", "format": "uuid"}
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/ReviewCompletion"}
+                        }
+                    }
+                },
+                "responses": {
+                    "204": {"description": "Completion accepted or already recorded."},
+                    "400": {"description": "The completion or idempotency binding is invalid."},
+                    "401": {"description": "The completion authority could not be authenticated."},
+                    "415": {"description": "The request is not application/json."},
+                    "503": {"description": "The completion could not be durably recorded."}
+                }
+            }
+        }),
+    );
 }
 
 #[derive(Clone, Copy)]

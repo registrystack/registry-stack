@@ -1,5 +1,6 @@
 use registry_review_protocol::{ReviewResult, ReviewResultFeedPage, ReviewResultLookup};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 const MAXIMUM_CURSOR_BYTES: usize = 4096;
 const MAXIMUM_PAGE_SIZE: usize = 100;
@@ -78,8 +79,29 @@ pub(crate) fn check_result_page(page: &ReviewResultFeedPage) -> Result<(), &'sta
         cursor.is_empty()
             || cursor.len() > MAXIMUM_CURSOR_BYTES
             || cursor.chars().any(char::is_control)
+            || Uuid::parse_str(cursor).is_err()
     }) {
         return Err("the result page cursor is invalid");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn result_page_continuations_are_uuid_positions() {
+        let valid = ReviewResultFeedPage {
+            items: Vec::new(),
+            next_cursor: Some(Uuid::from_u128(7).to_string()),
+        };
+        assert!(check_result_page(&valid).is_ok());
+
+        let invalid = ReviewResultFeedPage {
+            items: Vec::new(),
+            next_cursor: Some("bounded-but-not-a-uuid".to_owned()),
+        };
+        assert!(check_result_page(&invalid).is_err());
+    }
 }

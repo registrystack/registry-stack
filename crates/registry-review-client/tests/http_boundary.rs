@@ -162,7 +162,7 @@ async fn capture_create(
         request.uri().to_string(),
         request.headers().clone(),
     ));
-    json_response(StatusCode::CREATED, accepted_json(Uuid::from_u128(7)))
+    json_response(StatusCode::OK, accepted_json(Uuid::from_u128(7)))
 }
 
 #[tokio::test]
@@ -340,7 +340,7 @@ async fn capture_feed(
                 "resultId": Uuid::from_u128(99),
                 "completedAt": "2026-09-19T00:00:00Z"
             }],
-            "nextCursor": "cursor-8"
+            "nextCursor": Uuid::from_u128(8)
         }),
     )
 }

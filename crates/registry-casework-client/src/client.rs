@@ -110,8 +110,9 @@ impl CaseworkClient {
                 HeaderName::from_static(IDEMPOTENCY_KEY_HEADER),
                 idempotency_key,
             );
-        let complete: CaseworkComplete<ReviewRequestAccepted> =
-            self.send_json(outgoing, StatusCode::CREATED).await?;
+        let complete: CaseworkComplete<ReviewRequestAccepted> = self
+            .send_json_one_of(outgoing, &[StatusCode::OK, StatusCode::CREATED])
+            .await?;
         if complete.value.subject.check().is_err()
             || complete.value.policy.check().is_err()
             || complete.value.policy.id != request.kind
@@ -300,7 +301,20 @@ impl CaseworkClient {
         auth: CaseworkAuth<'_>,
     ) -> Result<CaseworkComplete<Vec<ReviewKindPolicySnapshot>>, CaseworkClientError> {
         reject_source_profile(&auth)?;
-        self.get_json(&auth, &["v1", "review-kinds"], &[]).await
+        let complete: CaseworkComplete<Vec<ReviewKindPolicySnapshot>> =
+            self.get_json(&auth, &["v1", "review-kinds"], &[]).await?;
+        if complete
+            .value
+            .iter()
+            .any(|snapshot| snapshot.verify().is_err())
+        {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete)
     }
 
     pub async fn review_kind(
@@ -310,8 +324,17 @@ impl CaseworkClient {
     ) -> Result<CaseworkComplete<ReviewKindPolicySnapshot>, CaseworkClientError> {
         reject_source_profile(&auth)?;
         validate_identifier(kind_id, "the review kind identifier is invalid")?;
-        self.get_json(&auth, &["v1", "review-kinds", kind_id], &[])
-            .await
+        let complete: CaseworkComplete<ReviewKindPolicySnapshot> = self
+            .get_json(&auth, &["v1", "review-kinds", kind_id], &[])
+            .await?;
+        if complete.value.verify().is_err() {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete)
     }
 
     pub async fn review_tasks(
@@ -354,7 +377,8 @@ impl CaseworkClient {
             )
             .await?;
         let snapshot = &complete.value.policy_snapshot;
-        if complete.value.task_id != task_id
+        if snapshot.verify().is_err()
+            || complete.value.task_id != task_id
             || snapshot.identity.id != complete.value.policy.id
             || snapshot.identity.version != complete.value.policy.version
             || snapshot.identity.digest != complete.value.policy.digest
@@ -1522,9 +1546,17 @@ impl CaseworkClient {
         request: RequestBuilder,
         expected_status: StatusCode,
     ) -> Result<CaseworkComplete<T>, CaseworkClientError> {
+        self.send_json_one_of(request, &[expected_status]).await
+    }
+
+    async fn send_json_one_of<T: DeserializeOwned>(
+        &self,
+        request: RequestBuilder,
+        expected_statuses: &[StatusCode],
+    ) -> Result<CaseworkComplete<T>, CaseworkClientError> {
         let response = self.send(request).await?;
         let status = response.status();
-        if status != expected_status {
+        if !expected_statuses.contains(&status) {
             return Err(self.problem_or_status(response).await);
         }
         let trace_id = response_trace(status, response.headers())?;

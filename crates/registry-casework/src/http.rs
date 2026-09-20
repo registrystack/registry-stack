@@ -316,7 +316,12 @@ async fn create_review_request(
         .create_review_request(&actor, request, idempotency_key(&headers)?)
         .await
         .map_err(HttpError::from)?;
-    Ok((StatusCode::CREATED, Json(outcome.accepted)).into_response())
+    let status = if outcome.recovered {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    Ok((status, Json(outcome.accepted)).into_response())
 }
 
 async fn review_kind_descriptions(

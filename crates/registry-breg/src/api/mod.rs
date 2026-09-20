@@ -431,6 +431,9 @@ async fn openapi(
     let has_request_actions = !action_input_schemas.is_empty();
     schemas.extend(action_input_schemas);
     actions::append_openapi(&visible_actions, &mut paths, &mut schemas);
+    if service.review_completions.is_some() {
+        crate::artifacts::append_review_completion_openapi(&mut paths, &mut schemas);
+    }
     Json(json!({
         "openapi": "3.1.0",
         "info": {"title": service.registry.registry_id(), "version": service.registry.version()},

@@ -98,7 +98,9 @@ impl ReviewClient {
         let outgoing = self
             .authorized(self.http.post(url).json(request), token)
             .header(HeaderName::from_static(IDEMPOTENCY_KEY_HEADER), key);
-        let complete = self.send_json(outgoing, StatusCode::CREATED).await?;
+        let complete = self
+            .send_json_one_of(outgoing, &[StatusCode::OK, StatusCode::CREATED])
+            .await?;
         check_accepted(
             &complete.value,
             &request.kind,
@@ -267,9 +269,17 @@ impl ReviewClient {
         request: RequestBuilder,
         expected_status: StatusCode,
     ) -> Result<ReviewComplete<T>, ReviewClientError> {
+        self.send_json_one_of(request, &[expected_status]).await
+    }
+
+    async fn send_json_one_of<T: DeserializeOwned>(
+        &self,
+        request: RequestBuilder,
+        expected_statuses: &[StatusCode],
+    ) -> Result<ReviewComplete<T>, ReviewClientError> {
         let response = self.send(request).await?;
         let status = response.status();
-        if status != expected_status {
+        if !expected_statuses.contains(&status) {
             return Err(self.problem_or_status(response, None).await);
         }
         let trace_id = response_trace(status, response.headers())?;

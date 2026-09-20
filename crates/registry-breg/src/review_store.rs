@@ -1119,8 +1119,8 @@ pub(crate) async fn install(
                      REFERENCES registry_internal.registry_request_proposals,
                  CHECK ((on_approved_mode = 'manual' AND executor IS NULL)
                      OR (on_approved_mode = 'automatic' AND executor IS NOT NULL)),
-                 CHECK ((state IN ('accepted','cancelling','cancelled') AND accepted_binding IS NOT NULL)
-                     OR (state NOT IN ('accepted','cancelling','cancelled')))
+                 CHECK ((state IN ('accepted','cancelling') AND accepted_binding IS NOT NULL)
+                     OR state NOT IN ('accepted','cancelling')))
              );
              ALTER TABLE registry_internal.registry_request_review_submissions
                  ADD COLUMN IF NOT EXISTS withdrawn boolean NOT NULL DEFAULT false;
@@ -2120,6 +2120,10 @@ enum ApplicationExchangeError {
     Transient,
 }
 
+fn retryable_application_status(status: reqwest::StatusCode) -> bool {
+    status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+}
+
 async fn discover_application(
     executor: &ReviewExecutorClient,
     job: &ApplicationJob,
@@ -2146,7 +2150,7 @@ async fn discover_application(
         return Err(ApplicationExchangeError::Denied);
     }
     if response.status() != reqwest::StatusCode::OK {
-        return if response.status().is_server_error() {
+        return if retryable_application_status(response.status()) {
             Err(ApplicationExchangeError::Transient)
         } else {
             Err(ApplicationExchangeError::InvalidResponse)
@@ -2337,7 +2341,7 @@ async fn send_application(
         return Err(ApplicationExchangeError::Stale);
     }
     if response.status() != reqwest::StatusCode::OK {
-        return if response.status().is_server_error() {
+        return if retryable_application_status(response.status()) {
             Err(ApplicationExchangeError::Transient)
         } else {
             Err(ApplicationExchangeError::InvalidResponse)
@@ -2594,6 +2598,19 @@ fn application_mode(proposal: &ProposalSnapshot) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_application_retries_rate_limits_and_server_failures() {
+        assert!(retryable_application_status(
+            reqwest::StatusCode::TOO_MANY_REQUESTS
+        ));
+        assert!(retryable_application_status(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE
+        ));
+        assert!(!retryable_application_status(
+            reqwest::StatusCode::BAD_REQUEST
+        ));
+    }
 
     fn executor() -> ReviewExecutorClient {
         ReviewExecutorClient::new(

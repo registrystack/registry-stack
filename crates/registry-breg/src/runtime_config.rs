@@ -2285,6 +2285,7 @@ struct RawReviewAuthorityConfig {
     #[serde(default)]
     private_key_jwt: Option<RawReviewPrivateKeyJwtConfig>,
     producer_id: String,
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 3650)))]
     recovery_days: u32,
     #[serde(default)]
     completion_token_ref: Option<String>,

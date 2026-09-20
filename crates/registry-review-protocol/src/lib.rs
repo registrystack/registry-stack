@@ -184,6 +184,9 @@ impl ReviewContext {
     pub fn check(&self) -> Result<(), ProtocolError> {
         match self {
             Self::Submitted { snapshot } => {
+                if !snapshot.is_object() {
+                    return Err(ProtocolError::ContextShape);
+                }
                 if canonical_bytes(snapshot)?.len() > MAXIMUM_CONTEXT_BYTES {
                     return Err(ProtocolError::ContextTooLarge);
                 }
@@ -473,6 +476,8 @@ pub enum ProtocolError {
     Text,
     #[error("the review context exceeds the protocol bound")]
     ContextTooLarge,
+    #[error("the submitted review context must be an object")]
+    ContextShape,
     #[error("the create request exceeds the protocol bound")]
     CreateTooLarge,
     #[error("the result or result constraints exceed the protocol bound")]
@@ -634,5 +639,20 @@ mod tests {
             canonical_bytes(&too_many_nodes),
             Err(ProtocolError::JsonComplexity)
         );
+    }
+
+    #[test]
+    fn submitted_context_is_an_object() {
+        for snapshot in [Value::Null, json!([]), json!("scalar")] {
+            assert_eq!(
+                ReviewContext::Submitted { snapshot }.check(),
+                Err(ProtocolError::ContextShape)
+            );
+        }
+        assert!(ReviewContext::Submitted {
+            snapshot: json!({"field": "value"})
+        }
+        .check()
+        .is_ok());
     }
 }
