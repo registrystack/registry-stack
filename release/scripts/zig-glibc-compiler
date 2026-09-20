@@ -68,11 +68,16 @@ if (( target_approved == 0 )); then
 fi
 
 # cc-rs adds the Rust target even when the selected compiler is a wrapper.
-# Remove only its target selector so Zig receives exactly the approved target
-# above. Every other compiler and linker argument passes through unchanged.
+# Remove its target selector so Zig receives exactly the approved target above.
+# CMake's compiler-ABI probe also asks the linker to print its version; Zig
+# 0.12.1 rejects that informational linker flag, which prevents CMake from
+# detecting a 64-bit target and makes AWS-LC select the wrong assembly set.
 filtered=()
 while (( "$#" )); do
   case "$1" in
+    -Wl,-v)
+      shift
+      ;;
     --target=*)
       shift
       ;;
@@ -94,5 +99,64 @@ while (( "$#" )); do
   esac
 done
 
-exec "${zig_python}" -m ziglang "${driver}" \
-  -target "${zig_target}" "${filtered[@]}"
+compiler=("${zig_python}" -m ziglang "${driver}" -target "${zig_target}")
+
+# AWS-LC-FIPS generates its validated module as textual assembly while CMake
+# also requests a dependency file. Zig 0.12.1 exits successfully for that
+# combined invocation without writing the requested assembly output. Preserve
+# both outputs with two ordinary compiler passes. This stays in the pinned Zig
+# adapter so every canonical Linux artifact follows the same glibc-floor path.
+has_assembly=0
+has_dependencies=0
+for argument in "${filtered[@]}"; do
+  case "${argument}" in
+    -S) has_assembly=1 ;;
+    -MD | -MMD) has_dependencies=1 ;;
+  esac
+done
+
+if (( has_assembly && has_dependencies )); then
+  dependency_args=()
+  assembly_args=()
+  index=0
+  while (( index < ${#filtered[@]} )); do
+    argument="${filtered[index]}"
+    case "${argument}" in
+      -S | -c)
+        ;;
+      -MD | -MMD)
+        dependency_args+=("${argument}")
+        ;;
+      -MF | -MT | -MQ)
+        if (( index + 1 >= ${#filtered[@]} )); then
+          printf '%s requires an argument\n' "${argument}" >&2
+          exit 2
+        fi
+        dependency_args+=("${argument}" "${filtered[index + 1]}")
+        ((index += 1))
+        ;;
+      -o)
+        if (( index + 1 >= ${#filtered[@]} )); then
+          printf '%s requires an argument\n' "${argument}" >&2
+          exit 2
+        fi
+        assembly_args+=("${argument}" "${filtered[index + 1]}")
+        ((index += 1))
+        ;;
+      *)
+        dependency_args+=("${argument}")
+        assembly_args+=("${argument}")
+        ;;
+    esac
+    ((index += 1))
+  done
+  dependency_args+=(-E)
+  assembly_args+=(-S)
+  if "${compiler[@]}" "${dependency_args[@]}" >/dev/null; then
+    exec "${compiler[@]}" "${assembly_args[@]}"
+  else
+    exit $?
+  fi
+fi
+
+exec "${compiler[@]}" "${filtered[@]}"

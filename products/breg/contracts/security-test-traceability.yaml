@@ -70,3 +70,8 @@ traceability:
   - {id: BREG-SEC-67, state: enforced, negativeId: BREG-NEG-67, negativeTest: {path: crates/registry-breg/tests/postgres_hook_proposals.rs, name: real_postgres_terminal_retry_fences_a_late_proposal_application}}
   - {id: BREG-SEC-68, state: enforced, negativeId: BREG-NEG-68, negativeTest: {path: crates/registry-breg/tests/postgres_hook_proposals.rs, name: real_postgres_a_hidden_effect_proposal_finalizes_as_applied}}
   - {id: BREG-SEC-69, state: enforced, negativeId: BREG-NEG-69, negativeTest: {path: crates/registry-breg/tests/postgres_webhook_outbox.rs, name: real_postgres_answer_constraint_upgrade_erases_legacy_handler_message}}
+  - {id: BREG-SEC-70, state: enforced, negativeId: BREG-NEG-70, negativeTest: {path: crates/registry-breg/tests/postgres_field_encryption.rs, name: encrypted_fields_round_trip_and_store_only_envelopes}}
+  - {id: BREG-SEC-71, state: enforced, negativeId: BREG-NEG-71, negativeTest: {path: crates/registry-breg/tests/postgres_kernel.rs, name: field_encryption_catalog_enforces_key_state_and_runtime_authority}}
+  - {id: BREG-SEC-72, state: enforced, negativeId: BREG-NEG-72, negativeTest: {path: crates/registry-breg/tests/field_encryption_contract.rs, name: change_request_paths_refuse_encrypted_fields}}
+  - {id: BREG-SEC-73, state: enforced, negativeId: BREG-NEG-73, negativeTest: {path: crates/registry-breg/tests/postgres_field_encryption.rs, name: aad_binds_the_record_row}}
+  - {id: BREG-SEC-74, state: enforced, negativeId: BREG-NEG-74, negativeTest: {path: crates/registry-breg/tests/postgres_field_encryption.rs, name: missing_field_encryption_provider_refuses_startup}}

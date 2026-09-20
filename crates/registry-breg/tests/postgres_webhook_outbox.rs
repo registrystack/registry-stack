@@ -46,6 +46,7 @@ const PATH_CANARY: &str = "/webhook-path-canary";
 const SECRET_REF_CANARY: &str = "webhook-key-ref-canary";
 const SECRET_KEY_CANARY: &[u8] = b"webhook-key-material-canary-0123456789abcdef";
 const RESTRICTED_CANARY: &str = "restricted-projection-canary";
+const TAG_SHAPED_PLAINTEXT: &str = "not-a-storage-envelope";
 
 /// `registry.id` of the project below joined with `identity.instanceId` of the
 /// runtime configuration below, in the shape `delivery_source` builds.
@@ -814,11 +815,12 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "fields":[
               {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
               {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
-              {"id":"restricted_note","type":"string","maxLength":64,"required":true,"classification":"restricted"}
+              {"id":"restricted_note","type":"string","maxLength":64,"required":true,"classification":"restricted"},
+              {"id":"payload","type":"structured","maxBytes":256,"required":true,"classification":"internal","schema":{"type":"object","additionalProperties":false,"properties":{"__bregEncryptedV1":{"type":"string"}},"required":["__bregEncryptedV1"]}}
             ],
             "hooks":[{
               "phase": "after",
-              "id":"case-created","trigger":"created","projection":["label","restricted_note"],
+              "id":"case-created","trigger":"created","projection":["label","payload","restricted_note"],
               "handler":{
                 "kind": "url",
                 "destinationId":"case-operations"
@@ -840,8 +842,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "requiredPurposes":["case-management"],
             "permissions":[{
               "entity":"case","operations":["create","patch","get","list"],
-              "readableFields":["jurisdiction","label","restricted_note"],
-              "writableFields":["jurisdiction","label","restricted_note"],
+              "readableFields":["jurisdiction","label","payload","restricted_note"],
+              "writableFields":["jurisdiction","label","payload","restricted_note"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]
           }]
@@ -882,6 +884,10 @@ fn create_request<'a>(
         body: MutationBody::Create(Map::from_iter([
             ("jurisdiction".to_owned(), json!("zone-a")),
             ("label".to_owned(), json!(label)),
+            (
+                "payload".to_owned(),
+                json!({"__bregEncryptedV1": TAG_SHAPED_PLAINTEXT}),
+            ),
             ("restrictedNote".to_owned(), json!(RESTRICTED_CANARY)),
         ])),
         response_fields: BTreeSet::from([
@@ -1131,6 +1137,7 @@ fn expected_event_data(record_id: &str) -> Value {
         "packageRevision": PACKAGE_REVISION,
         "values": {
             "label": "first",
+            "payload": {"__bregEncryptedV1": TAG_SHAPED_PLAINTEXT},
             "restricted_note": RESTRICTED_CANARY,
         },
     })

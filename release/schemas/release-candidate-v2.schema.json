@@ -109,6 +109,7 @@
               "binary",
               "client-package",
               "installer",
+              "notice",
               "docs",
               "sbom",
               "security-evidence"

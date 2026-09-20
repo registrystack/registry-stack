@@ -655,6 +655,7 @@ fn metadata_only_source(
         change_class: registry_breg::package::CompiledRegistryChangeClass::AccessOrDisclosureChange,
         covers,
         recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        history: None,
         lock_timeout_ms: 10_000,
         statement_timeout_ms: 60_000,
         steps: Vec::new(),

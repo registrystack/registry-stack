@@ -68,10 +68,12 @@ impl TestDatabase {
         admin
             .batch_execute(&format!(
                 "REVOKE ALL ON DATABASE \"{}\" FROM PUBLIC;\n\
-                 GRANT CONNECT ON DATABASE \"{}\" TO \"{}\", \"{}\";",
+                 GRANT CONNECT, TEMPORARY ON DATABASE \"{}\" TO \"{}\";
+                 GRANT CONNECT ON DATABASE \"{}\" TO \"{}\";",
                 database.as_str(),
                 database.as_str(),
                 migration_role.as_str(),
+                database.as_str(),
                 runtime_role.as_str(),
             ))
             .await

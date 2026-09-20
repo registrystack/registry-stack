@@ -1622,6 +1622,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn target_snapshot_store_uses_internal_envelope_expansion_bound() {
+        let expanded = Map::from_iter([(
+            "secret".to_owned(),
+            json!({
+                crate::history_schema::ENVELOPE_MEMBER_TAG:
+                    "A".repeat(crate::change_request::MAX_CHANGE_REQUEST_SNAPSHOT_BYTES as usize)
+            }),
+        )]);
+        assert!(
+            canonical_object_size(&expanded).expect("expanded snapshot canonicalizes")
+                > crate::change_request::MAX_CHANGE_REQUEST_SNAPSHOT_BYTES as usize
+        );
+        assert!(
+            canonical_object_size(&expanded).expect("expanded snapshot canonicalizes")
+                <= MAX_REQUEST_SNAPSHOT_BYTES
+        );
+        validate_target_snapshot(&RequestTargetSnapshot {
+            entity_id: TARGET_ENTITY.to_owned(),
+            record_id: Uuid::new_v4(),
+            operation: Operation::Create,
+            expected_revision: None,
+            before: None,
+            after: expanded,
+        })
+        .expect("the target store admits bounded envelope expansion");
+
+        let oversized = Map::from_iter([(
+            "secret".to_owned(),
+            json!({
+                crate::history_schema::ENVELOPE_MEMBER_TAG:
+                    "A".repeat(MAX_REQUEST_SNAPSHOT_BYTES)
+            }),
+        )]);
+        assert_eq!(
+            validate_target_snapshot(&RequestTargetSnapshot {
+                entity_id: TARGET_ENTITY.to_owned(),
+                record_id: Uuid::new_v4(),
+                operation: Operation::Create,
+                expected_revision: None,
+                before: None,
+                after: oversized,
+            }),
+            Err(MutationError::InvalidRequest)
+        );
+    }
+
     fn request_revision(workflow: RequestWorkflow, actor_ref: &str, second: u8) -> RequestWorkflow {
         let proposal = workflow.current_proposal().expect("current proposal");
         let digest = proposal.effect_digest().clone();

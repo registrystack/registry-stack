@@ -488,6 +488,12 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Install Go for the AWS-LC-FIPS source build
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: 1.24.4
+          cache: false
+
       - name: Build native platform payload once
         shell: bash
         env:
@@ -596,6 +602,12 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Install Go for the AWS-LC-FIPS source build
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: 1.24.4
+          cache: false
+
       - name: Build native macOS release shard
         shell: bash
         run: |
@@ -626,6 +638,9 @@ jobs:
       CLIENT_VERSION: ${{ needs.validate.outputs.version }}
       CLIENT_TAG: ${{ needs.validate.outputs.tag }}
       RUSTUP_TOOLCHAIN: "1.95.0"
+      # Native client packages are self-contained. aws-lc-fips-sys otherwise
+      # defaults to a build-directory dylib on macOS.
+      AWS_LC_FIPS_SYS_STATIC: "1"
       NODE_GLIBC_BASELINE_IMAGE: node:22.12.0-bullseye-slim@sha256:52e4282a01d63eb4cfce7a395364d366cee488c278079110d3aa49dd21b2bf18
     permissions:
       contents: read
@@ -660,6 +675,12 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Install Go for the AWS-LC-FIPS source build
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: 1.24.4
+          cache: false
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -682,9 +703,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: registry-stack-release-clients-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
+          key: registry-stack-release-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
           restore-keys: |
-            registry-stack-release-clients-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-
+            registry-stack-release-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-
 
       - name: Build Python client wheels
         shell: bash
@@ -695,7 +716,6 @@ jobs:
           "${RUNNER_TEMP}/maturin/bin/pip" install --quiet \
             --require-hashes --only-binary=:all: \
             --requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"
-          export PATH="${RUNNER_TEMP}/maturin/bin:${PATH}"
           wheel_dir="${GITHUB_WORKSPACE}/candidate-client-package/clients"
           built_wheel_dir="${RUNNER_TEMP}/built-client-wheels"
           mkdir -p "${wheel_dir}" "${built_wheel_dir}"
@@ -739,13 +759,19 @@ jobs:
             if [[ "${registry_packages}" -eq 1 ]]; then
               wheel_tag="${{ matrix.registry_wheel_tag }}"
             fi
-            if [[ "${RUNNER_OS}" == Linux && "${registry_packages}" -eq 1 ]]; then
-              (cd "${client_dir}" && "${RUNNER_TEMP}/maturin/bin/maturin" build \
-                --release --locked --compatibility manylinux_2_17 --zig \
-                --out "${built_wheel_dir}")
-            elif [[ "${RUNNER_OS}" == Linux ]]; then
-              (cd "${client_dir}" && "${RUNNER_TEMP}/maturin/bin/maturin" build \
-                --release --locked --compatibility linux --out "${built_wheel_dir}")
+            if [[ "${RUNNER_OS}" == Linux ]]; then
+              compatibility=linux
+              if [[ "${registry_packages}" -eq 1 ]]; then
+                compatibility=manylinux_2_17
+              fi
+              release/scripts/build-linux-python-client \
+                --client "${client}" \
+                --target "${{ matrix.target }}" \
+                --compatibility "${compatibility}" \
+                --zig-python "${RUNNER_TEMP}/maturin/bin/python" \
+                --maturin "${RUNNER_TEMP}/maturin/bin/maturin" \
+                --out "${built_wheel_dir}" \
+                --profile release
             else
               (cd "${client_dir}" && "${RUNNER_TEMP}/maturin/bin/maturin" build \
                 --release --locked --out "${built_wheel_dir}")
@@ -1397,12 +1423,15 @@ jobs:
           cp "${macos}"/platform/* candidate/bundle-root/
           cp "${linux_arm}"/platform/* candidate/bundle-root/
           version="${{ needs.validate.outputs.version }}"
+          IFS=. read -r client_major client_minor client_patch <<<"${version}"
+          if (( client_major > 0 || client_minor >= 33 )); then
+            cp THIRD_PARTY_NOTICES candidate/bundle-root/
+          fi
           include_relay_clients=0
           if [[ ! "${version}" =~ ^0\.([0-9]|1[0-8])\. ]] &&
               [[ "${version}" != "0.19.0" ]]; then
             include_relay_clients=1
           fi
-          IFS=. read -r client_major client_minor client_patch <<<"${version}"
           include_unified_client=0
           if (( client_major > 0 || client_minor > 26 ||
                 (client_minor == 26 && client_patch >= 1) )); then
@@ -1732,6 +1761,7 @@ jobs:
                     *.sbom.spdx.json) kind=sbom ;;
                     *-security-evidence.tar.gz) kind=security-evidence ;;
                     *-install.sh) kind=installer ;;
+                    THIRD_PARTY_NOTICES) kind=notice ;;
                     discovery-client-node-*.tgz|evidence-client-node-*.tgz|relay-client-node-*.tgz|registrystack-discovery-client-*.tgz|registrystack-evidence-client-*.tgz|registrystack-relay-client-*.tgz|registrystack-client-*.tgz|registry_discovery_client-*.whl|registry_evidence_client-*.whl|registry_relay_client-*.whl|registry_stack_client-*.whl) kind=client-package ;;
                     *) kind=binary ;;
                   esac

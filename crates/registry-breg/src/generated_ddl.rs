@@ -237,6 +237,16 @@ pub(crate) fn generate_ddl_with_actions(
         ];
         for field in entity.fields.values() {
             columns.push(column_definition_for_entity(entity, field));
+            if let Some(blind) = field
+                .encryption
+                .as_ref()
+                .and_then(|encryption| encryption.blind_index.as_ref())
+            {
+                // The blind-index sibling is always nullable: it carries no
+                // value until the backfill populates it, and ciphertext CHECKs
+                // do not apply.
+                columns.push(format!("{} bytea", quote_identifier(&blind.physical_name)));
+            }
         }
         for field_id in spatial_projection_fields(entity) {
             columns.push(spatial_projection_column_definition(entity, &field_id));
@@ -290,6 +300,26 @@ pub(crate) fn generate_ddl_with_actions(
                         quote_identifier(constraint_name),
                         quote_identifier(&field.physical_name),
                         quote_identifier(&entities[target].physical_table),
+                    ),
+                });
+            }
+            if let Some(blind) = field
+                .encryption
+                .as_ref()
+                .and_then(|encryption| encryption.blind_index.as_ref())
+                .filter(|blind| blind.unique)
+            {
+                // Blind-index uniqueness is declared via lookup.unique, not via
+                // authored constraints. Postgres' default NULLS DISTINCT keeps
+                // rows without a derived index value outside the uniqueness.
+                statements.push(DdlStatement {
+                    id: format!("entity.{}.field.{}.lookup-unique", entity.id, field.id),
+                    kind: DdlStatementKind::Index,
+                    sql: format!(
+                        "CREATE UNIQUE INDEX {} ON registry_data.{} ({})",
+                        quote_identifier(&field_lookup_index_name(&entity.id, &field.id)),
+                        quote_identifier(&entity.physical_table),
+                        quote_identifier(&blind.physical_name),
                     ),
                 });
             }
@@ -782,6 +812,30 @@ fn added_column_defers_not_null(
     field.required && !nullable_when_tombstoned(entity, field)
 }
 
+/// The blind-index sibling column a successor adds beside an encrypted
+/// envelope. It arrives empty and stays nullable; the reviewed backfill
+/// populates it.
+#[cfg(feature = "runtime")]
+pub(crate) fn add_blind_index_column_statement(
+    entity: &CompiledEntity,
+    field: &crate::model::CompiledField,
+) -> DdlStatement {
+    let blind = field
+        .encryption
+        .as_ref()
+        .and_then(|encryption| encryption.blind_index.as_ref())
+        .expect("statement is emitted only for a field with a declared lookup");
+    DdlStatement {
+        id: format!("entity.{}.field.{}.lookup-column", entity.id, field.id),
+        kind: DdlStatementKind::Column,
+        sql: format!(
+            "ALTER TABLE registry_data.{} ADD COLUMN {} bytea",
+            quote_identifier(&entity.physical_table),
+            quote_identifier(&blind.physical_name)
+        ),
+    }
+}
+
 fn column_definition_for_entity(
     entity: &CompiledEntity,
     field: &crate::model::CompiledField,
@@ -823,7 +877,19 @@ fn column_definition(
     inline_requiredness: bool,
 ) -> String {
     let identifier = quote_identifier(&field.physical_name);
-    let mut column = format!("{} {}", identifier, sql_type(&field.field_type));
+    // An encrypted field persists an opaque envelope: the plaintext SQL type
+    // and its type-specific CHECKs cannot apply to ciphertext. Requiredness
+    // still applies exactly as it does to plaintext columns.
+    let encrypted = field.encryption.is_some();
+    let mut column = format!(
+        "{} {}",
+        identifier,
+        if encrypted {
+            "bytea".to_owned()
+        } else {
+            sql_type(&field.field_type)
+        }
+    );
     let required = field.required && inline_requiredness;
     if required && !nullable_when_tombstoned {
         column.push_str(" NOT NULL");
@@ -833,10 +899,12 @@ fn column_definition(
         column.push_str(&identifier);
         column.push_str(" IS NOT NULL)");
     }
-    if let Some(check) = field_check(&identifier, &field.field_type) {
-        column.push_str(" CHECK (");
-        column.push_str(&check);
-        column.push(')');
+    if !encrypted {
+        if let Some(check) = field_check(&identifier, &field.field_type) {
+            column.push_str(" CHECK (");
+            column.push_str(&check);
+            column.push(')');
+        }
     }
     column
 }
@@ -3748,6 +3816,12 @@ pub(crate) fn policy_sql(table: &str, policy: &DdlPolicy, role: Option<&str>) ->
 pub fn field_pattern_constraint_name(entity_id: &str, field_id: &str) -> String {
     let digest = Sha256::digest(format!("breg/field-pattern/v1/{entity_id}/{field_id}").as_bytes());
     format!("breg_pattern_{}", hex_prefix(&digest, 20))
+}
+
+/// Stable managed identity for the unique blind index of an encrypted field.
+pub fn field_lookup_index_name(entity_id: &str, field_id: &str) -> String {
+    let digest = Sha256::digest(format!("breg/field-lookup/v1/{entity_id}/{field_id}").as_bytes());
+    format!("breg_lookup_{}", hex_prefix(&digest, 20))
 }
 
 fn derived_reference_name<'a>(

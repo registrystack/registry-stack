@@ -58,6 +58,7 @@ BREG_RUNTIME_IMAGE_NAMES = DISCOVERY_RUNTIME_IMAGE_NAMES | {
 MINT_RETIREMENT_VERSION = (0, 31, 0)
 # Every v0.30.x release retains Mint. v0.31.0 and later omit it.
 CASEWORK_RUNTIME_IMAGE_NAMES = (BREG_RUNTIME_IMAGE_NAMES - {"mint"}) | {"casework"}
+THIRD_PARTY_NOTICES_MINIMUM_VERSION = (0, 33, 0)
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
     "repository",
@@ -76,6 +77,7 @@ PAYLOAD_KINDS = {
     "binary",
     "client-package",
     "installer",
+    "notice",
     "sbom",
     "security-evidence",
 }
@@ -397,6 +399,8 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             inventory[f"caseworkctl-{tag}-{platform}"] = "binary"
         inventory[f"casework-{tag}-install.sh"] = "installer"
         inventory["casework-install.sh"] = "installer"
+    if version_tuple >= THIRD_PARTY_NOTICES_MINIMUM_VERSION:
+        inventory["THIRD_PARTY_NOTICES"] = "notice"
     return inventory
 
 

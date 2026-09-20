@@ -24,6 +24,7 @@ use crate::audit::{
 };
 use crate::contract::{FieldTypeSource, Operation, ProvenanceFieldSource};
 use crate::cursor::CursorRepresentation;
+use crate::field_encryption::{FieldEncryptionService, SharedFieldEncryptionService};
 use crate::history_context::ChangeContext;
 use crate::history_migration::HISTORY_MIGRATION_SYSTEM_ORIGIN;
 use crate::history_schema::{
@@ -38,6 +39,7 @@ use crate::record_profile::{self, RecordRepresentation};
 use crate::stored_bytes;
 
 use super::history_read::HISTORY_STATEMENT_TIMEOUT;
+use super::read::{load_retained_plaintext_fields, open_history_row_members};
 use super::{
     begin_record_transaction, snapshot_read_error, validate_field_value, ClaimContext,
     ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
@@ -55,6 +57,7 @@ pub struct PostgresRevisionReadService {
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
     audit_profile: AuditProfile,
+    field_encryption: Option<SharedFieldEncryptionService>,
     fault: RevisionReadFaultControl,
 }
 
@@ -75,8 +78,18 @@ impl PostgresRevisionReadService {
             lock_key,
             lock_timeout,
             audit_profile,
+            field_encryption: None,
             fault: RevisionReadFaultControl::Disabled,
         }
+    }
+
+    /// Bind the field-encryption key state encrypted members open under at
+    /// the response edge. Absent key state is only acceptable for entities
+    /// without encrypted fields.
+    #[must_use]
+    pub fn with_field_encryption(mut self, service: Arc<FieldEncryptionService>) -> Self {
+        self.field_encryption = Some(service);
+        self
     }
 
     #[cfg(feature = "postgres-test")]
@@ -228,6 +241,8 @@ impl PostgresRevisionReadService {
         if record_id.to_string() != request.record_id {
             return Err(ReadServiceError::Unavailable);
         }
+        let retained_plaintext_fields =
+            load_retained_plaintext_fields(transaction.transaction(), &plan.entity.id).await?;
         let (sql, parameters) = revision_sql(
             request,
             &plan.entity,
@@ -252,6 +267,8 @@ impl PostgresRevisionReadService {
             &request.context,
             &request.selected_fields,
             plan.provenance_fields.as_slice(),
+            self.field_encryption.as_deref(),
+            &retained_plaintext_fields,
             &mut descriptors,
             &mut context_visibility,
         )
@@ -691,6 +708,8 @@ async fn revision_rows_from_rows(
     context: &AuthorizedRequestContext,
     selected_fields: &BTreeSet<String>,
     provenance_fields: &[ProvenanceFieldSource],
+    field_encryption: Option<&FieldEncryptionService>,
+    retained_plaintext_fields: &BTreeSet<String>,
     descriptors: &mut BTreeMap<String, HistorySchemaDescriptor>,
     context_visibility: &mut BTreeMap<i64, bool>,
 ) -> Result<Vec<RevisionEnvelope>, ReadServiceError> {
@@ -703,6 +722,8 @@ async fn revision_rows_from_rows(
             context,
             selected_fields,
             provenance_fields,
+            field_encryption,
+            retained_plaintext_fields,
             descriptors,
             context_visibility,
         )
@@ -722,6 +743,8 @@ async fn revision_from_row(
     context: &AuthorizedRequestContext,
     selected_fields: &BTreeSet<String>,
     provenance_fields: &[ProvenanceFieldSource],
+    field_encryption: Option<&FieldEncryptionService>,
+    retained_plaintext_fields: &BTreeSet<String>,
     descriptors: &mut BTreeMap<String, HistorySchemaDescriptor>,
     context_visibility: &mut BTreeMap<i64, bool>,
 ) -> Result<Option<RevisionEnvelope>, ReadServiceError> {
@@ -784,7 +807,12 @@ async fn revision_from_row(
     );
     let authorizing_fields = row_authorization_fields.iter().cloned().collect();
     let compatibility = descriptor
-        .compatibility_for_fields(entity, &required_fields, &authorizing_fields)
+        .compatibility_for_fields_allowing_retained_plaintext(
+            entity,
+            &required_fields,
+            &authorizing_fields,
+            retained_plaintext_fields,
+        )
         .map_err(history_schema_error)?;
     let decoded = descriptor
         .decode_snapshot_for_fields(&compatibility, &snapshot, Some(&record_id.to_string()))
@@ -806,12 +834,23 @@ async fn revision_from_row(
             .ok_or(ReadServiceError::Unavailable)?;
         data.insert(field.active_api_name.clone(), value.clone());
     }
+    // Open at the response edge while this exact revision's hash-bound
+    // descriptor compatibility is still available. User JSON shape never
+    // selects plaintext versus envelope handling.
+    open_history_row_members(
+        entity,
+        &record_id.to_string(),
+        &mut data,
+        field_encryption,
+        &compatibility,
+    )?;
     let change_context = revision_change_context(
         transaction,
         row,
         entity,
         context,
         provenance_fields,
+        retained_plaintext_fields,
         descriptors,
         context_visibility,
     )
@@ -920,12 +959,14 @@ fn row_authorized(
     Ok(true)
 }
 
+#[allow(clippy::too_many_arguments)] // The row, its schema descriptors, and the flip boundary travel together.
 async fn revision_change_context(
     transaction: &tokio_postgres::Transaction<'_>,
     row: &tokio_postgres::Row,
     entity: &CompiledEntity,
     context: &AuthorizedRequestContext,
     provenance_fields: &[ProvenanceFieldSource],
+    retained_plaintext_fields: &BTreeSet<String>,
     descriptors: &mut BTreeMap<String, HistorySchemaDescriptor>,
     context_visibility: &mut BTreeMap<i64, bool>,
 ) -> Result<Option<Map<String, Value>>, ReadServiceError> {
@@ -953,9 +994,15 @@ async fn revision_change_context(
     let visible = if let Some(visible) = context_visibility.get(&commit_position) {
         *visible
     } else {
-        let visible =
-            commit_context_visible(transaction, entity, context, commit_position, descriptors)
-                .await?;
+        let visible = commit_context_visible(
+            transaction,
+            entity,
+            context,
+            commit_position,
+            retained_plaintext_fields,
+            descriptors,
+        )
+        .await?;
         context_visibility.insert(commit_position, visible);
         visible
     };
@@ -970,6 +1017,7 @@ async fn commit_context_visible(
     entity: &CompiledEntity,
     context: &AuthorizedRequestContext,
     commit_position: i64,
+    retained_plaintext_fields: &BTreeSet<String>,
     descriptors: &mut BTreeMap<String, HistorySchemaDescriptor>,
 ) -> Result<bool, ReadServiceError> {
     let rows = transaction
@@ -1024,10 +1072,11 @@ async fn commit_context_visible(
             std::iter::empty::<&String>(),
         );
         let authorizing_fields = row_authorization_fields.iter().cloned().collect();
-        let compatibility = match descriptor.compatibility_for_fields(
+        let compatibility = match descriptor.compatibility_for_fields_allowing_retained_plaintext(
             entity,
             &required_fields,
             &authorizing_fields,
+            retained_plaintext_fields,
         ) {
             Ok(compatibility) => compatibility,
             Err(_) => return Ok(false),

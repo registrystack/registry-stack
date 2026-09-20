@@ -488,6 +488,7 @@ export default defineConfig({
                 { label: 'Modeling patterns', slug: 'explanation/registry-modeling-patterns' },
                 { label: 'Governed actions', slug: 'explanation/governed-registry-actions' },
                 { label: 'Native field patterns', slug: 'explanation/native-field-patterns' },
+                { label: 'Field encryption', slug: 'explanation/breg-field-encryption' },
                 { label: 'Membership read boundaries', slug: 'explanation/membership-read-boundaries' },
                 { label: 'Deriving from a model', slug: 'explanation/deriving-a-registry-from-a-model' },
               ],

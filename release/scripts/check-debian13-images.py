@@ -16,6 +16,8 @@ RUST_BUILDER = (
     "f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3"
 )
 RUST_BUILDER_SNAPSHOT = "20250810T000000Z"
+RUST_BUILDER_CMAKE = "cmake=3.31.6-2"
+RUST_BUILDER_GO = "golang-go=2:1.24~2"
 RUST_BUILDER_LIBCLANG = "libclang-19-dev=1:19.1.7-3+b1"
 RUST_BUILDER_PROTOC = "protobuf-compiler=3.21.12-11"
 RUST_BUILDER_PIP = "python3-pip=25.1.1+dfsg-1"
@@ -117,6 +119,7 @@ ARG SOURCE_DATE_EPOCH
 {RUNTIME_LIBC6_ADDS[1]}
 RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \\
     --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \\
+    --mount=type=bind,source=THIRD_PARTY_NOTICES,target=/workspace/THIRD_PARTY_NOTICES,readonly \\
     {RUNTIME_LIBC6_MOUNT} \\
     {RUNTIME_LIBC6_COMMAND} \\
     && mkdir -p \\
@@ -130,6 +133,7 @@ RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \\
         /workspace/runtime-root/etc/relay \\
     && install -m 0755 /workspace/image-bin/relay /workspace/runtime-root/usr/local/bin/relay \\
     && install -m 0644 /workspace/LICENSE /workspace/runtime-root/licenses/relay/LICENSE \\
+    && install -m 0644 /workspace/THIRD_PARTY_NOTICES /workspace/runtime-root/licenses/relay/THIRD_PARTY_NOTICES \\
     && chown -R 65532:65532 /workspace/runtime-root/var/lib/relay \\
     && chmod 0700 /workspace/runtime-root/var/lib/relay/audit \\
     && find /workspace/runtime-root -exec touch -h --date="@${{SOURCE_DATE_EPOCH}}" {{}} +
@@ -413,6 +417,20 @@ def check_repository(root: Path = ROOT) -> list[str]:
             f"snapshot.debian.org/archive/debian/{RUST_BUILDER_SNAPSHOT}",
             relative,
             "dated Debian package snapshot",
+            failures,
+        )
+        require(
+            text,
+            RUST_BUILDER_CMAKE,
+            relative,
+            "exact CMake build package",
+            failures,
+        )
+        require(
+            text,
+            RUST_BUILDER_GO,
+            relative,
+            "exact Go build package",
             failures,
         )
         require(

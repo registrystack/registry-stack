@@ -2377,6 +2377,18 @@ class RegistryReleaseTest(TestCase):
                 f"/workspace/runtime-root/usr/local/bin/{name}",
                 release_dockerfiles[name],
             )
+        for name in ("evidence", "breg", "casework", "relay"):
+            self.assertIn(
+                "--mount=type=bind,source=THIRD_PARTY_NOTICES,"
+                "target=/workspace/THIRD_PARTY_NOTICES,readonly",
+                release_dockerfiles[name],
+            )
+            self.assertIn(
+                "install -m 0644 /workspace/THIRD_PARTY_NOTICES "
+                f"/workspace/runtime-root/licenses/{name}/THIRD_PARTY_NOTICES",
+                release_dockerfiles[name],
+            )
+        self.assertNotIn("THIRD_PARTY_NOTICES", release_dockerfiles["discovery"])
         self.assertIn("discovery|evidence|breg|casework|relay)", image_recipe)
         self.assertNotIn("registry-relay)", image_recipe)
 
@@ -2399,6 +2411,8 @@ class RegistryReleaseTest(TestCase):
             [
                 "RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \\",
                 "--mount=type=bind,source=LICENSE,target=/workspace/LICENSE \\",
+                "--mount=type=bind,source=THIRD_PARTY_NOTICES,"
+                + "target=/workspace/THIRD_PARTY_NOTICES,readonly \\",
                 "--mount=type=bind,source=release/scripts/install-runtime-libc6.sh,"
                 + "target=/workspace/install-runtime-libc6.sh,readonly \\",
             ],
@@ -2560,6 +2574,8 @@ class RegistryReleaseTest(TestCase):
         )
         self.assertIn("release/docker/Dockerfile.builder", recipe)
         self.assertIn("20250810T000000Z", builder)
+        self.assertIn("cmake=3.31.6-2", builder)
+        self.assertIn("golang-go=2:1.24~2", builder)
         self.assertIn("libclang-19-dev=1:19.1.7-3+b1", builder)
         self.assertIn("protobuf-compiler=3.21.12-11", builder)
         self.assertIn("snapshot.debian.org/archive/debian/", builder)

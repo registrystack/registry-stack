@@ -1655,8 +1655,23 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "encrypted": {
+          "default": false,
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
+        },
+        "lookup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldLookupSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "required": {
           "default": false,
@@ -1703,8 +1718,23 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "encrypted": {
+          "default": false,
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
+        },
+        "lookup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldLookupSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "maximum": {
           "default": null,
@@ -2493,6 +2523,25 @@
       "required": [
         "profile"
       ],
+      "type": "object"
+    },
+    "FieldLookupSource": {
+      "additionalProperties": false,
+      "description": "The authored blind-index declaration for an encrypted field. Normalization\ncomposes in declared order over the canonical string form of the value;\n`unique` requests a unique index over the derived blind-index column.",
+      "properties": {
+        "normalization": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NormalizationStep"
+          },
+          "maxItems": 8,
+          "type": "array"
+        },
+        "unique": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "FieldSource": {
@@ -3466,6 +3515,25 @@
       ],
       "type": "string"
     },
+    "NormalizationStep": {
+      "description": "A normalization step applied to the canonical string form of an encrypted\nvalue before its blind index is derived. The vocabulary is closed.",
+      "oneOf": [
+        {
+          "enum": [
+            "trim",
+            "uppercase",
+            "lowercase",
+            "collapse-whitespace"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "remove-separators",
+          "description": "Strips spaces, hyphens, slashes, and dots from the canonical form.",
+          "type": "string"
+        }
+      ]
+    },
     "Operation": {
       "enum": [
         "create",
@@ -3918,8 +3986,23 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "encrypted": {
+          "default": false,
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
+        },
+        "lookup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldLookupSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "maxLength": {
           "format": "uint32",
@@ -3985,8 +4068,23 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "encrypted": {
+          "default": false,
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
+        },
+        "lookup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldLookupSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "maxBytes": {
           "format": "uint32",
@@ -4076,8 +4174,23 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "encrypted": {
+          "default": false,
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
+        },
+        "lookup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldLookupSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "maxLength": {
           "format": "uint32",

@@ -2472,7 +2472,9 @@ impl MutationCoordinator {
             correlation: input.correlation.clone(),
         };
         let mut current = match target.expected_revision {
-            None => apply_create_row(transaction, &request, &id).await,
+            None => {
+                apply_create_row(transaction, &request, &id, self.field_encryption.as_deref()).await
+            }
             Some(revision) => {
                 // Even no-op effects write only the approved field ceiling.
                 let changed = approved_fields
@@ -2488,7 +2490,14 @@ impl MutationCoordinator {
                         ))
                     })
                     .collect::<Result<Map<_, _>, MutationError>>()?;
-                apply_patch_row(transaction, &request, revision, changed).await
+                apply_patch_row(
+                    transaction,
+                    &request,
+                    revision,
+                    changed,
+                    self.field_encryption.as_deref(),
+                )
+                .await
             }
         }
         .map_err(|error| match error {
@@ -2531,7 +2540,7 @@ impl MutationCoordinator {
         let event_source = self.event_source();
         insert_configured_events(
             transaction,
-            &entity.hooks,
+            entity,
             &plan.event_deliveries,
             self.event_destinations.as_deref(),
             OutboxMutation {

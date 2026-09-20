@@ -13,7 +13,7 @@ use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
-use tokio_postgres::types::{ToSql, Type};
+use tokio_postgres::types::Type;
 use uuid::Uuid;
 
 use crate::api::{
@@ -32,13 +32,15 @@ use crate::cursor::{
     CursorFilterExpr, CursorFilterOperator, CursorLogicalOp, CursorOrderClause,
     CursorProjectionField, CursorQueryScope, CursorRepresentation, CursorSpatialQuery,
 };
+use crate::field_encryption::{open_member_value, FieldEncryptionService};
+use crate::history_schema::HistorySchemaCompatibility;
 use crate::model::{
     request_query_field_api_name, request_query_field_type, CompiledEntity, CompiledQueryKind,
     CompiledQueryOperation, CompiledQuerySortDirection, CompiledReadPath, CompiledRegistry,
     REQUEST_BREG_STATE_QUERY_FIELD, REQUEST_EFFECT_DIGEST_QUERY_FIELD,
     REQUEST_PROPOSAL_VERSION_QUERY_FIELD,
 };
-use crate::mutation::strong_record_etag_for_representation;
+use crate::mutation::{strong_record_etag_for_representation, BoundValue};
 use crate::query_binding::{CursorBindingQuery, CursorBindingReferences};
 use crate::record_profile::{self, RecordRepresentation};
 
@@ -63,6 +65,7 @@ pub struct PostgresRecordReadService {
     fault: ReadFaultControl,
     attachment_storage: crate::attachment_storage::AttachmentStorage,
     attachment_verification: crate::attachment_verification::AttachmentVerification,
+    field_encryption: Option<Arc<FieldEncryptionService>>,
     #[cfg(feature = "postgres-test")]
     metadata_pause: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     #[cfg(feature = "postgres-test")]
@@ -92,11 +95,21 @@ impl PostgresRecordReadService {
             attachment_storage: crate::attachment_storage::AttachmentStorage::Database,
             attachment_verification:
                 crate::attachment_verification::AttachmentVerification::Disabled,
+            field_encryption: None,
             #[cfg(feature = "postgres-test")]
             metadata_pause: None,
             #[cfg(feature = "postgres-test")]
             query_plan: None,
         }
+    }
+
+    /// Bind the field-encryption key state encrypted members open under at the
+    /// response edge. Absent key state is only acceptable for entities without
+    /// encrypted fields.
+    #[must_use]
+    pub fn with_field_encryption(mut self, service: Arc<FieldEncryptionService>) -> Self {
+        self.field_encryption = Some(service);
+        self
     }
 
     #[must_use]
@@ -258,30 +271,35 @@ impl PostgresRecordReadService {
         let attachment_verification = materialized.rows.first().and_then(|record| {
             crate::mutation::attachment_verification_etag_fields(&plan.entity, &record.data)
         });
-        let mut held =
-            match ReadResult::from_materialized(&self.registry, &request, &plan, materialized)
-                .and_then(|result| result.enforce_spatial_response_budget(&request))
-            {
-                Ok(held) => held,
-                Err(error) => {
-                    let _ = self
-                        .record_read_terminal_audit(
-                            &mut client,
-                            &claims,
+        let mut held = match ReadResult::from_materialized(
+            &self.registry,
+            &request,
+            &plan,
+            materialized,
+            self.field_encryption.as_deref(),
+        )
+        .and_then(|result| result.enforce_spatial_response_budget(&request))
+        {
+            Ok(held) => held,
+            Err(error) => {
+                let _ = self
+                    .record_read_terminal_audit(
+                        &mut client,
+                        &claims,
+                        &request,
+                        self.terminal(
                             &request,
-                            self.terminal(
-                                &request,
-                                &claims,
-                                &plan,
-                                TerminalAuditOutcome::Refused,
-                                0,
-                                None,
-                            )?,
-                        )
-                        .await;
-                    return Err(error);
-                }
-            };
+                            &claims,
+                            &plan,
+                            TerminalAuditOutcome::Refused,
+                            0,
+                            None,
+                        )?,
+                    )
+                    .await;
+                return Err(error);
+            }
+        };
         if plan.operation == Operation::Get
             && request.representation != CursorRepresentation::GeoJson
             && held.response.is_some()
@@ -480,6 +498,7 @@ impl PostgresRecordReadService {
             request,
             claims,
             &plan.entity,
+            self.field_encryption.as_deref(),
             record_uuid,
             i64::from(proposal_version),
             slot_id,
@@ -546,7 +565,7 @@ impl PostgresRecordReadService {
         &self,
         transaction: &tokio_postgres::Transaction<'_>,
         sql: &str,
-        parameters: &[(&(dyn ToSql + Sync), Type)],
+        parameters: &[(&(dyn tokio_postgres::types::ToSql + Sync), Type)],
     ) -> Result<(), ReadServiceError> {
         let Some(probe) = &self.query_plan else {
             return Ok(());
@@ -710,7 +729,7 @@ impl PostgresRecordReadService {
                         .get(..count_parameters)
                         .ok_or(ReadServiceError::Unavailable)?
                         .iter()
-                        .map(|value| (value as &(dyn ToSql + Sync), Type::TEXT))
+                        .map(|value| (value.as_parameter(), value.postgres_type()))
                         .collect::<Vec<_>>();
                     total_count = Some(
                         transaction
@@ -723,7 +742,7 @@ impl PostgresRecordReadService {
                 }
                 let mut params = values
                     .iter()
-                    .map(|value| (value as &(dyn ToSql + Sync), Type::TEXT))
+                    .map(|value| (value.as_parameter(), value.postgres_type()))
                     .collect::<Vec<_>>();
                 params.push((&limit, Type::INT8));
                 #[cfg(feature = "postgres-test")]
@@ -740,10 +759,16 @@ impl PostgresRecordReadService {
                     RecordReadKind::Lookup { selector } => &selector.values,
                     _ => return Err(ReadServiceError::Unavailable),
                 };
-                let (sql, values) = lookup_sql(&plan.entity, &relations, values, &projection)?;
+                let (sql, values) = lookup_sql(
+                    &plan.entity,
+                    &relations,
+                    values,
+                    &projection,
+                    self.field_encryption.as_deref(),
+                )?;
                 let mut params = values
                     .iter()
-                    .map(|value| (value as &(dyn ToSql + Sync), Type::TEXT))
+                    .map(|value| (value.as_parameter(), value.postgres_type()))
                     .collect::<Vec<_>>();
                 params.push((&limit, Type::INT8));
                 #[cfg(feature = "postgres-test")]
@@ -801,6 +826,7 @@ impl PostgresRecordReadService {
             request,
             claims,
             &plan.entity,
+            self.field_encryption.as_deref(),
             &mut rows,
         )
         .await?;
@@ -1076,8 +1102,10 @@ impl ReadResult {
         registry: &CompiledRegistry,
         request: &RecordReadRequest,
         plan: &ReadPlan,
-        materialized: MaterializedRead,
+        mut materialized: MaterializedRead,
+        field_encryption: Option<&FieldEncryptionService>,
     ) -> Result<Self, ReadServiceError> {
+        decrypt_materialized_rows(&plan.entity, &mut materialized.rows, field_encryption)?;
         match (plan.operation, request.representation) {
             (Operation::Get, CursorRepresentation::Json) => {
                 let Some(record) = materialized.rows.into_iter().next() else {
@@ -1279,6 +1307,162 @@ struct MaterializedRead {
     rows: Vec<RecordEnvelope>,
     next_cursor: Option<String>,
     total_count: Option<i64>,
+}
+
+/// Open every encrypted member of the materialized rows at the response edge.
+///
+/// Rows keep tagged members until here, so captured rows and journal
+/// comparison never depend on decryption; the HTTP response decrypts, and any
+/// open failure fails the whole response closed with the field-encryption
+/// problem, value-free. Entities without encrypted fields are untouched.
+fn decrypt_materialized_rows(
+    entity: &CompiledEntity,
+    rows: &mut [RecordEnvelope],
+    field_encryption: Option<&FieldEncryptionService>,
+) -> Result<(), ReadServiceError> {
+    for record in rows {
+        open_row_members(entity, &record.id, &mut record.data, field_encryption)?;
+    }
+    Ok(())
+}
+
+/// Open every encrypted member of one decoded row map at a response edge.
+///
+/// Row members key by their active API name, like the materialized read
+/// response rows and the history and revision rows below. Members stay tagged
+/// until the enumerated caller-authorized response edges call this, and any
+/// open failure fails the whole read closed with the field-encryption
+/// problem, value-free. An entity without encrypted fields returns without
+/// touching key state.
+pub(super) fn open_row_members(
+    entity: &CompiledEntity,
+    record_id: &str,
+    data: &mut Map<String, Value>,
+    field_encryption: Option<&FieldEncryptionService>,
+) -> Result<(), ReadServiceError> {
+    open_members(entity, record_id, data, field_encryption, true)
+}
+
+/// Open every encrypted member of one retained-snapshot member map.
+///
+/// Retained snapshot members key by field id, like the request target and
+/// guard snapshots the change-request surfaces authorize against. The opening
+/// rules match [`open_row_members`].
+pub(super) fn open_snapshot_members(
+    entity: &CompiledEntity,
+    record_id: &str,
+    data: &mut Map<String, Value>,
+    field_encryption: Option<&FieldEncryptionService>,
+) -> Result<(), ReadServiceError> {
+    open_members(entity, record_id, data, field_encryption, false)
+}
+
+/// Load the fields of one entity whose field-encryption flip declared
+/// retain-plaintext-history. A database bootstrapped before the flips table
+/// existed has no rows to read, which reads as the empty set; a Registry that
+/// never flipped a field reads the same way.
+pub(super) async fn load_retained_plaintext_fields(
+    transaction: &tokio_postgres::Transaction<'_>,
+    entity_id: &str,
+) -> Result<BTreeSet<String>, ReadServiceError> {
+    let rows = transaction
+        .query(
+            "SELECT field_id
+               FROM registry_internal.registry_field_encryption_flips
+              WHERE entity_id = $1
+                AND history_choice = 'retain-plaintext-history'",
+            &[&entity_id],
+        )
+        .await;
+    let rows = match rows {
+        Ok(rows) => rows,
+        Err(error) if error.code() == Some(&tokio_postgres::error::SqlState::UNDEFINED_TABLE) => {
+            return Ok(BTreeSet::new());
+        }
+        Err(_) => return Err(ReadServiceError::Unavailable),
+    };
+    rows.into_iter()
+        .map(|row| {
+            row.try_get::<_, String>(0)
+                .map_err(|_| ReadServiceError::Unavailable)
+        })
+        .collect()
+}
+
+/// Open every encrypted member of one decoded history or revision row map,
+/// honoring the fields whose flip declared retain-plaintext-history.
+///
+/// History and revision rows can span a field's flip boundary: rows at or
+/// after the boundary carry the tagged envelope member, and rows before it
+/// carry the plaintext the revision recorded under the declared choice.
+/// Snapshot decode has already validated each member against its own
+/// revision's descriptor. That descriptor compatibility says whether the
+/// member is retained plaintext or an envelope; value shape never decides.
+/// Recorded envelope members keep the strict authenticated-open rule.
+pub(super) fn open_history_row_members(
+    entity: &CompiledEntity,
+    record_id: &str,
+    data: &mut Map<String, Value>,
+    field_encryption: Option<&FieldEncryptionService>,
+    compatibility: &HistorySchemaCompatibility,
+) -> Result<(), ReadServiceError> {
+    let encrypted_fields = entity
+        .stored_fields
+        .iter()
+        .filter(|field| field.logical.encryption.is_some())
+        .collect::<Vec<_>>();
+    if encrypted_fields.is_empty() {
+        return Ok(());
+    }
+    for field in &encrypted_fields {
+        let key = field.logical.api_name.as_str();
+        let Some(member) = data.get_mut(key) else {
+            continue;
+        };
+        let recorded = compatibility
+            .fields
+            .get(field.logical.id.as_str())
+            .ok_or(ReadServiceError::Unavailable)?;
+        if recorded.retained_plaintext {
+            // Representation comes from the hash-bound descriptor, never the
+            // user-controlled JSON shape. A legitimate plaintext object may
+            // have the same shape as the envelope tag.
+            continue;
+        }
+        let service = field_encryption.ok_or(ReadServiceError::FieldEncryptionUnavailable)?;
+        let opened = open_member_value(
+            service,
+            &entity.id,
+            &field.logical.id,
+            record_id,
+            &field.logical.field_type,
+            member,
+        )
+        .map_err(|_| ReadServiceError::FieldEncryptionUnavailable)?;
+        *member = opened.unwrap_or(Value::Null);
+    }
+    Ok(())
+}
+
+fn open_members(
+    entity: &CompiledEntity,
+    record_id: &str,
+    data: &mut Map<String, Value>,
+    field_encryption: Option<&FieldEncryptionService>,
+    keyed_by_api_name: bool,
+) -> Result<(), ReadServiceError> {
+    let has_encrypted_fields = entity
+        .stored_fields
+        .iter()
+        .any(|field| field.logical.encryption.is_some());
+    if !has_encrypted_fields {
+        return Ok(());
+    }
+    // Dispatch admission refuses these entities without key state, so members
+    // reaching here without it means that boundary was bypassed.
+    let service = field_encryption.ok_or(ReadServiceError::FieldEncryptionUnavailable)?;
+    crate::field_encryption::open_member_map(entity, record_id, data, service, keyed_by_api_name)
+        .map_err(|_| ReadServiceError::FieldEncryptionUnavailable)
 }
 
 #[derive(Serialize)]
@@ -2360,6 +2544,7 @@ impl ReadRelations {
                 return Ok(FieldExpression {
                     sql: sql.to_owned(),
                     field_type,
+                    encrypted: false,
                 });
             }
         }
@@ -2367,6 +2552,7 @@ impl ReadRelations {
             return Ok(FieldExpression {
                 sql: self.id_expression.clone(),
                 field_type: entity.canonical_id.field_type.clone(),
+                encrypted: false,
             });
         }
         if let Some(field) = entity
@@ -2374,6 +2560,22 @@ impl ReadRelations {
             .iter()
             .find(|field| field.logical.id == field_id)
         {
+            if let Some(_encryption) = &field.logical.encryption {
+                // The registry_source view excludes encrypted columns, so the
+                // envelope resolves through the base-table alias instead.
+                if !valid_physical_identifier(&field.physical_name) {
+                    return Err(ReadServiceError::Unavailable);
+                }
+                return Ok(FieldExpression {
+                    sql: format!(
+                        "{}.{}",
+                        self.base_alias,
+                        quote_identifier(&field.physical_name)
+                    ),
+                    field_type: field.logical.field_type.clone(),
+                    encrypted: true,
+                });
+            }
             if !valid_physical_identifier(&field.logical.sql_name) {
                 return Err(ReadServiceError::Unavailable);
             }
@@ -2384,6 +2586,7 @@ impl ReadRelations {
                     quote_identifier(&field.logical.sql_name)
                 ),
                 field_type: field.logical.field_type.clone(),
+                encrypted: false,
             });
         }
         if let Some(field) = entity.derived_fields.get(field_id) {
@@ -2394,6 +2597,7 @@ impl ReadRelations {
             return Ok(FieldExpression {
                 sql: format!("{alias}.{}", quote_identifier(&field.logical.sql_name)),
                 field_type: field.logical.field_type.clone(),
+                encrypted: false,
             });
         }
         Err(ReadServiceError::Unavailable)
@@ -2422,6 +2626,8 @@ fn source_view_field_expression(
 struct FieldExpression {
     sql: String,
     field_type: FieldTypeSource,
+    /// The expression resolves the raw envelope column of an encrypted field.
+    encrypted: bool,
 }
 
 fn compiled_field_type<'a>(
@@ -2619,11 +2825,11 @@ fn projection(
     ];
     for field in selected_fields {
         let expression = relations.field_expression(entity, field)?;
-        expressions.push(json_expression(&expression.sql, &expression.field_type));
+        expressions.push(json_expression(&expression));
     }
     if let Some(order) = query.and_then(|query| query.order.as_ref()) {
         let expression = relations.field_expression(entity, &order.field_id)?;
-        expressions.push(json_expression(&expression.sql, &expression.field_type));
+        expressions.push(json_expression(&expression));
     }
     Ok(expressions.join(", "))
 }
@@ -2638,7 +2844,7 @@ struct ListStatements {
     page_sql: String,
     count_sql: String,
     count_parameters: usize,
-    values: Vec<String>,
+    values: Vec<BoundValue>,
 }
 
 fn list_sql(
@@ -2815,7 +3021,8 @@ fn lookup_sql(
     relations: &ReadRelations,
     selector_values: &[LookupSelectorValue],
     projection: &str,
-) -> Result<(String, Vec<String>), ReadServiceError> {
+    field_encryption: Option<&FieldEncryptionService>,
+) -> Result<(String, Vec<BoundValue>), ReadServiceError> {
     if selector_values.is_empty() {
         return Err(ReadServiceError::Unavailable);
     }
@@ -2828,6 +3035,35 @@ fn lookup_sql(
         }
         validate_field_value(&selector.value, &field.field_type)
             .map_err(|_| ReadServiceError::Unavailable)?;
+        if field.encrypted {
+            // Equality on an encrypted field resolves through its declared
+            // blind index: the normalized selector value is HMAC-bound in
+            // Rust and compared against the sibling column, never against
+            // the envelope. A field without a declared index cannot be
+            // looked up; the compiler refuses the selector, so this refusal
+            // only holds the boundary.
+            let blind = entity
+                .fields
+                .get(selector.field_id.as_str())
+                .and_then(|field| field.encryption.as_ref())
+                .and_then(|encryption| encryption.blind_index.as_ref())
+                .ok_or(ReadServiceError::Unavailable)?;
+            if !valid_physical_identifier(&blind.physical_name) {
+                return Err(ReadServiceError::Unavailable);
+            }
+            let service = field_encryption.ok_or(ReadServiceError::FieldEncryptionUnavailable)?;
+            let normalized =
+                FieldEncryptionService::normalize(&blind.normalization, &selector.value);
+            let index = service.blind_index(&entity.id, &selector.field_id, &normalized);
+            values.push(BoundValue::Bytea(Some(index.to_vec())));
+            predicates.push(format!(
+                "{}.{} = ${}::bytea",
+                relations.base_alias,
+                quote_identifier(&blind.physical_name),
+                values.len()
+            ));
+            continue;
+        }
         let parameter = push_value(&mut values, &selector.value);
         predicates.push(format!(
             "{} = ${parameter}::text::{}",
@@ -2850,11 +3086,16 @@ fn lookup_sql(
     ))
 }
 
-fn json_expression(expression: &str, field_type: &FieldTypeSource) -> String {
-    if matches!(field_type, FieldTypeSource::Decimal { .. }) {
-        format!("to_jsonb({expression}::text)")
+fn json_expression(expression: &FieldExpression) -> String {
+    if expression.encrypted {
+        // The envelope projects as base64 text; row decode turns it into the
+        // tagged member. No plaintext cast exists for the encrypted column.
+        return format!("to_jsonb(encode({}, 'base64'))", expression.sql);
+    }
+    if matches!(expression.field_type, FieldTypeSource::Decimal { .. }) {
+        format!("to_jsonb({}::text)", expression.sql)
     } else {
-        format!("to_jsonb({expression})")
+        format!("to_jsonb({})", expression.sql)
     }
 }
 
@@ -2862,7 +3103,7 @@ fn filter_sql(
     entity: &CompiledEntity,
     relations: &ReadRelations,
     filter: &ReadFilterExpr,
-    values: &mut Vec<String>,
+    values: &mut Vec<BoundValue>,
 ) -> Result<String, ReadServiceError> {
     match filter {
         ReadFilterExpr::Binary { op, left, right } => {
@@ -2892,10 +3133,15 @@ fn predicate_sql(
     entity: &CompiledEntity,
     relations: &ReadRelations,
     predicate: &ReadFilterPredicate,
-    values: &mut Vec<String>,
+    values: &mut Vec<BoundValue>,
 ) -> Result<String, ReadServiceError> {
     let field = relations.field_expression(entity, &predicate.field_id)?;
     if field.field_type != predicate.field_type {
+        return Err(ReadServiceError::Unavailable);
+    }
+    // The compiler refuses filterable encrypted fields; comparison against
+    // envelope bytes would leak nothing true, so hold the boundary here too.
+    if field.encrypted {
         return Err(ReadServiceError::Unavailable);
     }
     let cast = postgres_cast(&field.field_type);
@@ -2967,8 +3213,8 @@ fn temporal_instant_expression(
     }
 }
 
-fn push_value(values: &mut Vec<String>, value: &str) -> usize {
-    values.push(value.to_owned());
+fn push_value(values: &mut Vec<BoundValue>, value: &str) -> usize {
+    values.push(BoundValue::Text(Some(value.to_owned())));
     values.len()
 }
 
@@ -3033,6 +3279,18 @@ fn row_to_record(
             .try_get::<_, Option<Value>>(index + 2)
             .map_err(|_| ReadServiceError::Unavailable)?
             .unwrap_or(Value::Null);
+        // Encrypted columns project their base64 envelope; the record keeps
+        // the tagged member, unopened, until the response edge.
+        let value = if entity
+            .fields
+            .get(field_id.as_str())
+            .is_some_and(|field| field.encryption.is_some())
+        {
+            crate::mutation::envelope_member_from_projection(value)
+                .map_err(|_| ReadServiceError::Unavailable)?
+        } else {
+            value
+        };
         if data.insert(api_name.to_owned(), value).is_some() {
             return Err(ReadServiceError::Unavailable);
         }
@@ -3091,7 +3349,7 @@ fn valid_canonical_uuid(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::time::Duration;
 
     use serde_json::{json, Map};
@@ -3109,14 +3367,81 @@ mod tests {
         CursorProjectionField, CursorQuery, CursorQueryScope, CursorRepresentation,
         CursorSpatialQuery,
     };
+    use crate::history_schema::{
+        HistoryFieldCompatibility, HistoryFieldSource, HistorySchemaCompatibility,
+        HistoryValueSource,
+    };
     use crate::model::{CompiledQueryKind, CompiledQuerySortDirection, HttpMethod};
     use zeroize::Zeroizing;
 
     use super::{
-        cursor_binding_references, feature_value, list_sql, projection, quote_identifier,
-        temporal_instant_expression, ExpectedRegistryIdentity, ReadPlan, ReadRelations,
-        ReadServiceError, RecordEnvelope,
+        cursor_binding_references, feature_value, list_sql, open_history_row_members, projection,
+        quote_identifier, temporal_instant_expression, ExpectedRegistryIdentity, ReadPlan,
+        ReadRelations, ReadServiceError, RecordEnvelope,
     };
+
+    #[test]
+    fn retained_plaintext_representation_comes_from_revision_descriptor_not_value_shape() {
+        let registry = compile_project(
+            &parse_project_json(
+                br#"{
+                  "apiVersion":"registry.registrystack.org/v1alpha1",
+                  "kind":"RegistryProject",
+                  "registry":{"id":"retained-plaintext-shape","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+                  "entities":[{
+                    "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
+                    "fields":[{"id":"details","type":"structured","maxBytes":256,"classification":"restricted","encrypted":true,"schema":{"type":"object","additionalProperties":false,"properties":{"__bregEncryptedV1":{"type":"string"}},"required":["__bregEncryptedV1"]}}]
+                  }],
+                  "accessProfiles":[{"id":"reader","default":true,"principalClaim":"principal","permissions":[{"entity":"asset","operations":["get"],"readableFields":["details"],"rowBoundaries":[]}]}]
+                }"#,
+            )
+            .expect("fixture parses"),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .expect("fixture compiles");
+        let entity = &registry.entities()["asset"];
+        let field = &entity.fields["details"];
+        let api_name = entity
+            .stored_fields
+            .iter()
+            .find(|stored| stored.logical.id == field.id)
+            .expect("stored field exists")
+            .logical
+            .api_name
+            .clone();
+        let compatibility = HistorySchemaCompatibility {
+            entity_id: entity.id.clone(),
+            fields: BTreeMap::from([(
+                field.id.clone(),
+                HistoryFieldCompatibility {
+                    field_id: field.id.clone(),
+                    active_api_name: api_name.clone(),
+                    source: HistoryValueSource::Retained(HistoryFieldSource::SnapshotKey {
+                        key: field.id.clone(),
+                    }),
+                    field_type: field.field_type.clone(),
+                    required: field.required,
+                    nullable: !field.required,
+                    encrypted: false,
+                    retained_plaintext: true,
+                },
+            )]),
+        };
+        let plaintext = json!({"__bregEncryptedV1": "AAAA"});
+        let mut data = Map::from_iter([(api_name.clone(), plaintext.clone())]);
+
+        open_history_row_members(
+            entity,
+            "00000000-0000-4000-8000-000000000001",
+            &mut data,
+            None,
+            &compatibility,
+        )
+        .expect("descriptor-declared plaintext does not require an encryption key");
+
+        assert_eq!(data.get(&api_name), Some(&plaintext));
+    }
 
     #[test]
     fn temporal_query_instant_uses_utc_calendar_dates_without_session_timezone_dependence() {

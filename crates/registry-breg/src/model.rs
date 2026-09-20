@@ -12,8 +12,8 @@ use crate::contract::{
     ManifestProjectionDataServiceSource, ManifestProjectionDatasetSource,
     ManifestProjectionDistributionSource, ManifestProjectionEntitySource,
     ManifestProjectionPublicServiceSource, ManifestProjectionVocabularySource, MutationMode,
-    Operation, PackageIdentitySource, ProvenanceFieldSource, RowBoundarySource, TemporalSource,
-    ValidTimeRole, WebhookAuthenticationProfile, WebhookDeadLetterMode,
+    NormalizationStep, Operation, PackageIdentitySource, ProvenanceFieldSource, RowBoundarySource,
+    TemporalSource, ValidTimeRole, WebhookAuthenticationProfile, WebhookDeadLetterMode,
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
@@ -33,6 +33,29 @@ pub struct CompiledField {
     pub physical_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>,
+    /// Storage is an encrypted envelope column instead of the plaintext type.
+    /// `physical_name` points at the envelope column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption: Option<CompiledFieldEncryption>,
+}
+
+/// The compiled storage shape of an encrypted field.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledFieldEncryption {
+    /// The blind-index sibling column, present only when the author declared
+    /// a lookup for the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blind_index: Option<CompiledBlindIndex>,
+}
+
+/// The compiled blind-index sibling of an encrypted column.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledBlindIndex {
+    pub physical_name: String,
+    pub normalization: Vec<NormalizationStep>,
+    pub unique: bool,
 }
 
 /// Binary slot policy, separate from scalar fields and physical SQL columns.
@@ -54,6 +77,8 @@ pub struct CompiledLogicalField {
     pub sql_name: String,
     pub field_type: FieldTypeSource,
     pub classification: Classification,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption: Option<CompiledFieldEncryption>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

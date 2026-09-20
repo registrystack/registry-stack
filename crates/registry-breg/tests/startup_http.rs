@@ -481,7 +481,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
     .expect("request_id is a UUID");
 }
 
-fn startup_errors() -> [StartupError; 14] {
+fn startup_errors() -> [StartupError; 16] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -500,6 +500,8 @@ fn startup_errors() -> [StartupError; 14] {
         StartupError::Authentication,
         StartupError::EventDestinations,
         StartupError::AttachmentStorage,
+        StartupError::FieldEncryption,
+        StartupError::FieldEncryptionCustody,
         StartupError::Listener,
         StartupError::Shutdown,
         StartupError::Logging,
@@ -591,6 +593,10 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::EventDestinations => "the Registry event destination bindings were refused",
         StartupError::AttachmentStorage => {
             "the Registry attachment storage or verification binding was refused"
+        }
+        StartupError::FieldEncryption => "the Registry field-encryption key state was refused",
+        StartupError::FieldEncryptionCustody => {
+            "the Registry field-encryption data-key custody was refused"
         }
         StartupError::Listener => "the Registry listener could not be started",
         StartupError::Shutdown => "the Registry shutdown signal failed",

@@ -21,7 +21,11 @@ pub fn valid_review_reason(reason: &str) -> bool {
 
 pub const MAX_REQUEST_TARGETS: usize = 16;
 pub const MAX_REQUEST_FIELD_MUTATIONS: usize = 128;
-pub const MAX_REQUEST_SNAPSHOT_BYTES: usize = 2_097_152;
+/// Internal proposal and target snapshots retain unchanged encrypted members
+/// as tagged base64 envelopes. Keep the authored/plaintext admission ceiling
+/// at 2 MiB, but give the stored packet the same deterministic expansion
+/// headroom as revision snapshots.
+pub const MAX_REQUEST_SNAPSHOT_BYTES: usize = crate::history_schema::MAX_HISTORY_SNAPSHOT_BYTES;
 
 const MAX_STAGES: usize = 32;
 const MAX_APPROVALS_PER_STAGE: u16 = 32;

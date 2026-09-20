@@ -5061,6 +5061,7 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
             "request.plan_refused",
             "request.timeout",
             "resource.not_found",
+            "runtime.field_encryption.unavailable",
             "service.unavailable",
             "source.unavailable",
             "unsupported.media_type"

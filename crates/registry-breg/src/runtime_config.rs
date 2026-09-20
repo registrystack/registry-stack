@@ -173,6 +173,8 @@ pub enum RuntimeConfigError {
     InvalidAttachmentStorage,
     #[error("runtime configuration contains an invalid attachment verification binding")]
     InvalidAttachmentVerification,
+    #[error("runtime configuration contains an invalid field encryption binding")]
+    InvalidFieldEncryption,
     #[error("runtime configuration contains invalid operational bounds")]
     InvalidBounds,
     #[error("runtime configuration contains invalid WASM execution budgets")]
@@ -240,6 +242,7 @@ impl RuntimeConfigError {
             Self::InvalidEventDestination => "runtime_config.invalid_event_destination",
             Self::InvalidAttachmentStorage => "runtime_config.invalid_attachment_storage",
             Self::InvalidAttachmentVerification => "runtime_config.invalid_attachment_verification",
+            Self::InvalidFieldEncryption => "runtime_config.invalid_field_encryption",
             Self::InvalidBounds => "runtime_config.invalid_bounds",
             Self::InvalidWasmExecution => "runtime_config.invalid_wasm_execution",
             Self::Secret => "runtime_config.secret",
@@ -276,6 +279,7 @@ impl RuntimeConfigError {
             Self::InvalidEventDestination => "/eventDestinations",
             Self::InvalidAttachmentStorage => "/attachmentStorage",
             Self::InvalidAttachmentVerification => "/attachmentVerification",
+            Self::InvalidFieldEncryption => "/fieldEncryption",
             Self::InvalidBounds => "/operationalTimeouts",
             Self::InvalidWasmExecution => "/wasmExecution",
         }
@@ -395,6 +399,7 @@ pub struct RuntimeConfig {
     database: DatabaseConfig,
     attachment_storage: crate::attachment_storage::AttachmentStorageConfig,
     attachment_verification: crate::attachment_verification::AttachmentVerificationConfig,
+    field_encryption: crate::field_encryption::FieldEncryptionConfig,
     package: PackageConfig,
     authentication: AuthenticationConfig,
     task_grant_status: Vec<crate::task_grant::TaskGrantStatusConfig>,
@@ -429,6 +434,9 @@ impl RuntimeConfig {
                 raw.attachment_verification,
             )
             .map_err(|_| RuntimeConfigError::InvalidAttachmentVerification)?;
+        let field_encryption =
+            crate::field_encryption::FieldEncryptionConfig::from_raw(raw.field_encryption)
+                .map_err(|_| RuntimeConfigError::InvalidFieldEncryption)?;
         let package = PackageConfig::from_raw(raw.package)?;
         let authentication = AuthenticationConfig::from_raw(raw.authentication)?;
         let audit = AuditConfig::from_raw(raw.audit)?;
@@ -452,6 +460,7 @@ impl RuntimeConfig {
             database,
             attachment_storage,
             attachment_verification,
+            field_encryption,
             package,
             authentication,
             task_grant_status: raw.task_grant_status,
@@ -562,6 +571,11 @@ impl RuntimeConfig {
 
     pub fn event_delivery(&self) -> &EventDeliveryConfig {
         &self.event_delivery
+    }
+
+    /// The field-encryption binding, defaulting to no provider.
+    pub fn field_encryption(&self) -> &crate::field_encryption::FieldEncryptionConfig {
+        &self.field_encryption
     }
 
     pub async fn oidc_key_source(&self) -> Result<Arc<JwksFetcher>> {
@@ -715,6 +729,7 @@ impl fmt::Debug for RuntimeConfig {
             .field("database", &self.database)
             .field("attachment_storage", &self.attachment_storage)
             .field("attachment_verification", &self.attachment_verification)
+            .field("field_encryption", &self.field_encryption)
             .field("package", &self.package)
             .field("authentication", &self.authentication)
             .field("audit", &self.audit)
@@ -1944,6 +1959,10 @@ struct RawRuntimeConfig {
     /// Optional external verdict hook. Disabled by default.
     #[serde(default)]
     attachment_verification: crate::attachment_verification::RawAttachmentVerificationConfig,
+    /// Optional field-encryption data-key provider. Absent by default, which
+    /// serves unencrypted entities only.
+    #[serde(default)]
+    field_encryption: crate::field_encryption::RawFieldEncryptionConfig,
     package: RawPackageConfig,
     authentication: RawAuthenticationConfig,
     #[serde(default)]

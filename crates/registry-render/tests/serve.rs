@@ -950,13 +950,15 @@ fn wrong_method_on_render_is_a_problem_and_audited() {
 }
 
 #[test]
-fn slow_renders_are_killed_and_the_service_recovers() {
-    // A compute-heavy bundle and a one-second budget: the supervisor kills
-    // the worker, the refusal is audited, and the very next render works.
+fn pathological_renders_are_bounded_and_the_service_recovers() {
+    // A compute- and memory-heavy bundle exercises the worker resource walls.
+    // Depending on binary and platform layout, either the address-space cap or
+    // the timeout can win. Both must kill only that worker, be audited, and
+    // leave the service ready to spawn a fresh worker for the next request.
     let (_heavy, bundle) = physical_tempdir();
     std::fs::write(
         bundle.join("manifest.yaml"),
-        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: heavy\n    version: 1\n    entry: templates/heavy.typ\n",
+        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: heavy\n    version: 1\n    entry: templates/heavy.typ\n  - id: healthy\n    version: 1\n    entry: templates/healthy.typ\n",
     )
     .unwrap();
     for dir in ["templates", "fonts", "labels", "schemas"] {
@@ -966,6 +968,11 @@ fn slow_renders_are_killed_and_the_service_recovers() {
     std::fs::write(
         bundle.join("templates/heavy.typ"),
         "#let payload = json(bytes(sys.inputs.data))\n#let x = range(20000000).fold(0, (a, b) => a + b)\n#x\n",
+    )
+    .unwrap();
+    std::fs::write(
+        bundle.join("templates/healthy.typ"),
+        "#let payload = json(bytes(sys.inputs.data))\n= Worker recovered\n",
     )
     .unwrap();
     // Seal the heavy bundle so serve accepts it.
@@ -994,30 +1001,50 @@ fn slow_renders_are_killed_and_the_service_recovers() {
         ],
         Some(r#"{"issuedAt":"2026-09-16T10:32:00Z","data":{}}"#),
     );
-    assert_eq!(slow.status, 504, "{}", String::from_utf8_lossy(&slow.body));
-    assert!(String::from_utf8_lossy(&slow.body).contains("render-timeout"));
+    assert_worker_hit_resource_wall(&slow);
 
     // Recovery: an immediate second request is served by a fresh worker.
     let second = request(
         server.port,
         "POST",
-        "/v1/render/heavy",
+        "/v1/render/healthy",
         &[
             ("Authorization", &format!("Bearer {API_KEY}")),
             ("Content-Type", "application/json"),
         ],
         Some(r#"{"issuedAt":"2026-09-16T10:32:00Z","data":{}}"#),
     );
-    assert_eq!(second.status, 504);
+    assert_eq!(
+        second.status,
+        200,
+        "a fresh worker serves a healthy render: {}",
+        String::from_utf8_lossy(&second.body)
+    );
+    assert!(second.body.starts_with(b"%PDF-"));
     drop(server);
     let lines = audit_lines(&home);
     assert_eq!(
         lines
             .iter()
-            .filter(|l| l.contains("render-timeout"))
+            .filter(|l| l.contains("render-timeout") || l.contains("render-panicked"))
             .count(),
-        2,
-        "each killed render is audited"
+        1,
+        "the bounded render is audited once"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("\"outcome\":\"rendered\"")),
+        "the recovery render is audited: {lines:?}"
+    );
+}
+
+fn assert_worker_hit_resource_wall(reply: &Reply) {
+    let body = String::from_utf8_lossy(&reply.body);
+    assert!(
+        (reply.status == 504 && body.contains("render-timeout"))
+            || (reply.status == 500 && body.contains("render-panicked")),
+        "expected the timeout or memory wall to stop the worker: {body}"
     );
 }
 

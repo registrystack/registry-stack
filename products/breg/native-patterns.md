@@ -4,6 +4,12 @@ A persisted `string` or `text` field can declare `pattern` using PostgreSQL's
 native advanced regular-expression syntax. PostgreSQL 17 or newer remains the
 minimum version. There is no second regular-expression engine in BREG.
 
+Phase 1 field encryption cannot preserve that database-enforced contract without
+disclosing plaintext to PostgreSQL. The compiler therefore refuses a field that
+combines `pattern` with `encrypted: true` at the authored `pattern` path, using
+`field.encrypted.pattern_refused`. Remove `pattern`, or keep the field in plaintext
+storage when the native pattern is required.
+
 ```yaml
 fields:
   - id: identifier

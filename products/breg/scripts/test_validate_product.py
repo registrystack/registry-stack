@@ -61,7 +61,7 @@ class BRegProductCatalogTests(unittest.TestCase):
                 self.assertIn("path", invariant["negativeTest"])
                 self.assertIn("name", invariant["negativeTest"])
 
-    def test_security_range_is_closed_through_registry_extension_invariants(self) -> None:
+    def test_security_range_is_closed_through_field_encryption_invariants(self) -> None:
         matrix = VALIDATOR.load_yaml(
             VALIDATOR.CONTRACTS / "security-invariant-matrix.yaml"
         )
@@ -71,7 +71,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         )
         extension_rows = matrix["invariants"][24:]
         self.assertEqual(
-            [f"BREG-NEG-{index:02d}" for index in range(25, 70)],
+            [f"BREG-NEG-{index:02d}" for index in range(25, 75)],
             [invariant["negativeId"] for invariant in extension_rows],
         )
         for invariant in extension_rows:
@@ -124,6 +124,7 @@ class BRegProductCatalogTests(unittest.TestCase):
                 "dep:registry-platform-buildinfo",
                 "dep:registry-platform-config",
                 "dep:registry-platform-crypto",
+                "registry-platform-crypto/transit",
                 "registry-platform-hooks/postgres",
                 "dep:registry-platform-httpsec",
                 "dep:registry-platform-httputil",

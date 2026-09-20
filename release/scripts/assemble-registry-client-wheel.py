@@ -144,6 +144,9 @@ def main() -> int:
     files[f"{dist_info}/METADATA"] = metadata(args.version)
     files[f"{dist_info}/WHEEL"] = wheel_metadata(tag)
     files[f"{dist_info}/licenses/LICENSE"] = (ROOT / "LICENSE").read_bytes()
+    files[f"{dist_info}/licenses/THIRD_PARTY_NOTICES"] = (
+        ROOT / "THIRD_PARTY_NOTICES"
+    ).read_bytes()
 
     rows = [
         [name, digest(data), str(len(data))] for name, data in sorted(files.items())

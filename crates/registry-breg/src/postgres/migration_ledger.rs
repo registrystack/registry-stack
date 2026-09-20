@@ -38,6 +38,7 @@ pub(crate) enum MigrationLedgerStepKind {
     CompilerDdl,
     TransactionalSql,
     ChunkedBackfill,
+    FieldEncryptionBackfill,
 }
 
 impl MigrationLedgerStepKind {
@@ -46,7 +47,14 @@ impl MigrationLedgerStepKind {
             Self::CompilerDdl => "compiler_ddl",
             Self::TransactionalSql => "transactional_sql",
             Self::ChunkedBackfill => "chunked_backfill",
+            Self::FieldEncryptionBackfill => "field_encryption_backfill",
         }
+    }
+
+    /// Whether the step walks a record-id cursor across committed chunks and
+    /// therefore carries a checkpoint between chunks.
+    pub(crate) fn is_cursor_backfill(self) -> bool {
+        matches!(self, Self::ChunkedBackfill | Self::FieldEncryptionBackfill)
     }
 }
 
@@ -267,7 +275,8 @@ pub(crate) async fn install_migration_ledger(
                  step_ordinal integer NOT NULL CHECK (step_ordinal >= 0),
                  step_id text NOT NULL CHECK (step_id <> ''),
                  step_kind text NOT NULL
-                     CHECK (step_kind IN ('compiler_ddl', 'transactional_sql', 'chunked_backfill')),
+                     CONSTRAINT registry_migration_steps_step_kind_closed
+                     CHECK (step_kind IN ('compiler_ddl', 'transactional_sql', 'chunked_backfill', 'field_encryption_backfill')),
                  statement_checksum text NOT NULL CHECK (statement_checksum <> ''),
                  outcome text NOT NULL DEFAULT 'pending'
                      CHECK (outcome IN ('pending', 'applying', 'completed')),
@@ -278,10 +287,12 @@ pub(crate) async fn install_migration_ledger(
                  CONSTRAINT registry_migration_steps_state_consistent CHECK (
                      (outcome = 'pending' AND checkpoint_record_id IS NULL
                          AND affected_rows = 0 AND completed_at IS NULL)
-                     OR (outcome = 'applying' AND step_kind = 'chunked_backfill'
+                     OR (outcome = 'applying'
+                         AND step_kind IN ('chunked_backfill', 'field_encryption_backfill')
                          AND checkpoint_record_id IS NOT NULL AND completed_at IS NULL)
                      OR (outcome = 'completed' AND completed_at IS NOT NULL
-                         AND (step_kind = 'chunked_backfill' OR checkpoint_record_id IS NULL))
+                         AND (step_kind IN ('chunked_backfill', 'field_encryption_backfill')
+                             OR checkpoint_record_id IS NULL))
                  )
              );
              REVOKE ALL ON TABLE registry_internal.registry_migrations FROM PUBLIC;
@@ -336,6 +347,22 @@ pub(crate) async fn reconcile_migration_ledger_metadata_only_constraints(
                              AND cardinality(artifact_paths) = 0)
                          OR (plan_kind = 'reviewed' AND cardinality(artifact_paths) > 0)
                      )
+                 );
+             ALTER TABLE registry_internal.registry_migration_steps
+                 DROP CONSTRAINT IF EXISTS registry_migration_steps_step_kind_closed,
+                 ADD CONSTRAINT registry_migration_steps_step_kind_closed
+                     CHECK (step_kind IN ('compiler_ddl', 'transactional_sql', 'chunked_backfill', 'field_encryption_backfill'));
+             ALTER TABLE registry_internal.registry_migration_steps
+                 DROP CONSTRAINT IF EXISTS registry_migration_steps_state_consistent,
+                 ADD CONSTRAINT registry_migration_steps_state_consistent CHECK (
+                     (outcome = 'pending' AND checkpoint_record_id IS NULL
+                         AND affected_rows = 0 AND completed_at IS NULL)
+                     OR (outcome = 'applying'
+                         AND step_kind IN ('chunked_backfill', 'field_encryption_backfill')
+                         AND checkpoint_record_id IS NOT NULL AND completed_at IS NULL)
+                     OR (outcome = 'completed' AND completed_at IS NOT NULL
+                         AND (step_kind IN ('chunked_backfill', 'field_encryption_backfill')
+                             OR checkpoint_record_id IS NULL))
                  );",
         )
         .await?;
@@ -624,7 +651,7 @@ pub(crate) async fn record_chunk_progress(
     checkpoint_record_id: Uuid,
     affected_rows: u64,
 ) -> Result<()> {
-    if step.kind != MigrationLedgerStepKind::ChunkedBackfill {
+    if !step.kind.is_cursor_backfill() {
         return Err(PostgresKernelError::RegistryUnavailable);
     }
     let affected_rows =
@@ -637,7 +664,7 @@ pub(crate) async fn record_chunk_progress(
                AND migration_ordinal = $4
                AND step_ordinal = $5
                AND step_id = $6
-               AND step_kind = 'chunked_backfill'
+               AND step_kind IN ('chunked_backfill', 'field_encryption_backfill')
                AND statement_checksum = $7
                AND outcome IN ('pending', 'applying')",
             &[

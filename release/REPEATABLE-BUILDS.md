@@ -48,10 +48,12 @@ A rebuild must therefore go through that script, as this workflow does.
 different bytes, which is a different build rather than a failed reproduction.
 
 For releases that include BReg, the script installs the exact libclang and
-protobuf compiler packages needed by BReg's pinned SQL parser from a dated
-Debian snapshot inside the pinned builder container. The source commit
-therefore fixes both the builder image and the additional build packages
-instead of consulting Debian's mutable package indexes.
+protobuf compiler packages needed by BReg's pinned SQL parser, plus the exact
+cmake and Go packages needed to build `aws-lc-fips-sys`, the FIPS cryptography
+backend the runtimes link, from a dated Debian snapshot inside the pinned
+builder container. The source commit therefore fixes both the builder image
+and the additional build packages instead of consulting Debian's mutable
+package indexes.
 
 ## The C compiler, the linker, and the GNU libc floor
 

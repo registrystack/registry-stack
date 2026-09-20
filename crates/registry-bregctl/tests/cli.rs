@@ -574,10 +574,13 @@ struct RuntimePackageFixture {
 
 impl RuntimePackageFixture {
     fn production(bind: SocketAddr) -> Self {
+        Self::production_with_module(bind, package_module_bytes())
+    }
+
+    fn production_with_module(bind: SocketAddr, module_bytes: Vec<u8>) -> Self {
         let directory = TestProject::from_registry_source(authoring_fixture());
         let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384)
             .expect("production package signing key generates");
-        let module_bytes = package_module_bytes();
         let module = parse_module_json(&module_bytes).expect("package module parses");
         let project_bytes = package_project_bytes(&module_digest(&module));
         let key_id = signing.public().kid.expect("generated key has an id");
@@ -4910,6 +4913,61 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
 }
 
 #[test]
+fn apply_requires_safe_field_encryption_custody_before_database_authority() {
+    let fixture = RuntimePackageFixture::production_with_module(
+        "127.0.0.1:1".parse().unwrap(),
+        encrypted_package_module_bytes(),
+    );
+    let missing_provider = bregctl(&[
+        "--format",
+        "json",
+        "apply",
+        "--runtime-config",
+        path(&fixture.runtime_config),
+        "--package",
+        path(&fixture.package),
+        "--initial",
+    ]);
+    assert_eq!(
+        missing_provider.status.code(),
+        Some(1),
+        "{missing_provider:?}"
+    );
+    assert_eq!(
+        json_stdout(&missing_provider)["diagnostics"][0]["code"],
+        "apply.field_encryption.configuration_refused"
+    );
+
+    let local_file_runtime = fixture.directory.path().join("local-file-runtime.yaml");
+    let runtime = fs::read_to_string(&fixture.runtime_config).expect("runtime config reads");
+    fs::write(
+        &local_file_runtime,
+        format!(
+            "{runtime}\nfieldEncryption:\n  provider:\n    kind: localFile\n    dekRef: secret:file/field-encryption-dek\n"
+        ),
+    )
+    .expect("runtime variant writes");
+    let unsafe_custody = bregctl(&[
+        "--format",
+        "json",
+        "apply",
+        "--runtime-config",
+        path(&local_file_runtime),
+        "--package",
+        path(&fixture.package),
+        "--initial",
+    ]);
+    assert_eq!(unsafe_custody.status.code(), Some(1), "{unsafe_custody:?}");
+    assert_eq!(
+        json_stdout(&unsafe_custody)["diagnostics"][0]["code"],
+        "apply.field_encryption.custody_refused"
+    );
+    let rendered = String::from_utf8(unsafe_custody.stdout).expect("apply refusal is UTF-8");
+    assert!(!rendered.contains("field-encryption-dek"));
+    assert!(!rendered.contains("VERIFY_MIGRATION_DATABASE_SECRET_IS_NOT_OPENED"));
+}
+
+#[test]
 fn migration_reconcile_verifies_intent_before_database_authority_and_stays_value_free() {
     let relative = bregctl(&[
         "--format",
@@ -5642,6 +5700,11 @@ entities:
 
 fn package_module_bytes() -> Vec<u8> {
     br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":16,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "rowBoundaries": []}]}]}"#
+        .to_vec()
+}
+
+fn encrypted_package_module_bytes() -> Vec<u8> {
+    br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":16,"classification":"restricted","encrypted":true}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "rowBoundaries": []}]}]}"#
         .to_vec()
 }
 

@@ -202,6 +202,8 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
         "release/requirements/maturin-1.9.6.txt",
         "release/scripts/assemble-registry-client-packages.py",
         "release/scripts/assemble-registry-client-wheel.py",
+        "release/scripts/build-linux-python-client",
+        "release/scripts/zig-glibc-compiler",
         "release/scripts/smoke-registry-client-package.py",
     }
 )
@@ -332,11 +334,17 @@ LINUX_NODE_BINDING_PACKAGES = frozenset(
         "registry-casework-client-node",
     }
 )
+# The shared Linux release job also builds the Evidence Python wheel. Keep its
+# production recipe selected by the binding it actually proves, including
+# build.rs-only changes that the Node package closure does not reach.
+LINUX_RELEASE_BINDING_PACKAGES = LINUX_NODE_BINDING_PACKAGES | frozenset(
+    {"registry-evidence-client-py"}
+)
 
-# Inputs that can change the production Linux Node client recipe without
-# changing either binding crate. This proof is deliberately selected from the
-# actual changed paths rather than `complete`: an unrelated change must not
-# rebuild release addons merely because its Rust matrix is complete. Explicit
+# Inputs that can change the production Linux native-client compiler path
+# without changing a binding crate. This proof is deliberately selected from
+# the actual changed paths rather than `complete`: an unrelated change must not
+# rebuild release clients merely because its Rust matrix is complete. Explicit
 # periodic/manual full sweeps additionally select this proof.
 LINUX_NODE_RELEASE_RECIPE_INPUTS = frozenset(
     {
@@ -349,6 +357,7 @@ LINUX_NODE_RELEASE_RECIPE_INPUTS = frozenset(
         "Cargo.toml",
         "release/glibc-floor.env",
         "release/requirements/maturin-1.9.6.txt",
+        "release/scripts/build-linux-python-client",
         "release/scripts/build-linux-node-client",
         "release/scripts/smoke-discovery-client-package.js",
         "release/scripts/smoke-evidence-client-package.js",
@@ -357,6 +366,7 @@ LINUX_NODE_RELEASE_RECIPE_INPUTS = frozenset(
         "release/scripts/assemble-registry-client-wheel.py",
         "release/scripts/sync-registry-client-node.py",
         "release/scripts/test_build_linux_node_client.py",
+        "release/scripts/test_build_linux_python_client.py",
         "release/scripts/test_zig_glibc_compiler.py",
         "release/scripts/zig-glibc-compiler",
         "rust-toolchain",
@@ -723,7 +733,7 @@ def classify(
         for path in paths
     ) or bool(
         workspace.affected_packages(linux_node_seeds)
-        & LINUX_NODE_BINDING_PACKAGES
+        & LINUX_RELEASE_BINDING_PACKAGES
     )
 
     identifiers = complete or any(
@@ -759,6 +769,7 @@ def classify(
             path.startswith("release/")
             or path
             in {
+                "THIRD_PARTY_NOTICES",
                 "docs/site/src/content/docs/reference/errors.mdx",
             }
             for path in paths

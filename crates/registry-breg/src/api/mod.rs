@@ -508,6 +508,9 @@ async fn read_dispatch(
         .await;
         return response;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     let representation = negotiated_read_representation(&headers);
 
     if options.request_history_after_proposal_version.is_some()
@@ -616,6 +619,7 @@ async fn read_dispatch(
                 Err(ReadServiceError::Unavailable | ReadServiceError::SnapshotUnreadable) => {
                     unavailable()
                 }
+                Err(ReadServiceError::FieldEncryptionUnavailable) => field_encryption_unavailable(),
                 Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
             }
         }
@@ -736,6 +740,7 @@ async fn read_dispatch(
                 Err(ReadServiceError::Unavailable | ReadServiceError::SnapshotUnreadable) => {
                     unavailable()
                 }
+                Err(ReadServiceError::FieldEncryptionUnavailable) => field_encryption_unavailable(),
                 Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
             }
         }
@@ -773,6 +778,9 @@ async fn lookup_dispatch(
         return audited_read_concealment(&service, &route, &options, &claims, None, &correlation)
             .await;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     if surface.read_path.is_some() || options.has_non_projection_query_members() {
         return audited_read_refusal(
             &service,
@@ -911,6 +919,7 @@ async fn lookup_dispatch(
         ),
         Ok(None) => lookup_unresolved(),
         Err(ReadServiceError::Unavailable | ReadServiceError::SnapshotUnreadable) => unavailable(),
+        Err(ReadServiceError::FieldEncryptionUnavailable) => field_encryption_unavailable(),
         Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
     }
 }
@@ -955,6 +964,9 @@ async fn revision_dispatch(
         )
         .await;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     let Some(record_id) = path.get("record_id") else {
         return audited_revision_refusal(
             revisions.as_ref(),
@@ -1038,6 +1050,7 @@ async fn revision_dispatch(
                 public_deployment_prefix(&service),
             ),
             Ok(None) => concealed(),
+            Err(ReadServiceError::FieldEncryptionUnavailable) => field_encryption_unavailable(),
             Err(_) => unavailable(),
         },
         Some(CompiledRevisionKind::Detail) => match revisions.detail(request).await {
@@ -1047,6 +1060,7 @@ async fn revision_dispatch(
                 public_deployment_prefix(&service),
             ),
             Ok(None) => concealed(),
+            Err(ReadServiceError::FieldEncryptionUnavailable) => field_encryption_unavailable(),
             Err(_) => unavailable(),
         },
         None => concealed(),
@@ -1085,6 +1099,9 @@ async fn snapshot_dispatch(
         return audited_read_concealment(&service, &route, &options, &claims, None, &correlation)
             .await;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     let query = match read_query(
         &service,
         &route,
@@ -1129,6 +1146,7 @@ async fn snapshot_dispatch(
             public_deployment_prefix(&service),
         ),
         Err(ReadServiceError::Unavailable | ReadServiceError::SnapshotUnreadable) => unavailable(),
+        Err(ReadServiceError::FieldEncryptionUnavailable) => field_encryption_unavailable(),
         Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
     }
 }
@@ -1361,6 +1379,9 @@ async fn create_dispatch(
         )
         .await;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     let Some(idempotency_key) = single_header(&headers, "idempotency-key") else {
         return audited_mutation_refusal(
             mutations,
@@ -1433,6 +1454,7 @@ async fn create_dispatch(
             outcome.response(),
             Some(surface.response_entity),
             public_deployment_prefix(&service),
+            service.field_encryption.as_deref(),
         ),
         Err(error) => mutation_problem(error),
     }
@@ -1480,6 +1502,9 @@ async fn patch_dispatch(
         )
         .await;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     let Some(idempotency_key) = single_header(&headers, "idempotency-key") else {
         return audited_mutation_refusal(
             mutations,
@@ -1589,6 +1614,7 @@ async fn patch_dispatch(
             outcome.response(),
             Some(surface.response_entity),
             public_deployment_prefix(&service),
+            service.field_encryption.as_deref(),
         ),
         Err(error) => mutation_problem(error),
     }
@@ -1631,6 +1657,9 @@ async fn batch_dispatch(
         )
         .await;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     let Some(batch) = surface.entity.batch.as_ref() else {
         return audited_mutation_refusal(
             mutations,
@@ -1715,6 +1744,7 @@ async fn batch_dispatch(
             outcome.response(),
             Some(surface.response_entity),
             public_deployment_prefix(&service),
+            service.field_encryption.as_deref(),
         ),
         Err(error) => mutation_problem(error),
     }
@@ -1762,6 +1792,9 @@ async fn tombstone_dispatch(
         )
         .await;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     let Some(idempotency_key) = single_header(&headers, "idempotency-key") else {
         return audited_mutation_refusal(
             mutations,
@@ -1846,6 +1879,7 @@ async fn tombstone_dispatch(
             outcome.response(),
             Some(surface.response_entity),
             public_deployment_prefix(&service),
+            service.field_encryption.as_deref(),
         ),
         Err(error) => mutation_problem(error),
     }
@@ -1893,6 +1927,9 @@ async fn request_action_dispatch(
         )
         .await;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     let Some(idempotency_key) = single_header(&headers, "idempotency-key") else {
         return audited_mutation_refusal(
             mutations,
@@ -2008,6 +2045,7 @@ async fn request_action_dispatch(
             outcome.response(),
             Some(surface.response_entity),
             public_deployment_prefix(&service),
+            service.field_encryption.as_deref(),
         ),
         Err(error) => mutation_problem(error),
     }
@@ -4728,6 +4766,14 @@ fn unavailable() -> Response {
     )
 }
 
+fn field_encryption_unavailable() -> Response {
+    fixed_problem(
+        StatusCode::SERVICE_UNAVAILABLE,
+        crate::problem::ProblemCode::RuntimeFieldEncryptionUnavailable.code(),
+        crate::problem::ProblemCode::RuntimeFieldEncryptionUnavailable.description(),
+    )
+}
+
 fn invalid_query() -> Response {
     fixed_problem(
         StatusCode::BAD_REQUEST,
@@ -4942,7 +4988,13 @@ fn exact_mutation(
     response: &HeldResponse,
     response_entity: Option<&CompiledEntity>,
     deployment_prefix: &str,
+    field_encryption: Option<&crate::field_encryption::FieldEncryptionService>,
 ) -> Response {
+    // The held body keeps sealed members in the idempotency cache; this is the
+    // one authorized edge both fresh and replayed bodies are opened at.
+    let Ok(body) = opened_held_body(response, response_entity, field_encryption) else {
+        return field_encryption_unavailable();
+    };
     let mut builder = Response::builder()
         .status(response.status())
         .header(CACHE_CONTROL, "no-store")
@@ -4977,8 +5029,92 @@ fn exact_mutation(
         };
     }
     builder
-        .body(Body::from(response.body().to_vec()))
+        .body(Body::from(body))
         .unwrap_or_else(|_| unavailable())
+}
+
+/// Open the sealed members of one held response body at the serve edge.
+///
+/// Fresh and replayed bodies both arrive here with encrypted members still in
+/// their tagged envelope form, so the idempotency cache holds ciphertext while
+/// the caller receives opened plaintext. Key state is required only by a body
+/// that actually carries a member map to open; entities without encrypted
+/// fields and bodies of shapes that carry no domain data pass through
+/// byte-identical without touching it. Absent key state and any open failure
+/// fail the whole response closed with the field-encryption problem,
+/// value-free.
+fn opened_held_body(
+    response: &HeldResponse,
+    response_entity: Option<&CompiledEntity>,
+    field_encryption: Option<&crate::field_encryption::FieldEncryptionService>,
+) -> Result<Vec<u8>, ()> {
+    let Some(entity) = response_entity else {
+        return Ok(response.body().to_vec());
+    };
+    if !entity
+        .fields
+        .values()
+        .any(|field| field.encryption.is_some())
+    {
+        return Ok(response.body().to_vec());
+    }
+    let mut body = parse_json_strict(response.body()).map_err(|_| ())?;
+    let root = body.as_object_mut().ok_or(())?;
+    let mut service: Option<&crate::field_encryption::FieldEncryptionService> = None;
+    let mut key_state = || -> Result<&crate::field_encryption::FieldEncryptionService, ()> {
+        match service {
+            Some(resolved) => Ok(resolved),
+            None => {
+                let resolved = field_encryption.ok_or(())?;
+                service = Some(resolved);
+                Ok(resolved)
+            }
+        }
+    };
+    if let Some(record) = root.get_mut("data").and_then(Value::as_object_mut) {
+        // A single-record body names its record once, beside the domain data
+        // its sealed members live in.
+        let record_id = record
+            .get("recordIdentifier")
+            .and_then(Value::as_str)
+            .filter(|identifier| !identifier.is_empty())
+            .ok_or(())?
+            .to_owned();
+        if let Some(domain_data) = record.get_mut("domainData").and_then(Value::as_object_mut) {
+            let service = key_state()?;
+            crate::field_encryption::open_member_map(
+                entity,
+                &record_id,
+                domain_data,
+                service,
+                true,
+            )
+            .map_err(|_| ())?;
+        }
+    }
+    if let Some(results) = root.get_mut("results").and_then(Value::as_array_mut) {
+        // A batch body names each record beside its item's domain data. The
+        // immediate-action body's results member is an object, not an array,
+        // and carries no domain data, so it never reaches this loop.
+        for item in results {
+            let record_id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|identifier| !identifier.is_empty())
+                .ok_or(())?
+                .to_owned();
+            if let Some(data) = item.get_mut("data").and_then(Value::as_object_mut) {
+                let service = key_state()?;
+                crate::field_encryption::open_member_map(entity, &record_id, data, service, true)
+                    .map_err(|_| ())?;
+            }
+        }
+    }
+    if service.is_none() {
+        // Nothing needed opening; the held bytes serve exactly as stored.
+        return Ok(response.body().to_vec());
+    }
+    serde_json::to_vec(&body).map_err(|_| ())
 }
 
 async fn bounded_body(body: Body) -> Result<Vec<u8>, ()> {
@@ -5313,6 +5449,11 @@ fn mutation_problem(error: MutationError) -> Response {
             entity_id,
             field_id,
         } => crate::correlation::field_pattern_response(entity_id, field_id),
+        MutationError::FieldEncryptionUnavailable => fixed_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            crate::problem::ProblemCode::RuntimeFieldEncryptionUnavailable.code(),
+            crate::problem::ProblemCode::RuntimeFieldEncryptionUnavailable.description(),
+        ),
         MutationError::PlannerFailure(error) => {
             let (status, code, detail) = planner_failure_problem(error);
             fixed_problem(status, code, detail)
@@ -5352,6 +5493,20 @@ fn fixed_problem(status: StatusCode, code: &'static str, detail: &'static str) -
         detail,
         code,
     )
+}
+
+/// Per-entity field-encryption admission. A route that reaches an entity with
+/// at least one encrypted field requires usable key state; without it the
+/// route answers the field-encryption problem code, while entities without
+/// encrypted fields keep serving. Startup refuses to run an encrypted package
+/// without a usable key, so this is the in-process boundary that holds even
+/// for services assembled outside full startup.
+fn field_encryption_refusal(service: &HttpService, entity: &CompiledEntity) -> Option<Response> {
+    let encrypted = entity
+        .fields
+        .values()
+        .any(|field| field.encryption.is_some());
+    (encrypted && service.field_encryption.is_none()).then(field_encryption_unavailable)
 }
 
 #[cfg(test)]
@@ -5404,11 +5559,356 @@ mod deployment_response_tests {
         )
         .unwrap();
 
-        let response = exact_mutation(&held, None, "/registry-a");
+        let response = exact_mutation(&held, None, "/registry-a", None);
         assert_eq!(
             response.headers()["location"],
             "/registry-a/v1/records/cases/00000000-0000-4000-8000-000000000001"
         );
+    }
+}
+
+#[cfg(test)]
+mod held_body_encryption_tests {
+    use std::collections::BTreeMap;
+
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
+    use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
+    use registry_platform_crypto::field_encryption::envelope_member_json;
+    use registry_platform_crypto::KeyProviderKind;
+    use serde_json::{json, Map, Value};
+    use zeroize::Zeroizing;
+
+    use super::exact_mutation;
+    use crate::compiler::{compile_project, CompileProfile, MAX_BATCH_ITEMS};
+    use crate::contract::{parse_project_json, MAX_ENCRYPTED_FIELD_STRING_CHARACTERS};
+    use crate::field_encryption::FieldEncryptionService;
+    use crate::history_schema::ENVELOPE_MEMBER_TAG;
+    use crate::idempotency::{HeldResponse, PermittedResponseHeader};
+    use crate::model::CompiledRegistry;
+
+    const DEK: [u8; 32] = [0x5A; 32];
+    const RECORD_ID: &str = "00000000-0000-4000-8000-000000000001";
+    const OTHER_RECORD_ID: &str = "00000000-0000-4000-8000-000000000002";
+    const FIRST_PLAINTEXT: &str = "held-canary-plaintext";
+    const SECOND_PLAINTEXT: &str = "held-canary-plaintext-two";
+
+    fn registry(encrypted: bool) -> CompiledRegistry {
+        let mut secret = json!({
+            "id":"secret","type":"string","maxLength":MAX_ENCRYPTED_FIELD_STRING_CHARACTERS,
+            "classification":"restricted"
+        });
+        if encrypted {
+            secret["encrypted"] = json!(true);
+        }
+        let source = json!({
+            "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
+            "registry":{"id":"held-encryption","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://held.example.test"},
+            "entities":[{
+                "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable",
+                "fields":[
+                    {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
+                    secret
+                ]
+            }],
+            "accessProfiles":[{"id":"caseworker","default":true,"principalClaim":"principal","permissions":[{
+                "entity":"case","rowBoundaries":[],"operations":["get","list","create","patch"],
+                "readableFields":["label","secret"],"writableFields":["label","secret"]
+            }]}]
+        });
+        let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+        compile_project(&project, &[], CompileProfile::Authoring).unwrap()
+    }
+
+    fn service() -> FieldEncryptionService {
+        FieldEncryptionService::from_data_key(
+            "held-encryption".to_owned(),
+            1,
+            Zeroizing::new(DEK),
+            KeyProviderKind::TransitDatakey,
+        )
+    }
+
+    fn secret_api_name(registry: &CompiledRegistry) -> String {
+        registry.entities()["case"]
+            .stored_fields
+            .iter()
+            .find(|field| field.logical.id == "secret")
+            .unwrap()
+            .logical
+            .api_name
+            .clone()
+    }
+
+    fn sealed_member(service: &FieldEncryptionService, record_id: &str, plaintext: &str) -> Value {
+        let envelope = service
+            .seal("case", "secret", record_id, plaintext.as_bytes())
+            .unwrap();
+        envelope_member_json(&envelope)
+    }
+
+    fn single_record_body(secret_key: &str, member: Value) -> Value {
+        let mut domain_data = Map::new();
+        domain_data.insert("label".to_owned(), json!("visible"));
+        domain_data.insert(secret_key.to_owned(), member);
+        json!({
+            "data": {
+                "recordIdentifier": RECORD_ID,
+                "revisionIdentifier": 1,
+                "domainData": domain_data
+            },
+            "meta": {"registryIdentifier": "held-encryption"}
+        })
+    }
+
+    /// The stored cache row holds the tagged envelope member, never plaintext.
+    fn assert_stays_sealed(held: &HeldResponse, plaintexts: &[&str]) {
+        let stored = String::from_utf8_lossy(held.body());
+        assert!(stored.contains(ENVELOPE_MEMBER_TAG));
+        for plaintext in plaintexts {
+            assert!(!stored.contains(plaintext));
+        }
+    }
+
+    /// The replay gate re-derives exactly the stored bytes from the parsed
+    /// body, so a sealed envelope member must survive that canonical round
+    /// trip for a replay to serve at all.
+    fn assert_replay_canonical(held: &HeldResponse) {
+        let parsed = parse_json_strict(held.body()).unwrap();
+        assert_eq!(canonicalize_json(&parsed).unwrap(), held.body());
+    }
+
+    #[tokio::test]
+    async fn single_record_body_opens_once_at_the_serve_edge() {
+        let registry = registry(true);
+        let entity = &registry.entities()["case"];
+        let service = service();
+        let secret_key = secret_api_name(&registry);
+        let held = HeldResponse::from_json(
+            201,
+            &single_record_body(
+                &secret_key,
+                sealed_member(&service, RECORD_ID, FIRST_PLAINTEXT),
+            ),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        assert_stays_sealed(&held, &[FIRST_PLAINTEXT]);
+        assert_replay_canonical(&held);
+
+        let response = exact_mutation(&held, Some(entity), "", Some(&service));
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let served = parse_json_strict(&bytes).unwrap();
+        assert_eq!(served["data"]["recordIdentifier"], json!(RECORD_ID));
+        assert_eq!(served["data"]["domainData"]["label"], json!("visible"));
+        assert_eq!(
+            served["data"]["domainData"][&secret_key],
+            json!(FIRST_PLAINTEXT)
+        );
+
+        // Serving opened a copy: the held body a replay will read from the
+        // cache still holds the sealed member.
+        assert_stays_sealed(&held, &[FIRST_PLAINTEXT]);
+    }
+
+    #[tokio::test]
+    async fn batch_body_opens_each_item_and_positions_stay_outside_the_members() {
+        let registry = registry(true);
+        let entity = &registry.entities()["case"];
+        let service = service();
+        let secret_key = secret_api_name(&registry);
+        let mut first = Map::new();
+        first.insert(
+            secret_key.clone(),
+            sealed_member(&service, RECORD_ID, FIRST_PLAINTEXT),
+        );
+        let mut second = Map::new();
+        second.insert(
+            secret_key.clone(),
+            sealed_member(&service, OTHER_RECORD_ID, SECOND_PLAINTEXT),
+        );
+        let snapshot = format!("sha256:{}", "0".repeat(64));
+        let body = json!({
+            "snapshot": snapshot,
+            "results": [
+                {"operation": "create", "id": RECORD_ID, "revision": 3,
+                 "etag": "\"etag-one\"", "data": first},
+                {"operation": "patch", "id": OTHER_RECORD_ID, "revision": 4,
+                 "etag": "\"etag-two\"", "data": second}
+            ]
+        });
+        let held = HeldResponse::from_json(200, &body, BTreeMap::new()).unwrap();
+        assert_stays_sealed(&held, &[FIRST_PLAINTEXT, SECOND_PLAINTEXT]);
+        assert_replay_canonical(&held);
+
+        let response = exact_mutation(&held, Some(entity), "", Some(&service));
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let served = parse_json_strict(&bytes).unwrap();
+        // The erasure tombstone scan reads the snapshot and each item's id and
+        // revision directly from the body, beside the sealed members, so those
+        // positions survive opening unchanged.
+        assert_eq!(served["snapshot"], json!(snapshot));
+        assert_eq!(served["results"][0]["id"], json!(RECORD_ID));
+        assert_eq!(served["results"][0]["revision"], json!(3));
+        assert_eq!(served["results"][1]["id"], json!(OTHER_RECORD_ID));
+        assert_eq!(served["results"][1]["revision"], json!(4));
+        assert_eq!(
+            served["results"][0]["data"][&secret_key],
+            json!(FIRST_PLAINTEXT)
+        );
+        assert_eq!(
+            served["results"][1]["data"][&secret_key],
+            json!(SECOND_PLAINTEXT)
+        );
+    }
+
+    #[tokio::test]
+    async fn batch_cache_budget_accounts_for_envelope_expansion() {
+        let registry = registry(true);
+        let entity = &registry.entities()["case"];
+        let service = service();
+        let secret_key = secret_api_name(&registry);
+        let plaintext = "x".repeat(MAX_ENCRYPTED_FIELD_STRING_CHARACTERS as usize);
+        let results = (1..=MAX_BATCH_ITEMS)
+            .map(|position| {
+                let record_id = format!("00000000-0000-4000-8000-{position:012}");
+                json!({
+                    "operation": "patch",
+                    "id": record_id,
+                    "revision": 2,
+                    "etag": format!("\"etag-{position}\""),
+                    "data": {
+                        secret_key.clone(): sealed_member(&service, &record_id, &plaintext),
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        let body = json!({
+            "snapshot": format!("sha256:{}", "0".repeat(64)),
+            "results": results,
+        });
+
+        let held = HeldResponse::from_json(200, &body, BTreeMap::new()).unwrap();
+        assert!(held.body().len() > 2 * 1024 * 1024);
+        assert!(held.body().len() < 3 * 1024 * 1024);
+        assert!(!String::from_utf8_lossy(held.body()).contains(&plaintext));
+
+        let response = exact_mutation(&held, Some(entity), "", Some(&service));
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
+            .await
+            .unwrap();
+        assert!(bytes.len() < 2 * 1024 * 1024);
+        let served = parse_json_strict(&bytes).unwrap();
+        assert_eq!(
+            served["results"].as_array().unwrap().len(),
+            usize::from(MAX_BATCH_ITEMS)
+        );
+        assert_eq!(served["results"][0]["data"][&secret_key], plaintext);
+        assert_eq!(
+            served["results"][usize::from(MAX_BATCH_ITEMS) - 1]["data"][&secret_key],
+            plaintext
+        );
+    }
+
+    #[test]
+    fn expanded_cache_budget_remains_bounded() {
+        let oversized = json!({"data": "x".repeat(3 * 1024 * 1024)});
+        assert!(HeldResponse::from_json(200, &oversized, BTreeMap::new()).is_err());
+    }
+
+    #[tokio::test]
+    async fn body_without_domain_data_passes_through_without_key_state() {
+        let registry = registry(true);
+        let entity = &registry.entities()["case"];
+        let held = HeldResponse::from_json(
+            200,
+            &json!({"actionResult": {"recorded": true}}),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let response = exact_mutation(&held, Some(entity), "", None);
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        assert_eq!(bytes.as_ref(), held.body());
+    }
+
+    #[tokio::test]
+    async fn entity_without_encrypted_fields_never_touches_key_state() {
+        let registry = registry(false);
+        let entity = &registry.entities()["case"];
+        let held = HeldResponse::from_json(
+            200,
+            &single_record_body("secret", json!(FIRST_PLAINTEXT)),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let response = exact_mutation(&held, Some(entity), "", None);
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        assert_eq!(bytes.as_ref(), held.body());
+    }
+
+    #[tokio::test]
+    async fn sealed_member_without_key_state_fails_closed_value_free() {
+        let registry = registry(true);
+        let entity = &registry.entities()["case"];
+        let service = service();
+        let secret_key = secret_api_name(&registry);
+        let held = HeldResponse::from_json(
+            201,
+            &single_record_body(
+                &secret_key,
+                sealed_member(&service, RECORD_ID, FIRST_PLAINTEXT),
+            ),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let response = exact_mutation(&held, Some(entity), "", None);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let problem = parse_json_strict(&bytes).unwrap();
+        assert_eq!(
+            problem["code"],
+            json!("runtime.field_encryption.unavailable")
+        );
+        assert!(!bytes
+            .windows(FIRST_PLAINTEXT.len())
+            .any(|window| window == FIRST_PLAINTEXT.as_bytes()));
+    }
+
+    #[tokio::test]
+    async fn tampered_or_malformed_members_fail_closed_value_free() {
+        let registry = registry(true);
+        let entity = &registry.entities()["case"];
+        let service = service();
+        let secret_key = secret_api_name(&registry);
+        // An envelope sealed for another record fails its AAD bind at the
+        // serve edge, and a member that is not the tagged envelope shape
+        // fails the same way.
+        for member in [
+            sealed_member(&service, OTHER_RECORD_ID, FIRST_PLAINTEXT),
+            json!({ENVELOPE_MEMBER_TAG: "not base64!"}),
+            json!("bare plaintext"),
+        ] {
+            let held = HeldResponse::from_json(
+                201,
+                &single_record_body(&secret_key, member),
+                BTreeMap::from([(PermittedResponseHeader::Etag, b"\"etag\"".to_vec())]),
+            )
+            .unwrap();
+            let response = exact_mutation(&held, Some(entity), "", Some(&service));
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+            let problem = parse_json_strict(&bytes).unwrap();
+            assert_eq!(
+                problem["code"],
+                json!("runtime.field_encryption.unavailable")
+            );
+            assert!(!String::from_utf8_lossy(&bytes).contains(FIRST_PLAINTEXT));
+        }
     }
 }
 
