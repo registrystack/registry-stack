@@ -106,6 +106,16 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                     errors.push(Diagnostic::error("access.membership.principal_type", &path,
                         "principalField must be a stored string or text field matching the verified principal"));
                 }
+                // The membership predicate compares the principal column to the
+                // verified plaintext principal, so ciphertext can never match.
+                if membership
+                    .fields
+                    .iter()
+                    .any(|field| field.id == boundary.principal_field && field.encrypted)
+                {
+                    errors.push(Diagnostic::error("access.membership.principal_encrypted", &path,
+                        "principalField must be a plaintext stored field; an encrypted field cannot match the verified principal"));
+                }
                 if !membership.fields.iter().any(|field| {
                     field.id == boundary.active_field
                         && matches!(field.field_type, FieldTypeSource::Boolean)

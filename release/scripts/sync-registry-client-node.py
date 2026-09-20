@@ -37,6 +37,7 @@ https://github.com/registrystack/registry-stack for details.
 def expected_files() -> dict[Path, bytes]:
     files: dict[Path, bytes] = {}
     license_text = (ROOT / "LICENSE").read_bytes()
+    third_party_notices = (ROOT / "THIRD_PARTY_NOTICES").read_bytes()
     for destination in (
         TARGET,
         TARGET / "npm" / "darwin-arm64",
@@ -55,6 +56,9 @@ def expected_files() -> dict[Path, bytes]:
         files[TARGET / "npm" / platform / "README.md"] = PLATFORM_README.format(
             platform=platform, triple=triple
         ).encode()
+        files[TARGET / "npm" / platform / "THIRD_PARTY_NOTICES"] = (
+            third_party_notices
+        )
     for product, source in PRODUCTS.items():
         destination = TARGET / product
         files[destination / "client.js"] = (source / "client.js").read_bytes()

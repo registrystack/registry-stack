@@ -82,6 +82,107 @@ fn omitted_optional_request_field_freezes_as_materialized_null() {
 }
 
 #[test]
+fn encrypted_participation_is_refused_before_targets_resolve() {
+    // The compiler refuses encrypted change-request targets, ceilings, and
+    // value sources, so this compiled state stands for a package built before
+    // those refusals: both entities carry an encrypted field the plan never
+    // names. A candidate naming one anyway is refused inside resolve_targets,
+    // before target resolution, so no proposal or target snapshot can be
+    // materialized from it.
+    let registry = fixture_with(
+        json!([{"target":{"fromField":"one"},"operation":"patch","set":{"first":{"fromField":"value"}}}]),
+        |source| {
+            source["entities"][0]["fields"].as_array_mut().unwrap().push(json!({
+                "id":"secret","type":"string","maxLength":64,"classification":"restricted","encrypted":true
+            }));
+            source["entities"][1]["fields"].as_array_mut().unwrap().push(json!({
+                "id":"secret-value","type":"string","maxLength":64,"classification":"restricted","encrypted":true
+            }));
+        },
+    );
+    let request_entity = &registry.entities()["request"];
+    let intake = map(json!({"one":TARGET,"value":"changed"}));
+    let legitimate = crate::rhai_planner::plan_change_request_effects(
+        request_entity.change_request.as_ref().unwrap(),
+        &intake,
+        Instant::now() + Duration::from_secs(1),
+    )
+    .unwrap();
+    // The legitimate candidate passes the backstop itself and resolves.
+    refuse_encrypted_participation(&registry, request_entity, &legitimate).unwrap();
+    resolve_targets(
+        &registry,
+        request_entity,
+        &intake,
+        legitimate.clone(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+
+    // A set on an encrypted target field is refused by the backstop, whatever
+    // the value source: literal here, request field, and reserved effect
+    // sources all name the same encrypted target member.
+    let mut set_encrypted = legitimate.clone();
+    set_encrypted.effects[0]
+        .mutations
+        .push(CandidateChangeRequestMutation::Set {
+            field: "secret".to_owned(),
+            value: CandidateChangeRequestValue::Literal(json!("sealed-canary")),
+        });
+    assert!(matches!(
+        refuse_encrypted_participation(&registry, request_entity, &set_encrypted),
+        Err(MutationError::InvalidRequest)
+    ));
+    assert!(matches!(
+        resolve_targets(
+            &registry,
+            request_entity,
+            &intake,
+            set_encrypted,
+            &BTreeMap::new()
+        ),
+        Err(MutationError::InvalidRequest)
+    ));
+
+    // A clear of an encrypted target field is refused the same way.
+    let mut clear_encrypted = legitimate.clone();
+    clear_encrypted.effects[0]
+        .mutations
+        .push(CandidateChangeRequestMutation::Clear {
+            field: "secret".to_owned(),
+        });
+    assert!(matches!(
+        refuse_encrypted_participation(&registry, request_entity, &clear_encrypted),
+        Err(MutationError::InvalidRequest)
+    ));
+
+    // An encrypted request field cannot source a set of a plaintext target.
+    let mut encrypted_source = legitimate;
+    encrypted_source.effects[0]
+        .mutations
+        .push(CandidateChangeRequestMutation::Set {
+            field: "second".to_owned(),
+            value: CandidateChangeRequestValue::FromRequestField {
+                field: "secret-value".to_owned(),
+            },
+        });
+    assert!(matches!(
+        refuse_encrypted_participation(&registry, request_entity, &encrypted_source),
+        Err(MutationError::InvalidRequest)
+    ));
+    assert!(matches!(
+        resolve_targets(
+            &registry,
+            request_entity,
+            &intake,
+            encrypted_source,
+            &BTreeMap::new()
+        ),
+        Err(MutationError::InvalidRequest)
+    ));
+}
+
+#[test]
 fn preparation_refuses_a_guard_on_its_own_request_record() {
     let registry = fixture_with(
         json!([{"target":{"fromField":"one"},"operation":"patch","set":{"first":{"fromField":"value"}}}]),
@@ -363,6 +464,62 @@ fn unchanged_snapshot_bytes_count_toward_the_full_packet_limit() {
         existing(&registry, intake, before),
         Err(MutationError::InvalidRequest)
     ));
+}
+
+#[test]
+fn unchanged_encrypted_members_fit_the_stored_packet_expansion_budget() {
+    const ENCRYPTED_FIELDS: usize = 48;
+    const PLAINTEXT_BYTES_PER_FIELD: usize = 16 * 1024;
+    const ENVELOPE_FIXED_BYTES: usize = 33;
+    const MAX_ENVELOPE_MEMBER_OVERHEAD: usize = 72;
+
+    let registry = fixture_with(
+        json!([{"target":{"fromField":"one"},"operation":"patch","set":{"first":{"fromField":"value"}}}]),
+        |source| {
+            let fields = source["entities"][0]["fields"]
+                .as_array_mut()
+                .expect("target fields are an array");
+            fields.extend((0..ENCRYPTED_FIELDS).map(|index| {
+                json!({
+                    "id": format!("secret-{index}"),
+                    "type": "string",
+                    "maxLength": PLAINTEXT_BYTES_PER_FIELD,
+                    "classification": "restricted",
+                    "encrypted": true
+                })
+            }));
+        },
+    );
+    let base64_bytes = 4 * (PLAINTEXT_BYTES_PER_FIELD + ENVELOPE_FIXED_BYTES).div_ceil(3);
+    let envelope = json!({
+        crate::history_schema::ENVELOPE_MEMBER_TAG: "A".repeat(base64_bytes)
+    });
+    let mut before = map(json!({"first":"old"}));
+    for index in 0..ENCRYPTED_FIELDS {
+        before.insert(format!("secret-{index}"), envelope.clone());
+    }
+
+    let prepared = existing(
+        &registry,
+        map(json!({"one":TARGET,"value":"changed"})),
+        before,
+    )
+    .expect("a plaintext-only effect retains unchanged ciphertext snapshots");
+    assert!(
+        prepared.proposal.combined_snapshot_bytes()
+            > crate::change_request::MAX_CHANGE_REQUEST_SNAPSHOT_BYTES as usize
+    );
+    assert!(prepared.proposal.combined_snapshot_bytes() <= MAX_REQUEST_SNAPSHOT_BYTES);
+    assert_eq!(prepared.targets[0].after["first"], json!("changed"));
+    assert_eq!(prepared.targets[0].after["secret-0"], envelope);
+
+    let maximum_encrypted_members = 2
+        * crate::request_workflow::MAX_REQUEST_TARGETS
+        * crate::contract::MAX_ENCRYPTED_FIELDS_PER_ENTITY;
+    let worst_case_expanded = 4
+        * (crate::change_request::MAX_CHANGE_REQUEST_SNAPSHOT_BYTES as usize).div_ceil(3)
+        + maximum_encrypted_members * MAX_ENVELOPE_MEMBER_OVERHEAD;
+    assert!(worst_case_expanded <= MAX_REQUEST_SNAPSHOT_BYTES);
 }
 
 #[test]

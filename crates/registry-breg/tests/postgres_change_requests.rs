@@ -4243,7 +4243,11 @@ async fn real_postgres_http_change_request_oversized_prepared_packet_refuses_bef
         json!({"tenant": TENANT, "name": "bounded-new"}),
     )
     .await;
-    let large_note = "x".repeat(1_060_000);
+    // Preparation retains both before and after target snapshots. Keep this
+    // fixture above the internal stored-packet limit as that limit grows to
+    // accommodate encrypted-envelope expansion.
+    let large_note =
+        "x".repeat(registry_breg::request_workflow::MAX_REQUEST_SNAPSHOT_BYTES / 2 + 64 * 1024);
     let placement = create_record(
         &app,
         "/v1/records/placements?accessProfile=steward",

@@ -10,12 +10,13 @@ ADD --checksum=sha256:8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8a
 
 # The runtime configuration, compiled package, deployment trust anchor, runtime
 # secrets, migration credential, and signing keys are deployment inputs. The
-# release image carries only the runtime binary and the license, and gives
+# release image carries only the runtime binary and its licenses, and gives
 # operators fixed read-only mount points under /etc/breg. BReg keeps no local
 # state: its audit journal lives in PostgreSQL, and the image carries no
 # writable directory of its own.
 RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
     --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \
+    --mount=type=bind,source=THIRD_PARTY_NOTICES,target=/workspace/THIRD_PARTY_NOTICES,readonly \
     --mount=type=bind,source=release/scripts/install-runtime-libc6.sh,target=/workspace/install-runtime-libc6.sh,readonly \
     /workspace/install-runtime-libc6.sh /workspace/runtime-root /workspace/runtime-packages \
     && mkdir -p \
@@ -24,6 +25,7 @@ RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
         /workspace/runtime-root/usr/local/bin \
     && install -m 0755 /workspace/image-bin/breg /workspace/runtime-root/usr/local/bin/breg \
     && install -m 0644 /workspace/LICENSE /workspace/runtime-root/licenses/breg/LICENSE \
+    && install -m 0644 /workspace/THIRD_PARTY_NOTICES /workspace/runtime-root/licenses/breg/THIRD_PARTY_NOTICES \
     && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
 
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c AS runtime

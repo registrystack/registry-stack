@@ -60,6 +60,8 @@ pub(crate) struct HistoryErasureLifecycleOutcome {
     pub scrubbed_outbox_payload_count: u64,
     pub scrubbed_cached_response_count: u64,
     pub scrubbed_ingestion_receipt_count: u64,
+    pub scrubbed_request_target_count: u64,
+    pub scrubbed_request_proposal_count: u64,
     pub removed_descriptor_count: u64,
 }
 
@@ -142,6 +144,8 @@ fn outcome_report(
         scrubbed_outbox_payload_count: outcome.scrubbed_outbox_payload_count,
         scrubbed_cached_response_count: outcome.scrubbed_cached_response_count,
         scrubbed_ingestion_receipt_count: outcome.scrubbed_ingestion_receipt_count,
+        scrubbed_request_target_count: outcome.scrubbed_request_target_count,
+        scrubbed_request_proposal_count: outcome.scrubbed_request_proposal_count,
         removed_descriptor_count: outcome.removed_descriptor_count,
     }
 }
@@ -244,6 +248,8 @@ mod tests {
                 scrubbed_outbox_payload_count: 1,
                 scrubbed_cached_response_count: 1,
                 scrubbed_ingestion_receipt_count: 1,
+                scrubbed_request_target_count: 2,
+                scrubbed_request_proposal_count: 1,
                 removed_descriptor_count: 0,
             },
         );
@@ -254,6 +260,8 @@ mod tests {
         assert_eq!(report.scrubbed_change_context_count, 1);
         assert_eq!(report.scrubbed_cached_response_count, 1);
         assert_eq!(report.scrubbed_ingestion_receipt_count, 1);
+        assert_eq!(report.scrubbed_request_target_count, 2);
+        assert_eq!(report.scrubbed_request_proposal_count, 1);
     }
 
     #[test]

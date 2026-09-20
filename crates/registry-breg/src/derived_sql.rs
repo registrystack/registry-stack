@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use pg_query::protobuf::{
     node::Node as PgNode, AExpr, Node as PgNodeWrapper, SelectStmt, SetOperation,
@@ -17,6 +17,7 @@ pub(crate) fn validate_derived_sql(
     derived: &DerivedSource,
     sql: &[u8],
     known_relations: &BTreeSet<&str>,
+    encrypted_columns: &BTreeMap<String, BTreeSet<String>>,
     path: &str,
     errors: &mut Vec<Diagnostic>,
 ) {
@@ -47,6 +48,177 @@ pub(crate) fn validate_derived_sql(
     if !valid_ast(&parsed, known_relations) {
         errors.push(sql_error(path));
     }
+    refuse_encrypted_columns(&parsed, encrypted_columns, path, errors);
+}
+
+/// Refuse any column reference that resolves to an encrypted field. The
+/// registry_source layer never exposes encrypted columns, so such a reference
+/// could only fail at runtime; refusing it at compile keeps the derived layer
+/// honest. Map keys are relation sql names and values are the logical column
+/// names of each entity's encrypted fields.
+fn refuse_encrypted_columns(
+    parsed: &pg_query::ParseResult,
+    encrypted_columns: &BTreeMap<String, BTreeSet<String>>,
+    path: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if encrypted_columns.is_empty() {
+        return;
+    }
+    let qualified_relations = source_relation_qualifiers(parsed);
+    let cte_outputs = cte_output_qualifiers(parsed);
+    for (node, _, _, _) in parsed.protobuf.nodes() {
+        let NodeRef::ColumnRef(column) = node else {
+            continue;
+        };
+        let names: Vec<String> = column
+            .fields
+            .iter()
+            .filter_map(|field| match field.node.as_ref() {
+                Some(PgNode::String(value)) => Some(value.sval.clone()),
+                _ => None,
+            })
+            .collect();
+        let Some(last) = names.last() else {
+            continue;
+        };
+        let matches = match names.as_slice() {
+            [schema, relation, _column] if schema == "registry_source" => encrypted_columns
+                .get(relation.as_str())
+                .is_some_and(|columns| columns.contains(last)),
+            [qualifier, _column] if qualified_relations.contains_key(qualifier) => {
+                qualified_relations[qualifier].iter().any(|relation| {
+                    encrypted_columns
+                        .get(relation)
+                        .is_some_and(|columns| columns.contains(last))
+                })
+            }
+            [qualifier, _column]
+                if cte_outputs
+                    .get(qualifier)
+                    .is_some_and(|columns| columns.contains(last)) =>
+            {
+                false
+            }
+            // An unqualified reference, or a qualifier not owned by a direct
+            // registry_source range, cannot be resolved without full scope
+            // analysis. Refuse it conservatively against every source.
+            _ => encrypted_columns
+                .values()
+                .any(|columns| columns.contains(last)),
+        };
+        if matches {
+            errors.push(Diagnostic::error(
+                "derived.sql.encrypted_column",
+                path,
+                "derived SQL cannot reference an encrypted column; registry_source views never expose it",
+            ));
+            return;
+        }
+    }
+}
+
+/// Map each direct `registry_source` relation and authored alias back to the
+/// source relation it qualifies. A qualifier can occur in nested scopes, so
+/// retain every candidate and refuse when any candidate owns the encrypted
+/// column rather than pretending the query has one flat namespace.
+fn source_relation_qualifiers(
+    parsed: &pg_query::ParseResult,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let mut qualifiers = BTreeMap::<String, BTreeSet<String>>::new();
+    for (node, _, _, _) in parsed.protobuf.nodes() {
+        let NodeRef::RangeVar(range) = node else {
+            continue;
+        };
+        if !range.catalogname.is_empty() || range.schemaname != "registry_source" {
+            continue;
+        }
+        qualifiers
+            .entry(range.relname.clone())
+            .or_default()
+            .insert(range.relname.clone());
+        if let Some(alias) = &range.alias {
+            qualifiers
+                .entry(alias.aliasname.clone())
+                .or_default()
+                .insert(range.relname.clone());
+        }
+    }
+    qualifiers
+}
+
+/// Map each CTE name and authored range alias to output columns declared by an
+/// alias or unambiguously inherited from a simple column reference. References
+/// inside the CTE are still checked on their own against source relations;
+/// this only prevents the outer `cte.column` reference from being mistaken
+/// for an unresolved source column with the same name.
+fn cte_output_qualifiers(parsed: &pg_query::ParseResult) -> BTreeMap<String, BTreeSet<String>> {
+    let ctes = parsed
+        .protobuf
+        .nodes()
+        .into_iter()
+        .filter_map(|(node, _, _, _)| {
+            let NodeRef::CommonTableExpr(cte) = node else {
+                return None;
+            };
+            let column_names = if cte.aliascolnames.is_empty() {
+                let Some(PgNode::SelectStmt(select)) = cte
+                    .ctequery
+                    .as_deref()
+                    .and_then(|query| query.node.as_ref())
+                else {
+                    return None;
+                };
+                select
+                    .target_list
+                    .iter()
+                    .map(cte_target_name)
+                    .collect::<Option<Vec<_>>>()?
+            } else {
+                node_strings(&cte.aliascolnames)?
+            };
+            let columns = column_names.iter().cloned().collect::<BTreeSet<_>>();
+            (!columns.is_empty() && columns.len() == column_names.len())
+                .then(|| (cte.ctename.clone(), columns))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let mut qualifiers = BTreeMap::<String, BTreeSet<String>>::new();
+    for (node, _, _, _) in parsed.protobuf.nodes() {
+        let NodeRef::RangeVar(range) = node else {
+            continue;
+        };
+        if !range.catalogname.is_empty() || !range.schemaname.is_empty() {
+            continue;
+        }
+        let Some(columns) = ctes.get(&range.relname) else {
+            continue;
+        };
+        qualifiers
+            .entry(range.relname.clone())
+            .or_default()
+            .extend(columns.iter().cloned());
+        if let Some(alias) = &range.alias {
+            qualifiers
+                .entry(alias.aliasname.clone())
+                .or_default()
+                .extend(columns.iter().cloned());
+        }
+    }
+    qualifiers
+}
+
+fn cte_target_name(node: &PgNodeWrapper) -> Option<String> {
+    let Some(PgNode::ResTarget(target)) = node.node.as_ref() else {
+        return None;
+    };
+    if !target.name.is_empty() {
+        return Some(target.name.clone());
+    }
+    let Some(PgNode::ColumnRef(column)) = target.val.as_deref()?.node.as_ref() else {
+        return None;
+    };
+    node_strings(&column.fields)?.pop()
 }
 
 fn root_node(parsed: &pg_query::ParseResult) -> Option<&PgNode> {

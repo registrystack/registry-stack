@@ -142,7 +142,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             with self.subTest(platform=napi_platform):
                 args = (
                     ROOT, "9.9.9", napi_platform, "all", "maturin",
-                    Path("/work"), Path("/out"),
+                    Path("/work"), Path("/out"), "/maturin/python",
                 )
                 release = self.module.plan(*args)
                 ci = self.module.plan(*args, python_profile="ci")
@@ -156,28 +156,87 @@ class AssembleClientPackagesTest(unittest.TestCase):
                         )
                         self.assertEqual(ci_step.cwd, release_step.cwd)
                         products.append(ci_step.cwd.name)
+                    elif release_step.argv[0].endswith("build-linux-python-client"):
+                        profile_index = release_step.argv.index("--profile") + 1
+                        self.assertEqual(release_step.argv[profile_index], "release")
+                        expected = list(release_step.argv)
+                        expected[profile_index] = "ci"
+                        self.assertEqual(ci_step.argv, tuple(expected))
+                        self.assertEqual(ci_step.cwd, release_step.cwd)
+                        products.append(
+                            release_step.argv[release_step.argv.index("--client") + 1]
+                        )
                     else:
                         self.assertEqual(ci_step, release_step)
-                self.assertEqual(products, [
-                    f"registry-{product}-client-py" for product in self.module.PRODUCTS
-                ])
+                expected_products = list(self.module.PRODUCTS)
+                if napi_platform == "darwin-arm64":
+                    expected_products = [
+                        f"registry-{product}-client-py"
+                        for product in self.module.PRODUCTS
+                    ]
+                self.assertEqual(products, expected_products)
 
     def test_cli_ci_profile_is_explicit_and_rejects_unknown_profiles(self) -> None:
         command = [
             sys.executable, str(SCRIPT), "--output-dir", "/out",
             "--napi-platform", "linux-x64-gnu", "--artifacts", "python", "--dry-run",
-            "--include-casework",
+            "--include-casework", "--zig-python", "/maturin/python",
+            "--maturin", "/maturin/maturin",
         ]
         result = subprocess.run(
             [*command, "--python-profile", "ci"], capture_output=True, text=True, check=True
         )
-        self.assertEqual(result.stdout.count("maturin build --profile ci --locked"), 5)
-        self.assertNotIn("--release", result.stdout)
+        self.assertEqual(result.stdout.count("build-linux-python-client"), 5)
+        self.assertEqual(result.stdout.count("--profile ci"), 5)
+        self.assertNotIn("--profile release", result.stdout)
         invalid = subprocess.run(
             [*command, "--python-profile", "dev"], capture_output=True, text=True
         )
         self.assertEqual(invalid.returncode, 2)
         self.assertIn("invalid choice", invalid.stderr)
+
+    def test_path_maturin_is_resolved_for_the_linux_helper(self) -> None:
+        resolved = self.module.resolve_executable("python3")
+        self.assertTrue(Path(resolved).is_absolute())
+        self.assertEqual(Path(resolved), Path(sys.executable).resolve())
+        with self.assertRaisesRegex(ValueError, "executable is not on PATH"):
+            self.module.resolve_executable("definitely-not-a-registry-build-tool")
+
+    def test_linux_wheels_use_the_canonical_zig_compiler_helper(self) -> None:
+        steps = self.module.plan(
+            ROOT,
+            "9.9.9",
+            "linux-x64-gnu",
+            "python",
+            "/maturin/maturin",
+            Path("/work"),
+            Path("/out"),
+            "/maturin/python",
+        )
+        builds = [
+            step
+            for step in steps
+            if step.argv[0].endswith("build-linux-python-client")
+        ]
+        self.assertEqual(len(builds), 5)
+        for product, step in zip(self.module.PRODUCTS, builds):
+            self.assertEqual(step.cwd, ROOT)
+            self.assertIn(("--client", product), tuple(zip(step.argv, step.argv[1:])))
+            self.assertIn("x86_64-unknown-linux-gnu", step.argv)
+            self.assertIn("manylinux_2_17", step.argv)
+            self.assertIn("/maturin/python", step.argv)
+            self.assertNotIn("--zig", step.argv)
+
+        with self.assertRaisesRegex(ValueError, "require --zig-python"):
+            self.module.plan(
+                ROOT,
+                "9.9.9",
+                "linux-x64-gnu",
+                "python",
+                "/maturin/maturin",
+                Path("/work"),
+                Path("/out"),
+            )
 
     def test_each_platform_names_the_wheel_tag_its_release_matrix_builds(self) -> None:
         candidate = (

@@ -89,7 +89,7 @@ run.
 The delivery row is `BREG-V1-INGESTION-RUNS` in
 `contracts/definition-of-done.yaml`, the acceptance scenarios are journey
 `BREG-J21` in `contracts/acceptance-scenario-matrix.yaml`, and the security
-rows are `BREG-SEC-70` through `BREG-SEC-77` in
+rows are `BREG-SEC-75` through `BREG-SEC-82` in
 `contracts/security-invariant-matrix.yaml`. The published HTTP reference is
 `docs/site/src/content/docs/reference/breg-api.mdx`; the operator procedure is
 `docs/site/src/content/docs/operate/breg-data.mdx`.

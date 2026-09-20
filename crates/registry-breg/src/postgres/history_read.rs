@@ -29,6 +29,7 @@ use crate::cursor::{
     CursorFilterExpr, CursorFilterOperator, CursorLogicalOp, CursorOrderClause,
     CursorProjectionField, CursorQueryScope, CursorRepresentation,
 };
+use crate::field_encryption::{FieldEncryptionService, SharedFieldEncryptionService};
 use crate::history_commit::{
     capture_latest_snapshot_reference, resolve_snapshot_reference, ResolvedSnapshot,
 };
@@ -46,6 +47,7 @@ use crate::query_binding::{CursorBindingQuery, CursorBindingReferences};
 use crate::record_profile::{self, RecordRepresentation};
 use crate::stored_bytes;
 
+use super::read::{load_retained_plaintext_fields, open_history_row_members};
 use super::{
     begin_record_transaction, snapshot_read_error, validate_field_value, ClaimContext,
     ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
@@ -67,6 +69,7 @@ pub struct PostgresSnapshotReadService {
     lock_timeout: Duration,
     audit_profile: AuditProfile,
     cursors: Arc<CursorCodec>,
+    field_encryption: Option<SharedFieldEncryptionService>,
     fault: SnapshotReadFaultControl,
 }
 
@@ -89,8 +92,18 @@ impl PostgresSnapshotReadService {
             lock_timeout,
             audit_profile,
             cursors,
+            field_encryption: None,
             fault: SnapshotReadFaultControl::Disabled,
         }
+    }
+
+    /// Bind the field-encryption key state encrypted members open under at
+    /// the response edge. Absent key state is only acceptable for entities
+    /// without encrypted fields.
+    #[must_use]
+    pub fn with_field_encryption(mut self, service: Arc<FieldEncryptionService>) -> Self {
+        self.field_encryption = Some(service);
+        self
     }
 
     #[cfg(feature = "postgres-test")]
@@ -279,11 +292,14 @@ impl PostgresSnapshotReadService {
                 effective_binding,
             });
         }
+        let retained_plaintext_fields =
+            load_retained_plaintext_fields(transaction, &request.entity_id).await?;
         let descriptors = load_compatible_descriptors(
             transaction,
             &plan.entity,
             &plan.required_fields,
             &plan.authorizing_fields,
+            &retained_plaintext_fields,
             package_revisions,
         )
         .await?;
@@ -359,7 +375,15 @@ impl PostgresSnapshotReadService {
         };
         let rows = rows
             .iter()
-            .map(|row| row_to_record(row, &selected_fields, &descriptors))
+            .map(|row| {
+                row_to_record(
+                    row,
+                    &selected_fields,
+                    &descriptors,
+                    &plan.entity,
+                    self.field_encryption.as_deref(),
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         guarded
             .commit()
@@ -773,6 +797,7 @@ async fn load_compatible_descriptors(
     entity: &CompiledEntity,
     required_fields: &BTreeSet<String>,
     authorizing_fields: &BTreeSet<String>,
+    retained_plaintext_fields: &BTreeSet<String>,
     package_revisions: Vec<String>,
 ) -> Result<BTreeMap<String, CompatibleDescriptor>, ReadServiceError> {
     let mut descriptors = BTreeMap::new();
@@ -781,7 +806,12 @@ async fn load_compatible_descriptors(
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
         let compatibility = descriptor
-            .compatibility_for_fields(entity, required_fields, authorizing_fields)
+            .compatibility_for_fields_allowing_retained_plaintext(
+                entity,
+                required_fields,
+                authorizing_fields,
+                retained_plaintext_fields,
+            )
             .map_err(|_| ReadServiceError::Unavailable)?;
         descriptors.insert(
             package_revision,
@@ -1364,6 +1394,8 @@ fn row_to_record(
     row: &tokio_postgres::Row,
     selected_fields: &[String],
     descriptors: &BTreeMap<String, CompatibleDescriptor>,
+    entity: &CompiledEntity,
+    field_encryption: Option<&FieldEncryptionService>,
 ) -> Result<RecordEnvelope, ReadServiceError> {
     let id = row
         .try_get::<_, String>(0)
@@ -1388,7 +1420,16 @@ fn row_to_record(
         .descriptor
         .decode_snapshot_for_fields(&descriptor.compatibility, &snapshot, Some(&id))
         .map_err(|_| ReadServiceError::Unavailable)?;
-    let data = projected_data(&decoded, &descriptor.compatibility, selected_fields)?;
+    let mut data = projected_data(&decoded, &descriptor.compatibility, selected_fields)?;
+    // Open at the response edge while this row's descriptor compatibility is
+    // still available. The retained snapshot itself remains byte-identical.
+    open_history_row_members(
+        entity,
+        &id,
+        &mut data,
+        field_encryption,
+        &descriptor.compatibility,
+    )?;
     Ok(RecordEnvelope {
         id,
         revision: u64::try_from(revision).map_err(|_| ReadServiceError::Unavailable)?,
@@ -2064,6 +2105,8 @@ mod tests {
                     },
                     required: true,
                     nullable: false,
+                    encrypted: false,
+                    retained_plaintext: false,
                 },
             )]),
         };

@@ -16,6 +16,14 @@ Use `KeyProviderKind` labels when reporting signing-key providers:
 - `workload_identity` for workload identity, federation, or ambient identity
   providers that mint or authorize signing operations without local key export.
 
+The same labels cover field-encryption data-key custodians:
+
+- `transit_datakey` for a Vault/OpenBao Transit data-encryption key reached
+  through a local Unix-socket proxy, which generates wrapped data keys and
+  unwraps them on demand.
+- `local_datakey_file` for a base64-encoded 32-byte data key read from a local
+  secret file.
+
 Product config should reject unknown provider labels for live apply. Add a new
 shared label before accepting a new provider kind in public posture or apply
 reports.
@@ -56,6 +64,8 @@ Do not copy these fields into posture or bundles:
 - cloud KMS resource names, key ring paths, or account/project identifiers;
 - workload identity trust domains, audience values, subject selectors, or token
   exchange diagnostics;
+- Transit socket paths, mount paths, or key names for data-key custodians;
+- data-key reference names, such as `secret:file` targets;
 - raw provider error strings if they can contain any of the above.
 
 Products may log provider diagnostics on private operator channels after their

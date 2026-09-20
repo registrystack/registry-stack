@@ -399,6 +399,9 @@ async fn items(
         Err(super::ReadServiceError::Unavailable | super::ReadServiceError::SnapshotUnreadable) => {
             unavailable()
         }
+        Err(super::ReadServiceError::FieldEncryptionUnavailable) => {
+            super::field_encryption_unavailable()
+        }
         Err(super::ReadServiceError::CursorInvalid) => super::cursor_invalid(),
     }
 }

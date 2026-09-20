@@ -127,6 +127,16 @@ impl PostgresRecordMutationService {
         self
     }
 
+    /// Bind the field-encryption key state record writes seal and open under.
+    #[must_use]
+    pub fn with_field_encryption(
+        mut self,
+        service: Arc<crate::field_encryption::FieldEncryptionService>,
+    ) -> Self {
+        self.coordinator = self.coordinator.with_field_encryption(service);
+        self
+    }
+
     /// Bind operator-approved Evidence clients for v2 immediate action handlers.
     #[must_use]
     pub fn with_evidence_evaluator(
@@ -1374,6 +1384,7 @@ impl PostgresRecordMutationService {
                     MutationError::IdempotencyConflict
                     | MutationError::Unavailable
                     | MutationError::RetryableConflict
+                    | MutationError::FieldEncryptionUnavailable
                     | MutationError::PlannerFailure(_)
                     | MutationError::ActionHandlerFailure(_)
                     | MutationError::ActionEvidenceFailure { .. }

@@ -10,9 +10,10 @@ use registry_breg::generated_ddl::DdlStatementKind;
 use registry_breg::migration_plan::{
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
     RehearsalFixture, RehearsalProofs, RehearsalRowAssertion, ReviewedChangeCover,
-    ReviewedMigrationAssertionDescriptor, ReviewedMigrationDescriptor, ReviewedMigrationFile,
-    ReviewedMigrationObject, ReviewedMigrationObjectKind, ReviewedMigrationRecovery,
-    ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
+    ReviewedFieldEncryptionHistory, ReviewedMigrationAssertionDescriptor,
+    ReviewedMigrationDescriptor, ReviewedMigrationFile, ReviewedMigrationObject,
+    ReviewedMigrationObjectKind, ReviewedMigrationRecovery, ReviewedMigrationSource,
+    ReviewedMigrationStepDescriptor,
 };
 use registry_breg::package::{
     compiled_registry_change_set, inspect_package_integrity, prepare_package,
@@ -328,7 +329,10 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
     let objects = unbounded_dml.descriptor.steps[0].objects().to_vec();
     unbounded_dml.descriptor.steps[0] = ReviewedMigrationStepDescriptor::TransactionalSql {
         id: "backfill".to_owned(),
-        sql_path: unbounded_dml.descriptor.steps[0].sql_path().to_owned(),
+        sql_path: unbounded_dml.descriptor.steps[0]
+            .sql_path()
+            .expect("the chunked artifact binds a SQL path")
+            .to_owned(),
         objects,
         affected_rows: None,
     };
@@ -463,6 +467,225 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
     );
 }
 
+#[test]
+fn reviewed_encryption_flip_binds_envelope_blind_index_and_views() {
+    let previous = compile_variant(Variant::EncryptedBase, 1);
+    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+
+    // The flip is one backfill-classified change, never a physical rename.
+    let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+    assert_eq!(change_set.changes.len(), 1);
+    assert_eq!(
+        (change_set.changes[0].code, change_set.changes[0].class),
+        (
+            CompiledRegistryChangeCode::FieldEncryptionChanged,
+            CompiledRegistryChangeClass::DataBackfillRequired
+        )
+    );
+
+    let artifacts = encryption_flip_artifacts("encryption-flip", &previous, &candidate);
+    let prepared =
+        prepare_reviewed_package(Variant::EncryptedFlipOn, previous, vec![artifacts.source()])
+            .expect("reviewed encryption flip prepares");
+
+    assert_eq!(
+        prepared.manifest().migration_plan.reviewed_descriptors,
+        vec!["modules/core/migrations/encryption-flip/descriptor.json"]
+    );
+    let statements = &prepared.manifest().migration_plan.statements;
+    let entity = &candidate.entities()["asset"];
+    let field = &entity.fields["secret"];
+    let envelope = &field.physical_name;
+    let blind = field
+        .encryption
+        .as_ref()
+        .and_then(|encryption| encryption.blind_index.as_ref())
+        .expect("the flip candidate declares a blind index");
+
+    // The envelope column arrives under the field's own member, the blind
+    // sibling under its lookup member, both nullable bytea ahead of the
+    // reviewed backfill that fills them.
+    let envelope_column = statement(statements, "entity.asset.field.secret.column");
+    assert_eq!(envelope_column.kind, DdlStatementKind::Column);
+    assert!(envelope_column
+        .sql
+        .contains(&format!("ADD COLUMN \"{envelope}\" bytea")));
+    let blind_column = statement(statements, "entity.asset.field.secret.lookup-column");
+    assert_eq!(blind_column.kind, DdlStatementKind::Column);
+    assert_eq!(
+        blind_column.sql,
+        format!(
+            "ALTER TABLE registry_data.\"{}\" ADD COLUMN \"{}\" bytea",
+            entity.physical_table, blind.physical_name
+        )
+    );
+    // The optional flip field defers nothing: no NOT NULL interlock exists.
+    assert!(statements
+        .iter()
+        .all(|statement| statement.id != "entity.asset.field.secret.column.not-null"));
+    let lookup_index = statement(statements, "entity.asset.field.secret.lookup-unique");
+    assert_eq!(lookup_index.kind, DdlStatementKind::Index);
+    assert!(lookup_index.sql.starts_with("CREATE UNIQUE INDEX "));
+
+    // The registry_source view never exposes the envelope or its blind index.
+    let source_view = statement(statements, "entity.asset.source-view");
+    assert_eq!(source_view.kind, DdlStatementKind::View);
+    assert!(!source_view.sql.contains(envelope));
+    assert!(!source_view.sql.contains(&blind.physical_name));
+}
+
+#[test]
+fn reviewed_encryption_flip_refuses_a_missing_history_choice() {
+    let previous = compile_variant(Variant::EncryptedBase, 1);
+    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let mut artifacts = encryption_flip_artifacts("encryption-flip", &previous, &candidate);
+    // The choice is explicit or absent, never assumed: dropping it from an
+    // otherwise complete flip plan refuses rather than defaulting.
+    artifacts.descriptor.history = None;
+    artifacts.rebind();
+    assert_refused(
+        Variant::EncryptedFlipOn,
+        previous,
+        vec![artifacts.source()],
+        "an encryption flip without an explicit history choice",
+    );
+}
+
+#[test]
+fn reviewed_encryption_flip_refuses_an_unknown_history_choice() {
+    let previous = compile_variant(Variant::EncryptedBase, 1);
+    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let artifacts = encryption_flip_artifacts("encryption-flip", &previous, &candidate);
+    let mut source = artifacts.source();
+    // The wire grammar is the two reviewed choices alone: a third word is
+    // refused at parse, before any binding or digest is consulted.
+    let mut descriptor: serde_json::Value =
+        serde_json::from_slice(&source.descriptor.bytes).expect("the descriptor serializes");
+    descriptor["history"] = serde_json::Value::String("scrub-everything".to_owned());
+    source.descriptor.bytes = canonical(&descriptor);
+    assert_refused(
+        Variant::EncryptedFlipOn,
+        previous,
+        vec![source],
+        "an unknown history choice value",
+    );
+}
+
+#[test]
+fn reviewed_plan_refuses_a_history_choice_without_an_encryption_flip() {
+    let previous = compile_variant(Variant::Base, 1);
+    let candidate = compile_variant(Variant::RequiredField, 2);
+    let mut artifacts = backfill_artifacts("required-field", &previous, &candidate);
+    // The choice says what happens to pre-flip plaintext history; a plan that
+    // flips nothing has nothing to choose, so the word alone refuses.
+    artifacts.descriptor.history = Some(ReviewedFieldEncryptionHistory::RetainPlaintextHistory);
+    artifacts.rebind();
+    assert_refused(
+        Variant::RequiredField,
+        previous,
+        vec![artifacts.source()],
+        "a history choice on a plan without a field-encryption flip",
+    );
+}
+
+#[test]
+fn reviewed_encryption_flip_refuses_a_chunk_size_beyond_the_commit_budget() {
+    let previous = compile_variant(Variant::EncryptedBase, 1);
+    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let mut artifacts = encryption_flip_artifacts("encryption-flip", &previous, &candidate);
+    // One chunk journals one history commit, so its size is capped at the
+    // history machinery's commit-member budget rather than the chunked-SQL cap.
+    let ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { chunk_size, .. } =
+        &mut artifacts.descriptor.steps[0]
+    else {
+        panic!("the flip step is the engine-executed backfill");
+    };
+    *chunk_size = 1_001;
+    artifacts.rebind();
+    assert_refused(
+        Variant::EncryptedFlipOn,
+        previous,
+        vec![artifacts.source()],
+        "a field-encryption chunk size beyond the commit-member budget",
+    );
+}
+
+#[test]
+fn reviewed_encryption_flip_refuses_multiple_backfill_steps_for_one_entity() {
+    let previous = compile_variant(Variant::EncryptedBase, 1);
+    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let mut artifacts = encryption_flip_artifacts("encryption-flip", &previous, &candidate);
+    let mut second = artifacts.descriptor.steps[0].clone();
+    let ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { id, .. } = &mut second else {
+        panic!("the flip step is the engine-executed backfill");
+    };
+    *id = "backfill-second".to_owned();
+    artifacts.descriptor.steps.push(second);
+    artifacts
+        .receipt
+        .row_assertions
+        .push(RehearsalRowAssertion {
+            step_id: "backfill-second".to_owned(),
+            affected_rows: 10,
+        });
+    artifacts.rebind();
+
+    assert_refused(
+        Variant::EncryptedFlipOn,
+        previous,
+        vec![artifacts.source()],
+        "multiple field-encryption steps for one entity",
+    );
+}
+
+#[test]
+fn reviewed_encryption_flip_refuses_plaintext_drop_before_backfill() {
+    let previous = compile_variant(Variant::EncryptedBase, 1);
+    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let mut artifacts = encryption_flip_artifacts("encryption-flip", &previous, &candidate);
+    let entity = &previous.entities()["asset"];
+    let plaintext = &entity.fields["secret"];
+    let step_path = "modules/core/migrations/encryption-flip/steps/drop-plaintext.sql".to_owned();
+    artifacts.descriptor.steps.insert(
+        0,
+        ReviewedMigrationStepDescriptor::TransactionalSql {
+            id: "drop-plaintext".to_owned(),
+            sql_path: step_path,
+            objects: vec![ReviewedMigrationObject {
+                schema: "registry_data".to_owned(),
+                table: entity.physical_table.clone(),
+                entity_id: "asset".to_owned(),
+                kind: ReviewedMigrationObjectKind::Field,
+                member_id: Some("secret".to_owned()),
+                physical_name: plaintext.physical_name.clone(),
+            }],
+            affected_rows: None,
+        },
+    );
+    artifacts.step_sql = format!(
+        "ALTER TABLE registry_data.{} DROP COLUMN {}",
+        entity.physical_table, plaintext.physical_name
+    )
+    .into_bytes();
+    artifacts.rebind();
+    assert_refused(
+        Variant::EncryptedFlipOn,
+        previous,
+        vec![artifacts.source()],
+        "dropping the plaintext column before its sealing backfill",
+    );
+}
+
+fn statement<'a>(
+    statements: &'a [registry_breg::generated_ddl::DdlStatement],
+    id: &str,
+) -> &'a registry_breg::generated_ddl::DdlStatement {
+    statements
+        .iter()
+        .find(|statement| statement.id == id)
+        .unwrap_or_else(|| panic!("the plan carries the {id} statement"))
+}
+
 #[derive(Clone)]
 struct ReviewedArtifacts {
     descriptor: ReviewedMigrationDescriptor,
@@ -482,10 +705,19 @@ impl ReviewedArtifacts {
             self.descriptor.id
         );
         self.receipt.plan_sha256 = digest(&descriptor_bytes);
-        self.receipt.sql_sha256 = vec![ArtifactDigestBinding {
-            path: self.descriptor.steps[0].sql_path().to_owned(),
-            sha256: digest(&self.step_sql),
-        }];
+        // The engine-executed backfill binds no SQL artifact, so the receipt
+        // carries no digest for its step; the plan digest pins it whole.
+        self.receipt.sql_sha256 = self
+            .descriptor
+            .steps
+            .iter()
+            .filter_map(|step| {
+                step.sql_path().map(|path| ArtifactDigestBinding {
+                    path: path.to_owned(),
+                    sha256: digest(&self.step_sql),
+                })
+            })
+            .collect();
         self.receipt.assertion_sha256 = vec![
             ArtifactDigestBinding {
                 path: self.descriptor.pre_assertions[0].sql_path.clone(),
@@ -509,28 +741,29 @@ impl ReviewedArtifacts {
             "modules/core/migrations/{}/descriptor.json",
             self.descriptor.id
         );
-        let mut files = vec![
-            ReviewedMigrationFile {
-                path: self.descriptor.steps[0].sql_path().to_owned(),
+        let mut files = Vec::new();
+        if let Some(step_path) = self.descriptor.steps[0].sql_path() {
+            files.push(ReviewedMigrationFile {
+                path: step_path.to_owned(),
                 bytes: self.step_sql.clone(),
-            },
-            ReviewedMigrationFile {
-                path: self.descriptor.pre_assertions[0].sql_path.clone(),
-                bytes: self.pre_sql.clone(),
-            },
-            ReviewedMigrationFile {
-                path: self.descriptor.post_assertions[0].sql_path.clone(),
-                bytes: self.post_sql.clone(),
-            },
-            ReviewedMigrationFile {
-                path: self.descriptor.rehearsal_receipt_path.clone(),
-                bytes: canonical(&self.receipt),
-            },
-            ReviewedMigrationFile {
-                path: self.receipt.fixture_inventory[0].path.clone(),
-                bytes: self.fixture_bytes.clone(),
-            },
-        ];
+            });
+        }
+        files.push(ReviewedMigrationFile {
+            path: self.descriptor.pre_assertions[0].sql_path.clone(),
+            bytes: self.pre_sql.clone(),
+        });
+        files.push(ReviewedMigrationFile {
+            path: self.descriptor.post_assertions[0].sql_path.clone(),
+            bytes: self.post_sql.clone(),
+        });
+        files.push(ReviewedMigrationFile {
+            path: self.descriptor.rehearsal_receipt_path.clone(),
+            bytes: canonical(&self.receipt),
+        });
+        files.push(ReviewedMigrationFile {
+            path: self.receipt.fixture_inventory[0].path.clone(),
+            bytes: self.fixture_bytes.clone(),
+        });
         if let (Some(path), Some(binding)) = (&self.descriptor.backup_binding_path, &self.backup) {
             files.push(ReviewedMigrationFile {
                 path: path.clone(),
@@ -550,33 +783,34 @@ impl ReviewedArtifacts {
 }
 
 trait StepPath {
-    fn sql_path(&self) -> &str;
+    fn sql_path(&self) -> Option<&str>;
     fn objects(&self) -> &[ReviewedMigrationObject];
     fn objects_mut(&mut self) -> &mut [ReviewedMigrationObject];
 }
 
 impl StepPath for ReviewedMigrationStepDescriptor {
-    fn sql_path(&self) -> &str {
+    fn sql_path(&self) -> Option<&str> {
         match self {
             Self::TransactionalSql { sql_path, .. } | Self::ChunkedBackfill { sql_path, .. } => {
-                sql_path
+                Some(sql_path)
             }
+            Self::FieldEncryptionBackfill { .. } => None,
         }
     }
 
     fn objects(&self) -> &[ReviewedMigrationObject] {
         match self {
-            Self::TransactionalSql { objects, .. } | Self::ChunkedBackfill { objects, .. } => {
-                objects
-            }
+            Self::TransactionalSql { objects, .. }
+            | Self::ChunkedBackfill { objects, .. }
+            | Self::FieldEncryptionBackfill { objects, .. } => objects,
         }
     }
 
     fn objects_mut(&mut self) -> &mut [ReviewedMigrationObject] {
         match self {
-            Self::TransactionalSql { objects, .. } | Self::ChunkedBackfill { objects, .. } => {
-                objects
-            }
+            Self::TransactionalSql { objects, .. }
+            | Self::ChunkedBackfill { objects, .. }
+            | Self::FieldEncryptionBackfill { objects, .. } => objects,
         }
     }
 }
@@ -648,6 +882,7 @@ fn backfill_artifacts(
         }],
         rehearsal_receipt_path: format!("{base}/rehearsal.json"),
         backup_binding_path: None,
+        history: None,
     };
     let mut artifacts = ReviewedArtifacts {
         descriptor,
@@ -721,6 +956,7 @@ fn destructive_artifacts(
         }],
         rehearsal_receipt_path: format!("{base}/rehearsal.json"),
         backup_binding_path: Some(format!("{base}/backup.json")),
+        history: None,
     };
     let mut artifacts = ReviewedArtifacts {
         descriptor,
@@ -742,6 +978,103 @@ fn destructive_artifacts(
             created_at: "2026-08-30T00:00:00Z".to_owned(),
             max_age_seconds: 86_400,
         }),
+        fixture_bytes: b"{\"fixture\":\"representative\"}\n".to_vec(),
+    };
+    artifacts.rebind();
+    artifacts
+}
+
+/// A reviewed encryption flip declared the way the engine executes it: one
+/// engine-executed `FieldEncryptionBackfill` step with no authored SQL, an
+/// explicit history choice, and objects that name the envelope column of the
+/// covered field plus its blind-index sibling through the implicit `#lookup`
+/// member.
+fn encryption_flip_artifacts(
+    id: &str,
+    previous: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+) -> ReviewedArtifacts {
+    let change_set = compiled_registry_change_set(previous, candidate, PRIOR_REVISION);
+    let change = change_set
+        .changes
+        .iter()
+        .find(|change| change.code == CompiledRegistryChangeCode::FieldEncryptionChanged)
+        .expect("the flip is classified as a field encryption change");
+    let entity = &candidate.entities()["asset"];
+    let field = &entity.fields["secret"];
+    let blind = field
+        .encryption
+        .as_ref()
+        .and_then(|encryption| encryption.blind_index.as_ref())
+        .expect("the flip declares a blind index");
+    let base = format!("modules/core/migrations/{id}");
+    let pre_path = format!("{base}/assertions/pre.sql");
+    let post_path = format!("{base}/assertions/post.sql");
+    let assertion_sql = format!(
+        "SELECT pg_catalog.count(*) >= 0 FROM registry_data.{}",
+        entity.physical_table
+    )
+    .into_bytes();
+    let descriptor = ReviewedMigrationDescriptor {
+        id: id.to_owned(),
+        change_class: change.class,
+        covers: vec![ReviewedChangeCover::from(change)],
+        recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        lock_timeout_ms: 10_000,
+        statement_timeout_ms: 60_000,
+        steps: vec![ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
+            id: "backfill".to_owned(),
+            entity_id: "asset".to_owned(),
+            objects: vec![
+                ReviewedMigrationObject {
+                    schema: "registry_data".to_owned(),
+                    table: entity.physical_table.clone(),
+                    entity_id: "asset".to_owned(),
+                    kind: ReviewedMigrationObjectKind::Field,
+                    member_id: Some("secret".to_owned()),
+                    physical_name: field.physical_name.clone(),
+                },
+                ReviewedMigrationObject {
+                    schema: "registry_data".to_owned(),
+                    table: entity.physical_table.clone(),
+                    entity_id: "asset".to_owned(),
+                    kind: ReviewedMigrationObjectKind::Field,
+                    member_id: Some("secret#lookup".to_owned()),
+                    physical_name: blind.physical_name.clone(),
+                },
+            ],
+            cursor: ChunkCursorProtocol::RecordIdUuidArray,
+            chunk_size: 100,
+            max_total_rows: 1_000,
+            lock_timeout_ms: 1_000,
+            statement_timeout_ms: 10_000,
+        }],
+        pre_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "pre".to_owned(),
+            sql_path: pre_path,
+        }],
+        post_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "post".to_owned(),
+            sql_path: post_path,
+        }],
+        rehearsal_receipt_path: format!("{base}/rehearsal.json"),
+        backup_binding_path: None,
+        history: Some(ReviewedFieldEncryptionHistory::EraseAndRebaseline),
+    };
+    let mut artifacts = ReviewedArtifacts {
+        descriptor,
+        receipt: receipt(
+            false,
+            true,
+            vec![RehearsalRowAssertion {
+                step_id: "backfill".to_owned(),
+                affected_rows: 10,
+            }],
+        ),
+        step_sql: Vec::new(),
+        pre_sql: assertion_sql.clone(),
+        post_sql: assertion_sql,
+        backup: None,
         fixture_bytes: b"{\"fixture\":\"representative\"}\n".to_vec(),
     };
     artifacts.rebind();
@@ -836,6 +1169,8 @@ enum Variant {
     RequiredField,
     FieldRemoved,
     DifferentRegistry,
+    EncryptedBase,
+    EncryptedFlipOn,
 }
 
 struct SourceFixture {
@@ -876,6 +1211,12 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         }
         Variant::FieldRemoved => {
             r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"}"#
+        }
+        Variant::EncryptedBase => {
+            r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"},{"id":"secret","type":"string","maxLength":256,"classification":"restricted"}"#
+        }
+        Variant::EncryptedFlipOn => {
+            r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"},{"id":"secret","type":"string","maxLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["uppercase"],"unique":true}}"#
         }
         Variant::Base | Variant::DifferentRegistry => {
             r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"}"#

@@ -16,6 +16,9 @@ use std::time::Duration;
 use deadpool_postgres::Client;
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_crypto::field_encryption::{
+    envelope_member_json, FieldCryptoError, MAX_FIELD_PLAINTEXT_BYTES,
+};
 use registry_platform_hooks::HookHandlerKind;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -40,16 +43,19 @@ use crate::contract::{
 use crate::correlation::RequestCorrelation;
 use crate::data::{validate_field_value, FieldValue};
 use crate::event_destination::ActivatedEventDestinationRegistry;
+use crate::field_encryption::FieldEncryptionService;
 use crate::history_commit::{
     allocate_revision_commit, install_history_commit_schema, CommitAllocation, HistoryCommitError,
     RevisionCommitMember,
 };
 use crate::history_context::{ChangeContext, CommitOrigin};
+use crate::history_schema::MAX_HISTORY_SNAPSHOT_BYTES;
 use crate::idempotency::{
     insert_result, lock_and_load, resolve_action_binding, resolve_binding,
     resolve_hook_action_binding, resolve_hook_key_reference, ActionIdempotencyBinding,
     HeldResponse, IdempotencyBinding, IdempotencyError, IdempotencyKeyDomain,
-    PermittedResponseHeader, StoredResultMetadata, MAX_IMMEDIATE_ACTION_RESULTS,
+    PermittedResponseHeader, StoredResultMetadata, MAX_HELD_BODY_BYTES,
+    MAX_IMMEDIATE_ACTION_RESULTS,
 };
 use crate::ingestion_store::{
     record_attempt, IngestionAttemptOutcome, IngestionChunkCommit, IngestionRunStatus,
@@ -58,8 +64,8 @@ pub use crate::ingestion_store::{IngestionChunkBinding, IngestionRefusal};
 use crate::model::{
     ActionRouteKind, CompiledAction, CompiledActionEffect, CompiledActionMutation,
     CompiledActionTargetBinding, CompiledActionValue, CompiledEntity, CompiledEventDelivery,
-    CompiledRegistry, CompiledRoute, CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile,
-    HttpMethod,
+    CompiledField, CompiledFieldEncryption, CompiledRegistry, CompiledRoute,
+    CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile, HttpMethod,
 };
 use crate::outbox::{
     event_data_schemas, insert_configured_events, EnvelopeBinding, OutboxError, OutboxMutation,
@@ -85,7 +91,7 @@ pub async fn install_mutation_schema(
     runtime_role: &SqlIdentifier,
 ) -> Result<(), MutationError> {
     migration
-        .batch_execute(
+        .batch_execute(&format!(
             "CREATE TABLE IF NOT EXISTS registry_internal.registry_revisions (
                  entity_id text NOT NULL CHECK (entity_id <> ''),
                  record_id uuid NOT NULL,
@@ -118,14 +124,14 @@ pub async fn install_mutation_schema(
              ALTER TABLE registry_internal.registry_revisions
                  ADD CONSTRAINT registry_revisions_snapshot_bounds CHECK (
                      snapshot IS NULL OR
-                     (octet_length(snapshot) > 0 AND octet_length(snapshot) <= 2097152)
+                     (octet_length(snapshot) > 0 AND octet_length(snapshot) <= {MAX_HISTORY_SNAPSHOT_BYTES})
                  ),
                  ADD CONSTRAINT registry_revisions_erasure_shape CHECK (
                      (snapshot IS NULL) = (erased_at IS NOT NULL)
                  ),
                  ADD CONSTRAINT registry_revisions_mutation_kind_check
-                 CHECK (mutation_kind IN ('create', 'patch', 'tombstone', 'migration'))",
-        )
+                 CHECK (mutation_kind IN ('create', 'patch', 'tombstone', 'migration'))"
+        ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
     registry_platform_hooks::delivery_schema::install(migration, crate::webhook::DELIVERY_SCHEMA)
@@ -158,7 +164,7 @@ pub async fn install_mutation_schema(
                  proposal_version bigint CHECK (proposal_version > 0),
                  response_status smallint NOT NULL CHECK (response_status BETWEEN 200 AND 299),
                  response_body bytea NOT NULL
-                     CHECK (octet_length(response_body) > 0 AND octet_length(response_body) <= 2097152),
+                     CHECK (octet_length(response_body) > 0 AND octet_length(response_body) <= {MAX_HELD_BODY_BYTES}),
                  response_headers bytea NOT NULL CHECK (octet_length(response_headers) <= 65536),
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
                  CONSTRAINT registry_idempotency_result_shape CHECK (
@@ -278,7 +284,7 @@ pub async fn install_mutation_schema(
              ALTER TABLE registry_internal.registry_idempotency
                  ADD CONSTRAINT registry_idempotency_response_body_bounds CHECK (
                      response_body IS NULL OR
-                     (octet_length(response_body) > 0 AND octet_length(response_body) <= 2097152)
+                     (octet_length(response_body) > 0 AND octet_length(response_body) <= {MAX_HELD_BODY_BYTES})
                  ),
                  ADD CONSTRAINT registry_idempotency_erasure_shape
                      CHECK ((response_body IS NULL) = (erased_at IS NOT NULL));
@@ -808,6 +814,7 @@ pub struct MutationCoordinator {
     audit_profile: AuditProfile,
     event_destinations: Option<Arc<ActivatedEventDestinationRegistry>>,
     task_status: Option<Arc<dyn crate::task_grant::TaskGrantStatusChecker>>,
+    field_encryption: Option<Arc<FieldEncryptionService>>,
 }
 
 impl MutationCoordinator {
@@ -843,6 +850,7 @@ impl MutationCoordinator {
             audit_profile,
             event_destinations,
             task_status: None,
+            field_encryption: None,
         }
     }
 
@@ -851,6 +859,14 @@ impl MutationCoordinator {
         checker: Arc<dyn crate::task_grant::TaskGrantStatusChecker>,
     ) -> Self {
         self.task_status = Some(checker);
+        self
+    }
+
+    /// Bind the field-encryption key state sealed envelopes are produced and
+    /// opened under. Absent key state is only acceptable for entities without
+    /// encrypted fields; write admission fails closed per field otherwise.
+    pub fn with_field_encryption(mut self, service: Arc<FieldEncryptionService>) -> Self {
+        self.field_encryption = Some(service);
         self
     }
 
@@ -1393,6 +1409,7 @@ impl MutationCoordinator {
             &self.expected.database_id,
             &self.attachment_storage,
             &self.attachment_verification.binding_digest(),
+            self.field_encryption.as_deref(),
         )
         .await?;
         let record_reference = match request.record_id {
@@ -1445,7 +1462,7 @@ impl MutationCoordinator {
         let event_source = self.event_source();
         insert_configured_events(
             transaction.transaction(),
-            &request.plan.entity.hooks,
+            &request.plan.entity,
             &request.plan.event_deliveries,
             self.event_destinations.as_deref(),
             OutboxMutation {
@@ -1861,6 +1878,7 @@ impl MutationCoordinator {
                 &self.expected.database_id,
                 &self.attachment_storage,
                 &self.attachment_verification.binding_digest(),
+                self.field_encryption.as_deref(),
             )
             .await?;
             let record_reference = record_reference(
@@ -1909,7 +1927,7 @@ impl MutationCoordinator {
             let event_source = self.event_source();
             insert_configured_events(
                 transaction.transaction(),
-                &item_plan.entity.hooks,
+                &item_plan.entity,
                 &item_plan.event_deliveries,
                 self.event_destinations.as_deref(),
                 OutboxMutation {
@@ -2296,6 +2314,8 @@ pub enum MutationError {
     ActionRefusal(crate::action_handler::ActionHandlerRefusal),
     #[error("field does not conform to its declared storage pattern")]
     FieldPatternViolation { entity_id: String, field_id: String },
+    #[error("field-encryption key state is unavailable for this operation")]
+    FieldEncryptionUnavailable,
     /// A durable ingestion run refused the chunk under its own invariants.
     /// The refusal kind travels with the error so the HTTP surface answers
     /// with the closed run vocabulary, never with chunk bytes or row values.
@@ -2447,6 +2467,7 @@ async fn link_request_record_revision(
     Ok(Some(header.proposal_version))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn apply_current_row(
     transaction: &Transaction<'_>,
     request: &MutationRequest<'_>,
@@ -2455,6 +2476,7 @@ async fn apply_current_row(
     identity_scope: &str,
     attachment_storage: &crate::attachment_storage::AttachmentStorage,
     verification_policy: &str,
+    field_encryption: Option<&FieldEncryptionService>,
 ) -> Result<CurrentRow, MutationError> {
     if request
         .plan
@@ -2482,7 +2504,7 @@ async fn apply_current_row(
                 data,
             )
             .await?;
-            let row = apply_create_row(transaction, request, &record_id).await?;
+            let row = apply_create_row(transaction, request, &record_id, field_encryption).await?;
             if request.plan.entity.change_request.is_some() {
                 let owner = request_actor_reference(audit_profile, identity_scope, request.claims)?;
                 crate::request_store::initialize_draft(
@@ -2636,7 +2658,14 @@ async fn apply_current_row(
                     .ok_or(MutationError::PreconditionFailed)?;
                 row_to_current(&request.plan.entity, &row)?
             } else {
-                apply_patch_row(transaction, request, current.record_revision, data).await?
+                apply_patch_row(
+                    transaction,
+                    request,
+                    current.record_revision,
+                    data,
+                    field_encryption,
+                )
+                .await?
             };
             if request.plan.entity.change_request.is_some()
                 && !matches!(&request.body, MutationBody::Attachment(_))
@@ -2687,6 +2716,7 @@ async fn apply_create_row(
     transaction: &Transaction<'_>,
     request: &MutationRequest<'_>,
     record_id: &str,
+    field_encryption: Option<&FieldEncryptionService>,
 ) -> Result<CurrentRow, MutationError> {
     let MutationBody::Create(data) = &request.body else {
         return Err(MutationError::InvalidRequest);
@@ -2700,7 +2730,14 @@ async fn apply_create_row(
         )
         .await
         .map_err(map_database_error)?;
-    insert_current_row(transaction, &request.plan.entity, record_id, data).await
+    insert_current_row(
+        transaction,
+        &request.plan.entity,
+        record_id,
+        data,
+        field_encryption,
+    )
+    .await
 }
 
 async fn apply_patch_row(
@@ -2708,6 +2745,7 @@ async fn apply_patch_row(
     request: &MutationRequest<'_>,
     expected_revision: i64,
     data: Map<String, Value>,
+    field_encryption: Option<&FieldEncryptionService>,
 ) -> Result<CurrentRow, MutationError> {
     let record_id = request.record_id.ok_or(MutationError::InvalidRequest)?;
     update_current_row(
@@ -2716,6 +2754,7 @@ async fn apply_patch_row(
         record_id,
         expected_revision,
         data,
+        field_encryption,
     )
     .await
 }
@@ -2725,31 +2764,49 @@ async fn insert_current_row(
     entity: &CompiledEntity,
     record_id: &str,
     data: &Map<String, Value>,
+    field_encryption: Option<&FieldEncryptionService>,
 ) -> Result<CurrentRow, MutationError> {
     let submitted_fields = entity
         .fields
         .values()
         .filter(|field| data.contains_key(&field.id))
         .collect::<Vec<_>>();
-    let mut values = Vec::<Option<String>>::with_capacity(submitted_fields.len() + 1);
-    values.push(Some(record_id.to_owned()));
+    let mut values = Vec::<BoundValue>::with_capacity(submitted_fields.len() + 1);
+    values.push(BoundValue::Text(Some(record_id.to_owned())));
+    let mut field_columns = Vec::with_capacity(submitted_fields.len());
+    let mut field_parameters = Vec::with_capacity(submitted_fields.len());
     for field in &submitted_fields {
-        values.push(sql_value(&data[&field.id], &field.field_type)?);
+        if let Some(encryption) = &field.encryption {
+            let sealed = encrypted_column_values(
+                entity,
+                field,
+                encryption,
+                record_id,
+                &data[&field.id],
+                field_encryption,
+            )?;
+            values.push(BoundValue::Bytea(sealed.envelope));
+            field_columns.push(quote_identifier(&field.physical_name));
+            field_parameters.push(bytea_parameter(values.len()));
+            if let Some(blind) = &encryption.blind_index {
+                values.push(BoundValue::Bytea(sealed.blind_index));
+                field_columns.push(quote_identifier(&blind.physical_name));
+                field_parameters.push(bytea_parameter(values.len()));
+            }
+            continue;
+        }
+        values.push(BoundValue::Text(sql_value(
+            &data[&field.id],
+            &field.field_type,
+        )?));
+        field_columns.push(quote_identifier(&field.physical_name));
+        field_parameters.push(typed_parameter(values.len(), &field.field_type));
     }
     let parameters = values
         .iter()
-        .map(|value| value as &(dyn ToSql + Sync))
+        .map(BoundValue::as_parameter)
         .collect::<Vec<_>>();
     let table = quote_identifier(&entity.physical_table);
-    let field_columns = submitted_fields
-        .iter()
-        .map(|field| quote_identifier(&field.physical_name))
-        .collect::<Vec<_>>();
-    let field_parameters = submitted_fields
-        .iter()
-        .enumerate()
-        .map(|(index, field)| typed_parameter(index + 2, &field.field_type))
-        .collect::<Vec<_>>();
     let returning = returning_projection(entity);
     let mut columns = vec![
         "record_id".to_owned(),
@@ -2781,6 +2838,7 @@ async fn update_current_row(
     record_id: &str,
     expected_revision: i64,
     data: Map<String, Value>,
+    field_encryption: Option<&FieldEncryptionService>,
 ) -> Result<CurrentRow, MutationError> {
     let submitted_fields = entity
         .fields
@@ -2790,28 +2848,51 @@ async fn update_current_row(
     if submitted_fields.is_empty() {
         return Err(MutationError::InvalidRequest);
     }
-    let mut values = Vec::<Option<String>>::with_capacity(submitted_fields.len() + 2);
-    values.push(Some(record_id.to_owned()));
+    let mut values = Vec::<BoundValue>::with_capacity(submitted_fields.len() + 2);
+    values.push(BoundValue::Text(Some(record_id.to_owned())));
+    let mut assignments = Vec::with_capacity(submitted_fields.len());
     for field in &submitted_fields {
-        values.push(sql_value(&data[&field.id], &field.field_type)?);
-    }
-    values.push(Some(expected_revision.to_string()));
-    let parameters = values
-        .iter()
-        .map(|value| value as &(dyn ToSql + Sync))
-        .collect::<Vec<_>>();
-    let table = quote_identifier(&entity.physical_table);
-    let assignments = submitted_fields
-        .iter()
-        .enumerate()
-        .map(|(index, field)| {
-            format!(
+        if let Some(encryption) = &field.encryption {
+            let sealed = encrypted_column_values(
+                entity,
+                field,
+                encryption,
+                record_id,
+                &data[&field.id],
+                field_encryption,
+            )?;
+            values.push(BoundValue::Bytea(sealed.envelope));
+            assignments.push(format!(
                 "{} = {}",
                 quote_identifier(&field.physical_name),
-                typed_parameter(index + 2, &field.field_type)
-            )
-        })
+                bytea_parameter(values.len())
+            ));
+            if let Some(blind) = &encryption.blind_index {
+                values.push(BoundValue::Bytea(sealed.blind_index));
+                assignments.push(format!(
+                    "{} = {}",
+                    quote_identifier(&blind.physical_name),
+                    bytea_parameter(values.len())
+                ));
+            }
+            continue;
+        }
+        values.push(BoundValue::Text(sql_value(
+            &data[&field.id],
+            &field.field_type,
+        )?));
+        assignments.push(format!(
+            "{} = {}",
+            quote_identifier(&field.physical_name),
+            typed_parameter(values.len(), &field.field_type)
+        ));
+    }
+    values.push(BoundValue::Text(Some(expected_revision.to_string())));
+    let parameters = values
+        .iter()
+        .map(BoundValue::as_parameter)
         .collect::<Vec<_>>();
+    let table = quote_identifier(&entity.physical_table);
     let expected_parameter = values.len();
     let returning = returning_projection(entity);
     let sql = format!(
@@ -2832,6 +2913,84 @@ async fn update_current_row(
         .map_err(|error| map_field_database_error(error, entity))?
         .ok_or(MutationError::PreconditionFailed)?;
     row_to_current(entity, &row)
+}
+
+/// One bound SQL parameter of a record statement: typed text for plaintext
+/// columns, raw bytes for encrypted envelope and blind-index columns.
+pub(crate) enum BoundValue {
+    Text(Option<String>),
+    Bytea(Option<Vec<u8>>),
+}
+
+impl BoundValue {
+    pub(crate) fn as_parameter(&self) -> &(dyn ToSql + Sync) {
+        match self {
+            Self::Text(value) => value,
+            Self::Bytea(value) => value,
+        }
+    }
+
+    /// The PostgreSQL parameter type this value binds as.
+    pub(crate) fn postgres_type(&self) -> tokio_postgres::types::Type {
+        use tokio_postgres::types::Type;
+        match self {
+            Self::Text(_) => Type::TEXT,
+            Self::Bytea(_) => Type::BYTEA,
+        }
+    }
+}
+
+/// The `$n::bytea` placeholder an envelope or blind-index column binds.
+fn bytea_parameter(index: usize) -> String {
+    format!("${index}::bytea")
+}
+
+/// The sealed bytes one encrypted field binds: the envelope column's value and,
+/// when the author declared a lookup, the blind-index column's value.
+struct EncryptedColumnValues {
+    envelope: Option<Vec<u8>>,
+    blind_index: Option<Vec<u8>>,
+}
+
+/// Seal one encrypted field's submitted value into the bytes its physical
+/// columns bind. The plaintext is validated, canonicalized, and checked against
+/// the encryption size limit in Rust. No plaintext of an encrypted field ever
+/// reaches SQL.
+fn encrypted_column_values(
+    entity: &CompiledEntity,
+    field: &CompiledField,
+    encryption: &CompiledFieldEncryption,
+    record_id: &str,
+    value: &Value,
+    field_encryption: Option<&FieldEncryptionService>,
+) -> Result<EncryptedColumnValues, MutationError> {
+    let service = field_encryption.ok_or(MutationError::FieldEncryptionUnavailable)?;
+    if value.is_null() {
+        return Ok(EncryptedColumnValues {
+            envelope: None,
+            blind_index: None,
+        });
+    }
+    let plaintext = sql_value(value, &field.field_type)?.ok_or(MutationError::InvalidRequest)?;
+    if plaintext.len() > MAX_FIELD_PLAINTEXT_BYTES {
+        return Err(MutationError::InvalidRequest);
+    }
+    let envelope = service
+        .seal(&entity.id, &field.id, record_id, plaintext.as_bytes())
+        .map_err(|error| match error {
+            FieldCryptoError::FieldTooLarge => MutationError::InvalidRequest,
+            _ => MutationError::FieldEncryptionUnavailable,
+        })?;
+    let blind_index = encryption.blind_index.as_ref().map(|blind| {
+        let normalized = FieldEncryptionService::normalize(&blind.normalization, &plaintext);
+        service
+            .blind_index(&entity.id, &field.id, &normalized)
+            .to_vec()
+    });
+    Ok(EncryptedColumnValues {
+        envelope: Some(envelope),
+        blind_index,
+    })
 }
 
 async fn apply_tombstone_row(
@@ -3037,6 +3196,12 @@ fn field_id_for_api_name<'a>(
     Ok(&field.logical.id)
 }
 
+/// Assemble the response data map, keeping encrypted members sealed.
+///
+/// The stored map holds tagged envelope members, and so does the map that
+/// enters a held response body: the idempotency cache stores ciphertext, and
+/// the single authorized HTTP serve edge opens the members for both fresh and
+/// replayed bodies.
 fn response_data(
     entity: &CompiledEntity,
     data: &Map<String, Value>,
@@ -3112,9 +3277,19 @@ fn apply_patch_document(
             }
             PatchOperation::Test { path, value } => {
                 let field_id = patch_field(path)?;
-                if !profile.readable_fields.contains(&field_id)
-                    || !request.plan.entity.fields.contains_key(&field_id)
-                {
+                let field = request
+                    .plan
+                    .entity
+                    .fields
+                    .get(&field_id)
+                    .ok_or(MutationError::InvalidRequest)?;
+                if !profile.readable_fields.contains(&field_id) {
+                    return Err(MutationError::InvalidRequest);
+                }
+                if field.encryption.is_some() {
+                    // The stored member is an opaque envelope, so a test
+                    // against it can neither pass nor fail honestly; the
+                    // operation is refused instead of misreporting.
                     return Err(MutationError::InvalidRequest);
                 }
                 if materialized.get(&field_id) != Some(value) {
@@ -3217,10 +3392,29 @@ fn returning_projection(entity: &CompiledEntity) -> String {
 
 fn field_json_projection(field: &crate::model::CompiledField) -> String {
     let column = quote_identifier(&field.physical_name);
+    if field.encryption.is_some() {
+        // The envelope is projected as base64 text; row decode turns it into
+        // the tagged JSON member. No plaintext cast exists for this column.
+        return format!("to_jsonb(encode({column}, 'base64'))");
+    }
     match field.field_type {
         FieldTypeSource::Decimal { .. } => format!("to_jsonb({column}::text)"),
         _ => format!("to_jsonb({column})"),
     }
+}
+
+/// Decode one encrypted column's projected base64 into the tagged JSON member.
+/// A null projection stays null; anything but a base64 string is refused.
+pub(crate) fn envelope_member_from_projection(value: Value) -> Result<Value, MutationError> {
+    use base64::Engine as _;
+    if value.is_null() {
+        return Ok(Value::Null);
+    }
+    let encoded = value.as_str().ok_or(MutationError::Unavailable)?;
+    let envelope = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| MutationError::Unavailable)?;
+    Ok(envelope_member_json(&envelope))
 }
 
 fn row_to_current(
@@ -3250,6 +3444,14 @@ fn row_to_current(
             .try_get::<_, Option<Value>>(index + 3)
             .map_err(|_| MutationError::Unavailable)?
             .unwrap_or(Value::Null);
+        // Encrypted columns project their base64 envelope; the row keeps the
+        // tagged member, unopened, so journal snapshots and captured rows
+        // canonicalize byte-identically. Opening happens at the response edge.
+        let value = if field.encryption.is_some() {
+            envelope_member_from_projection(value)?
+        } else {
+            value
+        };
         data.insert(field.id.clone(), value);
     }
     Ok(CurrentRow {

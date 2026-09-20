@@ -57,8 +57,8 @@ release claim rests on one.
 
 A third row, `BREG-V1-INGESTION-RUNS`, records the durable ingestion-run API as
 `enforced`: the surface is contracted in `INGESTION-RUNS.md` and the published
-API reference, with journey `BREG-J21` and invariants `BREG-SEC-70` through
-`BREG-SEC-77` carrying the same threats, proven by the real-PostgreSQL
+API reference, with journey `BREG-J21` and invariants `BREG-SEC-75` through
+`BREG-SEC-82` carrying the same threats, proven by the real-PostgreSQL
 journeys and negative tests in `crates/registry-breg/tests/postgres_ingestion_runs.rs`.
 
 The HTTP record contract is also explicit: caller-filtered and generated

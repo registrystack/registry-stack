@@ -1575,6 +1575,9 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         Code::RequestPlanRefused(refusal) => plan_refused_detail(refusal),
         Code::RequestTimeout => "The request timed out.",
         Code::ResourceNotFound => "The requested resource was not found.",
+        Code::RuntimeFieldEncryptionUnavailable => {
+            "The Registry field-encryption service is unavailable."
+        }
         Code::RuntimeNotReady => "Registry runtime is not ready.",
         Code::ServiceUnavailable => "The Registry mutation service is unavailable.",
         Code::SourceUnavailable => "The Registry data service is unavailable.",

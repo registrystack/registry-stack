@@ -18,9 +18,11 @@ Prerequisites this script does not perform:
   * the Node bindings selected for this version, built for this platform from
     `crates/registry-{discovery,evidence,relay,breg,casework}-client-node`:
     `npm ci && npm run build:debug` (or `npm run build` for a release build)
-  * a maturin for the Python half, passed with `--maturin`; the release
-    workflows install the pinned one from
+  * a maturin for the Python half; `--maturin` defaults to the command on
+    `PATH`, while the release workflows pass the pinned executable from
     `release/requirements/maturin-1.9.6.txt` into a virtual environment
+  * on Linux, the Python from that environment, passed with `--zig-python`,
+    so the build uses its pinned Zig 0.12.1 through the release compiler
 
 `--dry-run` prints the exact commands instead of running them, which is the
 readable form of the recipe.
@@ -44,6 +46,7 @@ import argparse
 import json
 import platform
 import shlex
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -73,15 +76,15 @@ WHEEL_STEMS = {
 PLATFORMS = {
     "darwin-arm64": {
         "wheel_tag": "cp310-abi3-macosx_11_0_arm64",
-        "maturin_flags": (),
+        "rust_target": "aarch64-apple-darwin",
     },
     "linux-x64-gnu": {
         "wheel_tag": "cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64",
-        "maturin_flags": ("--compatibility", "manylinux_2_17", "--zig"),
+        "rust_target": "x86_64-unknown-linux-gnu",
     },
     "linux-arm64-gnu": {
         "wheel_tag": "cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64",
-        "maturin_flags": ("--compatibility", "manylinux_2_17", "--zig"),
+        "rust_target": "aarch64-unknown-linux-gnu",
     },
 }
 HOST_PLATFORMS = {
@@ -110,6 +113,15 @@ def host_platform() -> str:
             f"no Registry Stack client platform package is built for {key[0]} {key[1]}"
         )
     return HOST_PLATFORMS[key]
+
+
+def resolve_executable(command: str) -> str:
+    if Path(command).is_absolute():
+        return command
+    resolved = shutil.which(command)
+    if resolved is None:
+        raise ValueError(f"executable is not on PATH: {command}")
+    return str(Path(resolved).resolve())
 
 
 def facade_version(root: Path) -> str:
@@ -207,6 +219,7 @@ def python_steps(
     maturin: str,
     work_dir: Path,
     output_dir: Path,
+    zig_python: str | None = None,
     python_profile: str = "release",
     include_casework: bool = False,
 ) -> list[Step]:
@@ -215,7 +228,6 @@ def python_steps(
     profile_flags = ("--release",) if python_profile == "release" else ("--profile", "ci")
     built = work_dir / "product-wheels"
     wheel_tag = PLATFORMS[napi_platform]["wheel_tag"]
-    flags = PLATFORMS[napi_platform]["maturin_flags"]
     steps = [
         Step(
             "discard the previous product wheels so a stale one is never packed",
@@ -229,11 +241,35 @@ def python_steps(
         ),
     ]
     for product in PRODUCTS:
+        if napi_platform.startswith("linux-"):
+            if zig_python is None:
+                raise ValueError("Linux Python builds require --zig-python")
+            argv = (
+                str(root / "release" / "scripts" / "build-linux-python-client"),
+                "--client",
+                product,
+                "--target",
+                PLATFORMS[napi_platform]["rust_target"],
+                "--compatibility",
+                "manylinux_2_17",
+                "--zig-python",
+                zig_python,
+                "--maturin",
+                maturin,
+                "--out",
+                str(built),
+                "--profile",
+                python_profile,
+            )
+            cwd = root
+        else:
+            argv = (maturin, "build", *profile_flags, "--locked", "--out", str(built))
+            cwd = root / "crates" / f"registry-{product}-client-py"
         steps.append(
             Step(
                 f"build the {product} product wheel",
-                (maturin, "build", *profile_flags, "--locked", *flags, "--out", str(built)),
-                root / "crates" / f"registry-{product}-client-py",
+                argv,
+                cwd,
             )
         )
     assemble = [
@@ -265,6 +301,7 @@ def plan(
     maturin: str,
     work_dir: Path,
     output_dir: Path,
+    zig_python: str | None = None,
     python_profile: str = "release",
     include_casework: bool = False,
 ) -> list[Step]:
@@ -286,6 +323,7 @@ def plan(
             maturin,
             work_dir,
             output_dir,
+            zig_python,
             python_profile,
             include_casework,
         )
@@ -313,6 +351,10 @@ def main() -> int:
     )
     parser.add_argument("--maturin", default="maturin")
     parser.add_argument(
+        "--zig-python",
+        help="absolute Python executable providing pinned ziglang 0.12.1 on Linux",
+    )
+    parser.add_argument(
         "--python-profile",
         choices=("release", "ci"),
         default="release",
@@ -330,6 +372,12 @@ def main() -> int:
     version = args.version or facade_version(ROOT)
     output_dir = args.output_dir.resolve()
     work_dir = (args.work_dir or (args.output_dir / "staging")).resolve()
+    maturin = args.maturin
+    if napi_platform.startswith("linux-") and args.artifacts in ("all", "python"):
+        try:
+            maturin = resolve_executable(maturin)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     try:
         steps = plan(
@@ -337,9 +385,10 @@ def main() -> int:
             version,
             napi_platform,
             args.artifacts,
-            args.maturin,
+            maturin,
             work_dir,
             output_dir,
+            args.zig_python,
             args.python_profile,
             args.include_casework,
         )

@@ -2946,3 +2946,62 @@ fn attachment_verification_defaults_off_and_validates_operator_binding() {
         AttachmentVerification::Http(_)
     ));
 }
+
+#[test]
+fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
+    use registry_breg::field_encryption::FieldEncryptionProvider;
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let default = parse_runtime_config(&base).unwrap();
+    assert!(
+        default.field_encryption().provider().is_none(),
+        "field encryption is unconfigured by default"
+    );
+
+    let transit = format!("{base}\nfieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n");
+    let config = parse_runtime_config(&transit).unwrap();
+    assert!(matches!(
+        config.field_encryption().provider(),
+        Some(FieldEncryptionProvider::Transit(_))
+    ));
+    let rendered = format!("{config:?}");
+    assert!(
+        !rendered.contains("/run/transit"),
+        "no socket path in debug"
+    );
+    assert!(!rendered.contains("breg-field-dek"), "no key name in debug");
+
+    let local = format!("{base}\nfieldEncryption:\n  provider:\n    kind: localFile\n    dekRef: secret:file/breg-field-dek\n");
+    let config = parse_runtime_config(&local).unwrap();
+    assert!(matches!(
+        config.field_encryption().provider(),
+        Some(FieldEncryptionProvider::LocalFile { .. })
+    ));
+
+    for invalid in [
+        // A relative socket path never reaches a provider.
+        format!("{base}\nfieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: transit.sock\n    mount: transit\n    keyName: breg-field-dek\n"),
+        // The request timeout stays at or below the provider maximum.
+        format!("{base}\nfieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    timeoutMilliseconds: 30001\n"),
+        // A zero timeout is not a timeout.
+        format!("{base}\nfieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    timeoutMilliseconds: 0\n"),
+        // The local data key must come from a secret file.
+        format!("{base}\nfieldEncryption:\n  provider:\n    kind: localFile\n    dekRef: secret:env/BREG_FIELD_DEK\n"),
+    ] {
+        let error = parse_runtime_config(&invalid).unwrap_err();
+        assert_eq!(error, RuntimeConfigError::InvalidFieldEncryption);
+        assert_eq!(error.path(), "/fieldEncryption");
+        assert_eq!(error.code(), "runtime_config.invalid_field_encryption");
+    }
+    // An unknown provider kind never parses as a document at all, so it is
+    // refused before field-encryption validation runs.
+    let unknown_kind = format!("{base}\nfieldEncryption:\n  provider:\n    kind: kms\n");
+    assert_eq!(
+        parse_runtime_config(&unknown_kind).unwrap_err(),
+        RuntimeConfigError::Document
+    );
+}

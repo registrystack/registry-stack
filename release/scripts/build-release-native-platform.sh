@@ -52,6 +52,10 @@ fi
 target=aarch64-apple-darwin
 asset=macos-arm64
 rust_toolchain=1.95.0
+# aws-lc-fips-sys defaults to a shared library on macOS. Release assets are
+# standalone executables, so bind the validated module into each executable
+# instead of depending on a build-directory dylib that is not distributed.
+export AWS_LC_FIPS_SYS_STATIC=1
 tag="v${version}"
 export REGISTRY_RELEASE_TAG="${tag}"
 IFS=. read -r version_major version_minor _version_patch <<<"${version}"
@@ -86,9 +90,21 @@ fi
 stage() {
   local binary="$1"
   local destination="$2"
+  local dependencies
   cp -- "${target_root}/${target}/release/${binary}" \
     "${temporary}/platform/${destination}"
   chmod 0755 "${temporary}/platform/${destination}"
+  if ! dependencies="$(otool -L "${temporary}/platform/${destination}")"; then
+    printf 'cannot inspect macOS release binary dependencies: %s\n' \
+      "${destination}" >&2
+    return 1
+  fi
+  if grep -Eq 'libaws_lc_fips_[^/[:space:]]*_crypto\.dylib' \
+      <<<"${dependencies}"; then
+    printf 'macOS release binary retains an unpackaged AWS-LC-FIPS dylib: %s\n' \
+      "${destination}" >&2
+    return 1
+  fi
 }
 
 build_core() {

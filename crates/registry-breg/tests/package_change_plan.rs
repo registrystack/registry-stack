@@ -765,6 +765,27 @@ fn data_destructive_and_unsupported_changes_cannot_create_applicable_plans() {
 }
 
 #[test]
+fn plaintext_to_encrypted_type_change_is_unsupported() {
+    let previous = compile_variant(Variant::PlaintextSecret, 1);
+    let candidate = compile_variant(Variant::EncryptedStructuredSecret, 2);
+    let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+
+    assert_eq!(change_set.changes.len(), 2);
+    assert_change(
+        &change_set,
+        CompiledRegistryChangeClass::DataBackfillRequired,
+        CompiledRegistryChangeCode::FieldEncryptionChanged,
+    );
+    assert_change(
+        &change_set,
+        CompiledRegistryChangeClass::Unsupported,
+        CompiledRegistryChangeCode::FieldTypeChanged,
+    );
+    assert_eq!(change_set.migration_plan, None);
+    assert!(change_set_to_applicable_migration_plan(&change_set).is_err());
+}
+
+#[test]
 fn metadata_only_access_or_disclosure_changes_create_empty_applicable_plans() {
     for (previous_variant, candidate_variant, code) in [
         (
@@ -1323,6 +1344,8 @@ enum Variant {
     ReferenceConstraintIndexReordered,
     FieldRemoved,
     TypeChanged,
+    PlaintextSecret,
+    EncryptedStructuredSecret,
     RouteChanged,
     EntityClassificationChanged,
     ClassificationChanged,
@@ -1538,6 +1561,22 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         ),
         Variant::TypeChanged => asset_entity(
             r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"},{"id":"rank","type":"string","maxLength":8,"classification":"internal"}"#,
+            r#""route":"assets""#,
+            r#""id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            "",
+            "",
+            "",
+        ),
+        Variant::PlaintextSecret => asset_entity(
+            r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"},{"id":"secret","type":"string","maxLength":64,"classification":"restricted"}"#,
+            r#""route":"assets""#,
+            r#""id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
+            "",
+            "",
+            "",
+        ),
+        Variant::EncryptedStructuredSecret => asset_entity(
+            r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"},{"id":"secret","type":"structured","maxBytes":1024,"schema":{"type":"object","additionalProperties":false},"classification":"restricted","encrypted":true}"#,
             r#""route":"assets""#,
             r#""id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]"#,
             "",
@@ -1950,6 +1989,7 @@ fn metadata_only_source_between(
         change_class: CompiledRegistryChangeClass::AccessOrDisclosureChange,
         covers,
         recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        history: None,
         lock_timeout_ms: 10_000,
         statement_timeout_ms: 60_000,
         steps: Vec::new(),
@@ -2037,6 +2077,7 @@ fn reference_target_source(candidate: &CompiledRegistry) -> ReviewedMigrationSou
         change_class: change.class,
         covers: vec![ReviewedChangeCover::from(change)],
         recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        history: None,
         lock_timeout_ms: 10_000,
         statement_timeout_ms: 60_000,
         steps: vec![
@@ -2211,6 +2252,7 @@ fn reviewed_source_with_canaries(
         change_class: change.class,
         covers: vec![ReviewedChangeCover::from(change)],
         recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        history: None,
         lock_timeout_ms: 10_000,
         statement_timeout_ms: 60_000,
         steps: vec![ReviewedMigrationStepDescriptor::ChunkedBackfill {

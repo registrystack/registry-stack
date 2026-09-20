@@ -22,8 +22,8 @@ use registry_breg::contract::{parse_project_json, Operation};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::idempotency::PermittedResponseHeader;
 use registry_breg::mutation::{
-    MutationBody, MutationCoordinator, MutationError, MutationFaultPoint, MutationOutcome,
-    MutationPlan, MutationRequest, PatchOperation,
+    install_mutation_schema, MutationBody, MutationCoordinator, MutationError, MutationFaultPoint,
+    MutationOutcome, MutationPlan, MutationRequest, PatchOperation,
 };
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
@@ -52,6 +52,117 @@ const BREG_SEC_13_ZONE_CANARY: &str = "breg-sec-13-zone-a";
 const BREG_SEC_13_LABEL_CANARY: &str = "breg-sec-13-unique-label";
 const BREG_SEC_13_QUANTITY_CANARY: &str = "4242";
 const BREG_SEC_13_PROFILE_CANARY: &str = "breg-sec-13-access-profile-canary";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_idempotency_response_bound_matches_clean_and_upgraded_schema() {
+    const EXPECTED_MAX_STORED_RESPONSE_BYTES: usize = 3 * 1024 * 1024;
+
+    let database = TestDatabase::create(1).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    install_mutation_schema(&migration, &database.runtime_role)
+        .await
+        .expect("clean mutation schema installs");
+    assert_idempotency_response_body_bound(&migration, "clean", EXPECTED_MAX_STORED_RESPONSE_BYTES)
+        .await;
+
+    migration
+        .batch_execute(
+            "ALTER TABLE registry_internal.registry_idempotency
+                 DROP CONSTRAINT registry_idempotency_response_body_bounds;
+             ALTER TABLE registry_internal.registry_idempotency
+                 ADD CONSTRAINT registry_idempotency_response_body_bounds CHECK (
+                     response_body IS NULL OR
+                     (octet_length(response_body) > 0 AND octet_length(response_body) <= 2097152)
+                 )",
+        )
+        .await
+        .expect("test restores the legacy 2 MiB response constraint");
+    assert!(
+        insert_idempotency_response(
+            &migration,
+            "legacy-over-two-mib",
+            &json_body_with_size(2 * 1024 * 1024 + 1),
+        )
+        .await
+        .is_err(),
+        "the legacy fixture must reject a response above 2 MiB"
+    );
+
+    install_mutation_schema(&migration, &database.runtime_role)
+        .await
+        .expect("mutation schema reconciles the legacy response constraint");
+    assert_idempotency_response_body_bound(
+        &migration,
+        "upgraded",
+        EXPECTED_MAX_STORED_RESPONSE_BYTES,
+    )
+    .await;
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+async fn assert_idempotency_response_body_bound(
+    migration: &tokio_postgres::Client,
+    key_prefix: &str,
+    expected_maximum: usize,
+) {
+    let maximum_key = format!("{key_prefix}-maximum");
+    insert_idempotency_response(
+        migration,
+        &maximum_key,
+        &json_body_with_size(expected_maximum),
+    )
+    .await
+    .expect("the configured maximum stored response is admitted");
+    assert!(
+        insert_idempotency_response(
+            migration,
+            &format!("{key_prefix}-oversized"),
+            &json_body_with_size(expected_maximum + 1),
+        )
+        .await
+        .is_err(),
+        "one byte above the configured maximum must be refused"
+    );
+    migration
+        .execute(
+            "DELETE FROM registry_internal.registry_idempotency WHERE key_reference = $1",
+            &[&maximum_key],
+        )
+        .await
+        .expect("accepted boundary fixture is removed before constraint replacement");
+}
+
+async fn insert_idempotency_response(
+    migration: &tokio_postgres::Client,
+    key_reference: &str,
+    body: &[u8],
+) -> Result<u64, tokio_postgres::Error> {
+    let response_headers = Vec::<u8>::new();
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_idempotency (
+                 key_reference, binding_reference, result_kind,
+                 record_reference, record_revision, response_status,
+                 response_body, response_headers
+             ) VALUES ($1, 'binding', 'record', 'record', 1, 200, $2, $3)",
+            &[&key_reference, &body, &response_headers],
+        )
+        .await
+}
+
+fn json_body_with_size(size: usize) -> Vec<u8> {
+    const PREFIX: &[u8] = b"{\"value\":\"";
+    const SUFFIX: &[u8] = b"\"}";
+    assert!(size >= PREFIX.len() + SUFFIX.len());
+    let mut body = Vec::with_capacity(size);
+    body.extend_from_slice(PREFIX);
+    body.resize(size - SUFFIX.len(), b'x');
+    body.extend_from_slice(SUFFIX);
+    assert_eq!(body.len(), size);
+    body
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable() {

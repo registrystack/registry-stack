@@ -493,6 +493,7 @@ fn metadata_only_source_between(
         change_class: CompiledRegistryChangeClass::AccessOrDisclosureChange,
         covers,
         recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        history: None,
         lock_timeout_ms: 10_000,
         statement_timeout_ms: 60_000,
         steps: Vec::new(),
@@ -567,6 +568,7 @@ fn destructive_source_with_recovery_fault(
         change_class: CompiledRegistryChangeClass::DestructiveOrIrreversible,
         covers: vec![ReviewedChangeCover::from(&change)],
         recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        history: None,
         lock_timeout_ms: 50,
         statement_timeout_ms: 5_000,
         steps: vec![

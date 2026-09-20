@@ -3,9 +3,10 @@
 
 use std::path::{Path, PathBuf};
 
+use registry_breg::field_encryption::FieldEncryptionProvider;
 use registry_breg::migration::{
-    apply_verified_package, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
+    apply_verified_package, AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles,
+    ApplyTimeouts, ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
 };
 use registry_breg::package::{
     load_package, load_predecessor_package, PackageError, PackageIntent, PackageLoadContext,
@@ -22,6 +23,8 @@ pub(crate) enum ApplyLifecycleError {
     CurrentPackage(PackageError),
     TargetPackage(PackageError),
     EventDestinations,
+    FieldEncryptionConfiguration,
+    FieldEncryptionCustody,
     DatabaseConfiguration,
     TimeoutConfiguration,
     BackupArgument,
@@ -115,6 +118,29 @@ pub(crate) fn run(
     {
         return Err(ApplyLifecycleError::TargetPackage(PackageError::Binding));
     }
+    let declares_encrypted_fields = target.registry().entities().values().any(|entity| {
+        entity
+            .fields
+            .values()
+            .any(|field| field.encryption.is_some())
+    });
+    let field_encryption_provider = if declares_encrypted_fields {
+        let provider = config
+            .field_encryption()
+            .provider()
+            .ok_or(ApplyLifecycleError::FieldEncryptionConfiguration)?;
+        validate_field_encryption_custody(
+            provider,
+            config.identity().database_initialization_environment(),
+        )?;
+        Some(provider)
+    } else {
+        None
+    };
+    let field_encryption_secrets = field_encryption_provider
+        .map(|_| config.secret_resolver())
+        .transpose()
+        .map_err(|_| ApplyLifecycleError::FieldEncryptionConfiguration)?;
     let activated_event_destinations = config
         .activate_event_destinations(target.registry())
         .map_err(|_| ApplyLifecycleError::EventDestinations)?;
@@ -157,6 +183,13 @@ pub(crate) fn run(
     if let Some(descriptor) = current_history_descriptor.as_ref() {
         apply = apply.with_predecessor_history_descriptor(descriptor);
     }
+    if let (Some(provider), Some(secrets)) =
+        (field_encryption_provider, field_encryption_secrets.as_ref())
+    {
+        apply = apply.with_field_encryption_key_source(AppliedFieldEncryptionKeySource::new(
+            provider, secrets,
+        ));
+    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -170,6 +203,26 @@ pub(crate) fn run(
         package_sequence: activated.package_sequence,
         initial: request.initial,
     })
+}
+
+fn validate_field_encryption_custody(
+    provider: &FieldEncryptionProvider,
+    database_initialization_environment: &str,
+) -> Result<(), ApplyLifecycleError> {
+    validate_field_encryption_custody_kind(
+        matches!(provider, FieldEncryptionProvider::LocalFile { .. }),
+        database_initialization_environment,
+    )
+}
+
+fn validate_field_encryption_custody_kind(
+    local_file: bool,
+    database_initialization_environment: &str,
+) -> Result<(), ApplyLifecycleError> {
+    if local_file && database_initialization_environment != "local" {
+        return Err(ApplyLifecycleError::FieldEncryptionCustody);
+    }
+    Ok(())
 }
 
 fn expected_identity(
@@ -235,5 +288,15 @@ mod tests {
         ] {
             assert!(parse_backup_arguments(&[refused.to_owned()]).is_err());
         }
+    }
+
+    #[test]
+    fn plaintext_field_key_custody_is_local_only_during_apply() {
+        assert!(validate_field_encryption_custody_kind(true, "local").is_ok());
+        assert!(matches!(
+            validate_field_encryption_custody_kind(true, "production"),
+            Err(ApplyLifecycleError::FieldEncryptionCustody)
+        ));
+        assert!(validate_field_encryption_custody_kind(false, "production").is_ok());
     }
 }

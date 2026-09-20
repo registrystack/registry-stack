@@ -14,11 +14,13 @@ use uuid::Uuid;
 
 use crate::artifacts::event_data_schema_binding;
 use crate::contract::{
-    Classification, EventConditionSource, EventScalarValue, EventTrigger, HookSource,
+    Classification, EventConditionSource, EventScalarValue, EventTrigger,
     WebhookAuthenticationProfile, WebhookDeadLetterMode,
 };
 use crate::event_destination::ActivatedEventDestinationRegistry;
-use crate::model::{CompiledEntity, CompiledEventDelivery, CompiledWebhookDeliveryMode};
+use crate::model::{
+    CompiledEntity, CompiledEventDelivery, CompiledField, CompiledWebhookDeliveryMode,
+};
 use crate::webhook::DELIVERY_SCHEMA;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -171,13 +173,14 @@ pub(crate) async fn capture_time(transaction: &Transaction<'_>) -> Result<System
 
 pub(crate) async fn insert_configured_events(
     transaction: &Transaction<'_>,
-    events: &BTreeMap<String, HookSource>,
+    entity: &CompiledEntity,
     deliveries: &[CompiledEventDelivery],
     destinations: Option<&ActivatedEventDestinationRegistry>,
     mutation: OutboxMutation<'_>,
 ) -> Result<(), OutboxError> {
     let mut captured_at = None;
-    for event in events
+    for event in entity
+        .hooks
         .values()
         .filter(|event| event.trigger == mutation.trigger)
     {
@@ -209,11 +212,7 @@ pub(crate) async fn insert_configured_events(
             EventTrigger::RequestLifecycle => return Err(OutboxError::InvalidProjection),
         }
         .ok_or(OutboxError::InvalidProjection)?;
-        let mut values = Map::new();
-        for field in projection_fields {
-            let value = snapshot.get(field).ok_or(OutboxError::InvalidProjection)?;
-            values.insert(field.to_owned(), value.clone());
-        }
+        let values = projected_event_values(&entity.fields, &projection_fields, snapshot)?;
         let data = json!({
             "entity": mutation.entity_id,
             "recordId": mutation.record_id,
@@ -299,6 +298,32 @@ pub(crate) async fn insert_configured_events(
         }
     }
     Ok(())
+}
+
+/// Project the event's fields out of the trigger snapshot.
+///
+/// A missing field and a field compiled for encryption both refuse the
+/// projection. The runtime checks trusted compiled metadata rather than the
+/// JSON value's shape: an unencrypted structured field may legitimately use
+/// the same member name as the storage envelope, while an encrypted field must
+/// never enter an outbox payload even if its runtime value is malformed.
+fn projected_event_values(
+    compiled_fields: &BTreeMap<String, CompiledField>,
+    projection_fields: &[&str],
+    snapshot: &Map<String, Value>,
+) -> Result<Map<String, Value>, OutboxError> {
+    let mut values = Map::new();
+    for field in projection_fields {
+        let compiled_field = compiled_fields
+            .get(*field)
+            .ok_or(OutboxError::InvalidProjection)?;
+        if compiled_field.encryption.is_some() {
+            return Err(OutboxError::InvalidProjection);
+        }
+        let value = snapshot.get(*field).ok_or(OutboxError::InvalidProjection)?;
+        values.insert((*field).to_owned(), value.clone());
+    }
+    Ok(values)
 }
 
 fn condition_matches(
@@ -734,5 +759,64 @@ mod tests {
         let envelope = capture_envelope(&binding, captured(projection())).expect("envelope");
         assert_eq!(envelope.causation, caused);
         assert_eq!(envelope.causation.hop, 1);
+    }
+
+    #[test]
+    fn event_projection_uses_compiled_encryption_metadata_not_value_shape() {
+        let fields = BTreeMap::from([
+            (
+                "payload".to_owned(),
+                crate::model::CompiledField {
+                    id: "payload".to_owned(),
+                    field_type: crate::contract::FieldTypeSource::Structured {
+                        max_bytes: 256,
+                        schema: json!({"type": "object"}),
+                    },
+                    required: true,
+                    classification: Classification::Internal,
+                    valid_time_role: None,
+                    physical_name: "payload".to_owned(),
+                    pattern: None,
+                    encryption: None,
+                },
+            ),
+            (
+                "secret".to_owned(),
+                crate::model::CompiledField {
+                    id: "secret".to_owned(),
+                    field_type: crate::contract::FieldTypeSource::String {
+                        min_length: 0,
+                        max_length: 64,
+                    },
+                    required: true,
+                    classification: Classification::Restricted,
+                    valid_time_role: None,
+                    physical_name: "secret".to_owned(),
+                    pattern: None,
+                    encryption: Some(crate::model::CompiledFieldEncryption { blind_index: None }),
+                },
+            ),
+        ]);
+        let mut snapshot = Map::new();
+        let tag_shaped_plaintext =
+            json!({ crate::history_schema::ENVELOPE_MEMBER_TAG: "plaintext"});
+        snapshot.insert("payload".to_owned(), tag_shaped_plaintext.clone());
+        snapshot.insert(
+            "secret".to_owned(),
+            json!({ crate::history_schema::ENVELOPE_MEMBER_TAG: "c2VhbGVk"}),
+        );
+        let projected = projected_event_values(&fields, &["payload"], &snapshot)
+            .expect("tag-shaped plaintext structured fields project");
+        assert_eq!(projected.get("payload"), Some(&tag_shaped_plaintext));
+        assert!(projected_event_values(&fields, &["missing"], &snapshot).is_err());
+        assert!(
+            projected_event_values(&fields, &["secret"], &snapshot).is_err(),
+            "a compiled encrypted field must never enter an outbox payload"
+        );
+        snapshot.insert("secret".to_owned(), json!("malformed plaintext"));
+        assert!(
+            projected_event_values(&fields, &["secret"], &snapshot).is_err(),
+            "the encrypted-field backstop must not depend on runtime value shape"
+        );
     }
 }

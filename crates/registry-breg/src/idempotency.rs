@@ -22,7 +22,11 @@ pub(crate) const MAX_IMMEDIATE_ACTION_RESULTS: u16 =
 
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 const MAX_HEADER_VALUE_BYTES: usize = 8 * 1024;
-const MAX_HELD_BODY_BYTES: usize = 2 * 1024 * 1024;
+// Held mutation bodies keep encrypted members as tagged, base64-encoded
+// AES-GCM envelopes until the authorized serve edge opens them. Reserve half
+// again as much space as the prior 2 MiB held-body budget for that
+// internal expansion while retaining a hard cache and replay-read bound.
+pub(crate) const MAX_HELD_BODY_BYTES: usize = 3 * 1024 * 1024;
 // Overwrites the held bytes of a key whose record history was erased. The table
 // requires a nonempty body and a 2xx status on every row, so an erased key keeps
 // a minimal placeholder instead of the response it cached. Replay refuses on the
