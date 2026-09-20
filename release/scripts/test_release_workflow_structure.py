@@ -1105,6 +1105,9 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         for forbidden in ("npm ci", "npm pack", "bind-optional-deps"):
             self.assertNotIn(forbidden, assemble)
         self.assertIn("kind=client-package", text)
+        self.assertIn("kind=notice", text)
+        self.assertIn("cp THIRD_PARTY_NOTICES candidate/bundle-root/", assemble)
+        self.assertIn("client_minor >= 33", assemble)
         self.assertIn("discovery-client-node-*.tgz", text)
         self.assertIn("registrystack-discovery-client-*.tgz", text)
         self.assertIn("registry_discovery_client-*.whl", text)

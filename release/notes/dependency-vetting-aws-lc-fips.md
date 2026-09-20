@@ -106,8 +106,10 @@ claim about Registry Stack itself.
 The `OpenSSL` license term imposes attribution and notice conditions on
 redistribution of the vendored OpenSSL-derived code. Binary release
 artifacts that statically link the FIPS module therefore need the OpenSSL
-attribution and disclaimer in their accompanying documentation; the release
-notes for the version shipping field-level encryption must carry it.
+attribution and disclaimer in their accompanying documentation. Images and
+client packages carry `THIRD_PARTY_NOTICES` inside the artifact. From v0.33.0,
+the GitHub Release publishes the same checksum-covered file alongside the
+standalone native binaries. Release notes need not duplicate the full notice.
 
 ## Accepted Risk and Controls
 

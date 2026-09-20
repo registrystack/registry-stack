@@ -851,6 +851,13 @@ class ReleaseCandidateTest(TestCase):
         self.assertEqual("installer", future["casework-v0.30.0-install.sh"])
         self.assertEqual("installer", future["casework-install.sh"])
 
+    def test_third_party_notices_join_only_the_v0_33_roster(self) -> None:
+        historical = self.module._relay_v2_payload_inventory("0.32.0")
+        current = self.module._relay_v2_payload_inventory("0.33.0")
+
+        self.assertNotIn("THIRD_PARTY_NOTICES", historical)
+        self.assertEqual("notice", current["THIRD_PARTY_NOTICES"])
+
     def test_retirement_preserves_every_v0_30_release(self) -> None:
         for version, expected in (
             ("0.30.0", True),
@@ -1212,6 +1219,9 @@ class ReleaseCandidateTest(TestCase):
         self.assertIn("docs", schema["properties"])
         self.assertIn(
             "docs", payload_schema["items"]["properties"]["kind"]["enum"]
+        )
+        self.assertIn(
+            "notice", payload_schema["items"]["properties"]["kind"]["enum"]
         )
         self.assertEqual(
             "^0\\.(?:[0-9]|1[0-8])\\.",
