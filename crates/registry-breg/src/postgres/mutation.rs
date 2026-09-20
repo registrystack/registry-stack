@@ -1092,11 +1092,21 @@ impl PostgresRecordMutationService {
         if run.bound_context_reference != self.ingestion_context_reference(&claims)? {
             return Err(IngestionServiceError::ProfileMismatch);
         }
-        let transaction = client
-            .transaction()
-            .await
-            .map_err(|_| IngestionServiceError::Unavailable)?;
-        let tx: &tokio_postgres::Transaction<'_> = &transaction;
+        // Cancellation permanently closes an otherwise resumable run, so the
+        // write takes the same guarded transaction run creation takes: the
+        // registry lock plus the durable identity check inside it leave a
+        // stale instance no window to cancel under an identity its successor
+        // already retired.
+        let transaction = begin_record_transaction(
+            &mut client,
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+            &claims,
+        )
+        .await
+        .map_err(|_| IngestionServiceError::Unavailable)?;
+        let tx: &tokio_postgres::Transaction<'_> = transaction.transaction();
         let cancelled =
             ingestion_store::cancel_run(tx, run.run_id, IngestionAttemptOutcome::Refused)
                 .await

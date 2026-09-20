@@ -1728,6 +1728,73 @@ async fn a_stale_instance_cannot_release_a_retained_receipt() {
     assert_eq!(current_recovered.status(), StatusCode::OK);
 }
 
+/// Cancellation permanently closes an otherwise resumable run, so it owes the
+/// same durable activation interlock run creation and chunk submission owe:
+/// an instance whose package a successor retired answers an outage and leaves
+/// the run untouched, while the current instance can still cancel it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stale_instance_cannot_cancel_an_open_run() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("stale-cancel", 4);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+
+    // The successor revision activates in the database while the original
+    // process keeps serving its retired identity.
+    let successor = harness.restart_with_revision("package-ingestion-2").await;
+
+    let cancelled = harness
+        .post_empty(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/cancel"),
+            &claims,
+        )
+        .await;
+    assert_eq!(
+        cancelled.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the stale instance cannot cancel a run"
+    );
+
+    // The run keeps its committed prefix and stays resumable: the stored row
+    // is still open, and the successor can still cancel it.
+    let stored = harness
+        .database
+        .admin
+        .query_opt(
+            "SELECT status, committed_items, next_chunk_index
+               FROM registry_internal.registry_ingestion_runs
+              WHERE run_id = $1",
+            &[&Uuid::parse_str(&run_id).expect("run id parses")],
+        )
+        .await
+        .expect("administrator inspects the stored run")
+        .expect("the run row exists");
+    assert_eq!(stored.get::<_, String>(0), "open");
+    assert_eq!(stored.get::<_, i64>(1), 2);
+    assert_eq!(stored.get::<_, i64>(2), 1);
+
+    let successor_cancel = successor
+        .post_empty(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/cancel"),
+            &claims,
+        )
+        .await;
+    assert_eq!(successor_cancel.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(successor_cancel).await["run"]["status"],
+        "cancelled"
+    );
+}
+
 /// The published ingestion operations carry every problem response their
 /// handlers can produce: a producible refusal outside the published contract
 /// is invisible to generated clients and contract validators.
