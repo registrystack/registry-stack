@@ -451,6 +451,69 @@ async fn run_creation_refuses_mismatched_profiles_bindings_and_algorithms() {
     assert_eq!(refused.status(), StatusCode::NOT_FOUND);
 }
 
+/// A run only exists when its announced operation is one the selected
+/// profile can execute to the end of every chunk, decided exactly as an
+/// import binding is: a batch-and-patch profile cannot open a run
+/// announcing create, an immutable entity cannot announce patch, and the
+/// matching patch run is created.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn run_creation_refuses_an_operation_the_profile_cannot_execute() {
+    let harness = IngestionHarness::from_registry(patch_only_registry()).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let fingerprint = harness.identity.schema_fingerprint.clone();
+
+    // The profile grants batch and patch only, so a create run would linger
+    // open while every chunk deterministically fails item authorization.
+    let create_plan = plan_chunks(&announce_items("unexecutable-create", 1), 3);
+    let refused = harness
+        .post_json(
+            "/v1/records/widgets/ingestion-runs",
+            &claims,
+            run_body_under("create", &fingerprint, &create_plan, "patcher"),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(refused).await["code"], "request.invalid");
+
+    // The immutable entity grants create and batch, so the announced patch
+    // is unexecutable there too.
+    let patch_plan = plan_chunks(&announce_items("unexecutable-patch", 1), 3);
+    let refused = harness
+        .post_json(
+            "/v1/records/assets/ingestion-runs",
+            &claims,
+            run_body_under("patch", &fingerprint, &patch_plan, "patcher"),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(refused).await["code"], "request.invalid");
+
+    // No run row was written for either refusal.
+    let listed = harness
+        .get_json("/v1/records/widgets/ingestion-runs", &claims)
+        .await;
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(listed).await["runs"]
+            .as_array()
+            .expect("runs")
+            .len(),
+        0
+    );
+
+    // The positive control: the patch operation the profile can execute
+    // against the mutable entity opens its run.
+    let created = harness
+        .post_json(
+            "/v1/records/widgets/ingestion-runs",
+            &claims,
+            run_body_under("patch", &fingerprint, &patch_plan, "patcher"),
+        )
+        .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(body_json(created).await["run"]["operation"], "patch");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn package_change_blocks_the_run_and_keeps_it_inspectable() {
     let harness = IngestionHarness::create().await;
@@ -2772,6 +2835,58 @@ fn encrypted_widget_registry() -> Arc<registry_breg::CompiledRegistry> {
     Arc::new(
         compile_project(&project, &[], CompileProfile::Authoring)
             .expect("the encrypted fixture compiles to trusted inventories"),
+    )
+}
+
+/// A registry whose only profile grants batch and patch, over a mutable
+/// entity and an immutable one, so run creation must decide the announced
+/// operation the import binding would. The compiler refuses patch
+/// permissions on create-only entities, so the immutable entity grants
+/// create and batch and the announced patch is unexecutable either way.
+fn patch_only_registry() -> Arc<registry_breg::CompiledRegistry> {
+    let project = r#"{
+      "apiVersion":"registry.registrystack.org/v1alpha1",
+      "kind":"RegistryProject",
+      "registry":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "entities":[{
+        "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
+        "batch":{"maximumItems":3,"maximumBytes":8192},
+        "fields":[
+          {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
+          {"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"},
+          {"id":"quantity","type":"int64","required":true,"classification":"public"}
+        ]
+      },{
+        "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"create_only","classification":"public",
+        "batch":{"maximumItems":3,"maximumBytes":8192},
+        "fields":[
+          {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
+          {"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"}
+        ]
+      }],
+      "accessProfiles":[{
+        "id":"patcher","default":true,"principalClaim":"registry_principal",
+        "requiredPurposes":["case-management"],
+        "permissions":[
+          {
+            "entity":"widget","operations":["patch","batch"],
+            "readableFields":["jurisdiction","label","quantity"],
+            "writableFields":["jurisdiction","label","quantity"],
+            "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+          },
+          {
+            "entity":"asset","operations":["create","batch"],
+            "readableFields":["jurisdiction","label"],
+            "writableFields":["jurisdiction","label"],
+            "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+          }
+        ]
+      }]
+    }"#;
+    let project = parse_project_json(project.as_bytes()).expect("the patch-only fixture parses");
+    Arc::new(
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("the patch-only fixture compiles to trusted inventories"),
     )
 }
 

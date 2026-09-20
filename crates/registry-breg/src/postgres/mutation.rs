@@ -889,6 +889,23 @@ impl PostgresRecordMutationService {
             .batch
             .as_ref()
             .ok_or(IngestionServiceError::RequestInvalid)?;
+        // The announced operation must be one the selected profile can
+        // execute to the end of every chunk, decided exactly as an import
+        // binding is; otherwise the run would linger open while every chunk
+        // deterministically fails item authorization.
+        let announced = match input.operation.as_str() {
+            "create" => crate::data::DataImportOperation::Create,
+            "patch" => crate::data::DataImportOperation::Patch,
+            _ => return Err(IngestionServiceError::RequestInvalid),
+        };
+        if !crate::data::ingestion_item_operation_admitted(
+            &self.registry,
+            entity,
+            &input.profile_id,
+            announced,
+        ) {
+            return Err(IngestionServiceError::RequestInvalid);
+        }
         let run = ingestion_store::NewIngestionRun {
             created_principal_reference: self.ingestion_principal_reference(principal)?,
             package_revision: input.package_revision,
