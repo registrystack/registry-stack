@@ -667,8 +667,8 @@ async fn active_absence_routes_assignment_to_eligible_cover_and_records_opaque_h
         .service
         .assign_item(
             &fixture.supervisor,
-            None,
-            "unused",
+            Some("source-profile"),
+            "token",
             item.item_id,
             item.revision,
             &AssignmentRequest {
@@ -689,8 +689,8 @@ async fn active_absence_routes_assignment_to_eligible_cover_and_records_opaque_h
         .service
         .assign_item(
             &fixture.supervisor,
-            None,
-            "unused",
+            Some("source-profile"),
+            "token",
             item.item_id,
             item.revision,
             &AssignmentRequest {
@@ -726,8 +726,8 @@ async fn active_absence_routes_assignment_to_eligible_cover_and_records_opaque_h
         .service
         .assign_item(
             &fixture.supervisor,
-            None,
-            "unused",
+            Some("source-profile"),
+            "token",
             uncovered_item.item_id,
             uncovered_item.revision,
             &AssignmentRequest {
@@ -770,8 +770,8 @@ async fn active_absence_routes_assignment_to_eligible_cover_and_records_opaque_h
             .service
             .assign_item(
                 &fixture.supervisor,
-                None,
-                "unused",
+                Some("source-profile"),
+                "token",
                 removed_target_item.item_id,
                 removed_target_item.revision,
                 &AssignmentRequest {
@@ -789,8 +789,8 @@ async fn active_absence_routes_assignment_to_eligible_cover_and_records_opaque_h
             .service
             .assign_item(
                 &fixture.supervisor,
-                None,
-                "unused",
+                Some("source-profile"),
+                "token",
                 removed_target_item.item_id,
                 removed_target_item.revision,
                 &AssignmentRequest {
@@ -1536,10 +1536,16 @@ async fn caseload_apply_is_per_item_and_source_live_attempt_blocks_assignment() 
     assert_eq!(results[1].result, CaseloadItemOutcome::AttemptInProgress);
     assert_eq!(results[2].result, CaseloadItemOutcome::NotVisible);
     let moved = fixture
-        .store
-        .item(local.item_id)
+        .service
+        .caller_item(
+            &fixture.supervisor,
+            local.item_id,
+            "source-profile",
+            "token",
+        )
         .await
-        .expect("moved source item");
+        .expect("moved source item")
+        .0;
     assert_eq!(moved.holder, Some(fixture.staff_c.principal.clone()));
     assert!(moved
         .held_since
@@ -1748,8 +1754,8 @@ async fn caseload_outer_idempotency_key_binds_the_complete_selection() {
         .service
         .apply_caseload_move(
             &fixture.supervisor,
-            None,
-            "unused",
+            Some("source-profile"),
+            "token",
             &original,
             "outer-selection",
         )
@@ -1760,8 +1766,8 @@ async fn caseload_outer_idempotency_key_binds_the_complete_selection() {
         .service
         .apply_caseload_move(
             &fixture.supervisor,
-            None,
-            "unused",
+            Some("source-profile"),
+            "token",
             &original,
             "outer-selection",
         )
@@ -1784,8 +1790,8 @@ async fn caseload_outer_idempotency_key_binds_the_complete_selection() {
             .service
             .apply_caseload_move(
                 &fixture.supervisor,
-                None,
-                "unused",
+                Some("source-profile"),
+                "token",
                 &expanded,
                 "outer-selection",
             )
@@ -1822,8 +1828,8 @@ async fn assignment_replay_rechecks_current_control_and_queue_authority() {
         .service
         .delegate_item(
             &fixture.staff_a,
-            None,
-            "unused",
+            Some("source-profile"),
+            "token",
             item.item_id,
             claimed.revision,
             &request,
@@ -1835,8 +1841,8 @@ async fn assignment_replay_rechecks_current_control_and_queue_authority() {
         .service
         .assign_item(
             &fixture.supervisor,
-            None,
-            "unused",
+            Some("source-profile"),
+            "token",
             item.item_id,
             delegated.revision,
             &AssignmentRequest {
@@ -1852,8 +1858,8 @@ async fn assignment_replay_rechecks_current_control_and_queue_authority() {
             .service
             .delegate_item(
                 &fixture.staff_a,
-                None,
-                "unused",
+                Some("source-profile"),
+                "token",
                 item.item_id,
                 claimed.revision,
                 &request,
@@ -2415,8 +2421,11 @@ async fn team_reorganization_revokes_immediately_and_reconciliation_defers_live_
         .expect("replace team membership");
     assert_eq!(revision, 2);
     assert!(matches!(
-        fixture.store.item(local.item_id).await,
-        Err(StoreError::NotFound)
+        fixture
+            .service
+            .caller_item(&fixture.staff_a, local.item_id, "source-profile", "token")
+            .await,
+        Err(ServiceError::NotFound)
     ));
     assert!(matches!(
         fixture

@@ -247,7 +247,7 @@ async fn review_completion(
     let Some(recipient) = single_header(&headers, REVIEW_COMPLETION_RECIPIENT_HEADER) else {
         return review_completion_refused();
     };
-    let Some(authority) = receiver.authority(token, recipient) else {
+    let Some((authority, recovery_days)) = receiver.authority(token, recipient) else {
         return review_completion_refused();
     };
     if !single_content_type(&headers, "application/json") {
@@ -274,15 +274,40 @@ async fn review_completion(
         return invalid_request();
     }
     let now = chrono::Utc::now();
-    if completion.completed_at < now - chrono::Duration::days(90)
-        || completion.completed_at > now + chrono::Duration::minutes(5)
-    {
+    if !completion_timestamp_is_acceptable(completion.completed_at, now, recovery_days) {
         return invalid_request();
     }
     match receiver.receive(&authority, &completion).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(MutationError::InvalidRequest | MutationError::PreconditionFailed) => invalid_request(),
         Err(_) => unavailable(),
+    }
+}
+
+fn completion_timestamp_is_acceptable(
+    completed_at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+    recovery_days: u32,
+) -> bool {
+    completed_at >= now - chrono::Duration::days(i64::from(recovery_days))
+        && completed_at <= now + chrono::Duration::minutes(5)
+}
+
+#[cfg(test)]
+mod review_completion_tests {
+    use super::completion_timestamp_is_acceptable;
+
+    #[test]
+    fn completion_age_uses_the_configured_authority_recovery_window() {
+        let now = chrono::Utc::now();
+        let retained = now - chrono::Duration::days(120);
+        assert!(completion_timestamp_is_acceptable(retained, now, 365));
+        assert!(!completion_timestamp_is_acceptable(retained, now, 90));
+        assert!(!completion_timestamp_is_acceptable(
+            now + chrono::Duration::minutes(6),
+            now,
+            365,
+        ));
     }
 }
 

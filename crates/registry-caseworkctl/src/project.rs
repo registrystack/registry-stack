@@ -191,7 +191,7 @@ reviewProducers:
   - id: requester
     profile: requester
     issuer: http://127.0.0.1:8093
-    subject: requester
+    subject: b75315b2-5854-70f3-8867-511dd771a6da
     sourceNamespaces: [standalone]
     kinds: [decision]
     recoveryDays: 30

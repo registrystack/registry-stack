@@ -25,6 +25,7 @@ use registry_breg::postgres::{
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
     RegistryStateTestIdentity,
 };
+use registry_breg::review_store::{ReviewAuthorityClient, ReviewAuthorityRegistry};
 use registry_platform_audit::AuditProfile;
 use serde_json::{json, Value};
 use tower::Service as _;
@@ -399,14 +400,17 @@ fn request_query_router(
         audit.clone(),
         cursors.clone(),
     ));
-    let mutations = Arc::new(PostgresRecordMutationService::new(
-        pool,
-        registry.clone(),
-        identity.clone(),
-        lock_key,
-        Duration::from_secs(2),
-        audit,
-    ));
+    let mutations = Arc::new(
+        PostgresRecordMutationService::new(
+            pool,
+            registry.clone(),
+            identity.clone(),
+            lock_key,
+            Duration::from_secs(2),
+            audit,
+        )
+        .with_review_result_source(review_authority_registry()),
+    );
     router(Arc::new(
         HttpService::new(
             registry,
@@ -420,6 +424,35 @@ fn request_query_router(
         )
         .with_postgres_mutations(mutations),
     ))
+}
+
+fn review_authority_registry() -> Arc<ReviewAuthorityRegistry> {
+    let client = registry_review_client::ReviewClient::new(
+        registry_review_client::ReviewClientConfig::new(
+            "http://127.0.0.1:9/".parse().expect("loopback review URL"),
+        )
+        .with_profile("producer-profile"),
+    )
+    .expect("review client");
+    let authority = Arc::new(
+        ReviewAuthorityClient::new(
+            "casework-main".to_owned(),
+            client,
+            Arc::new(
+                registry_platform_httputil::StaticToken::new("producer-token".to_owned())
+                    .expect("review token"),
+            ),
+            "request-query-producer".to_owned(),
+            30,
+            None,
+            None,
+        )
+        .expect("review authority"),
+    );
+    Arc::new(
+        ReviewAuthorityRegistry::new(BTreeMap::from([("casework-main".to_owned(), authority)]))
+            .expect("review authority registry"),
+    )
 }
 
 #[derive(Clone)]

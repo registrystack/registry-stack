@@ -426,9 +426,9 @@ async fn retention_migration_backfills_review_ownership_and_author_keys_drafts()
         .database
         .execute(
             "INSERT INTO casework_review_accountability(
-                event_id,request_id,task_id,actor_ref,actor_issuer,actor_subject,profile_id,
+                event_id,request_id,task_id,queue_id,actor_ref,actor_issuer,actor_subject,profile_id,
                 decision,occurred_at,retained_until)
-             VALUES($1,$2,$3,'actor-ref','https://issuer.test','reviewer-a','staff',
+             VALUES($1,$2,$3,'review','actor-ref','https://issuer.test','reviewer-a','staff',
                     'approve',now()-interval '20 days',now()-interval '1 day')",
             &[&Uuid::new_v4(), &request_id, &task_id],
         )

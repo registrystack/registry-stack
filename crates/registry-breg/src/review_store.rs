@@ -781,10 +781,10 @@ impl ReviewCompletionReceiver {
         Self { pool, authorities }
     }
 
-    pub fn authority(&self, token: &str, recipient: &str) -> Option<String> {
-        self.authorities
-            .completion_authority(token, recipient)
-            .map(str::to_owned)
+    pub fn authority(&self, token: &str, recipient: &str) -> Option<(String, u32)> {
+        let authority = self.authorities.completion_authority(token, recipient)?;
+        let recovery_days = self.authorities.recovery_days(authority)?;
+        Some((authority.to_owned(), recovery_days))
     }
 
     pub async fn receive(

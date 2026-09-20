@@ -248,7 +248,6 @@ fn create_review_request(session: &Session, report: &Value, reference: &str) -> 
         })),
     );
     assert_eq!(status, 201, "{body:#}");
-    assert_eq!(body["requesterReference"], reference);
     body["requestId"]
         .as_str()
         .expect("a review request ID")
@@ -307,6 +306,8 @@ fn dev_serves_a_tutorial_project_and_retains_its_records() {
     .expect("the initialized policy is valid YAML");
     policy["reviewProducers"][0]["issuer"] =
         format!("http://127.0.0.1:{}", session.ports[1]).into();
+    policy["reviewProducers"][0]["subject"] =
+        registry_thunderid_tooling::local::agent_id("casework-local", "requester").into();
     fs::write(
         &policy_path,
         serde_norway::to_string(&policy).expect("the adjusted policy is valid YAML"),

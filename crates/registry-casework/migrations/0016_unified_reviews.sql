@@ -295,7 +295,8 @@ CREATE INDEX casework_review_history_request_idx
 CREATE TABLE casework_review_accountability (
     event_id uuid PRIMARY KEY,
     request_id uuid NOT NULL,
-    task_id uuid,
+    task_id uuid NOT NULL,
+    queue_id text NOT NULL CHECK (octet_length(queue_id) BETWEEN 1 AND 128),
     actor_ref text NOT NULL CHECK (octet_length(actor_ref) BETWEEN 1 AND 256),
     actor_issuer text NOT NULL CHECK (octet_length(actor_issuer) BETWEEN 1 AND 2048),
     actor_subject text NOT NULL CHECK (octet_length(actor_subject) BETWEEN 1 AND 2048),
@@ -306,9 +307,7 @@ CREATE TABLE casework_review_accountability (
     occurred_at timestamptz NOT NULL,
     retained_until timestamptz NOT NULL,
     CHECK (retained_until > occurred_at),
-    FOREIGN KEY (request_id) REFERENCES casework_review_requests(request_id) ON DELETE CASCADE,
-    FOREIGN KEY (task_id, request_id)
-        REFERENCES casework_review_tasks(task_id, request_id) ON DELETE SET NULL (task_id)
+    FOREIGN KEY (request_id) REFERENCES casework_review_requests(request_id) ON DELETE CASCADE
 );
 CREATE INDEX casework_review_accountability_retention_idx
     ON casework_review_accountability(retained_until, event_id);

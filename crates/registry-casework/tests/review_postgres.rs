@@ -50,6 +50,9 @@ struct Fixture {
     supervisor: ActorContext,
     source_revoked: Arc<AtomicBool>,
     source_state: Arc<Mutex<OccurrenceState>>,
+    source_read_blocked: Arc<AtomicBool>,
+    source_read_started: Arc<Notify>,
+    source_read_continue: Arc<Notify>,
     application_name: String,
 }
 
@@ -57,6 +60,9 @@ struct Fixture {
 struct ReviewSource {
     revoked: Arc<AtomicBool>,
     state: Arc<Mutex<OccurrenceState>>,
+    read_blocked: Arc<AtomicBool>,
+    read_started: Arc<Notify>,
+    read_continue: Arc<Notify>,
 }
 
 #[async_trait]
@@ -123,6 +129,10 @@ impl SourceAdapter for ReviewSource {
         source_profile_id: &str,
         _credential: EphemeralCredential<'_>,
     ) -> Result<CallerSubjectView, SourceAdapterError> {
+        if self.read_blocked.swap(false, Ordering::SeqCst) {
+            self.read_started.notify_one();
+            self.read_continue.notified().await;
+        }
         if self.revoked.load(Ordering::SeqCst) || source_profile_id != "staff" {
             return Err(SourceAdapterError::Concealed);
         }
@@ -425,6 +435,9 @@ async fn fixture() -> Fixture {
     project_v2.check().expect("version two project");
     let source_revoked = Arc::new(AtomicBool::new(false));
     let source_state = Arc::new(Mutex::new(OccurrenceState::Open));
+    let source_read_blocked = Arc::new(AtomicBool::new(false));
+    let source_read_started = Arc::new(Notify::new());
+    let source_read_continue = Arc::new(Notify::new());
     Fixture {
         service_v1: CaseworkService::new(
             store.clone(),
@@ -438,6 +451,9 @@ async fn fixture() -> Fixture {
             [Arc::new(ReviewSource {
                 revoked: Arc::clone(&source_revoked),
                 state: Arc::clone(&source_state),
+                read_blocked: Arc::clone(&source_read_blocked),
+                read_started: Arc::clone(&source_read_started),
+                read_continue: Arc::clone(&source_read_continue),
             }) as Arc<dyn SourceAdapter>],
         )
         .expect("version two service"),
@@ -449,6 +465,9 @@ async fn fixture() -> Fixture {
         supervisor: actor("supervisor", CaseworkRole::Supervisor, "supervisor"),
         source_revoked,
         source_state,
+        source_read_blocked,
+        source_read_started,
+        source_read_continue,
         application_name,
     }
 }
@@ -1649,7 +1668,7 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
     let accountability = fixture
         .database
         .query_one(
-            "SELECT count(*),bool_and(task_id IS NULL),bool_and(retained_until>now())
+            "SELECT count(*),bool_and(task_id IS NOT NULL),bool_and(retained_until>now())
              FROM casework_review_accountability WHERE request_id=$1",
             &[&request_id],
         )
@@ -1661,6 +1680,22 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
         accountability.get::<_, bool>(2),
         "terminalDays expires before accountabilityDays in this fixture"
     );
+    let retained_accountability_event: Uuid = fixture
+        .database
+        .query_one(
+            "SELECT event_id FROM casework_review_accountability
+             WHERE request_id=$1 ORDER BY occurred_at,event_id LIMIT 1",
+            &[&request_id],
+        )
+        .await
+        .expect("select retained accountability event")
+        .get(0);
+    let retained_accountability = fixture
+        .service_v1
+        .review_accountability(&fixture.supervisor, retained_accountability_event)
+        .await
+        .expect("supervisor reads accountability after task cleanup");
+    assert_eq!(retained_accountability.request_id, request_id);
     assert_eq!(
         count_for_request(&fixture, "casework_review_requests", request_id).await,
         1
@@ -1671,6 +1706,13 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
             .review_task(&fixture.reviewer_b, primary, None, "")
             .await,
         Err(ReviewRuntimeError::NotFound)
+    ));
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_request(&fixture.producer, request_id)
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
     ));
     let idempotency = fixture
         .database
@@ -3543,6 +3585,106 @@ async fn source_context_task_disclosure_requires_a_current_caller_source_read() 
 }
 
 #[tokio::test]
+async fn source_history_and_clocks_recheck_membership_after_source_io() {
+    let fixture = fixture().await;
+    let mut source_request = request("record-source-race", "producer-ref-source-race");
+    source_request.context = ReviewContext::Source {
+        binding: SourceContextBinding {
+            reference: "registry:record:record-source-race".to_owned(),
+        },
+    };
+    let created = fixture
+        .service_v2
+        .create_review_request(&fixture.producer, source_request, "create-source-race")
+        .await
+        .expect("create source-context review");
+
+    fixture.source_read_blocked.store(true, Ordering::SeqCst);
+    let service = fixture.service_v2.clone();
+    let reviewer = fixture.reviewer_a.clone();
+    let request_id = created.accepted.request_id;
+    let history = tokio::spawn(async move {
+        service
+            .review_history(
+                &reviewer,
+                request_id,
+                Some("staff"),
+                "human-bearer",
+                None,
+                10,
+            )
+            .await
+    });
+    fixture.source_read_started.notified().await;
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    fixture.source_read_continue.notify_one();
+    assert!(matches!(
+        history.await.expect("history task joins"),
+        Err(ReviewRuntimeError::NotFound)
+    ));
+
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+    fixture.source_read_blocked.store(true, Ordering::SeqCst);
+    let service = fixture.service_v2.clone();
+    let reviewer = fixture.reviewer_a.clone();
+    let clocks = tokio::spawn(async move {
+        service
+            .review_clocks(&reviewer, request_id, Some("staff"), "human-bearer")
+            .await
+    });
+    fixture.source_read_started.notified().await;
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    fixture.source_read_continue.notify_one();
+    assert!(matches!(
+        clocks.await.expect("clock task joins"),
+        Err(ReviewRuntimeError::NotFound)
+    ));
+}
+
+#[tokio::test]
+async fn review_task_pagination_rejects_a_cursor_removed_by_retention() {
+    let fixture = fixture().await;
+    for (subject, key) in [
+        ("record-page-one", "create-page-one"),
+        ("record-page-two", "create-page-two"),
+    ] {
+        fixture
+            .service_v1
+            .create_review_request(&fixture.producer, request(subject, key), key)
+            .await
+            .expect("create paged review");
+    }
+    let first = fixture
+        .service_v1
+        .review_tasks(&fixture.reviewer_a, None, "", Some("review"), None, 1)
+        .await
+        .expect("read first task page");
+    let cursor = first.next_cursor.expect("first page has a cursor");
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_review_tasks WHERE task_id=$1",
+            &[&cursor],
+        )
+        .await
+        .expect("simulate retention removing the cursor task");
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_tasks(
+                &fixture.reviewer_a,
+                None,
+                "",
+                Some("review"),
+                Some(cursor),
+                10,
+            )
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+}
+
+#[tokio::test]
 async fn subject_clock_pauses_and_continues_across_review_rounds() {
     let fixture = fixture().await;
     let first = fixture
@@ -3796,6 +3938,9 @@ async fn source_review_clock_defers_effects_until_the_frozen_binding_is_current(
         [Arc::new(ReviewSource {
             revoked: Arc::clone(&fixture.source_revoked),
             state: Arc::clone(&fixture.source_state),
+            read_blocked: Arc::new(AtomicBool::new(false)),
+            read_started: Arc::new(Notify::new()),
+            read_continue: Arc::new(Notify::new()),
         }) as Arc<dyn SourceAdapter>],
     )
     .expect("source activity clock service");

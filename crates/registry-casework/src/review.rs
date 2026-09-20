@@ -704,6 +704,7 @@ impl CaseworkService {
         if producer_id.is_none() {
             self.preflight_review_request_source(request_id, source_profile_id, token)
                 .await?;
+            self.store.recheck_review_access(actor, request_id).await?;
         }
         Ok(history)
     }
@@ -731,6 +732,7 @@ impl CaseworkService {
         if producer_id.is_none() {
             self.preflight_review_request_source(request_id, source_profile_id, token)
                 .await?;
+            self.store.recheck_review_access(actor, request_id).await?;
         }
         Ok(clocks)
     }
@@ -1280,6 +1282,22 @@ impl PostgresStore {
             }
         };
         let client = self.client().await?;
+        let (cursor_created_at, cursor_task_id) = match cursor {
+            Some(task_id) => {
+                let row = client
+                    .query_opt(
+                        "SELECT created_at,task_id FROM casework_review_tasks WHERE task_id=$1",
+                        &[&task_id],
+                    )
+                    .await?
+                    .ok_or(ReviewRuntimeError::ResultExpired)?;
+                (
+                    Some(row.get::<_, DateTime<Utc>>(0)),
+                    Some(row.get::<_, Uuid>(1)),
+                )
+            }
+            None => (None, None),
+        };
         let rows = client
             .query(
                 "SELECT t.task_id,t.request_id,t.stage_index,t.stage_id,t.queue_id,t.state,
@@ -1292,17 +1310,16 @@ impl PostgresStore {
                    AND t.state IN ('open','claimed')
                    AND m.issuer=$1 AND m.subject=$2 AND m.membership_kind=$3
                    AND ($4::text IS NULL OR t.queue_id=$4)
-                   AND ($5::uuid IS NULL OR (t.created_at,t.task_id)>(
-                        SELECT c.created_at,c.task_id FROM casework_review_tasks c WHERE c.task_id=$5
-                   ))
-                   AND ((r.policy_snapshot->'stages'->t.stage_index->'decidingProfiles') ? $7)
-                 ORDER BY t.created_at,t.task_id LIMIT $6",
+                   AND ($5::timestamptz IS NULL OR (t.created_at,t.task_id)>($5,$6))
+                   AND ((r.policy_snapshot->'stages'->t.stage_index->'decidingProfiles') ? $8)
+                 ORDER BY t.created_at,t.task_id LIMIT $7",
                 &[
                     &actor.principal.issuer,
                     &actor.principal.subject,
                     &membership,
                     &queue,
-                    &cursor,
+                    &cursor_created_at,
+                    &cursor_task_id,
                     &i64::try_from(limit + 1).map_err(|_| ReviewRuntimeError::Invalid)?,
                     &actor.profile_id,
                 ],
@@ -2218,7 +2235,23 @@ impl PostgresStore {
     ) -> Result<ReviewRequestView, ReviewRuntimeError> {
         let client = self.client().await?;
         let record = load_request_client(&client, producer_id, request_id).await?;
+        if record
+            .result_available_until
+            .is_some_and(|available_until| available_until <= Utc::now())
+        {
+            return Err(ReviewRuntimeError::ResultExpired);
+        }
         Ok(request_view(&record))
+    }
+
+    async fn recheck_review_access(
+        &self,
+        actor: &ActorContext,
+        request_id: Uuid,
+    ) -> Result<(), ReviewRuntimeError> {
+        let client = self.client().await?;
+        let record = load_request_by_id(&client, request_id, false).await?;
+        ensure_review_reviewer_access(&client, &record, actor, None, false).await
     }
 
     async fn review_result(
@@ -3171,8 +3204,7 @@ impl PostgresStore {
                         a.actor_subject,a.profile_id,a.decision,a.private_reason,a.result_digest,
                         a.occurred_at,a.retained_until
                  FROM casework_review_accountability a
-                 JOIN casework_review_tasks t ON t.task_id=a.task_id
-                 JOIN casework_queue_service q ON q.queue_id=t.queue_id
+                 JOIN casework_queue_service q ON q.queue_id=a.queue_id
                  JOIN casework_memberships m ON m.team_id=q.team_id
                  WHERE a.event_id=$1 AND m.issuer=$2 AND m.subject=$3
                    AND m.membership_kind='supervisor' AND a.retained_until>now()
@@ -3184,9 +3216,7 @@ impl PostgresStore {
         let record = ReviewAccountabilityRecord {
             event_id: row.get(0),
             request_id: row.get(1),
-            task_id: row
-                .get::<_, Option<Uuid>>(2)
-                .ok_or(ReviewRuntimeError::Corrupt)?,
+            task_id: row.get(2),
             actor_ref: row.get(3),
             actor: IssuerPrincipal {
                 issuer: row.get(4),
@@ -3587,13 +3617,14 @@ impl PostgresStore {
         transaction
             .execute(
                 "INSERT INTO casework_review_accountability(
-                    event_id,request_id,task_id,actor_ref,actor_issuer,actor_subject,profile_id,
-                    decision,private_reason,result_digest,occurred_at,retained_until)
-                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+                    event_id,request_id,task_id,queue_id,actor_ref,actor_issuer,actor_subject,
+                    profile_id,decision,private_reason,result_digest,occurred_at,retained_until)
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
                 &[
                     &accountability_event_id,
                     &request_id,
                     &task_id,
+                    &task.queue,
                     &actor_ref,
                     &actor.principal.issuer,
                     &actor.principal.subject,
