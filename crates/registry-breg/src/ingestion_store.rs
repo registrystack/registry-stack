@@ -745,15 +745,31 @@ pub(crate) async fn list_runs(
     let status = filter.status.map(|status| status.as_str().to_owned());
     let after_created_at = filter.after.map(|(created_at, _)| created_at);
     let after_run_id = filter.after.map(|(_, run_id)| run_id);
+    // The status filter runs on the status a run document renders, so an
+    // open run whose binding a successor package retired answers as blocked
+    // here exactly as it does everywhere else. The durable binding, not the
+    // process's own, decides it, and the filter applies before the page cut.
     let rows = client
         .query(
             &format!(
                 "SELECT {RUN_COLUMNS}
                    FROM registry_internal.registry_ingestion_runs
+                  CROSS JOIN (
+                       SELECT active_package_revision AS state_package_revision,
+                              schema_fingerprint AS state_schema_fingerprint
+                         FROM registry_internal.registry_state
+                        WHERE singleton
+                   ) AS active
                   WHERE created_principal_reference = $1
                     AND ($2::text IS NULL OR entity_id = $2)
                     AND ($3::text IS NULL OR profile_id = $3)
-                    AND ($4::text IS NULL OR status = $4)
+                    AND ($4::text IS NULL OR $4 = CASE
+                            WHEN status <> 'open' THEN status
+                            WHEN package_revision = active.state_package_revision
+                                 AND schema_fingerprint = active.state_schema_fingerprint
+                                THEN 'open'
+                            ELSE 'blocked'
+                        END)
                     AND ($5::text IS NULL OR input_digest = $5)
                     AND ($7::timestamptz IS NULL OR (created_at, run_id) < ($7, $8))
                   ORDER BY created_at DESC, run_id DESC

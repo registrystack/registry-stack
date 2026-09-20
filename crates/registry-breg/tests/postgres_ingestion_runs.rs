@@ -2014,6 +2014,90 @@ async fn listing_runs_filters_by_status_and_input_digest() {
     }
 }
 
+/// The status filter answers on the status a run document renders, not the
+/// stored one: after a successor package retires a run's binding, the run is
+/// blocked for writes, so listing by status=blocked must find it, listing by
+/// status=open must skip it, and only a run that still matches the durable
+/// binding answers under status=open.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn listing_runs_filters_by_the_effective_status_after_a_package_change() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let stranded_plan = plan_chunks(&announce_items("effective-blocked", 4), 2);
+    let stranded_id = harness.create_run(&claims, &stranded_plan).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{stranded_id}/chunks"),
+            &claims,
+            chunk_body(&stranded_plan, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+
+    // The successor revision activates in the database and retires the
+    // stored run's binding, which stays open in the table.
+    let successor = harness.restart_with_revision("package-ingestion-2").await;
+
+    // A run created under the successor binding stays open, so the filter is
+    // proven to separate the two stored-open runs by their bindings. The
+    // successor keeps the schema fingerprint and moves only the revision.
+    let open_plan = plan_chunks(&announce_items("effective-open", 2), 3);
+    let mut open_body = run_body_under(
+        "create",
+        &harness.identity.schema_fingerprint,
+        &open_plan,
+        "operator",
+    );
+    open_body["packageRevision"] = json!("package-ingestion-2");
+    let created = successor
+        .post_json("/v1/records/widgets/ingestion-runs", &claims, open_body)
+        .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let open_id = body_json(created).await["run"]["runId"]
+        .as_str()
+        .expect("run id")
+        .to_owned();
+
+    let blocked = successor
+        .get_json("/v1/records/widgets/ingestion-runs?status=blocked", &claims)
+        .await;
+    assert_eq!(blocked.status(), StatusCode::OK);
+    let runs = body_json(blocked).await["runs"]
+        .as_array()
+        .expect("runs")
+        .clone();
+    assert_eq!(runs.len(), 1, "only the stranded run renders blocked");
+    assert_eq!(runs[0]["runId"], stranded_id.as_str());
+    assert_eq!(runs[0]["status"], "blocked");
+
+    let open = successor
+        .get_json("/v1/records/widgets/ingestion-runs?status=open", &claims)
+        .await;
+    assert_eq!(open.status(), StatusCode::OK);
+    let open_page = body_json(open).await;
+    let runs = open_page["runs"].as_array().expect("runs");
+    assert_eq!(runs.len(), 1, "a run the successor retired is not open");
+    assert_eq!(runs[0]["runId"], open_id.as_str());
+
+    let unfiltered = successor
+        .get_json("/v1/records/widgets/ingestion-runs", &claims)
+        .await;
+    assert_eq!(unfiltered.status(), StatusCode::OK);
+    let runs = body_json(unfiltered).await["runs"]
+        .as_array()
+        .expect("runs")
+        .clone();
+    assert_eq!(runs.len(), 2);
+    for run in &runs {
+        let expected = if run["runId"] == stranded_id.as_str() {
+            "blocked"
+        } else {
+            "open"
+        };
+        assert_eq!(run["status"], expected, "the unfiltered page renders both");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn erasing_through_revision_one_keeps_the_revision_two_receipt() {
     let harness = IngestionHarness::create().await;
