@@ -346,7 +346,11 @@ pub struct HostedCreateRequest {
     pub kind: String,
     pub requester_reference: String,
     pub display: Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_value",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub result_constraints: Option<Value>,
 }
 
@@ -416,8 +420,21 @@ pub struct HostedDecisionRequest {
     pub outcome: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_value",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub result: Option<Value>,
+}
+
+/// Preserve an explicitly present JSON `null` so semantic validation can
+/// reject it as a non-object instead of treating it like an omitted field.
+fn deserialize_present_value<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
 }
 
 impl HostedDecisionRequest {
@@ -1148,7 +1165,10 @@ fn validate_result_narrowing(
             )
         };
         if let Some(choices) = constraint.get("enum").and_then(Value::as_array) {
-            if !choices.contains(value) {
+            if !choices
+                .iter()
+                .any(|allowed| constraint_value_equals(allowed, value))
+            {
                 return Err(violated());
             }
         }
@@ -1156,7 +1176,7 @@ fn validate_result_narrowing(
             if !entries
                 .iter()
                 .filter_map(|entry| entry.get("const"))
-                .any(|allowed| allowed == value)
+                .any(|allowed| constraint_value_equals(allowed, value))
             {
                 return Err(violated());
             }
@@ -1189,6 +1209,15 @@ fn validate_result_narrowing(
         }
     }
     Ok(())
+}
+
+fn constraint_value_equals(allowed: &Value, actual: &Value) -> bool {
+    match (allowed.as_f64(), actual.as_f64()) {
+        // Constraint and result payloads have already passed canonical JSON,
+        // which rejects integers that binary64 cannot represent exactly.
+        (Some(allowed), Some(actual)) => allowed == actual,
+        _ => allowed == actual,
+    }
 }
 
 fn character_count(text: &str) -> u64 {
@@ -1905,6 +1934,61 @@ mod tests {
             result_error.reason,
             HostedValidationReason::MaximumBytesExceeded
         );
+    }
+
+    #[test]
+    fn numeric_choices_use_json_schema_value_equality() {
+        let mut policy = standalone_decision_starter_kind();
+        policy.result_schema = Some(json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["score"],
+            "properties": {"score": {"type": "number"}}
+        }));
+        policy.outcomes[0].result_required = true;
+        let snapshot = policy.snapshot().expect("numeric-choice policy snapshots");
+        let decision = HostedDecisionRequest {
+            outcome: "confirmed".to_owned(),
+            reason: None,
+            result: Some(json!({"score": 1.0})),
+        };
+
+        for constraints in [
+            json!({"score": {"enum": [1]}}),
+            json!({"score": {"oneOf": [{"const": 1, "title": "One"}]}}),
+        ] {
+            result_constraints_request(constraints.clone())
+                .check(&policy)
+                .expect("integer notation is a valid numeric narrowing");
+            decision
+                .check(&snapshot, Some(&constraints))
+                .expect("1 and 1.0 are equal JSON Schema numbers");
+        }
+    }
+
+    #[test]
+    fn request_deserialization_preserves_explicit_null_for_validation() {
+        let create: HostedCreateRequest = serde_json::from_value(json!({
+            "kind": "decision",
+            "requesterReference": "openfn:run:8f2",
+            "display": {},
+            "resultConstraints": null
+        }))
+        .expect("explicit null remains a semantic validation input");
+        assert_eq!(create.result_constraints, Some(Value::Null));
+
+        let decision: HostedDecisionRequest = serde_json::from_value(json!({
+            "outcome": "confirmed",
+            "result": null
+        }))
+        .expect("explicit null remains a semantic validation input");
+        assert_eq!(decision.result, Some(Value::Null));
+
+        let omitted: HostedDecisionRequest = serde_json::from_value(json!({
+            "outcome": "confirmed"
+        }))
+        .expect("an omitted optional result remains absent");
+        assert_eq!(omitted.result, None);
     }
 
     #[test]

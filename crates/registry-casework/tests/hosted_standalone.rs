@@ -17,6 +17,8 @@ use registry_casework_core::{
     HolidaySetRevisionInput, HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest,
     HostedHistoryKind, HostedNoteRequest, HostedPageQuery, HostedTerminalQuery,
     HostedTerminalState, InboxView, IssuerPrincipal, ListWorkItemsQuery, SourceAdapter, WorkItem,
+    CASEWORK_PROFILE_HEADER, IDEMPOTENCY_KEY_HEADER, IF_MATCH_HEADER, VALIDATION_PATH_HEADER,
+    VALIDATION_REASON_HEADER,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::{client::BearerToken, FetchUrlPolicy};
@@ -1081,6 +1083,42 @@ async fn result_validation_reasons_reach_the_wire_as_bounded_headers() {
         other => panic!("expected a bounded 400 validation problem, got {other:?}"),
     };
 
+    let raw_http = reqwest::Client::new();
+    let null_constraints = raw_http
+        .post(format!("http://{address}/v1/hosted-items"))
+        .header("authorization", requester.authorization_header_value())
+        .header(CASEWORK_PROFILE_HEADER, "requester")
+        .header(IDEMPOTENCY_KEY_HEADER, "null-constraints")
+        .json(&json!({
+            "kind": "decision",
+            "requesterReference": "null-constraints",
+            "display": {"summary": "Null constraints", "reference": "NULL-1"},
+            "resultConstraints": null
+        }))
+        .send()
+        .await
+        .expect("send explicit-null constraint request");
+    assert_eq!(null_constraints.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        null_constraints
+            .headers()
+            .get(VALIDATION_PATH_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("$.resultConstraints")
+    );
+    assert_eq!(
+        null_constraints
+            .headers()
+            .get(VALIDATION_REASON_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("object_required")
+    );
+    let null_constraints_problem: serde_json::Value = null_constraints
+        .json()
+        .await
+        .expect("decode explicit-null constraint problem");
+    assert_eq!(null_constraints_problem["code"], "request.invalid");
+
     // Constraints on a kind that declares no result schema.
     let undeclared = HostedCreateRequest {
         kind: "decision-plain".to_owned(),
@@ -1207,6 +1245,36 @@ async fn result_validation_reasons_reach_the_wire_as_bounded_headers() {
         .unwrap()
         .value;
     let decide_action = action(&claimed.item, "confirmed");
+    let null_result = raw_http
+        .post(format!("http://{address}{}", decide_action.href))
+        .header("authorization", staff.authorization_header_value())
+        .header(CASEWORK_PROFILE_HEADER, "staff")
+        .header(IF_MATCH_HEADER, &decide_action.if_match)
+        .header(IDEMPOTENCY_KEY_HEADER, "null-result")
+        .json(&json!({"outcome": "confirmed", "result": null}))
+        .send()
+        .await
+        .expect("send explicit-null result request");
+    assert_eq!(null_result.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        null_result
+            .headers()
+            .get(VALIDATION_PATH_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("$.result")
+    );
+    assert_eq!(
+        null_result
+            .headers()
+            .get(VALIDATION_REASON_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("object_required")
+    );
+    let null_result_problem: serde_json::Value = null_result
+        .json()
+        .await
+        .expect("decode explicit-null result problem");
+    assert_eq!(null_result_problem["code"], "request.invalid");
     expect_reason(
         client
             .decide_hosted_work_item(

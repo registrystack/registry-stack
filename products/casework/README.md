@@ -45,9 +45,10 @@ remain human roles and must carry the configured human-identity assertion.
 Requester admission does not require that assertion; if it is present, it adds
 no human-role or decision authority.
 
-The create body contains only the configured kind, the requester's opaque
-correlation reference, and display data validated against the kind's bounded
-JSON Schema:
+The create body contains the configured kind, the requester's opaque
+correlation reference, display data validated against the kind's bounded JSON
+Schema, and optional `resultConstraints` that may narrow declared result
+fields without widening the kind policy:
 
 ```json
 {
@@ -59,6 +60,11 @@ JSON Schema:
   }
 }
 ```
+
+The `standalone-decision` starter shown here declares no result schema, so its
+request omits `resultConstraints`. When a kind declares an `acceptedCount`
+result field, for example, a requester may add
+`"resultConstraints":{"acceptedCount":{"minimum":0,"maximum":12}}`.
 
 It cannot select an actor, team, outcome vocabulary, callback, URL to fetch,
 or human/service classification. A typed hosted validation failure returns
@@ -87,15 +93,16 @@ every profile in the `standalone-decision` starter, therefore reads
 `hosted-history`.
 
 Requester terminal results are ordered by terminal time and stable event id.
-Each result is either a completed outcome with an opaque `actorRef`, or a
-cancellation with its reason. The ordinary requester response never contains
-the deciding person's issuer, subject, email, display name, internal note, or
-decision reason. Casework retains the raw issuer-qualified identity and staff
-reason in its protected accountability state. A Supervisor who currently
-leads a team serving the item's queue can resolve one completed terminal
-`eventId` through the separate accountability route. That read is audited and
-ends when the accountability record expires. Cancellations have no deciding
-actor accountability record.
+Each terminal entry is either a completed outcome with an opaque `actorRef`
+and its policy-validated structured `result` when supplied, or a cancellation
+with its reason. The ordinary requester response never contains the deciding
+person's issuer, subject, email, display name, internal note, or decision
+reason. Casework retains the raw issuer-qualified identity and staff reason in
+its protected accountability state. A Supervisor who currently leads a team
+serving the item's queue can resolve one completed terminal `eventId` through
+the separate accountability route. That read is audited and ends when the
+accountability record expires. Cancellations have no deciding actor
+accountability record.
 
 `terminalDays` bounds the requester-visible terminal feed from the terminal
 time. `accountabilityDays` independently bounds protected accountability state
