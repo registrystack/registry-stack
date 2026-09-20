@@ -4336,7 +4336,115 @@
         ],
         "type": "object"
       },
-      "ReviewTaskDecisionRequest": {},
+      "ReviewTaskDecisionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "discriminator": {
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "const": "approve"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "outcome": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "result": {},
+                  "type": {
+                    "const": "reject"
+                  }
+                },
+                "required": [
+                  "type",
+                  "outcome"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "outcome": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "result": {},
+                  "type": {
+                    "const": "changes_requested"
+                  }
+                },
+                "required": [
+                  "type",
+                  "outcome"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "outcome": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "result": {},
+                  "type": {
+                    "const": "answer"
+                  }
+                },
+                "required": [
+                  "type",
+                  "outcome"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "type": "object"
+      },
       "ReviewTaskDraft": {
         "additionalProperties": false,
         "properties": {

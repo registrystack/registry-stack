@@ -921,6 +921,33 @@ fn review_authorities_accept_one_refreshing_or_static_credential() {
 }
 
 #[test]
+fn review_authority_recovery_days_match_the_casework_bound() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let authority = |recovery_days| {
+        format!(
+            "{base}reviewAuthorities:\n  casework-a:\n    endpoint: https://casework.example/reviews/\n    profile: producer\n    producerId: registry-producer\n    recoveryDays: {recovery_days}\n    tokenRef: secret:file/opaque-review-token\n"
+        )
+    };
+
+    parse_runtime_config_with_env(&authority(91), env_lookup)
+        .expect("a recovery window above the former local ceiling is accepted");
+    parse_runtime_config_with_env(&authority(3_650), env_lookup)
+        .expect("the Casework recovery ceiling is accepted");
+    for recovery_days in [0, 3_651] {
+        assert_eq!(
+            parse_runtime_config_with_env(&authority(recovery_days), env_lookup)
+                .expect_err("a recovery window outside the Casework bound is refused"),
+            RuntimeConfigError::InvalidBinding
+        );
+    }
+}
+
+#[test]
 fn review_authority_completion_recipient_accepts_the_shared_byte_bound() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(

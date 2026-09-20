@@ -190,7 +190,7 @@ reviewKinds:
 reviewProducers:
   - id: requester
     profile: requester
-    issuer: http://127.0.0.1:8091
+    issuer: http://127.0.0.1:8093
     subject: requester
     sourceNamespaces: [standalone]
     kinds: [decision]

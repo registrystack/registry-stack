@@ -343,6 +343,39 @@ def review_schemas() -> dict:
         },
         ["taskId", "requestId", "stageIndex", "stageId", "queue", "revision", "eligibleProfiles", "state"],
     )
+    decision = {
+        "oneOf": [
+            obj({"type": {"const": "approve"}}, ["type"]),
+            obj(
+                {
+                    "type": {"const": "reject"},
+                    "outcome": text,
+                    "reason": nullable(text),
+                    "result": value,
+                },
+                ["type", "outcome"],
+            ),
+            obj(
+                {
+                    "type": {"const": "changes_requested"},
+                    "outcome": text,
+                    "reason": nullable(text),
+                    "result": value,
+                },
+                ["type", "outcome"],
+            ),
+            obj(
+                {
+                    "type": {"const": "answer"},
+                    "outcome": text,
+                    "reason": nullable(text),
+                    "result": value,
+                },
+                ["type", "outcome"],
+            ),
+        ],
+        "discriminator": {"propertyName": "type"},
+    }
     result = {
         "ReviewRetentionPolicy": retention,
         "ReviewOutcomePolicy": outcome,
@@ -377,7 +410,7 @@ def review_schemas() -> dict:
         "ReviewTaskContext": obj({"taskId": uuid, "requestId": uuid, "subject": subject, "requesterReference": text, "policy": policy, "resultConstraints": result_payload, "context": value}, ["taskId", "requestId", "subject", "requesterReference", "policy", "context"]),
         "ReviewTaskDraftInput": obj({"body": value}, ["body"]),
         "ReviewTaskDraft": obj({"taskId": uuid, "author": ref("IssuerPrincipal"), "body": value, "revision": integer, "updatedAt": instant}, ["taskId", "author", "body", "revision", "updatedAt"]),
-        "ReviewTaskDecisionRequest": value,
+        "ReviewTaskDecisionRequest": obj({"decision": decision}, ["decision"]),
         "ReviewHistoryEntry": obj({"eventId": uuid, "requestId": uuid, "taskId": nullable(uuid), "kind": text, "actorRef": nullable(text), "detail": value, "occurredAt": instant}, ["eventId", "requestId", "kind", "detail", "occurredAt"]),
         "ReviewHistoryPage": obj({"items": array(ref("ReviewHistoryEntry")), "nextCursor": nullable(uuid)}, ["items"]),
         "ReviewNoteRequest": obj({"audience": {"type": "string", "enum": ["reviewers", "requester"]}, "note": text}, ["audience", "note"]),

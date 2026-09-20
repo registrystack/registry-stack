@@ -1176,6 +1176,20 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["docs_archives"])
         self.assertTrue(outputs["editors"])
 
+    def test_casework_postgres_job_names_existing_integration_test_targets(self) -> None:
+        commands = "\n".join(
+            str(step.get("run", ""))
+            for step in self.workflow_jobs["casework-postgres"]["steps"]
+        )
+        targets = set(re.findall(r"--test\s+([a-zA-Z0-9_-]+)", commands))
+        self.assertTrue(targets)
+        for target in targets:
+            with self.subTest(target=target):
+                self.assertTrue(
+                    Path("crates/registry-casework/tests", f"{target}.rs").is_file(),
+                    f"casework-postgres invokes missing test target {target}",
+                )
+
     def test_docs_only_change_skips_rust(self) -> None:
         outputs = classify(
             self.workspace,

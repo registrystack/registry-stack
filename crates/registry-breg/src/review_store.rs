@@ -35,6 +35,7 @@ const SUBJECT_TYPE: &str = "change-request";
 const SUBMISSION_LEASE_SECONDS: i64 = 30;
 const MAX_APPLICATION_RESPONSE_BYTES: u64 = 256 * 1024;
 pub(crate) const MAXIMUM_COMPLETION_RECIPIENT_BYTES: usize = 256;
+pub(crate) const MAXIMUM_REVIEW_RECOVERY_DAYS: u32 = 3_650;
 
 pub(crate) fn valid_completion_recipient(recipient: &str) -> bool {
     !recipient.trim().is_empty()
@@ -294,7 +295,7 @@ impl ReviewAuthorityClient {
             || producer_id.trim().is_empty()
             || producer_id.len() > 128
             || producer_id.chars().any(char::is_control)
-            || !(1..=90).contains(&recovery_days)
+            || !(1..=MAXIMUM_REVIEW_RECOVERY_DAYS).contains(&recovery_days)
             || completion_token.is_some() != completion_recipient.is_some()
             || completion_token.as_ref().is_some_and(|token| {
                 token.is_empty() || token.len() > 4096 || token.chars().any(char::is_control)
@@ -2065,7 +2066,7 @@ fn decode_application_discovery(
         .get("href")
         .and_then(Value::as_str)
         .ok_or(ApplicationExchangeError::InvalidResponse)?;
-    validate_application_href(href, &executor.access_profile)?;
+    validate_application_href(executor, job, href)?;
     let if_match = action
         .get("ifMatch")
         .and_then(Value::as_str)
@@ -2083,8 +2084,9 @@ fn decode_application_discovery(
 }
 
 fn validate_application_href(
+    executor: &ReviewExecutorClient,
+    job: &ApplicationJob,
     href: &str,
-    access_profile: &str,
 ) -> Result<(), ApplicationExchangeError> {
     if href.is_empty()
         || href.len() > 2048
@@ -2097,8 +2099,17 @@ fn validate_application_href(
     let (path, query) = href
         .split_once('?')
         .ok_or(ApplicationExchangeError::InvalidResponse)?;
-    if path.split('/').any(|segment| matches!(segment, "." | ".."))
-        || query != format!("accessProfile={}", percent_encode_query(access_profile))
+    let route = executor
+        .request_routes
+        .get(&job.entity_id)
+        .ok_or(ApplicationExchangeError::InvalidResponse)?;
+    let expected_path = format!("/v1/records/{route}/{}/actions/apply", job.request_id);
+    if path != expected_path
+        || query
+            != format!(
+                "accessProfile={}",
+                percent_encode_query(&executor.access_profile)
+            )
     {
         return Err(ApplicationExchangeError::InvalidResponse);
     }
@@ -2128,7 +2139,7 @@ async fn send_application(
         .action_href
         .as_deref()
         .ok_or(ApplicationExchangeError::InvalidResponse)?;
-    validate_application_href(href, &executor.access_profile)?;
+    validate_application_href(executor, job, href)?;
     let (path, query) = href
         .trim_start_matches('/')
         .split_once('?')
@@ -2525,6 +2536,35 @@ mod tests {
     }
 
     #[test]
+    fn review_authority_accepts_the_casework_recovery_bound() {
+        let configured = |recovery_days| {
+            ReviewAuthorityClient::new(
+                "casework-a".to_owned(),
+                ReviewClient::new(
+                    registry_review_client::ReviewClientConfig::new(
+                        "https://casework.example.test/".parse().expect("URL"),
+                    )
+                    .with_profile("producer"),
+                )
+                .expect("client"),
+                Arc::new(
+                    registry_platform_httputil::StaticToken::new("outgoing-token".to_owned())
+                        .expect("outgoing token"),
+                ),
+                "registry-producer".to_owned(),
+                recovery_days,
+                None,
+                None,
+            )
+        };
+
+        assert!(configured(91).is_ok());
+        assert!(configured(MAXIMUM_REVIEW_RECOVERY_DAYS).is_ok());
+        assert!(configured(0).is_err());
+        assert!(configured(MAXIMUM_REVIEW_RECOVERY_DAYS + 1).is_err());
+    }
+
+    #[test]
     fn polling_only_authority_has_no_completion_sender() {
         let registry = ReviewAuthorityRegistry::new(BTreeMap::from([(
             "casework-a".to_owned(),
@@ -2596,6 +2636,38 @@ mod tests {
                 ),
                 Err(ApplicationExchangeError::InvalidResponse)
                     | Err(ApplicationExchangeError::UnavailableAction)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn automatic_executor_refuses_substituted_apply_hrefs_before_http() {
+        let executor = executor();
+        let mut job = application_job();
+        job.action_if_match = Some("\"breg-request-etag\"".to_owned());
+        for href in [
+            format!(
+                "/v1/records/other/{}/actions/apply?accessProfile=automatic-applier",
+                job.request_id
+            ),
+            "/v1/records/requests/00000000-0000-4000-8000-000000000099/actions/apply?accessProfile=automatic-applier".to_owned(),
+            format!(
+                "/v1/records/requests/{}/actions/cancel?accessProfile=automatic-applier",
+                job.request_id
+            ),
+            format!(
+                "/v1/records/requests/{}/actions/apply/extra?accessProfile=automatic-applier",
+                job.request_id
+            ),
+            format!(
+                "/v1/records/requests/{}/actions/apply?accessProfile=substituted",
+                job.request_id
+            ),
+        ] {
+            job.action_href = Some(href);
+            assert!(matches!(
+                send_application(&executor, &job).await,
+                Err(ApplicationExchangeError::InvalidResponse)
             ));
         }
     }

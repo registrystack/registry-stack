@@ -297,6 +297,21 @@ fn dev_serves_a_tutorial_project_and_retains_its_records() {
             .contains(&json!("dev-clients.yaml")),
         "{created:#}"
     );
+    // This test deliberately selects collision-free ports instead of the
+    // template's default local issuer port. Keep the governed producer
+    // identity aligned with the exact issuer that will mint its token.
+    let policy_path = session.project.join("casework.yaml");
+    let mut policy: Value = serde_norway::from_slice(
+        &fs::read(&policy_path).expect("the initialized policy is readable"),
+    )
+    .expect("the initialized policy is valid YAML");
+    policy["reviewProducers"][0]["issuer"] =
+        format!("http://127.0.0.1:{}", session.ports[1]).into();
+    fs::write(
+        &policy_path,
+        serde_norway::to_string(&policy).expect("the adjusted policy is valid YAML"),
+    )
+    .expect("the adjusted policy is writable");
 
     let first = session.start();
     assert_eq!(first["directory"]["teams"], 1, "{first:#}");

@@ -2258,7 +2258,7 @@ impl ReviewAuthorityConfig {
             || raw.producer_id.trim().is_empty()
             || raw.producer_id.len() > 128
             || raw.producer_id.chars().any(char::is_control)
-            || !(1..=90).contains(&raw.recovery_days)
+            || !(1..=crate::review_store::MAXIMUM_REVIEW_RECOVERY_DAYS).contains(&raw.recovery_days)
         {
             return Err(RuntimeConfigError::InvalidBinding);
         }

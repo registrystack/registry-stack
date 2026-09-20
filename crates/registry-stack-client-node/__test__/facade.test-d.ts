@@ -22,6 +22,25 @@ breg.verifyWebhookDelivery({
 relayClient.listRecords('people', { pageSize: 25 })
 void discoveryClient
 void caseworkClient.description('header.payload.signature', 'staff')
+const reviewer = { issuer: 'https://idp.example.invalid/', subject: 'reviewer' }
+void caseworkClient.assignReviewTask(
+  'header.payload.signature', 'supervisor', 'task-1', 1, 'assign-1',
+  { assignee: reviewer }, 'source-reviewer',
+)
+void caseworkClient.delegateReviewTask(
+  'header.payload.signature', 'staff', 'task-1', 1, 'delegate-1',
+  { delegate: reviewer }, 'source-reviewer',
+)
+void caseworkClient.reviewTaskDraft(
+  'header.payload.signature', 'staff', 'task-1', 'source-reviewer',
+)
+void caseworkClient.saveReviewTaskDraft(
+  'header.payload.signature', 'staff', 'task-1', 1, 'draft-1',
+  { body: { note: 'Check the source context' } }, 'source-reviewer',
+)
+void caseworkClient.deleteReviewTaskDraft(
+  'header.payload.signature', 'staff', 'task-1', 2, 'draft-2', 'source-reviewer',
+)
 
 // The progressive request surface refines the generated declaration: it names
 // the request shape and discriminates the result on its response format.

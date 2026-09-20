@@ -4672,11 +4672,13 @@ fn assert_review_submission(value: &Value) -> Result<(), FixtureError> {
             return Err(FixtureError::ResponseShapeRefused);
         }
         review_uuid(submission.get("requestId"))?;
-        validate_digest(bounded_review_text(submission.get("submissionDigest"))?)?;
+        validate_digest(bounded_review_text(submission.get("submissionDigest"))?)
+            .map_err(|_| FixtureError::ResponseShapeRefused)?;
         let policy = exact_object(&submission["policy"], &["id", "version", "digest"])?;
         bounded_review_text(policy.get("id"))?;
         bounded_review_text(policy.get("version"))?;
-        validate_digest(bounded_review_text(policy.get("digest"))?)?;
+        validate_digest(bounded_review_text(policy.get("digest"))?)
+            .map_err(|_| FixtureError::ResponseShapeRefused)?;
     } else if accepted_fields
         .iter()
         .any(|field| submission.contains_key(*field))

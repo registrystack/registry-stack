@@ -756,11 +756,7 @@ impl CaseworkService {
         &self,
         task_id: Uuid,
     ) -> Result<Vec<String>, ReviewRuntimeError> {
-        let record = self.store.review_request_for_task(task_id).await?;
-        let stage = record
-            .active_stage
-            .and_then(|index| record.policy.stages.get(usize::from(index)))
-            .ok_or(ReviewRuntimeError::NotFound)?;
+        let stage = self.store.review_stage_for_task(task_id).await?;
         let mut kinds = stage
             .deciding_profiles
             .iter()
@@ -1748,6 +1744,31 @@ impl PostgresStore {
         request_from_row(&row)
     }
 
+    async fn review_stage_for_task(
+        &self,
+        task_id: Uuid,
+    ) -> Result<ReviewStagePolicy, ReviewRuntimeError> {
+        let client = self.client().await?;
+        let row = client
+            .query_opt(
+                "SELECT t.stage_index,r.policy_snapshot
+                 FROM casework_review_tasks t
+                 JOIN casework_review_requests r ON r.request_id=t.request_id
+                 WHERE t.task_id=$1",
+                &[&task_id],
+            )
+            .await?
+            .ok_or(ReviewRuntimeError::NotFound)?;
+        let stage_index =
+            usize::try_from(row.get::<_, i32>(0)).map_err(|_| ReviewRuntimeError::Corrupt)?;
+        let policy: ReviewKindPolicySnapshot = serde_json::from_value(row.get(1))?;
+        policy
+            .stages
+            .get(stage_index)
+            .cloned()
+            .ok_or(ReviewRuntimeError::Corrupt)
+    }
+
     async fn recover_review(
         &self,
         producer_id: &str,
@@ -2327,6 +2348,7 @@ impl PostgresStore {
         let record = load_request_by_id(&transaction, request_id, true).await?;
         let resource = format!("review-task:{task_id}");
         let request_hash = review_request_hash(&(expected_revision, "claim"))?;
+        ensure_review_mutation_actor_authorized(&transaction, &record, actor, task_id).await?;
         if let Some(response) = review_idempotent_response(
             &transaction,
             actor,
@@ -2481,6 +2503,15 @@ impl PostgresStore {
             .ok_or(ReviewRuntimeError::NotFound)?
             .get::<_, Uuid>(0);
         let record = load_request_by_id(&transaction, request_id, true).await?;
+        let task_queue = transaction
+            .query_opt(
+                "SELECT queue_id FROM casework_review_tasks
+                 WHERE task_id=$1 AND request_id=$2",
+                &[&task_id, &request_id],
+            )
+            .await?
+            .ok_or(ReviewRuntimeError::NotFound)?
+            .get::<_, String>(0);
         let operation = if delegate {
             "review.task.delegate"
         } else {
@@ -2494,6 +2525,14 @@ impl PostgresStore {
             delegate,
             membership_kinds,
         ))?;
+        if delegate {
+            ensure_review_mutation_actor_authorized(&transaction, &record, actor, task_id).await?;
+        } else {
+            if actor.role != CaseworkRole::Supervisor {
+                return Err(ReviewRuntimeError::Forbidden);
+            }
+            ensure_actor_serves_review_queue(&transaction, actor, &task_queue).await?;
+        }
         if let Some(response) = review_idempotent_response(
             &transaction,
             actor,
@@ -2531,6 +2570,12 @@ impl PostgresStore {
             .stages
             .get(usize::from(stage_index))
             .ok_or(ReviewRuntimeError::Corrupt)?;
+        if delegate && !stage.deciding_profiles.contains(&actor.profile_id) {
+            return Err(ReviewRuntimeError::Forbidden);
+        }
+        if !delegate && actor.role != CaseworkRole::Supervisor {
+            return Err(ReviewRuntimeError::Forbidden);
+        }
         let holder = match (
             row.get::<_, Option<String>>(4),
             row.get::<_, Option<String>>(5),
@@ -2539,37 +2584,22 @@ impl PostgresStore {
             (None, None) => None,
             _ => return Err(ReviewRuntimeError::Corrupt),
         };
-        let actor_controls_queue = transaction
+        let queue = row.get::<_, String>(2);
+        if delegate {
+            if holder.as_ref() != Some(&actor.principal) {
+                return Err(ReviewRuntimeError::Forbidden);
+            }
+            ensure_actor_serves_review_queue(&transaction, actor, &queue).await?;
+        } else if transaction
             .query_opt(
                 "SELECT 1 FROM casework_queue_service q
                  JOIN casework_memberships m ON m.team_id=q.team_id
                  WHERE q.queue_id=$1 AND m.issuer=$2 AND m.subject=$3
                    AND m.membership_kind='supervisor' FOR KEY SHARE OF q,m",
-                &[
-                    &row.get::<_, String>(2),
-                    &actor.principal.issuer,
-                    &actor.principal.subject,
-                ],
+                &[&queue, &actor.principal.issuer, &actor.principal.subject],
             )
             .await?
-            .is_some();
-        let actor_currently_eligible = transaction
-            .query_opt(
-                "SELECT 1 FROM casework_queue_service q
-                 JOIN casework_memberships m ON m.team_id=q.team_id
-                 WHERE q.queue_id=$1 AND m.issuer=$2 AND m.subject=$3
-                   AND m.membership_kind=ANY($4) FOR KEY SHARE OF q,m",
-                &[
-                    &row.get::<_, String>(2),
-                    &actor.principal.issuer,
-                    &actor.principal.subject,
-                    &membership_kinds,
-                ],
-            )
-            .await?
-            .is_some();
-        if (delegate && (holder.as_ref() != Some(&actor.principal) || !actor_currently_eligible))
-            || (!delegate && !actor_controls_queue)
+            .is_none()
         {
             return Err(ReviewRuntimeError::Forbidden);
         }
@@ -2579,7 +2609,7 @@ impl PostgresStore {
             stage,
             stage_index,
             target,
-            &row.get::<_, String>(2),
+            &queue,
             membership_kinds,
         )
         .await?;
@@ -2593,7 +2623,7 @@ impl PostgresStore {
             stage,
             stage_index,
             &effective,
-            &row.get::<_, String>(2),
+            &queue,
             membership_kinds,
         )
         .await
@@ -2666,7 +2696,7 @@ impl PostgresStore {
             request_id,
             stage_index,
             stage_id: row.get(1),
-            queue: row.get(2),
+            queue,
             revision: next_revision,
             eligible_profiles: stage.deciding_profiles.clone(),
             state: if eligible {
@@ -3214,6 +3244,9 @@ impl PostgresStore {
             )
             .await?
             .ok_or(ReviewRuntimeError::NotFound)?;
+        let request_id = row.get::<_, Uuid>(0);
+        let record = load_request_by_id(&transaction, request_id, true).await?;
+        ensure_review_mutation_actor_authorized(&transaction, &record, actor, task_id).await?;
         let resource = format!("review-task:{task_id}");
         let request_hash = review_request_hash(&(expected_revision, "release"))?;
         if let Some(response) = review_idempotent_response(
@@ -3254,7 +3287,6 @@ impl PostgresStore {
                 &[&task_id, &now],
             )
             .await?;
-        let request_id = row.get(0);
         let task = ReviewerTask {
             task_id,
             request_id,
@@ -3302,6 +3334,7 @@ impl PostgresStore {
         let record = load_request_by_id(&transaction, request_id, true).await?;
         let resource = format!("review-task:{task_id}");
         let request_hash = review_request_hash(&(expected_revision, &decision_kind))?;
+        ensure_review_mutation_actor_authorized(&transaction, &record, actor, task_id).await?;
         if let Some(response) = review_idempotent_response(
             &transaction,
             actor,
@@ -4629,7 +4662,7 @@ async fn ensure_review_reviewer_access(
         return Err(ReviewRuntimeError::NotFound);
     }
     let lock = if lock_membership {
-        " FOR KEY SHARE OF m,q"
+        " FOR KEY SHARE OF m,q,t"
     } else {
         ""
     };
@@ -4656,6 +4689,18 @@ async fn ensure_review_reviewer_access(
         .await?
         .ok_or(ReviewRuntimeError::NotFound)?;
     Ok(())
+}
+
+async fn ensure_review_mutation_actor_authorized(
+    transaction: &impl GenericClient,
+    record: &ReviewRequestRecord,
+    actor: &ActorContext,
+    task_id: Uuid,
+) -> Result<(), ReviewRuntimeError> {
+    match ensure_review_reviewer_access(transaction, record, actor, Some(task_id), true).await {
+        Err(ReviewRuntimeError::NotFound) => Err(ReviewRuntimeError::Forbidden),
+        result => result,
+    }
 }
 
 fn review_clock_from_row(row: &Row) -> Result<ReviewClockOccurrence, ReviewRuntimeError> {

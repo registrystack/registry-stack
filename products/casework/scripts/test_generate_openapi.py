@@ -720,6 +720,39 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertNotIn("hosted", schemas["WorkItem"]["properties"]["occurrenceKind"]["enum"])
         self.assertFalse(any(name.startswith("Hosted") for name in schemas))
 
+    def test_review_task_decision_request_is_the_closed_tagged_union(self) -> None:
+        request = self.openapi["components"]["schemas"][
+            "ReviewTaskDecisionRequest"
+        ]
+        self.assertFalse(request["additionalProperties"])
+        self.assertEqual(["decision"], request["required"])
+
+        decision = request["properties"]["decision"]
+        self.assertEqual({"propertyName": "type"}, decision["discriminator"])
+        variants = {
+            variant["properties"]["type"]["const"]: variant
+            for variant in decision["oneOf"]
+        }
+        self.assertEqual(
+            {"approve", "reject", "changes_requested", "answer"}, set(variants)
+        )
+        self.assertEqual({"type"}, set(variants["approve"]["properties"]))
+        self.assertEqual(["type"], variants["approve"]["required"])
+        for name in ("reject", "changes_requested", "answer"):
+            with self.subTest(decision=name):
+                variant = variants[name]
+                self.assertFalse(variant["additionalProperties"])
+                self.assertEqual(
+                    {"type", "outcome", "reason", "result"},
+                    set(variant["properties"]),
+                )
+                self.assertEqual(["type", "outcome"], variant["required"])
+                self.assertEqual(
+                    {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    variant["properties"]["reason"],
+                )
+                self.assertEqual({}, variant["properties"]["result"])
+
     def test_review_validation_headers_are_paired_value_free_metadata(self) -> None:
         for method, path in GENERATOR.REVIEW_VALIDATION_OPERATIONS:
             headers = self.openapi["paths"][path][method]["responses"]["400"][

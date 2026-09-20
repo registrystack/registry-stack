@@ -481,6 +481,44 @@ async fn count_for_request(fixture: &Fixture, table: &str, request_id: Uuid) -> 
         .get(0)
 }
 
+async fn set_review_membership(
+    fixture: &Fixture,
+    actor: &ActorContext,
+    membership_kind: &str,
+    present: bool,
+) {
+    if present {
+        fixture
+            .database
+            .execute(
+                "INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
+                 VALUES('review-team',$1,$2,$3) ON CONFLICT DO NOTHING",
+                &[
+                    &actor.principal.issuer,
+                    &actor.principal.subject,
+                    &membership_kind,
+                ],
+            )
+            .await
+            .expect("restore review membership");
+    } else {
+        fixture
+            .database
+            .execute(
+                "DELETE FROM casework_memberships
+                 WHERE team_id='review-team' AND issuer=$1 AND subject=$2
+                   AND membership_kind=$3",
+                &[
+                    &actor.principal.issuer,
+                    &actor.principal.subject,
+                    &membership_kind,
+                ],
+            )
+            .await
+            .expect("remove review membership");
+    }
+}
+
 async fn assert_terminal_atomic(fixture: &Fixture, request_id: Uuid, completion_events: i64) {
     assert_eq!(
         count_for_request(fixture, "casework_review_results", request_id).await,
@@ -2480,6 +2518,739 @@ async fn claim_and_decide_require_current_exact_queue_membership() {
         )
         .await,
         0
+    );
+}
+
+#[tokio::test]
+async fn delegation_requires_the_selected_profile_in_pinned_deciding_profiles() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request(
+                "record-delegation-profile",
+                "producer-ref-delegation-profile",
+            ),
+            "create-delegation-profile",
+        )
+        .await
+        .expect("create delegation profile review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    let claimed = fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-delegation-profile",
+        )
+        .await
+        .expect("claim delegation profile task");
+    let ineligible_selected_profile = ActorContext {
+        principal: fixture.reviewer_a.principal.clone(),
+        profile_id: "supervisor".to_owned(),
+        role: CaseworkRole::Supervisor,
+    };
+
+    assert!(matches!(
+        fixture
+            .service_v1
+            .delegate_review_task(
+                &ineligible_selected_profile,
+                task,
+                None,
+                "",
+                claimed.revision,
+                DelegateRequest {
+                    delegate: fixture.reviewer_b.principal.clone(),
+                    reason: Some("wrong selected profile".to_owned()),
+                },
+                "delegate-ineligible-profile",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden)
+    ));
+    let unchanged = fixture
+        .service_v1
+        .review_task(&fixture.reviewer_a, task, None, "")
+        .await
+        .expect("read unchanged held task");
+    assert_eq!(unchanged.revision, claimed.revision);
+    assert!(matches!(
+        unchanged.state,
+        ReviewerTaskState::Held { holder } if holder == fixture.reviewer_a.principal
+    ));
+    let delegation_events: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE request_id=$1 AND kind='task_delegated'",
+            &[&created.accepted.request_id],
+        )
+        .await
+        .expect("count refused delegation events")
+        .get(0);
+    assert_eq!(delegation_events, 0);
+
+    let delegated = fixture
+        .service_v1
+        .delegate_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            claimed.revision,
+            DelegateRequest {
+                delegate: fixture.reviewer_b.principal.clone(),
+                reason: Some("eligible selected profile".to_owned()),
+            },
+            "delegate-eligible-profile",
+        )
+        .await
+        .expect("delegate through eligible selected profile");
+    assert!(matches!(
+        delegated.state,
+        ReviewerTaskState::Held { ref holder } if holder == &fixture.reviewer_b.principal
+    ));
+}
+
+#[tokio::test]
+async fn delegation_requires_membership_matching_the_selected_role_in_a_mixed_stage() {
+    let fixture = fixture().await;
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
+             VALUES('review-team',$1,$2,'supervisor')",
+            &[
+                &fixture.reviewer_a.principal.issuer,
+                &fixture.reviewer_a.principal.subject,
+            ],
+        )
+        .await
+        .expect("give the holder a second directory role");
+    let mut mixed_project = project("mixed-delegation-membership");
+    mixed_project.review_kinds[0].stages[0]
+        .deciding_profiles
+        .push("supervisor".to_owned());
+    mixed_project.check().expect("mixed-profile review project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        mixed_project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("mixed-profile review service");
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            request(
+                "record-delegation-membership",
+                "producer-ref-delegation-membership",
+            ),
+            "create-delegation-membership",
+        )
+        .await
+        .expect("create mixed-profile review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    let claimed = service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-delegation-membership",
+        )
+        .await
+        .expect("claim through staff profile and membership");
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_memberships
+             WHERE team_id='review-team' AND issuer=$1 AND subject=$2
+               AND membership_kind='staff'",
+            &[
+                &fixture.reviewer_a.principal.issuer,
+                &fixture.reviewer_a.principal.subject,
+            ],
+        )
+        .await
+        .expect("remove only the holder's selected-role membership");
+
+    assert!(matches!(
+        service
+            .delegate_review_task(
+                &fixture.reviewer_a,
+                task,
+                None,
+                "",
+                claimed.revision,
+                DelegateRequest {
+                    delegate: fixture.reviewer_b.principal.clone(),
+                    reason: Some("cross-role directory fallback".to_owned()),
+                },
+                "delegate-cross-role-membership",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+    ));
+    let persisted = fixture
+        .database
+        .query_one(
+            "SELECT state,revision,holder_issuer,holder_subject
+             FROM casework_review_tasks WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("read task after refused cross-role delegation");
+    assert_eq!(persisted.get::<_, String>(0), "claimed");
+    assert_eq!(persisted.get::<_, i64>(1), claimed.revision);
+    assert_eq!(
+        persisted.get::<_, Option<String>>(2).as_deref(),
+        Some(fixture.reviewer_a.principal.issuer.as_str())
+    );
+    assert_eq!(
+        persisted.get::<_, Option<String>>(3).as_deref(),
+        Some(fixture.reviewer_a.principal.subject.as_str())
+    );
+    let delegation_events: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE request_id=$1 AND kind='task_delegated'",
+            &[&created.accepted.request_id],
+        )
+        .await
+        .expect("count refused cross-role delegation events")
+        .get(0);
+    assert_eq!(delegation_events, 0);
+
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
+             VALUES('review-team',$1,$2,'staff')",
+            &[
+                &fixture.reviewer_a.principal.issuer,
+                &fixture.reviewer_a.principal.subject,
+            ],
+        )
+        .await
+        .expect("restore the holder's selected-role membership");
+    let delegated = service
+        .delegate_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            claimed.revision,
+            DelegateRequest {
+                delegate: fixture.reviewer_b.principal.clone(),
+                reason: Some("exact-role membership restored".to_owned()),
+            },
+            "delegate-exact-role-membership",
+        )
+        .await
+        .expect("delegate with exact selected-role membership");
+    assert!(matches!(
+        delegated.state,
+        ReviewerTaskState::Held { ref holder } if holder == &fixture.reviewer_b.principal
+    ));
+
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    assert!(matches!(
+        service
+            .delegate_review_task(
+                &fixture.reviewer_a,
+                task,
+                None,
+                "",
+                claimed.revision,
+                DelegateRequest {
+                    delegate: fixture.reviewer_b.principal.clone(),
+                    reason: Some("exact-role membership restored".to_owned()),
+                },
+                "delegate-exact-role-membership",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+    ));
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+    assert_eq!(
+        service
+            .delegate_review_task(
+                &fixture.reviewer_a,
+                task,
+                None,
+                "",
+                claimed.revision,
+                DelegateRequest {
+                    delegate: fixture.reviewer_b.principal.clone(),
+                    reason: Some("exact-role membership restored".to_owned()),
+                },
+                "delegate-exact-role-membership",
+            )
+            .await
+            .expect("replay delegation through restored exact-role authority"),
+        delegated
+    );
+}
+
+#[tokio::test]
+async fn assignment_requires_a_selected_supervisor_profile_despite_directory_membership() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request(
+                "record-assignment-profile",
+                "producer-ref-assignment-profile",
+            ),
+            "create-assignment-profile",
+        )
+        .await
+        .expect("create assignment profile review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    let staff_scoped_supervisor_principal = ActorContext {
+        principal: fixture.supervisor.principal.clone(),
+        profile_id: "staff".to_owned(),
+        role: CaseworkRole::Staff,
+    };
+
+    assert!(matches!(
+        fixture
+            .service_v1
+            .assign_review_task(
+                &staff_scoped_supervisor_principal,
+                task,
+                None,
+                "",
+                1,
+                AssignmentRequest {
+                    assignee: fixture.reviewer_a.principal.clone(),
+                    reason: Some("staff-scoped assignment".to_owned()),
+                },
+                "assign-staff-scoped-supervisor",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden)
+    ));
+    let unchanged = fixture
+        .service_v1
+        .review_task(&fixture.reviewer_a, task, None, "")
+        .await
+        .expect("read unchanged open task");
+    assert_eq!(unchanged.revision, 1);
+    assert_eq!(unchanged.state, ReviewerTaskState::Open);
+    let assignment_events: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE request_id=$1 AND kind='task_assigned'",
+            &[&created.accepted.request_id],
+        )
+        .await
+        .expect("count refused assignment events")
+        .get(0);
+    assert_eq!(assignment_events, 0);
+
+    let assigned = fixture
+        .service_v1
+        .assign_review_task(
+            &fixture.supervisor,
+            task,
+            None,
+            "",
+            1,
+            AssignmentRequest {
+                assignee: fixture.reviewer_a.principal.clone(),
+                reason: Some("supervisor-scoped assignment".to_owned()),
+            },
+            "assign-supervisor-scoped",
+        )
+        .await
+        .expect("assign through selected supervisor profile");
+    assert!(matches!(
+        assigned.state,
+        ReviewerTaskState::Held { ref holder } if holder == &fixture.reviewer_a.principal
+    ));
+
+    set_review_membership(&fixture, &fixture.supervisor, "supervisor", false).await;
+    assert!(matches!(
+        fixture
+            .service_v1
+            .assign_review_task(
+                &fixture.supervisor,
+                task,
+                None,
+                "",
+                1,
+                AssignmentRequest {
+                    assignee: fixture.reviewer_a.principal.clone(),
+                    reason: Some("supervisor-scoped assignment".to_owned()),
+                },
+                "assign-supervisor-scoped",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+    ));
+    set_review_membership(&fixture, &fixture.supervisor, "supervisor", true).await;
+    assert_eq!(
+        fixture
+            .service_v1
+            .assign_review_task(
+                &fixture.supervisor,
+                task,
+                None,
+                "",
+                1,
+                AssignmentRequest {
+                    assignee: fixture.reviewer_a.principal.clone(),
+                    reason: Some("supervisor-scoped assignment".to_owned()),
+                },
+                "assign-supervisor-scoped",
+            )
+            .await
+            .expect("replay assignment through restored supervisor authority"),
+        assigned
+    );
+}
+
+#[tokio::test]
+async fn reviewer_mutation_replays_require_current_exact_role_authority() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("record-reviewer-replay", "producer-ref-reviewer-replay"),
+            "create-reviewer-replay",
+        )
+        .await
+        .expect("create reviewer replay review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    let claimed = fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-reviewer-replay",
+        )
+        .await
+        .expect("claim reviewer replay task");
+
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    assert!(matches!(
+        fixture
+            .service_v1
+            .claim_review_task(
+                &fixture.reviewer_a,
+                task,
+                None,
+                "",
+                1,
+                "claim-reviewer-replay",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+    ));
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+    assert_eq!(
+        fixture
+            .service_v1
+            .claim_review_task(
+                &fixture.reviewer_a,
+                task,
+                None,
+                "",
+                1,
+                "claim-reviewer-replay",
+            )
+            .await
+            .expect("replay claim through restored staff authority"),
+        claimed
+    );
+
+    let released = fixture
+        .service_v1
+        .release_review_task(
+            &fixture.reviewer_a,
+            task,
+            claimed.revision,
+            "release-reviewer-replay",
+        )
+        .await
+        .expect("release reviewer replay task");
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    assert!(matches!(
+        fixture
+            .service_v1
+            .release_review_task(
+                &fixture.reviewer_a,
+                task,
+                claimed.revision,
+                "release-reviewer-replay",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+    ));
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+    assert_eq!(
+        fixture
+            .service_v1
+            .release_review_task(
+                &fixture.reviewer_a,
+                task,
+                claimed.revision,
+                "release-reviewer-replay",
+            )
+            .await
+            .expect("replay release through restored staff authority"),
+        released
+    );
+
+    let answer_service = CaseworkService::new(
+        fixture.store.clone(),
+        answer_project(false),
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("answer replay service");
+    let mut answer_request = request("record-decision-replay", "producer-ref-decision-replay");
+    answer_request.kind = "registry-answer".to_owned();
+    let answer = answer_service
+        .create_review_request(&fixture.producer, answer_request, "create-decision-replay")
+        .await
+        .expect("create decision replay review");
+    let answer_task = task_id(&fixture, answer.accepted.request_id, 0).await;
+    answer_service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            answer_task,
+            None,
+            "",
+            1,
+            "claim-decision-replay",
+        )
+        .await
+        .expect("claim decision replay task");
+    let decision = || ReviewTaskDecisionRequest {
+        decision: ReviewerDecisionKind::Answer {
+            outcome: "found".to_owned(),
+            reason: Some("private replay reason".to_owned()),
+            result: Some(json!({"correction": "protected replay result"})),
+        },
+    };
+    let decided = answer_service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            answer_task,
+            decision(),
+            None,
+            "",
+            2,
+            "decide-reviewer-replay",
+        )
+        .await
+        .expect("settle decision replay review");
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    assert!(matches!(
+        answer_service
+            .decide_review_task(
+                &fixture.reviewer_a,
+                answer_task,
+                decision(),
+                None,
+                "",
+                2,
+                "decide-reviewer-replay",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+    ));
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+    assert_eq!(
+        answer_service
+            .decide_review_task(
+                &fixture.reviewer_a,
+                answer_task,
+                decision(),
+                None,
+                "",
+                2,
+                "decide-reviewer-replay",
+            )
+            .await
+            .expect("replay terminal decision through restored staff authority"),
+        decided
+    );
+}
+
+#[tokio::test]
+async fn assignment_and_delegation_replay_use_the_addressed_pinned_stage() {
+    let fixture = fixture().await;
+    let mut stage_shift_project = project("assignment-replay-stage-shift");
+    stage_shift_project.review_kinds[0].stages[1].deciding_profiles = vec!["supervisor".to_owned()];
+    stage_shift_project
+        .check()
+        .expect("stage-shift replay project");
+    let stage_shift_service = CaseworkService::new(
+        fixture.store.clone(),
+        stage_shift_project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("stage-shift replay service");
+    let staged = stage_shift_service
+        .create_review_request(
+            &fixture.producer,
+            request(
+                "record-assignment-stage-replay",
+                "producer-ref-assignment-stage-replay",
+            ),
+            "create-assignment-stage-replay",
+        )
+        .await
+        .expect("create assignment stage replay review");
+    let first_stage_task = task_id(&fixture, staged.accepted.request_id, 0).await;
+    let assigned = stage_shift_service
+        .assign_review_task(
+            &fixture.supervisor,
+            first_stage_task,
+            None,
+            "",
+            1,
+            AssignmentRequest {
+                assignee: fixture.reviewer_a.principal.clone(),
+                reason: Some("advance beyond addressed stage".to_owned()),
+            },
+            "assign-before-stage-advance",
+        )
+        .await
+        .expect("assign before stage advance");
+    assert!(matches!(
+        stage_shift_service
+            .decide_review_task(
+                &fixture.reviewer_a,
+                first_stage_task,
+                ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Approve,
+                },
+                None,
+                "",
+                assigned.revision,
+                "decide-before-assignment-replay",
+            )
+            .await,
+        Ok(ReviewTransition::StageAdvanced { .. })
+    ));
+    assert_eq!(
+        stage_shift_service
+            .assign_review_task(
+                &fixture.supervisor,
+                first_stage_task,
+                None,
+                "",
+                1,
+                AssignmentRequest {
+                    assignee: fixture.reviewer_a.principal.clone(),
+                    reason: Some("advance beyond addressed stage".to_owned()),
+                },
+                "assign-before-stage-advance",
+            )
+            .await
+            .expect("replay assignment after role-changing stage advance"),
+        assigned
+    );
+
+    let answer_service = CaseworkService::new(
+        fixture.store.clone(),
+        answer_project(false),
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("terminal delegation replay service");
+    let mut answer_request = request(
+        "record-terminal-delegation-replay",
+        "producer-ref-terminal-delegation-replay",
+    );
+    answer_request.kind = "registry-answer".to_owned();
+    let answer = answer_service
+        .create_review_request(
+            &fixture.producer,
+            answer_request,
+            "create-terminal-delegation-replay",
+        )
+        .await
+        .expect("create terminal delegation replay review");
+    let answer_task = task_id(&fixture, answer.accepted.request_id, 0).await;
+    let claimed = answer_service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            answer_task,
+            None,
+            "",
+            1,
+            "claim-terminal-delegation-replay",
+        )
+        .await
+        .expect("claim terminal delegation replay task");
+    let delegated = answer_service
+        .delegate_review_task(
+            &fixture.reviewer_a,
+            answer_task,
+            None,
+            "",
+            claimed.revision,
+            DelegateRequest {
+                delegate: fixture.reviewer_b.principal.clone(),
+                reason: Some("settle after delegation".to_owned()),
+            },
+            "delegate-before-terminal-settlement",
+        )
+        .await
+        .expect("delegate before terminal settlement");
+    assert!(matches!(
+        answer_service
+            .decide_review_task(
+                &fixture.reviewer_b,
+                answer_task,
+                ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Answer {
+                        outcome: "found".to_owned(),
+                        reason: None,
+                        result: Some(json!({"correction": "terminal delegated answer"})),
+                    },
+                },
+                None,
+                "",
+                delegated.revision,
+                "settle-terminal-delegation-replay",
+            )
+            .await,
+        Ok(ReviewTransition::Settled { .. })
+    ));
+    assert_eq!(
+        answer_service
+            .delegate_review_task(
+                &fixture.reviewer_a,
+                answer_task,
+                None,
+                "",
+                claimed.revision,
+                DelegateRequest {
+                    delegate: fixture.reviewer_b.principal.clone(),
+                    reason: Some("settle after delegation".to_owned()),
+                },
+                "delegate-before-terminal-settlement",
+            )
+            .await
+            .expect("replay delegation after terminal settlement"),
+        delegated
     );
 }
 
