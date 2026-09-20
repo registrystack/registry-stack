@@ -683,9 +683,18 @@ fn recover_lost_submission(
     chunk: &BRegIngestionChunk,
     error: BaseRegistryClientError,
 ) -> Result<RecoveredSubmission, DataLifecycleError> {
+    // A transport failure and a service-unavailable answer both leave the
+    // chunk's commit state unknown: the service may have committed before
+    // the answer was lost. A run-not-open refusal likewise means the next
+    // request observed a checkpoint this request may have moved. All three
+    // resolve through the run state, never through a blind resubmission.
     let run_may_have_committed = matches!(
         error,
         BaseRegistryClientError::Transport { .. }
+            | BaseRegistryClientError::Problem {
+                code: BRegProblemCode::ServiceUnavailable,
+                ..
+            }
             | BaseRegistryClientError::Problem {
                 code: BRegProblemCode::IngestionRunNotOpen,
                 ..
@@ -2154,6 +2163,68 @@ mod tests {
 
         assert_eq!(requests.len(), 5);
         // The replay sends byte-identical chunk bytes, not a new chunk.
+        assert_eq!(requests[1], requests[3]);
+        assert!(outcome.complete);
+        assert_eq!(outcome.committed_items, 3);
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_service_unavailable_chunk_answer_recovers_from_the_run_state() {
+        let input = import_input();
+        let (plan, inspected) = import_plan_and_inspected(&input);
+        let directory = test_directory("ingestion-unavailable-answer");
+        let checkpoint_path = directory.join("import.checkpoint.json");
+        // A chunk can commit and still answer 503, the same ambiguity a
+        // dropped connection leaves, so the recovery path re-reads the run
+        // instead of exiting on the refusal.
+        let unavailable = {
+            let body = serde_json::to_vec(&json!({
+                "type": "https://id.registrystack.org/problems/registry-breg/service/unavailable",
+                "title": "Service Unavailable",
+                "status": 503,
+                "detail": "The Registry mutation service is unavailable.",
+                "code": "service.unavailable",
+                "traceId": INGESTION_TRACE_ID
+            }))
+            .unwrap();
+            let head = format!(
+                "HTTP/1.1 503 Service Unavailable\r\nContent-Type: \
+                 application/problem+json\r\nCache-Control: no-store\r\nVary: \
+                 authorization, accept\r\ntraceparent: \
+                 00-{INGESTION_TRACE_ID}-{INGESTION_SPAN_ID}-01\r\nConnection: \
+                 close\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            let mut response = head.into_bytes();
+            response.extend_from_slice(&body);
+            response
+        };
+        let (address, handle) = spawn_scripted_server(vec![
+            ScriptedExchange::Respond(ingestion_run_response(
+                201, "Created", &plan, &input, 0, "open",
+            )),
+            ScriptedExchange::Respond(unavailable),
+            ScriptedExchange::Respond(ingestion_run_response(200, "OK", &plan, &input, 0, "open")),
+            ScriptedExchange::Respond(ingestion_submission_response(
+                &plan, &input, 0, true, "open",
+            )),
+            ScriptedExchange::Respond(ingestion_submission_response(
+                &plan, &input, 1, false, "complete",
+            )),
+        ]);
+        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let drive = ingestion_drive(&plan, &inspected, &input, &client);
+
+        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
+        let mut started = load_or_start_ingestion(&drive, destinations).unwrap();
+        let outcome = submit_ingestion_chunks(&drive, &mut started, None).unwrap();
+        let requests = handle.join().unwrap();
+
+        assert_eq!(requests.len(), 5);
+        // The refused answer sends the exact chunk bytes again, not a new chunk.
         assert_eq!(requests[1], requests[3]);
         assert!(outcome.complete);
         assert_eq!(outcome.committed_items, 3);

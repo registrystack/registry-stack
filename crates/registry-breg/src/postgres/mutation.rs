@@ -765,6 +765,31 @@ impl PostgresRecordMutationService {
             .map_err(|_| IngestionServiceError::Unavailable)
     }
 
+    /// The keyed reference of the claim context one run is bound to. It
+    /// covers the same members an ordinary mutation's idempotency binding
+    /// covers, with the database rather than the package revision as its
+    /// scope, so a committed chunk's replay still answers across a package
+    /// change while a drifted context cannot replay or continue the run.
+    fn ingestion_context_reference(
+        &self,
+        claims: &ClaimContext,
+    ) -> Result<String, IngestionServiceError> {
+        let context = crate::idempotency::canonical_claim_context(&self.audit_profile, claims, "")
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+        let canonical = registry_platform_canonical_json::canonicalize_json(&context)
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+        let canonical =
+            std::str::from_utf8(&canonical).map_err(|_| IngestionServiceError::Unavailable)?;
+        self.audit_profile
+            .key_hasher()
+            .audit_reference_hash(
+                "breg-ingestion-context-v1",
+                &self.expected.database_id,
+                canonical,
+            )
+            .map_err(|_| IngestionServiceError::Unavailable)
+    }
+
     async fn client(&self) -> Result<deadpool_postgres::Client, IngestionServiceError> {
         self.pool
             .get()
@@ -870,6 +895,7 @@ impl PostgresRecordMutationService {
             entity_id: input.entity_id,
             operation: input.operation,
             profile_id: input.profile_id,
+            bound_context_reference: self.ingestion_context_reference(&claims)?,
             input_digest: input.input_digest,
             input_length: input.input_length,
             item_count: input.item_count,
@@ -1074,6 +1100,9 @@ impl PostgresRecordMutationService {
         if run.profile_id != claims.access_profile() {
             return Err(IngestionServiceError::ProfileMismatch);
         }
+        if run.bound_context_reference != self.ingestion_context_reference(&claims)? {
+            return Err(IngestionServiceError::ProfileMismatch);
+        }
         if input.chunk_index < run.next_chunk_index {
             // The checkpoint already covers this chunk, so the caller is
             // recovering a lost response: return the stored receipt, never a
@@ -1113,6 +1142,13 @@ impl PostgresRecordMutationService {
             };
             let batch: Value =
                 serde_json::from_slice(&receipt).map_err(|_| IngestionServiceError::Unavailable)?;
+            // The attempt row above moved the run's last-attempt marker, so
+            // the answer describes the run as it now stands, not as this
+            // request found it.
+            let run = ingestion_store::load_run(&**client, run.run_id)
+                .await
+                .map_err(|_| IngestionServiceError::Unavailable)?
+                .ok_or(IngestionServiceError::Unavailable)?;
             return Ok(json!({
                 "run": self.run_response(&run),
                 "receipt": receipt_json(input.chunk_index, &input.digest, true, false, batch),
@@ -1359,6 +1395,9 @@ impl PostgresRecordMutationService {
         let claims = strict_claim_context(&self.registry, context, entity_id)
             .map_err(|_| IngestionServiceError::RequestInvalid)?;
         if run.profile_id != claims.access_profile() {
+            return Err(IngestionServiceError::ProfileMismatch);
+        }
+        if run.bound_context_reference != self.ingestion_context_reference(&claims)? {
             return Err(IngestionServiceError::ProfileMismatch);
         }
         let stored = ingestion_store::load_chunk(&**client, run.run_id, chunk_index)

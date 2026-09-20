@@ -121,6 +121,20 @@ pub(crate) struct IdempotencyBinding<'a> {
     pub package_revision: &'a str,
     pub response_fields: &'a BTreeSet<String>,
     pub canonical_request_digest: [u8; 32],
+    /// The hash domain the key resolves under. Server-derived ingestion keys
+    /// carry their own, so no caller-supplied key, however derived, can
+    /// reserve, preseed, or replay a run chunk's cached result through the
+    /// ordinary mutation routes.
+    pub key_domain: IdempotencyKeyDomain,
+}
+
+/// Which hash domain one idempotency key resolves its key reference under.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum IdempotencyKeyDomain {
+    /// Keys callers supply on ordinary mutation routes.
+    Caller,
+    /// Keys the run API derives for one ingestion chunk attempt.
+    IngestionChunk,
 }
 
 pub(crate) struct ActionIdempotencyBinding<'a> {
@@ -198,7 +212,12 @@ pub(crate) fn resolve_binding(
     }
 
     let key_hasher = profile.key_hasher();
-    let key_reference = resolve_key_reference(profile, binding.key)?;
+    let key_reference = match binding.key_domain {
+        IdempotencyKeyDomain::Caller => resolve_key_reference(profile, binding.key)?,
+        IdempotencyKeyDomain::IngestionChunk => {
+            resolve_key_reference_in_domain(profile, "breg-ingestion-chunk-key-v1", binding.key)?
+        }
+    };
     let canonical_context =
         canonical_claim_context(profile, binding.context, binding.package_revision)?;
     let principal_reference = key_hasher

@@ -164,6 +164,10 @@ pub(crate) struct IngestionRunRecord {
     pub(crate) entity_id: String,
     pub(crate) operation: String,
     pub(crate) profile_id: String,
+    /// The keyed reference of the claim context the run was created under.
+    /// Chunk submissions and receipt reads must resolve the same reference,
+    /// so a drifted context cannot replay or continue another context's run.
+    pub(crate) bound_context_reference: String,
     pub(crate) input_digest: String,
     pub(crate) input_length: i64,
     pub(crate) item_count: i64,
@@ -292,6 +296,7 @@ pub(crate) struct NewIngestionRun {
     pub(crate) entity_id: String,
     pub(crate) operation: String,
     pub(crate) profile_id: String,
+    pub(crate) bound_context_reference: String,
     pub(crate) input_digest: String,
     pub(crate) input_length: i64,
     pub(crate) item_count: i64,
@@ -414,6 +419,8 @@ pub(crate) async fn install(
                  entity_id text NOT NULL CHECK (entity_id <> ''),
                  operation text NOT NULL CHECK (operation IN ('create', 'patch')),
                  profile_id text NOT NULL CHECK (profile_id <> ''),
+                 bound_context_reference text NOT NULL
+                     CHECK (bound_context_reference <> ''),
                  input_digest text NOT NULL CHECK (input_digest ~ '{RUN_DIGEST_PATTERN}'),
                  input_length bigint NOT NULL CHECK (input_length > 0),
                  item_count bigint NOT NULL CHECK (item_count > 0),
@@ -503,6 +510,7 @@ fn parse_run_row(row: &tokio_postgres::Row) -> Option<IngestionRunRecord> {
         entity_id: row.get("entity_id"),
         operation: row.get("operation"),
         profile_id: row.get("profile_id"),
+        bound_context_reference: row.get("bound_context_reference"),
         input_digest: row.get("input_digest"),
         input_length: row.get("input_length"),
         item_count: row.get("item_count"),
@@ -537,10 +545,10 @@ fn parse_run_row(row: &tokio_postgres::Row) -> Option<IngestionRunRecord> {
 
 const RUN_COLUMNS: &str =
     "run_id, created_principal_reference, package_revision, schema_fingerprint,
-    entity_id, operation, profile_id, input_digest, input_length, item_count, chunk_count,
-    chunk_algorithm_version, maximum_items, maximum_bytes, status, blocked_reason,
-    next_chunk_index, committed_items, committed_prefix_digest, last_attempt_outcome,
-    last_attempt_chunk_index, created_at, updated_at";
+    entity_id, operation, profile_id, bound_context_reference, input_digest, input_length,
+    item_count, chunk_count, chunk_algorithm_version, maximum_items, maximum_bytes, status,
+    blocked_reason, next_chunk_index, committed_items, committed_prefix_digest,
+    last_attempt_outcome, last_attempt_chunk_index, created_at, updated_at";
 
 pub(crate) fn validate_new_run(run: &NewIngestionRun) -> Result<(), IngestionStoreError> {
     let digest = |value: &str| {
@@ -554,6 +562,7 @@ pub(crate) fn validate_new_run(run: &NewIngestionRun) -> Result<(), IngestionSto
         || run.schema_fingerprint.is_empty()
         || run.entity_id.is_empty()
         || run.profile_id.is_empty()
+        || run.bound_context_reference.is_empty()
         || !matches!(run.operation.as_str(), "create" | "patch")
         || !digest(&run.input_digest)
         || run.input_length <= 0
@@ -588,12 +597,13 @@ pub(crate) async fn insert_run(
             &format!(
                 "INSERT INTO registry_internal.registry_ingestion_runs
                      (run_id, created_principal_reference, package_revision, schema_fingerprint,
-                      entity_id, operation, profile_id, input_digest, input_length, item_count,
-                      chunk_count, chunk_algorithm_version, maximum_items, maximum_bytes,
-                      status, blocked_reason, next_chunk_index, committed_items,
-                      committed_prefix_digest, last_attempt_outcome, last_attempt_chunk_index)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                         'open', NULL, 0, 0, $15, NULL, NULL)
+                      entity_id, operation, profile_id, bound_context_reference, input_digest,
+                      input_length, item_count, chunk_count, chunk_algorithm_version,
+                      maximum_items, maximum_bytes, status, blocked_reason, next_chunk_index,
+                      committed_items, committed_prefix_digest, last_attempt_outcome,
+                      last_attempt_chunk_index)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                         'open', NULL, 0, 0, $16, NULL, NULL)
                  RETURNING {RUN_COLUMNS}",
             ),
             &[
@@ -604,6 +614,7 @@ pub(crate) async fn insert_run(
                 &run.entity_id,
                 &run.operation,
                 &run.profile_id,
+                &run.bound_context_reference,
                 &run.input_digest,
                 &run.input_length,
                 &run.item_count,
@@ -1051,6 +1062,7 @@ mod tests {
             entity_id: "installation".to_owned(),
             operation: "create".to_owned(),
             profile_id: "facility-operator".to_owned(),
+            bound_context_reference: "context-reference".to_owned(),
             input_digest: "a".repeat(64),
             input_length: 640,
             item_count: 5,
@@ -1110,6 +1122,7 @@ mod tests {
             entity_id: "installation".to_owned(),
             operation: "create".to_owned(),
             profile_id: "facility-operator".to_owned(),
+            bound_context_reference: "context-reference".to_owned(),
             input_digest: "a".repeat(64),
             input_length: 640,
             item_count: 5,

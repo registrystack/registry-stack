@@ -1075,7 +1075,9 @@ pub(super) fn append_openapi(
                 "requestBody": {
                     "required": true,
                     "content": {
-                        "application/json": {"schema": submit_chunk_schema(surface.entity)}
+                        "application/json": {
+                            "schema": submit_chunk_schema(surface.entity, batch)
+                        }
                     }
                 },
                 "responses": ingestion_responses(
@@ -1331,8 +1333,10 @@ fn create_run_schema() -> Value {
 }
 
 /// The chunk-submission document: the items of the compiled batch operation
-/// and the digests that bind the chunk to the announced input.
-fn submit_chunk_schema(entity: &CompiledEntity) -> Value {
+/// and the digests that bind the chunk to the announced input. The item
+/// count bound is the compiled batch maximum, the same ceiling the ordinary
+/// batch route enforces.
+fn submit_chunk_schema(entity: &CompiledEntity, batch: &crate::contract::BatchSource) -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -1342,6 +1346,7 @@ fn submit_chunk_schema(entity: &CompiledEntity) -> Value {
             "items": {
                 "type": "array",
                 "minItems": 1,
+                "maxItems": batch.maximum_items,
                 "items": {
                     "$ref": format!(
                         "#/components/schemas/{}/properties/items/items",

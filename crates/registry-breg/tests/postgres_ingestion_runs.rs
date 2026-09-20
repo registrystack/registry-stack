@@ -875,6 +875,167 @@ async fn chunk_digests_bind_the_submitted_api_names_not_the_field_ids() {
     assert_eq!(durable_widget_count(&harness).await, 2);
 }
 
+/// A caller who derives the server's chunk key may run the same items through
+/// the ordinary batch route first, but that cached batch result can never
+/// adopt a run chunk: the chunk still owes its own commit under the run lock,
+/// with the run lifecycle the batch route never writes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn caller_seeded_batch_keys_cannot_preseed_a_run_chunk() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("preseeded", 3);
+    let chunks = plan_chunks(&items, 3);
+    let run_id = harness.create_run(&claims, &chunks).await;
+
+    // The caller replays the exact derivation the run API uses, drives the
+    // ordinary batch route with it, and the batch commits the same items.
+    let key = chunk_idempotency_key(&run_id, &chunks.input_digest, 0, &chunks.digests[0]);
+    let seeded = send(
+        &harness.app,
+        Method::POST,
+        "/v1/records/widgets:batch",
+        Some(claims.clone()),
+        &[
+            ("content-type", "application/json"),
+            ("idempotency-key", key.as_str()),
+        ],
+        serde_json::to_vec(&json!({"items": items})).expect("batch body"),
+    )
+    .await;
+    assert_eq!(seeded.status(), StatusCode::OK);
+
+    // The run chunk executes as its own mutation: the labels the seeded batch
+    // already took make the commit fail visibly (the run surface reports a
+    // refused chunk) instead of the checkpoint silently adopting the
+    // caller-seeded batch answer.
+    let submitted = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(submitted.status(), StatusCode::PRECONDITION_FAILED);
+    let run = harness.read_run(&claims, &run_id).await;
+    assert_eq!(run["status"], "open");
+    assert_eq!(run["nextChunkIndex"], 0);
+    assert_eq!(run["committedItems"], 0);
+}
+
+/// Receipts answer only under the access context the run was bound to: the
+/// same principal and profile id presenting different row-boundary claims, or
+/// a different purpose, recovers nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn run_receipts_replay_only_under_the_bound_access_context() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let drifted = operator_claims(PRINCIPAL, "zone-b");
+    let items = announce_items("context-bound", 5);
+    let chunks = plan_chunks(&items, 3);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+
+    // The same principal and profile under a different row boundary recovers
+    // neither the committed chunk's receipt nor the dedicated receipt read,
+    // and cannot drive the next chunk either.
+    let refused_replay = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &drifted,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(refused_replay.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        body_json(refused_replay).await["code"],
+        "ingestion.profile_mismatch"
+    );
+    let refused_receipt = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &drifted,
+        )
+        .await;
+    assert_eq!(refused_receipt.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        body_json(refused_receipt).await["code"],
+        "ingestion.profile_mismatch"
+    );
+    let refused_fresh = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &drifted,
+            chunk_body(&chunks, 1),
+        )
+        .await;
+    assert_eq!(refused_fresh.status(), StatusCode::FORBIDDEN);
+
+    // Under the bound context the recovery still answers.
+    let replayed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replayed.status(), StatusCode::OK);
+    assert_eq!(body_json(replayed).await["receipt"]["replayed"], true);
+}
+
+/// The recovery answer renders the run the replay just touched, so its last
+/// attempt says `replayed`, exactly like a fresh read would.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_replayed_chunk_reports_the_replayed_attempt() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("attempt-freshness", 5);
+    let chunks = plan_chunks(&items, 3);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+
+    let replayed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replayed.status(), StatusCode::OK);
+    let run = body_json(replayed).await["run"].clone();
+    assert_eq!(run["lastAttempt"]["outcome"], "replayed");
+    assert_eq!(run["lastAttempt"]["chunkIndex"], 0);
+}
+
+/// The published chunk schema carries the compiled batch ceiling the runtime
+/// enforces, so generated clients refuse oversized chunks before sending.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_chunk_submission_schema_publishes_the_batch_maximum_items() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let openapi = harness.get_json("/openapi.json", &claims).await;
+    assert_eq!(openapi.status(), StatusCode::OK);
+    let schema = body_json(openapi).await["paths"]
+        ["/v1/records/widgets/ingestion-runs/{run_id}/chunks"]["post"]["requestBody"]["content"]
+        ["application/json"]["schema"]
+        .clone();
+    assert_eq!(schema["properties"]["items"]["minItems"], 1);
+    assert_eq!(schema["properties"]["items"]["maxItems"], 3);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn listing_runs_filters_by_status_and_input_digest() {
     let harness = IngestionHarness::create().await;
@@ -1545,6 +1706,25 @@ fn hex_digest(bytes: &[u8]) -> String {
 
 fn zero_digest() -> String {
     "0".repeat(64)
+}
+
+/// The server-derived idempotency key one chunk submission uses, derived here
+/// the way a caller can: from public run facts alone.
+fn chunk_idempotency_key(
+    run_id: &str,
+    input_digest: &str,
+    chunk_index: u64,
+    digest: &str,
+) -> String {
+    let binding = registry_platform_canonical_json::canonicalize_json(&json!({
+        "domain": "registry-data-import-chunk-v1",
+        "importId": run_id,
+        "inputDigest": input_digest,
+        "chunkIndex": chunk_index,
+        "chunkDigest": digest,
+    }))
+    .expect("chunk key binding canonicalizes");
+    format!("breg-data-v1-{}", hex_digest(&binding))
 }
 
 fn chunk_digest(items: &[Value]) -> String {
