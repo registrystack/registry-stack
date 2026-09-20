@@ -56,10 +56,14 @@ recovered by reading the run and replaying the chunk, never by a second
 mutation. Every release of a stored receipt appends a value-free disclosure
 record to the run audit before the answer leaves, so an audit outage gates the
 release instead of passing silently. The service-level replay and the recovery
-read append it in a transaction of their own, and the row-lock replay a
-duplicate submission takes when a concurrent submission already committed the
-chunk appends it in the same transaction as its attempt record, inside the run
-lock that decided the replay. A fresh submission's first release needs no
+read append it inside the same guarded record transaction that verifies the
+durable registry identity, so a serving instance a successor activation has
+left stale refuses the release with an outage and commits nothing: no
+disclosure record, and for the replay no replayed attempt marker either. The
+row-lock replay a duplicate submission takes when a concurrent submission
+already committed the chunk appends it in the same transaction as its attempt
+record, inside the run lock that decided the replay. A fresh submission's
+first release needs no
 disclosure record of its own: its terminal and run-committed audit records,
 written in the same transaction as the receipt it stores, already account for
 that release.
@@ -78,7 +82,10 @@ binding governs only chunks the checkpoint has not covered, and the replay is
 compared against the run's own stored bounds, so a successor package that
 lowers the batch ceilings cannot strand the committed prefix. A cancelled run
 keeps its counts and its audit; cancellation records the last attempt as
-`refused` with no chunk index, because cancellation is not a chunk attempt.
+`refused` with no chunk index, because cancellation is not a chunk attempt,
+and it takes the same guarded record transaction run creation takes, so a
+stale instance answers an outage instead of closing a run its successor can
+still resume.
 The last attempt is classified as
 `committed`, `replayed`, `invalidItem`, `refused`, `bindingChanged`,
 `chunkMismatch`, `runNotOpen`, or `unavailable`.
