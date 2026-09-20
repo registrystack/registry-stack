@@ -1036,6 +1036,179 @@ async fn the_chunk_submission_schema_publishes_the_batch_maximum_items() {
     assert_eq!(schema["properties"]["items"]["maxItems"], 3);
 }
 
+/// A drifted access context can neither drive nor terminate a run: cancel
+/// owes the run the same profile and bound-context checks chunk submission
+/// and receipt recovery owe it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn run_cancellation_requires_the_runs_bound_access_context() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let drifted = operator_claims(PRINCIPAL, "zone-b");
+    let chunks = plan_chunks(&announce_items("cancel-bound", 3), 3);
+    let run_id = harness.create_run(&claims, &chunks).await;
+
+    let refused = harness
+        .post_empty(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/cancel"),
+            &drifted,
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        body_json(refused).await["code"],
+        "ingestion.profile_mismatch"
+    );
+    let run = harness.read_run(&claims, &run_id).await;
+    assert_eq!(run["status"], "open");
+
+    let cancelled = harness
+        .post_empty(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/cancel"),
+            &claims,
+        )
+        .await;
+    assert_eq!(cancelled.status(), StatusCode::OK);
+    assert_eq!(body_json(cancelled).await["run"]["status"], "cancelled");
+}
+
+/// The replay comparison binds the submitted items, not the caller-stated
+/// digests: a body whose items do not hash to the announced digest is a
+/// mismatch even at an already committed index, never a receipt loan.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_forged_digest_cannot_borrow_a_committed_receipt() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("forged-digest", 3);
+    let chunks = plan_chunks(&items, 3);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    assert_eq!(durable_widget_count(&harness).await, 3);
+
+    // The digest and prefix digest are copied from the committed chunk; the
+    // items are not the items they announce.
+    let mut forged = chunk_body(&chunks, 0);
+    forged["items"] = json!([{"operation":"create", "data": {
+        "jurisdiction": "zone-a",
+        "label": "forged-digest-borrowed",
+        "quantity": 9
+    }}]);
+    let refused = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            forged,
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(refused).await["code"], "ingestion.chunk_mismatch");
+    assert_eq!(durable_widget_count(&harness).await, 3);
+
+    // The exact body still replays the retained receipt.
+    let replayed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replayed.status(), StatusCode::OK);
+    assert_eq!(body_json(replayed).await["receipt"]["replayed"], true);
+}
+
+/// A terminal run stays terminal when the active package later changes: the
+/// blocking transition belongs to open runs, and a stale next-chunk
+/// submission answers run_not_open, never a blocked answer or a blocked
+/// audit record for a run whose stored status never moved.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_terminal_run_whose_package_changed_answers_run_not_open() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&announce_items("terminal-binding", 5), 3);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let cancelled = harness
+        .post_empty(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/cancel"),
+            &claims,
+        )
+        .await;
+    assert_eq!(cancelled.status(), StatusCode::OK);
+
+    let changed = harness.restart_with_revision("package-ingestion-2").await;
+    let stale = changed
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 1),
+        )
+        .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(stale).await["code"], "ingestion.run_not_open");
+    let run = harness.read_run(&claims, &run_id).await;
+    assert_eq!(run["status"], "cancelled");
+    assert_eq!(run["nextChunkIndex"], 1);
+    assert_eq!(
+        run["lastAttempt"]["outcome"], "refused",
+        "cancellation's own attempt is the last one recorded"
+    );
+}
+
+/// A field that violates its declared storage pattern is a deterministic
+/// refusal, not an outage: the chunk answer matches the ordinary batch
+/// contract's conflict shape instead of an unavailable problem.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pattern_violation_is_a_refused_chunk_not_an_outage() {
+    let fixture = format!("{FIXTURE_HEAD}{FIXTURE_TAIL}").replacen(
+        r#"{"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"}"#,
+        r#"{"id":"label","type":"string","maxLength":128,"required":true,"classification":"public","pattern":"^[a-z0-9-]+$"}"#,
+        1,
+    );
+    let project = parse_project_json(fixture.as_bytes()).expect("the pattern fixture parses");
+    let registry = Arc::new(
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("the pattern fixture compiles to trusted inventories"),
+    );
+    let harness = IngestionHarness::from_registry(registry).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    // The label violates the declared lowercase pattern at insert time.
+    let items = vec![json!({"operation":"create", "data": {
+        "jurisdiction": "zone-a",
+        "label": "Pattern-Violation",
+        "quantity": 1
+    }})];
+    let chunks = plan_chunks(&items, 3);
+    let run_id = harness.create_run(&claims, &chunks).await;
+
+    let refused = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(body_json(refused).await["code"], "precondition.failed");
+    let run = harness.read_run(&claims, &run_id).await;
+    assert_eq!(run["status"], "open");
+    assert_eq!(run["nextChunkIndex"], 0);
+    assert_eq!(run["lastAttempt"]["outcome"], "refused");
+    assert_eq!(durable_widget_count(&harness).await, 0);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn listing_runs_filters_by_status_and_input_digest() {
     let harness = IngestionHarness::create().await;

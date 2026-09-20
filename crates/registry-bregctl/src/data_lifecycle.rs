@@ -274,12 +274,16 @@ impl IngestionDrive<'_> {
     }
 
     fn read_run(&self, run_id: Uuid) -> Result<BRegIngestionRun, DataLifecycleError> {
+        // The reread selects the plan's profile explicitly: an entity with
+        // several batch-capable profiles must not fall back to the route
+        // default and lose the run it is resuming.
         let run = self
             .runtime
-            .block_on(
-                self.client
-                    .read_ingestion_run(self.entity_route, run_id, None),
-            )
+            .block_on(self.client.read_ingestion_run(
+                self.entity_route,
+                run_id,
+                Some(self.plan.profile_id()),
+            ))
             .map_err(map_ingestion_client_error)?;
         Ok(run.value)
     }
@@ -2100,12 +2104,18 @@ mod tests {
         let outcome = submit_ingestion_chunks(&drive, &mut started, None).unwrap();
         let requests = handle.join().unwrap();
 
-        // The rerun reads the run, takes the server's nextChunkIndex, and
-        // submits only the chunk after it: chunk 0 is never re-sent.
+        // The rerun reads the run under the plan's own profile (an entity
+        // with several batch-capable profiles must not fall back to the
+        // route default and lose the run), takes the server's
+        // nextChunkIndex, and submits only the chunk after it: chunk 0 is
+        // never re-sent.
         assert_eq!(requests.len(), 2);
         assert_eq!(
             request_parts(&requests[0]).0,
-            format!("GET /v1/records/records/ingestion-runs/{RUN_ID} HTTP/1.1")
+            format!(
+                "GET /v1/records/records/ingestion-runs/{RUN_ID}\
+                 ?accessProfile=operator HTTP/1.1"
+            )
         );
         let (chunk_request, _, submission) = request_parts(&requests[1]);
         assert_eq!(

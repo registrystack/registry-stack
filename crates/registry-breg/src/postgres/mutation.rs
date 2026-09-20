@@ -1037,6 +1037,17 @@ impl PostgresRecordMutationService {
         let run = self
             .visible_run(&**client, context, entity_id, run_id)
             .await?;
+        // Cancellation owes the run the same admission chunk submission and
+        // receipt recovery owe it: a drifted profile or claim context cannot
+        // terminate a run it could not continue.
+        let claims = strict_claim_context(&self.registry, context, entity_id)
+            .map_err(|_| IngestionServiceError::RequestInvalid)?;
+        if run.profile_id != claims.access_profile() {
+            return Err(IngestionServiceError::ProfileMismatch);
+        }
+        if run.bound_context_reference != self.ingestion_context_reference(&claims)? {
+            return Err(IngestionServiceError::ProfileMismatch);
+        }
         let transaction = client
             .transaction()
             .await
@@ -1103,12 +1114,40 @@ impl PostgresRecordMutationService {
         if run.bound_context_reference != self.ingestion_context_reference(&claims)? {
             return Err(IngestionServiceError::ProfileMismatch);
         }
+        // The submitted items are parsed and canonicalized once, before any
+        // branch decides replay or fresh execution, so the announced digest
+        // binds the body the caller actually sent in both.
+        let items = input
+            .items
+            .iter()
+            .map(Self::parse_ingestion_item)
+            .collect::<Option<Vec<_>>>()
+            .ok_or(IngestionServiceError::RequestInvalid)?;
+        if items.is_empty() {
+            return Err(IngestionServiceError::RequestInvalid);
+        }
+        let (canonical_body, canonical_digest) = crate::data::canonical_chunk_body(&input.items)
+            .map_err(|_| IngestionServiceError::RequestInvalid)?;
+        let announced_body =
+            canonical_digest == input.digest && canonical_body.len() <= run.maximum_bytes as usize;
         if input.chunk_index < run.next_chunk_index {
             // The checkpoint already covers this chunk, so the caller is
             // recovering a lost response: return the stored receipt, never a
             // second mutation. This holds for every terminal status and for
             // a changed active package, because the committed prefix and its
             // receipts survive completion, cancellation, and blocking.
+            // A body that does not hash to the digest it announces cannot
+            // borrow the retained receipt, whatever digest strings it carries.
+            if !announced_body {
+                self.record_ingestion_attempt(
+                    &**client,
+                    run.run_id,
+                    IngestionAttemptOutcome::ChunkMismatch,
+                    input.chunk_index,
+                )
+                .await;
+                return Err(IngestionServiceError::ChunkMismatch);
+            }
             let stored = ingestion_store::load_chunk(&**client, run.run_id, input.chunk_index)
                 .await
                 .map_err(|_| IngestionServiceError::Unavailable)?
@@ -1153,6 +1192,17 @@ impl PostgresRecordMutationService {
                 "run": self.run_response(&run),
                 "receipt": receipt_json(input.chunk_index, &input.digest, true, false, batch),
             }));
+        }
+        // A terminal run stays terminal when the active package later
+        // changes: the blocking transition belongs to open runs alone, so a
+        // stale next-chunk submission answers run_not_open and never writes
+        // a blocked audit record for a run whose stored status never moved.
+        match run.status {
+            IngestionRunStatus::Blocked => return Err(IngestionServiceError::RunBlocked),
+            IngestionRunStatus::Complete | IngestionRunStatus::Cancelled => {
+                return Err(IngestionServiceError::RunNotOpen);
+            }
+            IngestionRunStatus::Open => {}
         }
         if !run.active_binding_matches(
             &self.expected.package_revision,
@@ -1205,13 +1255,6 @@ impl PostgresRecordMutationService {
             return Err(IngestionServiceError::RunBlocked);
         }
 
-        match run.status {
-            IngestionRunStatus::Blocked => return Err(IngestionServiceError::RunBlocked),
-            IngestionRunStatus::Complete | IngestionRunStatus::Cancelled => {
-                return Err(IngestionServiceError::RunNotOpen);
-            }
-            IngestionRunStatus::Open => {}
-        }
         if input.chunk_index > run.next_chunk_index || input.chunk_index >= run.chunk_count {
             self.record_ingestion_attempt(
                 &**client,
@@ -1222,18 +1265,7 @@ impl PostgresRecordMutationService {
             .await;
             return Err(IngestionServiceError::ChunkMismatch);
         }
-        let items = input
-            .items
-            .iter()
-            .map(Self::parse_ingestion_item)
-            .collect::<Option<Vec<_>>>()
-            .ok_or(IngestionServiceError::RequestInvalid)?;
-        if items.is_empty() {
-            return Err(IngestionServiceError::RequestInvalid);
-        }
-        let (canonical_body, canonical_digest) = crate::data::canonical_chunk_body(&input.items)
-            .map_err(|_| IngestionServiceError::RequestInvalid)?;
-        if canonical_digest != input.digest || canonical_body.len() > run.maximum_bytes as usize {
+        if !announced_body {
             self.record_ingestion_attempt(
                 &**client,
                 run.run_id,
@@ -1333,7 +1365,9 @@ impl PostgresRecordMutationService {
                         IngestionAttemptOutcome::InvalidItem,
                         Some(IngestionServiceError::RequestInvalid),
                     ),
-                    MutationError::PreconditionFailed | MutationError::Conflict => (
+                    MutationError::PreconditionFailed
+                    | MutationError::Conflict
+                    | MutationError::FieldPatternViolation { .. } => (
                         IngestionAttemptOutcome::Refused,
                         Some(IngestionServiceError::PreconditionFailed),
                     ),
@@ -1343,8 +1377,7 @@ impl PostgresRecordMutationService {
                     | MutationError::PlannerFailure(_)
                     | MutationError::ActionHandlerFailure(_)
                     | MutationError::ActionEvidenceFailure { .. }
-                    | MutationError::ActionRefusal(_)
-                    | MutationError::FieldPatternViolation { .. } => {
+                    | MutationError::ActionRefusal(_) => {
                         (IngestionAttemptOutcome::Unavailable, None)
                     }
                 };
