@@ -334,6 +334,12 @@ LINUX_NODE_BINDING_PACKAGES = frozenset(
         "registry-casework-client-node",
     }
 )
+# The shared Linux release job also builds the Evidence Python wheel. Keep its
+# production recipe selected by the binding it actually proves, including
+# build.rs-only changes that the Node package closure does not reach.
+LINUX_RELEASE_BINDING_PACKAGES = LINUX_NODE_BINDING_PACKAGES | frozenset(
+    {"registry-evidence-client-py"}
+)
 
 # Inputs that can change the production Linux native-client compiler path
 # without changing a binding crate. This proof is deliberately selected from
@@ -727,7 +733,7 @@ def classify(
         for path in paths
     ) or bool(
         workspace.affected_packages(linux_node_seeds)
-        & LINUX_NODE_BINDING_PACKAGES
+        & LINUX_RELEASE_BINDING_PACKAGES
     )
 
     identifiers = complete or any(

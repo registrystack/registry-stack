@@ -1495,6 +1495,16 @@ class CiChangesTest(unittest.TestCase):
                     classify(self.workspace, (path,))["release_linux_node_clients"]
                 )
 
+    def test_evidence_python_change_runs_its_linux_release_wheel_proof(self) -> None:
+        for path in (
+            "crates/registry-evidence-client-py/build.rs",
+            "crates/registry-evidence-client-py/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["release_linux_node_clients"]
+                )
+
     def test_linux_node_release_recipe_inputs_select_the_proof(self) -> None:
         for path in (
             "Cargo.lock",
