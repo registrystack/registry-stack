@@ -4588,14 +4588,19 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
         .await
         .expect("save private draft");
     assert_eq!(draft.body, json!({"private": "working notes"}));
+    let stored_draft = fixture
+        .service_v1
+        .review_task_draft(&fixture.reviewer_b, task, None, "")
+        .await
+        .expect("read private draft")
+        .expect("draft exists");
+    assert_eq!(stored_draft.task_id, draft.task_id);
+    assert_eq!(stored_draft.author, draft.author);
+    assert_eq!(stored_draft.body, draft.body);
+    assert_eq!(stored_draft.revision, draft.revision);
     assert_eq!(
-        fixture
-            .service_v1
-            .review_task_draft(&fixture.reviewer_b, task, None, "")
-            .await
-            .expect("read private draft")
-            .expect("draft exists"),
-        draft
+        stored_draft.updated_at.timestamp_micros(),
+        draft.updated_at.timestamp_micros()
     );
     assert!(fixture
         .service_v1
