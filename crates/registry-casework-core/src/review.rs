@@ -7,7 +7,7 @@ use std::{
 use chrono::{DateTime, Utc};
 use jsonschema::{Draft, JSONSchema};
 use registry_review_protocol::{ContentDigest, PolicyBinding, ReviewResultStatus, SubjectBinding};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;
 use uuid::Uuid;
@@ -604,23 +604,44 @@ pub enum ReviewerDecisionKind {
         outcome: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "deserialize_present_value",
+            skip_serializing_if = "Option::is_none"
+        )]
         result: Option<Value>,
     },
     ChangesRequested {
         outcome: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "deserialize_present_value",
+            skip_serializing_if = "Option::is_none"
+        )]
         result: Option<Value>,
     },
     Answer {
         outcome: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "deserialize_present_value",
+            skip_serializing_if = "Option::is_none"
+        )]
         result: Option<Value>,
     },
+}
+
+/// Preserve an explicitly present JSON `null` so semantic validation can
+/// reject it as a non-object instead of treating it like an omitted field.
+fn deserialize_present_value<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1402,7 +1423,11 @@ fn validate_result_narrowing(
         if constraint
             .get("enum")
             .and_then(Value::as_array)
-            .is_some_and(|choices| !choices.contains(value))
+            .is_some_and(|choices| {
+                !choices
+                    .iter()
+                    .any(|allowed| constraint_value_equals(allowed, value))
+            })
             || constraint
                 .get("oneOf")
                 .and_then(Value::as_array)
@@ -1410,7 +1435,7 @@ fn validate_result_narrowing(
                     !entries
                         .iter()
                         .filter_map(|entry| entry.get("const"))
-                        .any(|allowed| allowed == value)
+                        .any(|allowed| constraint_value_equals(allowed, value))
                 })
             || constraint
                 .get("minimum")
@@ -1439,6 +1464,14 @@ fn validate_result_narrowing(
         }
     }
     Ok(())
+}
+
+fn constraint_value_equals(allowed: &Value, actual: &Value) -> bool {
+    if allowed.is_number() && actual.is_number() {
+        compare_json_numbers(allowed, actual) == Some(Ordering::Equal)
+    } else {
+        allowed == actual
+    }
 }
 
 fn compare_json_numbers(left: &Value, right: &Value) -> Option<Ordering> {
@@ -1535,11 +1568,29 @@ fn is_scalar(value: &Value) -> bool {
 }
 
 fn result_field_path(prefix: &str, field: &str) -> String {
-    if field.len() + prefix.len() < 256 && field.bytes().all(valid_path_byte) {
-        format!("{prefix}/{field}")
-    } else {
-        prefix.to_owned()
+    if !field.bytes().all(valid_path_byte) {
+        return prefix.to_owned();
     }
+    let escaped_len = field.bytes().try_fold(0usize, |length, byte| {
+        length.checked_add(if matches!(byte, b'/' | b'~') { 2 } else { 1 })
+    });
+    if escaped_len
+        .and_then(|length| prefix.len().checked_add(length + 1))
+        .is_none_or(|length| length > 256)
+    {
+        return prefix.to_owned();
+    }
+    let mut path = String::with_capacity(prefix.len() + escaped_len.unwrap_or_default() + 1);
+    path.push_str(prefix);
+    path.push('/');
+    for byte in field.bytes() {
+        match byte {
+            b'~' => path.push_str("~0"),
+            b'/' => path.push_str("~1"),
+            _ => path.push(char::from(byte)),
+        }
+    }
+    path
 }
 
 fn constraint_invalid(path: impl Into<String>) -> ReviewValidationError {
@@ -2290,6 +2341,84 @@ mod tests {
             assert!(progress.decisions.is_empty());
             assert!(progress.settlement.is_none());
         }
+    }
+
+    #[test]
+    fn numeric_choices_use_json_schema_value_equality() {
+        let mut policy = answer_policy();
+        policy.result_schema = Some(json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["score"],
+            "properties": {"score": {"type": "number"}}
+        }));
+        let snapshot = policy.snapshot().expect("numeric-choice policy snapshots");
+        let request_id = Uuid::from_u128(100);
+        let task = task(request_id, 0, "answer", 1, "answerer");
+
+        for constraints in [
+            json!({"score": {"enum": [1]}}),
+            json!({"score": {"oneOf": [{"const": 1, "title": "One"}]}}),
+        ] {
+            snapshot
+                .validate_result_constraints(&constraints)
+                .expect("integer notation is a valid numeric narrowing");
+            let mut progress =
+                ReviewProgress::new(request_id, None, Some(constraints), &snapshot).unwrap();
+            let decision = ReviewerDecision {
+                task_id: task.task_id,
+                request_id,
+                stage_id: "answer".to_owned(),
+                reviewer: person("answerer"),
+                profile_id: "reviewer".to_owned(),
+                decision: ReviewerDecisionKind::Answer {
+                    outcome: "approved".to_owned(),
+                    reason: None,
+                    result: Some(json!({"score": 1.0})),
+                },
+            };
+            record_review_decision(&snapshot, &mut progress, &task, decision)
+                .expect("1 and 1.0 are equal JSON Schema numbers");
+        }
+    }
+
+    #[test]
+    fn decision_deserialization_preserves_explicit_null_result() {
+        let explicit_null: ReviewerDecisionKind = serde_json::from_value(json!({
+            "type": "answer",
+            "outcome": "approved",
+            "result": null
+        }))
+        .expect("explicit null remains a semantic validation input");
+        assert!(matches!(
+            explicit_null,
+            ReviewerDecisionKind::Answer {
+                result: Some(Value::Null),
+                ..
+            }
+        ));
+
+        let omitted: ReviewerDecisionKind = serde_json::from_value(json!({
+            "type": "answer",
+            "outcome": "approved"
+        }))
+        .expect("an omitted optional result remains absent");
+        assert!(matches!(
+            omitted,
+            ReviewerDecisionKind::Answer { result: None, .. }
+        ));
+    }
+
+    #[test]
+    fn result_paths_escape_json_pointer_segments() {
+        assert_eq!(
+            result_field_path(RESULT_PATH, "path/segment"),
+            "$.result/path~1segment"
+        );
+        assert_eq!(
+            result_field_path(RESULT_CONSTRAINTS_PATH, "tilde~segment"),
+            "$.resultConstraints/tilde~0segment"
+        );
     }
 
     #[test]
