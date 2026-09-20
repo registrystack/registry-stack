@@ -1559,6 +1559,21 @@ impl DedicatedApplyConnection {
         Ok(())
     }
 
+    /// Reconciles product-owned control tables before a successor enters
+    /// maintenance. This upgrades registries initialized by an older binary,
+    /// including installations that predate field-encryption key and flip
+    /// state, without giving the runtime role write authority.
+    pub(crate) async fn reconcile_successor_control_plane(
+        &mut self,
+        runtime_role: &SqlIdentifier,
+    ) -> Result<()> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        let transaction = self.client.transaction().await?;
+        install_registry_state_schema(&transaction, runtime_role).await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
     /// Records or resumes a successor only when the durable source identity,
     /// exact target, ordered checksums, and package sequence all agree.
     pub(crate) async fn begin_successor_package(

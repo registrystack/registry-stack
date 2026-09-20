@@ -889,6 +889,23 @@ fn encryption_flip_change_sets_classify_without_a_physical_rename() {
         |change| change.code == Code::FieldLookupChanged && change.class == Class::Unsupported
     ));
 
+    // Existing envelopes cannot be handed to authored SQL for conversion.
+    // A keyed engine conversion must exist before an encrypted field may
+    // change its authored type.
+    let mut structured = encrypted_project();
+    structured["entities"][0]["fields"][1] = json!({
+        "id":"secret", "type":"structured", "maxBytes":1024,
+        "schema":{"type":"object","additionalProperties":false},
+        "classification":"restricted", "encrypted":true
+    });
+    let encrypted_structured = compile_value(&structured).unwrap();
+    let type_change =
+        compiled_registry_change_set(&encrypted_no_lookup, &encrypted_structured, prior);
+    assert!(type_change.changes.iter().any(|change| {
+        change.code == Code::FieldTypeChanged && change.class == Class::Unsupported
+    }));
+    assert!(change_set_to_applicable_migration_plan(&type_change).is_err());
+
     let mut without_secret = encrypted_project();
     without_secret["entities"][0]["fields"]
         .as_array_mut()

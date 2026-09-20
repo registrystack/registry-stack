@@ -493,6 +493,18 @@ pub async fn apply_verified_package(
         return Err(MigrationError::ApplyFailed);
     }
     if current.is_some() {
+        // Existing registries may have been initialized by a binary that
+        // predates newer product-owned control tables. Reconcile them while
+        // the verified migration session holds the apply lock and before the
+        // successor can enter durable maintenance.
+        if connection
+            .reconcile_successor_control_plane(request.roles.runtime)
+            .await
+            .is_err()
+        {
+            let _ = connection.release().await;
+            return Err(MigrationError::ApplyFailed);
+        }
         if let Err(error) = crate::request_retention::guard_successor_activation(
             connection.client_for_request_retention_guard(),
             request.package.registry(),

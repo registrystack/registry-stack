@@ -903,6 +903,18 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
     );
     let keys = flip_key_source();
 
+    // Model an existing deployment initialized before field-encryption control
+    // tables shipped. Successor apply must install and reconcile these tables
+    // before it changes maintenance state or activates key material.
+    database
+        .admin
+        .batch_execute(
+            "DROP TABLE registry_internal.registry_field_encryption_flips;
+             DROP TABLE registry_internal.registry_field_encryption_keys;",
+        )
+        .await
+        .expect("legacy deployment has no field-encryption control tables");
+
     database
         .admin
         .execute(

@@ -1454,7 +1454,14 @@ fn compare_fields(
             };
             push_change(
                 changes,
-                CompiledRegistryChangeClass::DestructiveOrIrreversible,
+                if previous_field.encryption.is_some() {
+                    // The stored envelope is the only source value. Until the
+                    // engine has a keyed conversion step, reviewed SQL cannot
+                    // safely reinterpret it as a different authored type.
+                    CompiledRegistryChangeClass::Unsupported
+                } else {
+                    CompiledRegistryChangeClass::DestructiveOrIrreversible
+                },
                 code,
                 target(
                     CompiledRegistryChangeTargetKind::Field,
