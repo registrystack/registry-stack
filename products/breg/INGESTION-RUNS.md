@@ -49,7 +49,9 @@ package or schema binding no longer matches the active package reports
 `blocked` with reason `activePackageChanged`; it is retained and inspectable,
 and a successor run created under the new binding carries the work forward. A
 committed chunk replays its receipt in any run status, including blocked: the
-binding governs only chunks the checkpoint has not covered. A cancelled run
+binding governs only chunks the checkpoint has not covered, and the replay is
+compared against the run's own stored bounds, so a successor package that
+lowers the batch ceilings cannot strand the committed prefix. A cancelled run
 keeps its counts and its audit. The last attempt is classified as
 `committed`, `replayed`, `invalidItem`, `refused`, `bindingChanged`,
 `chunkMismatch`, `runNotOpen`, or `unavailable`.

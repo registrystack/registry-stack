@@ -29,13 +29,13 @@ pub(crate) const INGESTION_TABLES: &[(&str, &[&str])] = &[
     ),
     (
         "registry_ingestion_run_chunk_records",
-        &["INSERT", "SELECT", "UPDATE"],
+        &["INSERT", "SELECT"],
     ),
 ];
 
 /// One chunk receipt is the batch answer for one bounded chunk, so it holds
 /// no more than the idempotency cache it accompanies.
-const MAX_RECEIPT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_RECEIPT_BYTES: usize = crate::idempotency::MAX_HELD_BODY_BYTES;
 /// Runs are operator-driven and few; one page stays explicitly bounded.
 pub(crate) const MAX_RUN_PAGE_SIZE: i64 = 100;
 pub(crate) const DEFAULT_RUN_PAGE_SIZE: i64 = 25;
@@ -491,7 +491,7 @@ pub(crate) async fn install(
                  TO \"{role}\";
              GRANT INSERT, SELECT, UPDATE ON registry_internal.registry_ingestion_run_chunks
                  TO \"{role}\";
-             GRANT INSERT, SELECT, UPDATE
+             GRANT INSERT, SELECT
                  ON registry_internal.registry_ingestion_run_chunk_records TO \"{role}\";",
             role = runtime_role.as_str(),
         ))
@@ -1053,6 +1053,14 @@ pub(crate) fn run_audit_record(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_receipt_ceiling_is_the_idempotency_response_ceiling() {
+        // A batch answer the coordinator accepts into the idempotency cache
+        // must also persist as its chunk receipt; a smaller receipt ceiling
+        // would roll a valid chunk back after commit-time acceptance.
+        assert_eq!(MAX_RECEIPT_BYTES, crate::idempotency::MAX_HELD_BODY_BYTES);
+    }
 
     fn run() -> NewIngestionRun {
         NewIngestionRun {

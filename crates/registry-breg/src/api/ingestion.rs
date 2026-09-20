@@ -419,9 +419,9 @@ async fn submit_chunk(
         )
         .await;
     };
-    // The chunk items are the batch items of the compiled route, so they are
-    // bounded by the same limits the route itself answers under.
-    let Some(batch) = surface.entity.batch.as_ref() else {
+    // The chunk items are the batch items of the compiled route, so the
+    // entity must carry a batch surface at all.
+    if surface.entity.batch.is_none() {
         return audited_mutation_refusal(
             mutations,
             &binding.base,
@@ -431,7 +431,7 @@ async fn submit_chunk(
             &correlation,
         )
         .await;
-    };
+    }
     if headers.contains_key("idempotency-key") {
         return audited_mutation_refusal(
             mutations,
@@ -454,7 +454,11 @@ async fn submit_chunk(
         )
         .await;
     }
-    let Ok(body) = bounded_body_to(body, batch.maximum_bytes as usize).await else {
+    // The body is bounded by the stable protocol ceilings, never the current
+    // package's batch limits: an exact replay of a chunk a previous package
+    // admitted must still reach the service, which enforces the run's own
+    // stored bounds.
+    let Ok(body) = bounded_body_to(body, crate::compiler::MAX_BATCH_BYTES as usize).await else {
         return audited_mutation_refusal(
             mutations,
             &binding.base,
@@ -465,7 +469,7 @@ async fn submit_chunk(
         )
         .await;
     };
-    let Ok(parsed) = parse_chunk_body(&body, usize::from(batch.maximum_items)) else {
+    let Ok(parsed) = parse_chunk_body(&body, usize::from(crate::compiler::MAX_BATCH_ITEMS)) else {
         return audited_mutation_refusal(
             mutations,
             &binding.base,
@@ -503,7 +507,20 @@ async fn submit_chunk(
         .await
     {
         Ok(answer) => ingestion_response(StatusCode::OK, answer),
-        Err(error) => ingestion_problem(error),
+        // A submission the run refuses after parsing owes the journal the
+        // same durable refusal envelope pre-parse failures write, so an audit
+        // outage gates the refusal instead of passing silently.
+        Err(error) => {
+            audited_mutation_refusal(
+                mutations,
+                &binding.base,
+                &surface.context,
+                None,
+                ingestion_problem(error),
+                &correlation,
+            )
+            .await
+        }
     }
 }
 
@@ -967,6 +984,7 @@ pub(super) fn append_openapi(
                         crate::problem::ProblemCode::AuthenticationRefused,
                         crate::problem::ProblemCode::IngestionProfileMismatch,
                         crate::problem::ProblemCode::PreconditionFailed,
+                        crate::problem::ProblemCode::UnsupportedMediaType,
                         crate::problem::ProblemCode::ServiceUnavailable,
                     ],
                 ),
@@ -1103,6 +1121,7 @@ pub(super) fn append_openapi(
                         crate::problem::ProblemCode::IngestionChunkMismatch,
                         crate::problem::ProblemCode::IngestionReceiptErased,
                         crate::problem::ProblemCode::PreconditionFailed,
+                        crate::problem::ProblemCode::UnsupportedMediaType,
                         crate::problem::ProblemCode::ServiceUnavailable,
                     ],
                 ),
@@ -1128,8 +1147,10 @@ pub(super) fn append_openapi(
                     &[
                         crate::problem::ProblemCode::RequestInvalid,
                         crate::problem::ProblemCode::AuthenticationRefused,
+                        crate::problem::ProblemCode::IngestionProfileMismatch,
                         crate::problem::ProblemCode::ResourceNotFound,
                         crate::problem::ProblemCode::IngestionRunNotOpen,
+                        crate::problem::ProblemCode::UnsupportedMediaType,
                         crate::problem::ProblemCode::ServiceUnavailable,
                     ],
                 ),
@@ -1259,7 +1280,7 @@ fn ingestion_responses(
             "content": {"application/json": {"schema": success_schema}}
         }),
     )]);
-    for status in [400u16, 401, 403, 404, 409, 410, 412, 503] {
+    for status in [400u16, 401, 403, 404, 409, 410, 412, 415, 503] {
         let codes = problems
             .iter()
             .filter(|code| code.status() == status)

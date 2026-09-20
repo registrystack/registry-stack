@@ -1020,6 +1020,40 @@ async fn a_replayed_chunk_reports_the_replayed_attempt() {
     assert_eq!(run["lastAttempt"]["chunkIndex"], 0);
 }
 
+/// The published ingestion operations carry every problem response their
+/// handlers can produce: a producible refusal outside the published contract
+/// is invisible to generated clients and contract validators.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ingestion_operations_publish_their_producible_problem_responses() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let openapi = harness.get_json("/openapi.json", &claims).await;
+    assert_eq!(openapi.status(), StatusCode::OK);
+    let paths = body_json(openapi).await["paths"].clone();
+
+    let create = &paths["/v1/records/widgets/ingestion-runs"]["post"]["responses"];
+    assert!(
+        create["415"].is_object(),
+        "create-run publishes its media-type refusal"
+    );
+    let submit = &paths["/v1/records/widgets/ingestion-runs/{run_id}/chunks"]["post"]["responses"];
+    assert!(
+        submit["415"].is_object(),
+        "submit-chunk publishes its media-type refusal"
+    );
+    let cancel = &paths["/v1/records/widgets/ingestion-runs/{run_id}/cancel"]["post"]["responses"];
+    assert!(
+        cancel["403"]["content"]["application/problem+json"]["examples"]
+            ["ingestion.profile_mismatch"]
+            .is_object(),
+        "cancel publishes its profile-mismatch refusal"
+    );
+    assert!(
+        cancel["415"].is_object(),
+        "cancel publishes its media-type refusal"
+    );
+}
+
 /// The published chunk schema carries the compiled batch ceiling the runtime
 /// enforces, so generated clients refuse oversized chunks before sending.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1069,6 +1103,174 @@ async fn run_cancellation_requires_the_runs_bound_access_context() {
         .await;
     assert_eq!(cancelled.status(), StatusCode::OK);
     assert_eq!(body_json(cancelled).await["run"]["status"], "cancelled");
+}
+
+/// A run may be created only under the package the database still holds
+/// active: a stale process whose compiled configuration a successor package
+/// superseded cannot insert a run bound to the retired revision, because run
+/// creation takes the same durable activation interlock ordinary mutations
+/// take.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stale_process_cannot_create_a_run_under_a_retired_package() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&announce_items("stale-create", 1), 3);
+
+    // The database activates a successor revision while this process keeps
+    // serving with its original compiled configuration.
+    let _successor = harness.restart_with_revision("package-ingestion-2").await;
+    let refused = harness
+        .post_json(
+            "/v1/records/widgets/ingestion-runs",
+            &claims,
+            harness.run_body("create", &chunks),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    // No run row was written under the retired binding.
+    let listed = harness
+        .get_json("/v1/records/widgets/ingestion-runs", &claims)
+        .await;
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(listed).await["runs"]
+            .as_array()
+            .expect("runs")
+            .len(),
+        0
+    );
+}
+
+/// A syntactically valid submission the run refuses still owes the journal a
+/// durable refusal envelope: divergent attempts on the run routes are audited
+/// exactly like the refusals the ordinary mutation boundary audits, and an
+/// audit outage gates the refusal answer instead of passing silently.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn service_level_chunk_refusals_are_audited() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("audited-refusal", 5);
+    let chunks = plan_chunks(&items, 3);
+    let run_id = harness.create_run(&claims, &chunks).await;
+
+    // A well-formed submission at the wrong index is refused before the batch
+    // coordinator, so only the boundary refusal audit can record it.
+    let refused = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 1),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(refused).await["code"], "ingestion.chunk_mismatch");
+
+    let rows = harness
+        .database
+        .admin
+        .query(
+            "SELECT convert_from(envelope, 'UTF8')
+               FROM registry_internal.registry_audit
+              WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"refusal\"%'
+                AND convert_from(envelope, 'UTF8')
+                    LIKE '%\"operationId\":\"records.widget.batch\"%'",
+            &[],
+        )
+        .await
+        .expect("administrator inspects the audit journal");
+    assert!(
+        !rows.is_empty(),
+        "the chunk refusal is audited like any mutation refusal"
+    );
+}
+
+/// A committed chunk replays from the stored receipt whatever a successor
+/// package does to the compiled batch limits: the replay comparison is
+/// package-independent by design, so recovery of the committed prefix must
+/// survive a package that lowers the ceilings the chunk was admitted under.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_committed_chunk_replays_after_the_package_lowers_the_batch_limits() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("lowered-limits", 3);
+    let chunks = plan_chunks(&items, 3);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    assert_eq!(durable_widget_count(&harness).await, 3);
+
+    // A successor package with lower compiled batch limits activates; its
+    // process serves the replay of a chunk the old ceiling admitted.
+    let fixture = format!("{FIXTURE_HEAD}{FIXTURE_TAIL}").replace(
+        r#""batch":{"maximumItems":3,"maximumBytes":8192}"#,
+        r#""batch":{"maximumItems":1,"maximumBytes":1024}"#,
+    );
+    let project = parse_project_json(fixture.as_bytes()).expect("the lowered fixture parses");
+    let lowered = Arc::new(
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("the lowered fixture compiles"),
+    );
+    let successor = harness.restart_with_registry(lowered).await;
+
+    let replay = successor
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replay_body = body_json(replay).await;
+    assert_eq!(replay_body["receipt"]["replayed"], true);
+    assert_eq!(durable_widget_count(&harness).await, 3);
+}
+
+/// The runtime role inserts and reads receipt links but never rewrites them:
+/// repointing a link could make a retained receipt outlive the history it
+/// discloses or scrub an unrelated receipt, so the link table carries no
+/// UPDATE authority at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_runtime_role_cannot_rewrite_receipt_links() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&announce_items("link-authority", 3), 3);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+
+    let pool = harness
+        .database
+        .runtime_config
+        .build_pool()
+        .expect("runtime pool builds");
+    let client = pool
+        .get_for_test()
+        .await
+        .expect("runtime connection is available");
+    let refused = client
+        .execute(
+            "UPDATE registry_internal.registry_ingestion_run_chunk_records
+                SET record_id = record_id",
+            &[],
+        )
+        .await;
+    assert!(
+        refused.is_err(),
+        "the runtime role holds no UPDATE authority on receipt links"
+    );
 }
 
 /// The replay comparison binds the submitted items, not the caller-stated
@@ -1494,6 +1696,24 @@ impl IngestionHarness {
     }
 
     async fn restart_with_revision(&self, package_revision: &str) -> Surface {
+        self.restart_serving(self.registry.clone(), package_revision)
+            .await
+    }
+
+    /// Rebuild the HTTP surface from a caller-chosen successor registry, as a
+    /// restarted process under an activated successor package would.
+    async fn restart_with_registry(
+        &self,
+        registry: Arc<registry_breg::CompiledRegistry>,
+    ) -> Surface {
+        self.restart_serving(registry, "package-ingestion-2").await
+    }
+
+    async fn restart_serving(
+        &self,
+        registry: Arc<registry_breg::CompiledRegistry>,
+        package_revision: &str,
+    ) -> Surface {
         let successor = registry_breg::postgres::ExpectedRegistryIdentity {
             package_revision: package_revision.to_owned(),
             package_sequence: 2,
@@ -1524,7 +1744,7 @@ impl IngestionHarness {
         Surface {
             app: build_router(
                 pool,
-                self.registry.clone(),
+                registry,
                 successor,
                 self.lock_key,
                 self.audit_profile.clone(),

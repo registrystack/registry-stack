@@ -28,8 +28,8 @@ use crate::mutation::{
 };
 
 use super::{
-    ActionClaimContext, ClaimContext, ExpectedRegistryIdentity, RegistryLockKey,
-    RowBoundaryContext, RuntimePool,
+    begin_record_transaction, ActionClaimContext, ClaimContext, ExpectedRegistryIdentity,
+    RegistryLockKey, RowBoundaryContext, RuntimePool,
 };
 
 const REQUEST_ACTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -917,11 +917,20 @@ impl PostgresRecordMutationService {
         ingestion_store::validate_new_run(&run)
             .map_err(|_| IngestionServiceError::RequestInvalid)?;
         let mut client = self.client().await?;
-        let transaction = client
-            .transaction()
-            .await
-            .map_err(|_| IngestionServiceError::Unavailable)?;
-        let tx: &tokio_postgres::Transaction<'_> = &transaction;
+        // The run binding must name the package the database still holds
+        // active, so creation takes the same guarded transaction ordinary
+        // mutations take: a stale process cannot open runs under a retired
+        // revision while activation is racing it.
+        let transaction = begin_record_transaction(
+            &mut client,
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+            &claims,
+        )
+        .await
+        .map_err(|_| IngestionServiceError::Unavailable)?;
+        let tx: &tokio_postgres::Transaction<'_> = transaction.transaction();
         let record = ingestion_store::insert_run(tx, &run)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
@@ -1275,7 +1284,11 @@ impl PostgresRecordMutationService {
             .await;
             return Err(IngestionServiceError::ChunkMismatch);
         }
-        if !announced_body {
+        // The fresh chunk owes the run's own stored bounds, not just the
+        // current package's: the API layer parses under the stable protocol
+        // ceilings so committed chunks replay, so the run's per-chunk item
+        // ceiling is enforced here.
+        if !announced_body || items.len() > run.maximum_items as usize {
             self.record_ingestion_attempt(
                 &**client,
                 run.run_id,
