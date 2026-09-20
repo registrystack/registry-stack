@@ -101,6 +101,64 @@ async fn a_renamed_encrypted_field_fails_the_receipt_closed() {
     );
 }
 
+/// A successor package that retires encryption from the field entirely leaves
+/// the stored envelope under a member the active entity no longer treats as
+/// encrypted, so the opening pass would skip it. The release must still fail
+/// closed rather than serve the sealed envelope as an answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_successor_that_retires_encryption_fails_the_receipt_closed() {
+    let harness =
+        IngestionHarness::from_registry_with_encryption(encrypted_widget_registry()).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&encrypted_items("encrypted-retired", 2), 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    assert_eq!(durable_widget_count(&harness).await, 2);
+
+    let successor = harness
+        .restart_with_registry(encryption_retired_registry())
+        .await;
+
+    let replay = successor
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        !contains_envelope_marker(&body_bytes(replay).await),
+        "the replayed receipt answer carries no sealed envelope"
+    );
+
+    let recovered = successor
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        !contains_envelope_marker(&body_bytes(recovered).await),
+        "the recovered receipt answer carries no sealed envelope"
+    );
+
+    assert_receipt_stays_sealed(&harness, &run_id).await;
+    assert_eq!(
+        durable_widget_count(&harness).await,
+        2,
+        "the refused releases commit nothing"
+    );
+}
+
 /// The same successor activation without the rename still opens the stored
 /// members on both release edges, so the refusal above is the rename's doing
 /// and not the activation's.
@@ -449,6 +507,23 @@ fn renamed_serial_api_registry() -> Arc<registry_breg::CompiledRegistry> {
     Arc::new(
         compile_project(&project, &[], CompileProfile::Authoring)
             .expect("the renamed fixture compiles to trusted inventories"),
+    )
+}
+
+/// The same encrypted fixture under a successor package that retired
+/// encryption from the field: the member name survives but the active entity
+/// no longer declares the field encrypted, so the opening pass would skip a
+/// stored envelope entirely.
+fn encryption_retired_registry() -> Arc<registry_breg::CompiledRegistry> {
+    let fixture = encrypted_widget_fixture().replacen(
+        r#""classification":"restricted","encrypted":true"#,
+        r#""classification":"restricted""#,
+        1,
+    );
+    let project = parse_project_json(fixture.as_bytes()).expect("the retired fixture parses");
+    Arc::new(
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("the retired fixture compiles to trusted inventories"),
     )
 }
 

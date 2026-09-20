@@ -741,32 +741,42 @@ pub(crate) fn open_batch_result_members(
     results: &mut [Value],
     service: Option<&FieldEncryptionService>,
 ) -> Result<bool, BatchOpenError> {
-    if !entity
+    let entity_opens_members = entity
         .fields
         .values()
-        .any(|field| field.encryption.is_some())
-    {
-        return Ok(false);
-    }
+        .any(|field| field.encryption.is_some());
     let mut opened = false;
     for item in results {
-        let record_id = item
-            .get("id")
-            .and_then(Value::as_str)
-            .filter(|identifier| !identifier.is_empty())
-            .ok_or(BatchOpenError::OpenFailed)?
-            .to_owned();
-        if let Some(data) = item.get_mut("data").and_then(Value::as_object_mut) {
-            let service = service.ok_or(BatchOpenError::KeyStateUnavailable)?;
-            open_member_map(entity, &record_id, data, service, true)
-                .map_err(|_| BatchOpenError::OpenFailed)?;
+        if entity_opens_members {
+            let record_id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|identifier| !identifier.is_empty())
+                .ok_or(BatchOpenError::OpenFailed)?
+                .to_owned();
+            if let Some(data) = item.get_mut("data").and_then(Value::as_object_mut) {
+                let service = service.ok_or(BatchOpenError::KeyStateUnavailable)?;
+                open_member_map(entity, &record_id, data, service, true)
+                    .map_err(|_| BatchOpenError::OpenFailed)?;
+                if data
+                    .values()
+                    .any(|member| parse_envelope_member(member).is_some())
+                {
+                    return Err(BatchOpenError::OpenFailed);
+                }
+                opened = true;
+            }
+        } else if let Some(data) = item.get_mut("data").and_then(Value::as_object_mut) {
+            // The active entity declares no encrypted field, but a successor
+            // package may have retired the encryption a stored envelope was
+            // sealed under: an envelope that survives the pass fails the
+            // answer closed rather than serving the sealed member as a value.
             if data
                 .values()
                 .any(|member| parse_envelope_member(member).is_some())
             {
                 return Err(BatchOpenError::OpenFailed);
             }
-            opened = true;
         }
     }
     Ok(opened)

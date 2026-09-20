@@ -25,7 +25,14 @@ the run's own bounds admit is never refused for the envelope that carries it.
 Every operation rechecks current profile authority against the compiled batch
 route. A run id is not a capability: visibility is creator-scoped, another
 caller's run and an unknown run answer the same concealed 404, and a caller
-whose profile no longer satisfies the binding makes no progress.
+whose profile no longer satisfies the binding makes no progress. The claim
+context a run is bound to covers the caller's task grant when the claims carry
+one, the same member the ordinary idempotency binding carries, so two sibling
+grants are never one authority; every operation re-derives that reference from
+the caller's claims. Run creation also refuses an announced operation the
+selected profile cannot execute to the end of every chunk, decided exactly as
+an import binding decides it: the profile's operations, the item route for the
+profile, and patch only on a mutable entity. The refused run never exists.
 
 ## Chunk protocol
 
@@ -76,7 +83,11 @@ keeps its counts and its audit. The last attempt is classified as
 
 Run list and read responses carry operational metadata and bounded failure
 classifications only: no source rows, no committed record values, and no chunk
-bodies. Problem codes are `ingestion.profile_mismatch`,
+bodies. The listing's status filter answers on the status a run document
+renders: after a successor package activation, `status=blocked` finds the
+stored-open runs the durable binding retired, and `status=open` returns only
+runs that still match the active binding. Problem codes are
+`ingestion.profile_mismatch`,
 `ingestion.run_not_open`, `ingestion.run_blocked`, `ingestion.chunk_mismatch`,
 and `ingestion.receipt_erased`, alongside the ordinary `request.invalid`,
 `resource.not_found`, `precondition.failed`, and `service.unavailable`
@@ -107,7 +118,12 @@ envelopes exactly as the ordinary batch route stores them, and every release
 path, the fresh answer, the replay, and the recovery read, opens those members
 at the same serve edge the batch route opens its answers. The stored receipt
 bytes stay sealed, and a process without key state, or one whose open fails,
-answers `service.unavailable` instead of releasing an envelope.
+answers `service.unavailable` instead of releasing an envelope. A retained
+receipt never releases a member the active package no longer declares: a
+successor package that renames or retires an encrypted field's API name leaves
+any replay or recovery of that receipt answering the closed
+`service.unavailable` problem with nothing released and the envelope sealed at
+rest, rather than serving sealed ciphertext.
 
 ## Contract material
 
