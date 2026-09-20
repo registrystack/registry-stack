@@ -44,12 +44,12 @@ pub use history_read::SnapshotReadFaultPoint;
 pub use interlock::DedicatedApplyConnection;
 pub use interlock::RegistryLockKey;
 pub(crate) use interlock::{
-    covered_field_encryption_fields, field_plaintext_string, prior_plaintext_projection,
-    recursive_member_path, set_force_row_security,
-    DedicatedApplyConnection as VerifiedPackageApplyConnection, FieldEncryptionCoveredField,
-    MaintenanceAuditRecord, MaintenanceSnapshot, MaintenanceTransition, PackageDdlStatement,
-    ReviewedExecutionOutcome, ReviewedFieldEncryptionContext, ReviewedMigrationProgress,
-    ReviewedPackageExecutionRequest,
+    covered_field_encryption_fields, field_plaintext_string, prepare_unique_blind_index_preflight,
+    prior_plaintext_projection, record_unique_blind_index_page, recursive_member_path,
+    set_force_row_security, DedicatedApplyConnection as VerifiedPackageApplyConnection,
+    FieldEncryptionCoveredField, MaintenanceAuditRecord, MaintenanceSnapshot,
+    MaintenanceTransition, PackageDdlStatement, ReviewedExecutionOutcome,
+    ReviewedFieldEncryptionContext, ReviewedMigrationProgress, ReviewedPackageExecutionRequest,
 };
 pub(crate) use migration_ledger::{
     statement_checksum, MigrationArtifactBinding, MigrationLedgerEntry, MigrationLedgerStep,

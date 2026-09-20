@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use registry_platform_audit::AuditProfile;
@@ -64,6 +64,10 @@ const FIELD_ENCRYPTION_LIVE_VERIFICATION_PAGE_SIZE: i64 = 512;
 /// Journal snapshots can reach 3 MiB, so use a smaller page that remains near
 /// 48 MiB even when every retained boundary snapshot is at its maximum size.
 const FIELD_ENCRYPTION_JOURNAL_VERIFICATION_PAGE_SIZE: i64 = 16;
+/// Unique-index preflight values share the live encrypted-value bound. Each
+/// page keeps at most about 32 MiB of plaintext in process before retaining
+/// only keyed 32-byte digests in the transaction-local database table.
+const FIELD_ENCRYPTION_DUPLICATE_PREFLIGHT_PAGE_SIZE: i64 = 512;
 
 /// The finding reported when the live managed schema fingerprint differs from
 /// the one an expected package binds. Activation verification signals that
@@ -983,9 +987,11 @@ impl DedicatedApplyConnection {
             .collect::<Vec<_>>()
             .join(", ");
         let select_sql = format!(
-            "SELECT record_id::text, {projection}
+            "SELECT record_id, {projection}
              FROM registry_data.{}
-             ORDER BY record_id",
+             WHERE ($1::uuid IS NULL OR record_id > $1::uuid)
+             ORDER BY record_id
+             LIMIT $2",
             table.quoted()
         );
         let transaction = self.client.transaction().await?;
@@ -998,54 +1004,81 @@ impl DedicatedApplyConnection {
         transaction
             .execute("SELECT set_config('TimeZone', 'UTC', true)", &[])
             .await?;
-        let rows = transaction
-            .query(&select_sql, &[])
-            .await
-            .map_err(|_| PostgresKernelError::Connection)?;
+        prepare_unique_blind_index_preflight(&transaction).await?;
+        let mut after_record_id: Option<Uuid> = None;
+        loop {
+            let rows = transaction
+                .query(
+                    &select_sql,
+                    &[
+                        &after_record_id,
+                        &FIELD_ENCRYPTION_DUPLICATE_PREFLIGHT_PAGE_SIZE,
+                    ],
+                )
+                .await
+                .map_err(|_| PostgresKernelError::Connection)?;
+            if rows.is_empty() {
+                break;
+            }
+            for (field_index, field) in covered.iter().enumerate() {
+                let Some(blind) = field.blind.filter(|blind| blind.unique) else {
+                    continue;
+                };
+                let mut digests = Vec::with_capacity(rows.len());
+                let mut record_ids = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    let record_id: Uuid = row
+                        .try_get(0)
+                        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+                    let value = row
+                        .try_get::<_, Option<Value>>(field_index + 1)
+                        .map_err(|_| PostgresKernelError::RegistryUnavailable)?
+                        .unwrap_or(Value::Null);
+                    let Some(plaintext) = field_plaintext_string(field.prior, &value)? else {
+                        continue;
+                    };
+                    digests.push(
+                        service
+                            .blind_index(
+                                field.entity_id,
+                                field.candidate.id.as_str(),
+                                &FieldEncryptionService::normalize(
+                                    &blind.normalization,
+                                    &plaintext,
+                                ),
+                            )
+                            .to_vec(),
+                    );
+                    record_ids.push(record_id);
+                }
+                let field_slot = i16::try_from(field_index)
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+                let duplicates = record_unique_blind_index_page(
+                    &transaction,
+                    field_slot,
+                    &digests,
+                    &record_ids,
+                    64,
+                )
+                .await?;
+                if !duplicates.is_empty() {
+                    return Err(PostgresKernelError::FieldEncryptionBlindCollision {
+                        entity_id: field.entity_id.to_owned(),
+                        record_ids: duplicates,
+                    });
+                }
+            }
+            after_record_id = Some(
+                rows.last()
+                    .and_then(|row| row.try_get(0).ok())
+                    .ok_or(PostgresKernelError::RegistryUnavailable)?,
+            );
+        }
         set_force_row_security(&transaction, &[table.as_str().to_owned()], true).await?;
         transaction
             .commit()
             .await
             .map_err(|_| PostgresKernelError::Connection)?;
-
-        const MAX_NAMED_DUPLICATES: usize = 64;
-        for (field_index, field) in covered.iter().enumerate() {
-            let Some(blind) = field.blind.filter(|blind| blind.unique) else {
-                continue;
-            };
-            let mut seen = BTreeMap::new();
-            let mut duplicates = Vec::new();
-            for row in &rows {
-                let record_id: String = row
-                    .try_get(0)
-                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
-                let value = row
-                    .try_get::<_, Option<Value>>(field_index + 1)
-                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?
-                    .unwrap_or(Value::Null);
-                let Some(plaintext) = field_plaintext_string(field.prior, &value)? else {
-                    continue;
-                };
-                let index = service.blind_index(
-                    field.entity_id,
-                    field.candidate.id.as_str(),
-                    &FieldEncryptionService::normalize(&blind.normalization, &plaintext),
-                );
-                if let Some(first) = seen.insert(index, record_id.clone()) {
-                    duplicates.push(first);
-                    duplicates.push(record_id);
-                }
-            }
-            if !duplicates.is_empty() {
-                duplicates.sort();
-                duplicates.dedup();
-                duplicates.truncate(MAX_NAMED_DUPLICATES);
-                return Err(PostgresKernelError::FieldEncryptionBlindCollision {
-                    entity_id: field.entity_id.to_owned(),
-                    record_ids: duplicates,
-                });
-            }
-        }
         Ok(())
     }
 
@@ -2537,6 +2570,104 @@ pub(crate) fn field_plaintext_string(
             .to_owned(),
     };
     Ok(Some(text))
+}
+
+/// Prepare transaction-local, value-free collision state shared by the apply
+/// and operator preflights. The migration role contract includes temporary
+/// table authority. Only keyed 32-byte digests and record ids cross into it;
+/// normalized plaintext remains in the bounded client page that derived them.
+pub(crate) async fn prepare_unique_blind_index_preflight(
+    transaction: &tokio_postgres::Transaction<'_>,
+) -> Result<()> {
+    transaction
+        .batch_execute(
+            "CREATE TEMPORARY TABLE IF NOT EXISTS field_encryption_preflight_unique_values (
+                 field_slot smallint NOT NULL,
+                 digest bytea NOT NULL,
+                 first_record_id uuid NOT NULL,
+                 PRIMARY KEY (field_slot, digest)
+             ) ON COMMIT DROP;
+             TRUNCATE pg_temp.field_encryption_preflight_unique_values",
+        )
+        .await
+        .map_err(|_| PostgresKernelError::Connection)?;
+    Ok(())
+}
+
+/// Insert one bounded digest page, retaining only the first record for each
+/// field/digest pair, then return the bounded record ids participating in a
+/// collision introduced by this page. The insert and lookup are separate
+/// statements so the lookup sees rows the insert just committed to the
+/// transaction-local table.
+pub(crate) async fn record_unique_blind_index_page(
+    transaction: &tokio_postgres::Transaction<'_>,
+    field_slot: i16,
+    digests: &[Vec<u8>],
+    record_ids: &[Uuid],
+    maximum_named_records: i64,
+) -> Result<Vec<String>> {
+    if digests.len() != record_ids.len() || maximum_named_records <= 0 {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    if digests.is_empty() {
+        return Ok(Vec::new());
+    }
+    // `tokio-postgres` encodes PostgreSQL arrays from owned vectors. These
+    // clones remain page-bounded and avoid handing it a doubly borrowed slice.
+    let page_digests = digests.to_vec();
+    let page_record_ids = record_ids.to_vec();
+    transaction
+        .execute(
+            "INSERT INTO pg_temp.field_encryption_preflight_unique_values
+                 (field_slot, digest, first_record_id)
+             SELECT DISTINCT ON (page.digest) $1, page.digest, page.record_id
+               FROM unnest($2::bytea[], $3::uuid[]) WITH ORDINALITY
+                    AS page(digest, record_id, ordinal)
+              ORDER BY page.digest, page.ordinal
+             ON CONFLICT (field_slot, digest) DO NOTHING",
+            &[&field_slot, &page_digests, &page_record_ids],
+        )
+        .await
+        .map_err(|_| PostgresKernelError::Connection)?;
+    transaction
+        .query(
+            "WITH page AS (
+                 SELECT digest, record_id
+                   FROM unnest($2::bytea[], $3::uuid[]) AS value(digest, record_id)
+             ), collision_records AS (
+                 SELECT stored.first_record_id AS record_id
+                   FROM page
+                   JOIN pg_temp.field_encryption_preflight_unique_values AS stored
+                     ON stored.field_slot = $1
+                    AND stored.digest = page.digest
+                  WHERE stored.first_record_id <> page.record_id
+                 UNION
+                 SELECT page.record_id
+                   FROM page
+                   JOIN pg_temp.field_encryption_preflight_unique_values AS stored
+                     ON stored.field_slot = $1
+                    AND stored.digest = page.digest
+                  WHERE stored.first_record_id <> page.record_id
+             )
+             SELECT record_id::text
+               FROM collision_records
+              ORDER BY record_id
+              LIMIT $4",
+            &[
+                &field_slot,
+                &page_digests,
+                &page_record_ids,
+                &maximum_named_records,
+            ],
+        )
+        .await
+        .map_err(|_| PostgresKernelError::Connection)?
+        .into_iter()
+        .map(|row| {
+            row.try_get(0)
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)
+        })
+        .collect()
 }
 
 /// The fixed per-row sealing statement of one step: every covered field's

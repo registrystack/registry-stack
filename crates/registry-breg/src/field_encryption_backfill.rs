@@ -19,12 +19,13 @@
 //!   never an engine step, and every audit envelope it writes carries counts
 //!   and references only.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use registry_platform_audit::AuditProfile;
 use serde::Serialize;
 use serde_json::json;
 use tokio_postgres::Client;
+use zeroize::Zeroizing;
 
 use crate::history_commit::lock_history_head;
 use crate::history_erasure::{
@@ -45,9 +46,10 @@ use crate::migration_plan::{
 use crate::model::CompiledRegistry;
 use crate::package::CompiledRegistryMigrationBaseline;
 use crate::postgres::{
-    covered_field_encryption_fields, field_plaintext_string, prior_plaintext_projection,
-    recursive_member_path, set_force_row_security, verify_migration_role, ConnectionConfig,
-    ExpectedRegistryIdentity, FieldEncryptionCoveredField, RegistryLockKey, SqlIdentifier,
+    covered_field_encryption_fields, field_plaintext_string, prepare_unique_blind_index_preflight,
+    prior_plaintext_projection, record_unique_blind_index_page, recursive_member_path,
+    set_force_row_security, verify_migration_role, ConnectionConfig, ExpectedRegistryIdentity,
+    FieldEncryptionCoveredField, RegistryLockKey, SqlIdentifier,
 };
 
 pub use crate::history_maintenance::HistoryMaintenanceTimeouts as FieldEncryptionBackfillTimeouts;
@@ -62,6 +64,9 @@ const MAX_REASON_BYTES: usize = 1024;
 /// Bound the records one collision report names so a bulk collision cannot
 /// flood an operator surface. The apply-side preflight applies the same cap.
 const MAX_NAMED_DUPLICATE_RECORDS: usize = 64;
+/// Plaintext values are bounded near 64 KiB, keeping one exact-normalization
+/// page near 32 MiB while the database owns cross-page collision state.
+const PREFLIGHT_VALUE_PAGE_SIZE: i64 = 512;
 /// Keep both target discovery and each established erasure transaction bounded.
 const MAX_ERASURE_TARGETS_PER_PAGE: i64 = 128;
 const AUDIT_OPERATION_ID: &str = "field-encryption-erase-history";
@@ -273,43 +278,94 @@ async fn field_preflight(
     let plaintext_projection = prior_plaintext_projection(field.prior);
 
     let rows_sql = format!(
-        "SELECT record_id::text, {plaintext_projection}
+        "SELECT record_id, {plaintext_projection}
            FROM registry_data.{}
-          ORDER BY record_id",
+          WHERE ($1::uuid IS NULL OR record_id > $1::uuid)
+          ORDER BY record_id
+          LIMIT $2",
         table.quoted()
     );
-    let rows = transaction
-        .query(&rows_sql, &[])
-        .await
-        .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?;
 
     let mut plaintext_row_count = 0_u64;
-    // Normalized-duplicate detection needs no key material: the blind index
-    // is a deterministic function of the normalized value, so two records
-    // collide exactly when their normalized plaintexts are equal.
-    let mut normalized_seen = NormalizedSeen::default();
-    for row in &rows {
-        let record_id: String = row
-            .try_get(0)
+    // Normalized-duplicate detection needs no service key material: an
+    // ephemeral keyed digest preserves equality for this run. Keep the exact
+    // Rust normalization semantics, but place only keyed digests and record
+    // ids in transaction-local PostgreSQL state instead of raw normalized
+    // plaintext or an unbounded process map.
+    let unique_blind = field.blind.filter(|blind| blind.unique);
+    let ephemeral_index_key = unique_blind.map(|_| {
+        let mut key = [0_u8; 32];
+        key[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+        key[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+        Zeroizing::new(key)
+    });
+    if unique_blind.is_some() {
+        prepare_unique_blind_index_preflight(transaction)
+            .await
             .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?;
-        let value = row
-            .try_get::<_, Option<serde_json::Value>>(1)
-            .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?
-            .unwrap_or(serde_json::Value::Null);
-        let Some(plaintext) = field_plaintext_string(field.prior, &value)
-            .map_err(|_| FieldEncryptionBackfillPreflightError::InvalidInput)?
-        else {
-            continue;
-        };
-        plaintext_row_count = plaintext_row_count
-            .checked_add(1)
-            .ok_or(FieldEncryptionBackfillPreflightError::Unavailable)?;
-        if let Some(blind) = field.blind.filter(|blind| blind.unique) {
-            let normalized = crate::field_encryption::FieldEncryptionService::normalize(
-                &blind.normalization,
-                &plaintext,
-            );
-            normalized_seen.record(normalized, record_id);
+    }
+    let mut after_record_id: Option<uuid::Uuid> = None;
+    let mut duplicate_record_ids = BTreeSet::new();
+    loop {
+        let rows = transaction
+            .query(&rows_sql, &[&after_record_id, &PREFLIGHT_VALUE_PAGE_SIZE])
+            .await
+            .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?;
+        if rows.is_empty() {
+            break;
+        }
+        let mut blind_index_digests = Vec::with_capacity(rows.len());
+        let mut normalized_record_ids = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let record_id: uuid::Uuid = row
+                .try_get(0)
+                .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?;
+            let value = row
+                .try_get::<_, Option<serde_json::Value>>(1)
+                .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?
+                .unwrap_or(serde_json::Value::Null);
+            if let Some(plaintext) = field_plaintext_string(field.prior, &value)
+                .map_err(|_| FieldEncryptionBackfillPreflightError::InvalidInput)?
+            {
+                plaintext_row_count = plaintext_row_count
+                    .checked_add(1)
+                    .ok_or(FieldEncryptionBackfillPreflightError::Unavailable)?;
+                if let Some(blind) = unique_blind {
+                    let normalized = crate::field_encryption::FieldEncryptionService::normalize(
+                        &blind.normalization,
+                        &plaintext,
+                    );
+                    let key = ephemeral_index_key
+                        .as_ref()
+                        .ok_or(FieldEncryptionBackfillPreflightError::Unavailable)?;
+                    blind_index_digests.push(
+                        registry_platform_crypto::field_encryption::blind_index_hmac(
+                            key,
+                            &normalized,
+                        )
+                        .to_vec(),
+                    );
+                    normalized_record_ids.push(record_id);
+                }
+            }
+            after_record_id = Some(record_id);
+        }
+        if !blind_index_digests.is_empty() {
+            let page_duplicates = record_unique_blind_index_page(
+                transaction,
+                0,
+                &blind_index_digests,
+                &normalized_record_ids,
+                i64::try_from(MAX_NAMED_DUPLICATE_RECORDS)
+                    .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?,
+            )
+            .await
+            .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?;
+            for record_id in page_duplicates {
+                if duplicate_record_ids.len() < MAX_NAMED_DUPLICATE_RECORDS {
+                    duplicate_record_ids.insert(record_id);
+                }
+            }
         }
     }
 
@@ -319,7 +375,7 @@ async fn field_preflight(
                FROM registry_internal.registry_revisions
               WHERE entity_id = $1
                 AND package_revision <> $2
-                AND snapshot ? $3",
+                AND convert_from(snapshot, 'UTF8')::jsonb ? $3",
             &[&entity_id, &target_package_revision, &field_id],
         )
         .await
@@ -363,7 +419,7 @@ async fn field_preflight(
         .query_one(
             "SELECT count(*)::bigint
                FROM registry_internal.registry_idempotency
-              WHERE convert_from(response_body, 'UTF8')::jsonb @? $1::jsonpath",
+              WHERE convert_from(response_body, 'UTF8')::jsonb @? ($1::text)::jsonpath",
             &[&recursive_member_path(field.predecessor_api_name)
                 .map_err(|_| FieldEncryptionBackfillPreflightError::InvalidInput)?],
         )
@@ -374,19 +430,14 @@ async fn field_preflight(
             "SELECT count(*)::bigint
                FROM registry_internal.registry_outbox
               WHERE payload IS NOT NULL
-                AND convert_from(payload, 'UTF8')::jsonb @? $1::jsonpath",
+                AND convert_from(payload, 'UTF8')::jsonb @? ($1::text)::jsonpath",
             &[&recursive_member_path(field.logical_field_id)
                 .map_err(|_| FieldEncryptionBackfillPreflightError::InvalidInput)?],
         )
         .await
         .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?;
 
-    let duplicate_record_ids = normalized_seen.duplicates();
-    let duplicate_record_ids = if duplicate_record_ids.len() > MAX_NAMED_DUPLICATE_RECORDS {
-        duplicate_record_ids[..MAX_NAMED_DUPLICATE_RECORDS].to_vec()
-    } else {
-        duplicate_record_ids
-    };
+    let duplicate_record_ids = duplicate_record_ids.into_iter().collect();
 
     Ok(FieldEncryptionBackfillFieldPreflight {
         field_id: field_id.to_owned(),
@@ -404,35 +455,6 @@ async fn field_preflight(
             .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?,
         duplicate_record_ids,
     })
-}
-
-/// Normalized plaintext to the first authored record id that carried it. The
-/// duplicate list holds record ids only; normalized values are keys and never
-/// leave this map.
-#[derive(Default)]
-struct NormalizedSeen {
-    first: BTreeMap<String, String>,
-    duplicates: BTreeSet<String>,
-}
-
-impl NormalizedSeen {
-    fn record(&mut self, normalized: String, record_id: String) {
-        match self.first.entry(normalized) {
-            std::collections::btree_map::Entry::Occupied(first) => {
-                // A value colliding three times names three records, so a
-                // collision is counted per record, not per pair.
-                self.duplicates.insert(first.get().clone());
-                self.duplicates.insert(record_id);
-            }
-            std::collections::btree_map::Entry::Vacant(first) => {
-                first.insert(record_id);
-            }
-        }
-    }
-
-    fn duplicates(&self) -> Vec<String> {
-        self.duplicates.iter().cloned().collect()
-    }
 }
 
 /// One record whose retained pre-flip history the erase lifecycle still has to

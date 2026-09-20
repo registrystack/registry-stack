@@ -11,6 +11,10 @@ use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::field_encryption::FieldEncryptionProvider;
+use registry_breg::field_encryption_backfill::{
+    preflight_field_encryption_backfill, FieldEncryptionBackfillPreflightRequest,
+    FieldEncryptionBackfillTimeouts,
+};
 use registry_breg::migration::{
     apply_verified_package, AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles,
     ApplyTimeouts, ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
@@ -30,9 +34,9 @@ use registry_breg::migration_reconcile::{
 };
 use registry_breg::package::{
     compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
-    CompiledRegistryChangeCode, PackageBuildRequest, PackageIntent, PackageLoadContext,
-    PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, SignaturePolicy,
-    VerifiedPackage,
+    CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline, PackageBuildRequest,
+    PackageIntent, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
+    PackageSourceFile, SignaturePolicy, VerifiedPackage,
 };
 use registry_breg::postgres::{
     install_compiled_schema, managed_schema_fingerprint, ExpectedManagedCatalog,
@@ -901,6 +905,36 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
         &target_fingerprint,
         source,
     );
+    let predecessor_baseline =
+        CompiledRegistryMigrationBaseline::from_compiled(&active.package_revision, &prior);
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let report = preflight_field_encryption_backfill(
+        &mut migration,
+        FieldEncryptionBackfillPreflightRequest {
+            expected: &active,
+            migration_role: &database.migration_role,
+            timeouts: FieldEncryptionBackfillTimeouts::new(
+                Duration::from_secs(5),
+                Duration::from_secs(5),
+            )
+            .expect("preflight timeouts are bounded"),
+            registry: &candidate,
+            plan: package
+                .reviewed_migration_plan()
+                .expect("the successor carries its reviewed plan"),
+            predecessor_baseline: Some(&predecessor_baseline),
+            target_package_revision: &package.manifest().package_revision,
+        },
+    )
+    .await
+    .expect("the operator preflight counts stored copies and normalized collisions");
+    migration_task.abort();
+    assert_eq!(report.steps.len(), 1);
+    assert_eq!(report.steps[0].fields.len(), 1);
+    let field = &report.steps[0].fields[0];
+    assert_eq!(field.plaintext_row_count, 5);
+    assert_eq!(field.journal_row_count, 5);
+    assert!(field.duplicate_record_ids.is_empty());
     let keys = flip_key_source();
 
     // Model an existing deployment initialized before field-encryption control
@@ -1108,13 +1142,13 @@ async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value
     let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
         .await
         .expect("duplicate scenario initial package activates");
-    let secrets = [
-        "dup-canary".to_owned(),
-        "DUP-CANARY".to_owned(),
-        "unique-secret-2".to_owned(),
-        "unique-secret-3".to_owned(),
-        "unique-secret-4".to_owned(),
-    ];
+    // Put the normalized collision on opposite sides of the 512-row scan
+    // boundary so both operator and apply preflights prove cross-page state.
+    let mut secrets = (0..513)
+        .map(|index| format!("unique-secret-{index}"))
+        .collect::<Vec<_>>();
+    secrets[0] = "dup-canary".to_owned();
+    secrets[512] = "DUP-CANARY".to_owned();
     seed_flip_rows(&database, &prior, &secrets, false).await;
 
     let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
@@ -1133,7 +1167,7 @@ async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value
         candidate: &candidate,
         final_fingerprint: &target_fingerprint,
         history: ReviewedFieldEncryptionHistory::EraseAndRebaseline,
-        rehearsed_rows: 5,
+        rehearsed_rows: secrets.len() as u64,
     });
     let package = prepare_and_load_reviewed(
         2,
@@ -1142,6 +1176,40 @@ async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value
         Variant::EncryptedFlipOn,
         &target_fingerprint,
         source,
+    );
+    let predecessor_baseline =
+        CompiledRegistryMigrationBaseline::from_compiled(&active.package_revision, &prior);
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let report = preflight_field_encryption_backfill(
+        &mut migration,
+        FieldEncryptionBackfillPreflightRequest {
+            expected: &active,
+            migration_role: &database.migration_role,
+            timeouts: FieldEncryptionBackfillTimeouts::new(
+                Duration::from_secs(5),
+                Duration::from_secs(5),
+            )
+            .expect("preflight timeouts are bounded"),
+            registry: &candidate,
+            plan: package
+                .reviewed_migration_plan()
+                .expect("the successor carries its reviewed plan"),
+            predecessor_baseline: Some(&predecessor_baseline),
+            target_package_revision: &package.manifest().package_revision,
+        },
+    )
+    .await
+    .expect("the operator preflight reports normalized collisions");
+    migration_task.abort();
+    let field = &report.steps[0].fields[0];
+    assert_eq!(field.plaintext_row_count, secrets.len() as u64);
+    assert_eq!(field.journal_row_count, secrets.len() as u64);
+    assert_eq!(
+        field.duplicate_record_ids,
+        vec![
+            Uuid::from_u128(1).to_string(),
+            Uuid::from_u128(513).to_string()
+        ]
     );
     let keys = flip_key_source();
 
@@ -1153,7 +1221,7 @@ async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value
             entity_id: "asset".to_owned(),
             record_ids: vec![
                 Uuid::from_u128(1).to_string(),
-                Uuid::from_u128(2).to_string()
+                Uuid::from_u128(513).to_string()
             ],
         }
     );
@@ -1182,7 +1250,7 @@ async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value
     assert_eq!(unsealed.get::<_, i64>(0), 0, "no row was sealed");
     assert_eq!(
         unsealed.get::<_, i64>(1),
-        5,
+        secrets.len() as i64,
         "the compiler-added envelope column exists"
     );
 

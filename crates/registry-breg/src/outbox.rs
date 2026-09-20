@@ -14,12 +14,13 @@ use uuid::Uuid;
 
 use crate::artifacts::event_data_schema_binding;
 use crate::contract::{
-    Classification, EventConditionSource, EventScalarValue, EventTrigger, HookSource,
+    Classification, EventConditionSource, EventScalarValue, EventTrigger,
     WebhookAuthenticationProfile, WebhookDeadLetterMode,
 };
 use crate::event_destination::ActivatedEventDestinationRegistry;
-use crate::history_schema::tagged_envelope_member;
-use crate::model::{CompiledEntity, CompiledEventDelivery, CompiledWebhookDeliveryMode};
+use crate::model::{
+    CompiledEntity, CompiledEventDelivery, CompiledField, CompiledWebhookDeliveryMode,
+};
 use crate::webhook::DELIVERY_SCHEMA;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -172,13 +173,14 @@ pub(crate) async fn capture_time(transaction: &Transaction<'_>) -> Result<System
 
 pub(crate) async fn insert_configured_events(
     transaction: &Transaction<'_>,
-    events: &BTreeMap<String, HookSource>,
+    entity: &CompiledEntity,
     deliveries: &[CompiledEventDelivery],
     destinations: Option<&ActivatedEventDestinationRegistry>,
     mutation: OutboxMutation<'_>,
 ) -> Result<(), OutboxError> {
     let mut captured_at = None;
-    for event in events
+    for event in entity
+        .hooks
         .values()
         .filter(|event| event.trigger == mutation.trigger)
     {
@@ -210,7 +212,7 @@ pub(crate) async fn insert_configured_events(
             EventTrigger::RequestLifecycle => return Err(OutboxError::InvalidProjection),
         }
         .ok_or(OutboxError::InvalidProjection)?;
-        let values = projected_event_values(&projection_fields, snapshot)?;
+        let values = projected_event_values(&entity.fields, &projection_fields, snapshot)?;
         let data = json!({
             "entity": mutation.entity_id,
             "recordId": mutation.record_id,
@@ -300,20 +302,25 @@ pub(crate) async fn insert_configured_events(
 
 /// Project the event's fields out of the trigger snapshot.
 ///
-/// A missing field and a tagged envelope member both refuse the projection:
-/// the compiler refuses event projections naming encrypted fields, so an
-/// envelope member reaching here means that boundary was bypassed, and a
-/// sealed value must never enter an outbox payload.
+/// A missing field and a field compiled for encryption both refuse the
+/// projection. The runtime checks trusted compiled metadata rather than the
+/// JSON value's shape: an unencrypted structured field may legitimately use
+/// the same member name as the storage envelope, while an encrypted field must
+/// never enter an outbox payload even if its runtime value is malformed.
 fn projected_event_values(
+    compiled_fields: &BTreeMap<String, CompiledField>,
     projection_fields: &[&str],
     snapshot: &Map<String, Value>,
 ) -> Result<Map<String, Value>, OutboxError> {
     let mut values = Map::new();
     for field in projection_fields {
-        let value = snapshot
+        let compiled_field = compiled_fields
             .get(*field)
-            .filter(|value| !tagged_envelope_member(value))
             .ok_or(OutboxError::InvalidProjection)?;
+        if compiled_field.encryption.is_some() {
+            return Err(OutboxError::InvalidProjection);
+        }
+        let value = snapshot.get(*field).ok_or(OutboxError::InvalidProjection)?;
         values.insert((*field).to_owned(), value.clone());
     }
     Ok(values)
@@ -755,20 +762,61 @@ mod tests {
     }
 
     #[test]
-    fn event_projection_refuses_envelope_members_and_missing_fields() {
+    fn event_projection_uses_compiled_encryption_metadata_not_value_shape() {
+        let fields = BTreeMap::from([
+            (
+                "payload".to_owned(),
+                crate::model::CompiledField {
+                    id: "payload".to_owned(),
+                    field_type: crate::contract::FieldTypeSource::Structured {
+                        max_bytes: 256,
+                        schema: json!({"type": "object"}),
+                    },
+                    required: true,
+                    classification: Classification::Internal,
+                    valid_time_role: None,
+                    physical_name: "payload".to_owned(),
+                    pattern: None,
+                    encryption: None,
+                },
+            ),
+            (
+                "secret".to_owned(),
+                crate::model::CompiledField {
+                    id: "secret".to_owned(),
+                    field_type: crate::contract::FieldTypeSource::String {
+                        min_length: 0,
+                        max_length: 64,
+                    },
+                    required: true,
+                    classification: Classification::Restricted,
+                    valid_time_role: None,
+                    physical_name: "secret".to_owned(),
+                    pattern: None,
+                    encryption: Some(crate::model::CompiledFieldEncryption { blind_index: None }),
+                },
+            ),
+        ]);
         let mut snapshot = Map::new();
-        snapshot.insert("label".to_owned(), json!("visible"));
+        let tag_shaped_plaintext =
+            json!({ crate::history_schema::ENVELOPE_MEMBER_TAG: "plaintext"});
+        snapshot.insert("payload".to_owned(), tag_shaped_plaintext.clone());
         snapshot.insert(
             "secret".to_owned(),
             json!({ crate::history_schema::ENVELOPE_MEMBER_TAG: "c2VhbGVk"}),
         );
-        let projected =
-            projected_event_values(&["label"], &snapshot).expect("plaintext fields project");
-        assert_eq!(projected.get("label"), Some(&json!("visible")));
-        assert!(projected_event_values(&["missing"], &snapshot).is_err());
+        let projected = projected_event_values(&fields, &["payload"], &snapshot)
+            .expect("tag-shaped plaintext structured fields project");
+        assert_eq!(projected.get("payload"), Some(&tag_shaped_plaintext));
+        assert!(projected_event_values(&fields, &["missing"], &snapshot).is_err());
         assert!(
-            projected_event_values(&["secret"], &snapshot).is_err(),
-            "a sealed member must never enter an outbox payload"
+            projected_event_values(&fields, &["secret"], &snapshot).is_err(),
+            "a compiled encrypted field must never enter an outbox payload"
+        );
+        snapshot.insert("secret".to_owned(), json!("malformed plaintext"));
+        assert!(
+            projected_event_values(&fields, &["secret"], &snapshot).is_err(),
+            "the encrypted-field backstop must not depend on runtime value shape"
         );
     }
 }

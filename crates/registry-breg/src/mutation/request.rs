@@ -2540,7 +2540,7 @@ impl MutationCoordinator {
         let event_source = self.event_source();
         insert_configured_events(
             transaction,
-            &entity.hooks,
+            entity,
             &plan.event_deliveries,
             self.event_destinations.as_deref(),
             OutboxMutation {
