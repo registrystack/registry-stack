@@ -10497,6 +10497,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -10516,11 +10531,33 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.task-not-held",
+            "description": "Problem response: idempotency.key-reused, review.task-not-held",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -10664,11 +10701,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.not-applicable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -10702,6 +10746,9 @@
                 "schema": {
                   "oneOf": [
                     {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
                     },
                     {
@@ -10711,7 +10758,22 @@
                 }
               }
             },
-            "description": "Problem response: profile.not-authorized, profile.not-human",
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -10743,6 +10805,43 @@
             },
             "description": "Problem response: request.body-too-large",
             "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRuntimeFailure"
+                }
+              }
+            },
+            "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -10876,6 +10975,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -10891,21 +11005,6 @@
               }
             }
           },
-          "409": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
-                }
-              }
-            },
-            "description": "Problem response: review.task-not-held",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
           "413": {
             "content": {
               "application/problem+json": {
@@ -10915,36 +11014,6 @@
               }
             },
             "description": "Problem response: request.body-too-large",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "415": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
-                }
-              }
-            },
-            "description": "Problem response: request.unsupported-media-type",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
-                }
-              }
-            },
-            "description": "Problem response: request.unprocessable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -11172,6 +11241,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -11191,11 +11275,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.submission-conflict",
+            "description": "Problem response: idempotency.key-reused, review.submission-conflict",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -11206,11 +11297,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewResultExpired"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewResultExpired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.result-expired",
+            "description": "Problem response: idempotency.expired, review.result-expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -11425,6 +11523,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -11444,11 +11557,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.submission-conflict",
+            "description": "Problem response: idempotency.key-reused, review.submission-conflict",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -11459,11 +11579,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewResultExpired"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewResultExpired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.result-expired",
+            "description": "Problem response: idempotency.expired, review.result-expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -11700,6 +11827,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -11719,11 +11861,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.submission-conflict",
+            "description": "Problem response: idempotency.key-reused, review.submission-conflict",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -11734,11 +11883,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewResultExpired"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewResultExpired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.result-expired",
+            "description": "Problem response: idempotency.expired, review.result-expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -11956,6 +12112,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -11975,11 +12146,33 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.task-not-held",
+            "description": "Problem response: idempotency.key-reused, review.task-not-held",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12217,6 +12410,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -12236,11 +12444,33 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.task-not-held",
+            "description": "Problem response: idempotency.key-reused, review.task-not-held",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12480,6 +12710,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -12499,11 +12744,33 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.task-not-held",
+            "description": "Problem response: idempotency.key-reused, review.task-not-held",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12727,6 +12994,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -12746,11 +13028,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.submission-conflict",
+            "description": "Problem response: idempotency.key-reused, review.submission-conflict",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12983,6 +13272,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -13002,11 +13306,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.submission-conflict",
+            "description": "Problem response: idempotency.key-reused, review.submission-conflict",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13017,11 +13328,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewResultExpired"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewResultExpired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.result-expired",
+            "description": "Problem response: idempotency.expired, review.result-expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13208,16 +13526,22 @@
                 "schema": {
                   "oneOf": [
                     {
+                      "$ref": "#/components/schemas/ProblemCursorInvalid"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
                     },
                     {
                       "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: request.invalid, source-profile.not-applicable",
+            "description": "Problem response: cursor.invalid, request.invalid, source-profile.not-applicable, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13270,6 +13594,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -13285,15 +13624,15 @@
               }
             }
           },
-          "409": {
+          "410": {
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                  "$ref": "#/components/schemas/ProblemCursorExpired"
                 }
               }
             },
-            "description": "Problem response: review.task-not-held",
+            "description": "Problem response: cursor.expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13315,36 +13654,6 @@
               }
             }
           },
-          "415": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
-                }
-              }
-            },
-            "description": "Problem response: request.unsupported-media-type",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
-                }
-              }
-            },
-            "description": "Problem response: request.unprocessable",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -13354,6 +13663,21 @@
               }
             },
             "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                }
+              }
+            },
+            "description": "Problem response: source.bad-gateway",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13465,12 +13789,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: request.invalid, source-profile.not-applicable",
+            "description": "Problem response: request.invalid, source-profile.not-applicable, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13523,6 +13850,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -13532,21 +13874,6 @@
               }
             },
             "description": "Problem response: request.method-not-allowed",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "409": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
-                }
-              }
-            },
-            "description": "Problem response: review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13568,36 +13895,6 @@
               }
             }
           },
-          "415": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
-                }
-              }
-            },
-            "description": "Problem response: request.unsupported-media-type",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
-                }
-              }
-            },
-            "description": "Problem response: request.unprocessable",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -13607,6 +13904,21 @@
               }
             },
             "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                }
+              }
+            },
+            "description": "Problem response: source.bad-gateway",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13751,12 +14063,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: request.invalid, source-profile.not-applicable",
+            "description": "Problem response: request.invalid, source-profile.not-applicable, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13809,6 +14124,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -13828,11 +14158,48 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.task-not-held",
+            "description": "Problem response: idempotency.key-reused, review.task-not-held",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13884,6 +14251,21 @@
               }
             }
           },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                }
+              }
+            },
+            "description": "Problem response: precondition.required",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -13893,6 +14275,21 @@
               }
             },
             "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                }
+              }
+            },
+            "description": "Problem response: source.bad-gateway",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14027,12 +14424,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: request.invalid, source-profile.not-applicable",
+            "description": "Problem response: request.invalid, source-profile.not-applicable, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14085,6 +14485,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -14104,11 +14519,51 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemAlreadyClaimed"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.task-not-held",
+            "description": "Problem response: idempotency.key-reused, review.task-not-held, work-item.already-claimed",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14130,30 +14585,15 @@
               }
             }
           },
-          "415": {
+          "428": {
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
                 }
               }
             },
-            "description": "Problem response: request.unsupported-media-type",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
-                }
-              }
-            },
-            "description": "Problem response: request.unprocessable",
+            "description": "Problem response: precondition.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14169,6 +14609,21 @@
               }
             },
             "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                }
+              }
+            },
+            "description": "Problem response: source.bad-gateway",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14281,12 +14736,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: request.invalid, source-profile.not-applicable",
+            "description": "Problem response: request.invalid, source-profile.not-applicable, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14339,6 +14797,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -14348,21 +14821,6 @@
               }
             },
             "description": "Problem response: request.method-not-allowed",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "409": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
-                }
-              }
-            },
-            "description": "Problem response: review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14384,36 +14842,6 @@
               }
             }
           },
-          "415": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
-                }
-              }
-            },
-            "description": "Problem response: request.unsupported-media-type",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
-                }
-              }
-            },
-            "description": "Problem response: request.unprocessable",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -14423,6 +14851,21 @@
               }
             },
             "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                }
+              }
+            },
+            "description": "Problem response: source.bad-gateway",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14560,12 +15003,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: request.invalid, source-profile.not-applicable",
+            "description": "Problem response: request.invalid, source-profile.not-applicable, source-profile.required",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded JSON path for a typed review validation failure. Present together with Registry-Casework-Validation-Reason; rejected values are never echoed.",
@@ -14637,12 +15083,37 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceReviewerNotAuthorized"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human, source.reviewer-not-authorized",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceRecordMissing"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: source.record-missing, work-item.not-visible",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14668,11 +15139,71 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemNotHolder"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemNotOffered"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemProposalChanged"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemRecoveryPending"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemSuperseded"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.task-not-held",
+            "description": "Problem response: idempotency.key-reused, review.task-not-held, work-item.not-holder, work-item.not-offered, work-item.proposal-changed, work-item.recovery-pending, work-item.superseded",
+            "headers": {
+              "Registry-Casework-Attempt": {
+                "description": "Original attempt UUID, present only when the entitled recovery-pending response can disclose it.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "x-required-for-problem-code": "work-item.recovery-pending"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14713,11 +15244,36 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestReasonUnsupported"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestSourceRejected"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.unprocessable",
+            "description": "Problem response: request.reason-unsupported, request.source-rejected, request.unprocessable",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                }
+              }
+            },
+            "description": "Problem response: precondition.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14733,6 +15289,21 @@
               }
             },
             "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                }
+              }
+            },
+            "description": "Problem response: source.bad-gateway",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14877,12 +15448,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: request.invalid, source-profile.not-applicable",
+            "description": "Problem response: request.invalid, source-profile.not-applicable, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14935,6 +15509,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -14954,11 +15543,48 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.task-not-held",
+            "description": "Problem response: idempotency.key-reused, review.task-not-held",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -15010,6 +15636,21 @@
               }
             }
           },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                }
+              }
+            },
+            "description": "Problem response: precondition.required",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -15019,6 +15660,21 @@
               }
             },
             "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                }
+              }
+            },
+            "description": "Problem response: source.bad-gateway",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -15146,12 +15802,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: request.invalid, source-profile.not-applicable",
+            "description": "Problem response: request.invalid, source-profile.not-applicable, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -15204,6 +15863,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -15223,11 +15897,51 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemNotHolder"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.task-not-held",
+            "description": "Problem response: idempotency.key-reused, review.task-not-held, work-item.not-holder",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -15279,6 +15993,21 @@
               }
             }
           },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                }
+              }
+            },
+            "description": "Problem response: precondition.required",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -15288,6 +16017,21 @@
               }
             },
             "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                }
+              }
+            },
+            "description": "Problem response: source.bad-gateway",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -15397,12 +16141,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: request.invalid, source-profile.not-applicable",
+            "description": "Problem response: request.invalid, source-profile.not-applicable, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -15508,36 +16255,6 @@
               }
             }
           },
-          "415": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
-                }
-              }
-            },
-            "description": "Problem response: request.unsupported-media-type",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
-                }
-              }
-            },
-            "description": "Problem response: request.unprocessable",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -15547,6 +16264,21 @@
               }
             },
             "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                }
+              }
+            },
+            "description": "Problem response: source.bad-gateway",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -15689,12 +16421,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: request.invalid, source-profile.not-applicable",
+            "description": "Problem response: request.invalid, source-profile.not-applicable, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -15747,6 +16482,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -15766,11 +16516,51 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemNotHolder"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.task-not-held",
+            "description": "Problem response: idempotency.key-reused, review.task-not-held, work-item.not-holder",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -15822,6 +16612,21 @@
               }
             }
           },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                }
+              }
+            },
+            "description": "Problem response: precondition.required",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -15831,6 +16636,21 @@
               }
             },
             "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                }
+              }
+            },
+            "description": "Problem response: source.bad-gateway",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -15953,12 +16773,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: request.invalid, source-profile.not-applicable",
+            "description": "Problem response: request.invalid, source-profile.not-applicable, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -16011,6 +16834,21 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                }
+              }
+            },
+            "description": "Problem response: work-item.not-visible",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -16030,11 +16868,51 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemNotHolder"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: review.task-not-held",
+            "description": "Problem response: idempotency.key-reused, review.task-not-held, work-item.not-holder",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                }
+              }
+            },
+            "description": "Problem response: precondition.failed",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -16056,30 +16934,15 @@
               }
             }
           },
-          "415": {
+          "428": {
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
                 }
               }
             },
-            "description": "Problem response: request.unsupported-media-type",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "422": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
-                }
-              }
-            },
-            "description": "Problem response: request.unprocessable",
+            "description": "Problem response: precondition.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -16095,6 +16958,21 @@
               }
             },
             "description": "Problem response: runtime.failure",
+            "headers": {
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                }
+              }
+            },
+            "description": "Problem response: source.bad-gateway",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"

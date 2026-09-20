@@ -238,9 +238,6 @@ impl ClaimContext {
         mut self,
         identity: Option<registry_review_client::HumanIdentity>,
     ) -> Result<Self> {
-        if let Some(identity) = &identity {
-            identity.check().map_err(|_| invalid_context())?;
-        }
         self.human_identity = identity;
         Ok(self)
     }

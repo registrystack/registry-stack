@@ -671,6 +671,8 @@ jobs:
           docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_clocks
           docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_inbox_ordering
           docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_source_retention
+          docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_review
+          docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_review_migration
       - name: Verify hosted authorization, assignment, replay, and retention
         env:
           CASEWORK_HOSTED_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_hosted
@@ -701,6 +703,20 @@ jobs:
         env:
           CASEWORK_SOURCE_RETENTION_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_source_retention
         run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test source_retention_postgres
+      - name: Verify governed review persistence, HTTP, and source integration
+        env:
+          CASEWORK_REVIEW_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_review
+          BREG_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_review
+        run: >-
+          cargo test --locked --profile ci -p registry-casework --features postgres-test
+          --test review_postgres
+          --test review_http
+          --test review_payment_fixture_postgres
+          --test breg_review_journey
+      - name: Verify governed review schema upgrades
+        env:
+          CASEWORK_REVIEW_MIGRATION_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_review_migration
+        run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test review_migration_postgres
 
   breg-contracts:
     name: Base Registry Engine product contracts (${{ matrix.lane }})

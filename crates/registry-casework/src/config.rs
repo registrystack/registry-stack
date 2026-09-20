@@ -691,9 +691,7 @@ impl RuntimeConfig {
                 .iter()
                 .any(|(id, destination)| {
                     id.is_empty()
-                        || !(destination.url.starts_with("https://")
-                            || destination.url.starts_with("http://127.0.0.1:")
-                            || destination.url.starts_with("http://[::1]:"))
+                        || !valid_review_completion_url(&destination.url)
                         || !(100..=30_000).contains(&destination.timeout_milliseconds)
                         || !(1..=100).contains(&destination.maximum_attempts)
                         || !(1..=86_400).contains(&destination.retry_seconds)
@@ -873,6 +871,24 @@ impl RuntimeConfig {
     }
 }
 
+fn valid_review_completion_url(raw: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(raw) else {
+        return false;
+    };
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return false;
+    }
+    match url.scheme() {
+        "https" => url.host_str().is_some(),
+        "http" => matches!(url.host_str(), Some("127.0.0.1" | "::1" | "[::1]")),
+        _ => false,
+    }
+}
+
 fn validate_project_source_inputs(
     project_path: &Path,
     project: &CaseworkProject,
@@ -962,6 +978,26 @@ fn parse_static_jwks(bytes: &[u8]) -> Result<JwkSet, RuntimeConfigError> {
 mod tests {
     use super::*;
     use registry_platform_oidc::is_access_token_typ_pair;
+
+    #[test]
+    fn completion_destination_requires_a_complete_credential_free_url() {
+        for valid in [
+            "https://casework.example.test/v1/completions",
+            "http://127.0.0.1:8080/completions",
+            "http://[::1]:8080/completions",
+        ] {
+            assert!(valid_review_completion_url(valid), "{valid}");
+        }
+        for invalid in [
+            "https://",
+            "https://user@casework.example.test/completions",
+            "https://casework.example.test/completions?token=secret",
+            "https://casework.example.test/completions#fragment",
+            "http://casework.example.test/completions",
+        ] {
+            assert!(!valid_review_completion_url(invalid), "{invalid}");
+        }
+    }
 
     const SOURCE_PROJECT: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
 kind: CaseworkProject

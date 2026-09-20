@@ -126,6 +126,12 @@ impl ReviewExecutorRegistry {
         Ok(Self { executors })
     }
 
+    fn contains_binding(&self, executor: &str, request_entity_id: &str) -> bool {
+        self.executors
+            .get(executor)
+            .is_some_and(|configured| configured.request_routes.contains_key(request_entity_id))
+    }
+
     async fn run_one(&self, client: &mut tokio_postgres::Client) -> Result<bool, MutationError> {
         let Some(row) = client
             .query_opt(
@@ -158,6 +164,65 @@ impl ReviewExecutorRegistry {
         };
         run_one_application(client, configured).await
     }
+}
+
+/// Refuse an activation that would strand durable work accepted under the
+/// previous package. Operators may retain superseded bindings until their jobs
+/// finish; only then may those bindings be removed from runtime configuration.
+pub async fn verify_retained_bindings(
+    pool: &crate::postgres::RuntimePool,
+    authorities: Option<&ReviewAuthorityRegistry>,
+    executors: Option<&ReviewExecutorRegistry>,
+) -> Result<(), MutationError> {
+    let client = pool.get().await.map_err(|_| MutationError::Unavailable)?;
+    let authority_rows = client
+        .query(
+            "SELECT DISTINCT authority,producer_id
+               FROM registry_internal.registry_request_review_submissions s
+              WHERE state IN ('pending','submitting','uncertain','cancelling')
+                 OR (state='accepted' AND NOT EXISTS (
+                        SELECT 1 FROM registry_internal.registry_request_review_results r
+                         WHERE (r.request_entity_id,r.request_id,r.proposal_version)=
+                               (s.request_entity_id,s.request_id,s.proposal_version)))
+                 OR EXISTS (
+                        SELECT 1 FROM registry_internal.registry_request_application_jobs j
+                         WHERE (j.request_entity_id,j.request_id,j.proposal_version)=
+                               (s.request_entity_id,s.request_id,s.proposal_version)
+                           AND j.state IN ('queued','applying'))",
+            &[],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    if authority_rows.iter().any(|row| {
+        authorities.is_none_or(|configured| {
+            !configured.contains_binding(
+                row.get::<_, String>(0).as_str(),
+                row.get::<_, String>(1).as_str(),
+            )
+        })
+    }) {
+        return Err(MutationError::PreconditionFailed);
+    }
+    let executor_rows = client
+        .query(
+            "SELECT DISTINCT executor,request_entity_id
+               FROM registry_internal.registry_request_application_jobs
+              WHERE state IN ('queued','applying')",
+            &[],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    if executor_rows.iter().any(|row| {
+        executors.is_none_or(|configured| {
+            !configured.contains_binding(
+                row.get::<_, String>(0).as_str(),
+                row.get::<_, String>(1).as_str(),
+            )
+        })
+    }) {
+        return Err(MutationError::PreconditionFailed);
+    }
+    Ok(())
 }
 
 #[cfg(feature = "postgres-test")]
@@ -267,6 +332,12 @@ impl ReviewAuthorityRegistry {
 
     pub fn contains(&self, authority: &str) -> bool {
         self.authorities.contains_key(authority)
+    }
+
+    fn contains_binding(&self, authority: &str, producer_id: &str) -> bool {
+        self.authorities
+            .get(authority)
+            .is_some_and(|configured| configured.producer_id == producer_id)
     }
 
     fn submission_binding(&self, authority: &str) -> Option<(&str, u32)> {
@@ -381,6 +452,14 @@ impl ReviewAuthorityRegistry {
             tracing::debug!(
                 erased = erased_completions,
                 "BReg review completion retention pass erased expired rows"
+            );
+            return Ok(true);
+        }
+        let correlated_completions = correlate_stored_review_completions(client).await?;
+        if correlated_completions > 0 {
+            tracing::debug!(
+                correlated = correlated_completions,
+                "BReg review completion reconciliation matched stored results"
             );
             return Ok(true);
         }
@@ -553,6 +632,26 @@ async fn erase_expired_review_completions(
         .map_err(|_| MutationError::Unavailable)
 }
 
+async fn correlate_stored_review_completions(
+    client: &impl GenericClient,
+) -> Result<u64, MutationError> {
+    client
+        .execute(
+            "UPDATE registry_internal.registry_request_review_completions c
+                SET state='correlated'
+               FROM registry_internal.registry_request_review_submissions s
+               JOIN registry_internal.registry_request_review_results r
+                 USING (request_entity_id,request_id,proposal_version)
+              WHERE c.state IN ('pending','unmatched')
+                AND c.authority=s.authority AND r.authority=s.authority
+                AND s.accepted_binding->>'requestId'=c.review_request_id::text
+                AND r.result_id=c.result_id",
+            &[],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)
+}
+
 async fn consume_result_feed(
     client: &mut tokio_postgres::Client,
     authority: &ReviewAuthorityClient,
@@ -698,14 +797,14 @@ impl ReviewCompletionReceiver {
 
 pub struct ReviewWorker {
     pool: crate::postgres::RuntimePool,
-    authorities: Arc<ReviewAuthorityRegistry>,
+    authorities: Option<Arc<ReviewAuthorityRegistry>>,
     executors: Option<Arc<ReviewExecutorRegistry>>,
 }
 
 impl ReviewWorker {
     pub fn new(
         pool: crate::postgres::RuntimePool,
-        authorities: Arc<ReviewAuthorityRegistry>,
+        authorities: Option<Arc<ReviewAuthorityRegistry>>,
         executors: Option<Arc<ReviewExecutorRegistry>>,
     ) -> Self {
         Self {
@@ -722,17 +821,32 @@ impl ReviewWorker {
             }
             let worked = match self.pool.get().await {
                 Ok(mut client) => {
+                    let housekeeping_worked = erase_expired_review_completions(&**client)
+                        .await
+                        .unwrap_or(0)
+                        > 0;
                     // A source apply whose response was lost is retried against
                     // BReg before another Casework exchange. The source's
                     // idempotency receipt is the application authority.
-                    let application_worked = match &self.executors {
-                        Some(executors) => executors.run_one(&mut client).await.unwrap_or(false),
-                        None => false,
+                    let application_worked = if housekeeping_worked {
+                        false
+                    } else {
+                        match &self.executors {
+                            Some(executors) => {
+                                executors.run_one(&mut client).await.unwrap_or(false)
+                            }
+                            None => false,
+                        }
                     };
-                    if application_worked {
+                    if housekeeping_worked || application_worked {
                         true
                     } else {
-                        self.authorities.run_one(&mut client).await.unwrap_or(false)
+                        match &self.authorities {
+                            Some(authorities) => {
+                                authorities.run_one(&mut client).await.unwrap_or(false)
+                            }
+                            None => false,
+                        }
                     }
                 }
                 Err(_) => false,
@@ -1000,19 +1114,13 @@ pub(crate) async fn install(
              );
              ALTER TABLE registry_internal.registry_request_review_results
                  DROP CONSTRAINT IF EXISTS registry_request_review_results_result_check;
-             DO $$ BEGIN
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_constraint
-                      WHERE conname='registry_request_review_results_result_size'
-                        AND conrelid='registry_internal.registry_request_review_results'::regclass
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_request_review_results
-                         ADD CONSTRAINT registry_request_review_results_result_size CHECK (
-                             jsonb_typeof(result)='object'
-                             AND octet_length(result::text)<=32768
-                         );
-                 END IF;
-             END $$;
+             ALTER TABLE registry_internal.registry_request_review_results
+                 DROP CONSTRAINT IF EXISTS registry_request_review_results_result_size;
+             ALTER TABLE registry_internal.registry_request_review_results
+                 ADD CONSTRAINT registry_request_review_results_result_size CHECK (
+                     jsonb_typeof(result)='object'
+                     AND octet_length(result::text)<=1048576
+                 );
              CREATE TABLE IF NOT EXISTS registry_internal.registry_request_review_feed_checkpoints (
                  authority text PRIMARY KEY CHECK (authority <> '' AND octet_length(authority) <= 128),
                  cursor text CHECK (cursor IS NULL OR (cursor <> '' AND octet_length(cursor) <= 1024)),
@@ -1466,17 +1574,41 @@ pub async fn receive_completion(
     completion: &ReviewCompletion,
     expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), MutationError> {
-    let state = if transaction
+    // Reconciliation locks this same submission before storing its result and
+    // updating early completions. Taking the lock here closes the inverse
+    // ordering, where a result commits immediately before a late completion.
+    let matched = transaction
         .query_opt(
             "SELECT 1 FROM registry_internal.registry_request_review_submissions
-              WHERE authority=$1 AND accepted_binding->>'requestId'=$2",
+              WHERE authority=$1 AND accepted_binding->>'requestId'=$2
+              FOR UPDATE",
             &[&authority, &completion.request_id.to_string()],
         )
         .await
-        .map_err(|_| MutationError::Unavailable)?
-        .is_some()
-    {
-        "pending"
+        .map_err(|_| MutationError::Unavailable)?;
+    let state = if matched.is_some() {
+        if transaction
+            .query_opt(
+                "SELECT 1
+                   FROM registry_internal.registry_request_review_results r
+                   JOIN registry_internal.registry_request_review_submissions s
+                     USING (request_entity_id,request_id,proposal_version)
+                  WHERE r.authority=$1 AND s.authority=r.authority
+                    AND s.accepted_binding->>'requestId'=$2 AND r.result_id=$3",
+                &[
+                    &authority,
+                    &completion.request_id.to_string(),
+                    &completion.result_id,
+                ],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+            .is_some()
+        {
+            "correlated"
+        } else {
+            "pending"
+        }
     } else {
         "unmatched"
     };
@@ -1662,9 +1794,9 @@ pub async fn poll_one_result(
             client
                 .execute(
                     "UPDATE registry_internal.registry_request_review_submissions
-                        SET result_poll_attempts=result_poll_attempts+1,
+                        SET result_poll_attempts=LEAST(result_poll_attempts+1,1000),
                             next_result_poll_at=transaction_timestamp()+
-                              (LEAST(60,5*(result_poll_attempts+1)) * interval '1 second'),
+                              (LEAST(60,5*LEAST(result_poll_attempts+1,1000)) * interval '1 second'),
                             updated_at=transaction_timestamp()
                       WHERE authority=$1 AND accepted_binding=$2 AND state='accepted'",
                     &[
@@ -1717,7 +1849,7 @@ async fn run_one_application(
     let Some(row) = client
         .query_opt(
             "UPDATE registry_internal.registry_request_application_jobs j
-                SET state='applying',attempt_count=attempt_count+1,
+                SET state='applying',attempt_count=LEAST(attempt_count+1,1000),
                     next_attempt_at=transaction_timestamp()+interval '30 seconds',
                     last_error_code=NULL,updated_at=transaction_timestamp()
               WHERE (request_entity_id,request_id,proposal_version)=(

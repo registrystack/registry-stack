@@ -881,7 +881,10 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         .database
         .execute(
             "UPDATE casework_review_requests
-             SET terminal_at=$2,result_available_until=$3 WHERE request_id=$1",
+             SET terminal_at=$2,result_available_until=$3,
+                 context_strategy='source',
+                 context=jsonb_build_object('reference','breg:registry:record:expired:1')
+             WHERE request_id=$1",
             &[
                 &first.accepted.request_id,
                 &(now - TimeDelta::days(2)),
@@ -890,6 +893,28 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         )
         .await
         .expect("expire request result");
+    let exponent_values = vec![1e100_f64; 400];
+    assert!(serde_json::to_vec(&exponent_values).unwrap().len() < 32_768);
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_results
+                SET result=jsonb_set(result,'{numericExpansionProbe}',$2::jsonb)
+              WHERE request_id=$1",
+            &[&first.accepted.request_id, &json!(exponent_values)],
+        )
+        .await
+        .expect("store bounded result whose PostgreSQL numeric rendering exceeds 32 KiB");
+    let stored_result_bytes: i32 = fixture
+        .database
+        .query_one(
+            "SELECT octet_length(result::text) FROM casework_review_results WHERE request_id=$1",
+            &[&first.accepted.request_id],
+        )
+        .await
+        .expect("measure PostgreSQL result representation")
+        .get(0);
+    assert!(stored_result_bytes > 32_768);
     fixture
         .service_v1
         .erase_expired_reviews()
@@ -2002,6 +2027,14 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
         .await
         .expect("create coordinated review");
     let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests SET context='{}'::jsonb WHERE request_id=$1",
+            &[&created.accepted.request_id],
+        )
+        .await
+        .expect("represent a valid live empty submitted snapshot");
     let listed = fixture
         .service_v1
         .review_tasks(&fixture.reviewer_a, None, "", Some("review"), None, 10)
@@ -2029,7 +2062,7 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
     assert!(matches!(
         context.context,
         registry_casework_core::ReviewTaskContextData::Submitted { snapshot }
-            if snapshot == json!({"summary":"Review record-coordination"})
+            if snapshot == json!({})
     ));
 
     let initiator = IssuerPrincipal {

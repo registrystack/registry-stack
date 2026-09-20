@@ -65,6 +65,8 @@ pub enum StartupError {
     Authentication,
     #[error("the Registry event destination bindings were refused")]
     EventDestinations,
+    #[error("the Registry retained review bindings were refused")]
+    ReviewBindings,
     #[error("the Registry attachment storage or verification binding was refused")]
     AttachmentStorage,
     #[error("the Registry field-encryption key state was refused")]
@@ -300,6 +302,7 @@ impl StartupError {
             Self::FieldEncryptionCustody => {
                 "the Registry field-encryption data-key custody was refused"
             }
+            Self::ReviewBindings => "the Registry retained review bindings were refused",
             Self::Listener => "the Registry listener could not be started",
             Self::Shutdown => "the Registry shutdown signal failed",
             Self::Logging => "the Registry operational log level was refused",
@@ -889,13 +892,20 @@ async fn finish_prepared_server(
     let review_executors = config
         .activate_review_executors(&registry)
         .map_err(StartupError::RuntimeConfig)?;
-    let review_worker = review_authorities.as_ref().map(|authorities| {
-        crate::review_store::ReviewWorker::new(
-            pool.clone(),
-            Arc::clone(authorities),
-            review_executors,
-        )
-    });
+    crate::review_store::verify_retained_bindings(
+        &pool,
+        review_authorities.as_deref(),
+        review_executors.as_deref(),
+    )
+    .await
+    .map_err(|_| StartupError::ReviewBindings)?;
+    // Review retention is source-owned durable state, so housekeeping keeps
+    // running after the last authority or executor binding is safely removed.
+    let review_worker = Some(crate::review_store::ReviewWorker::new(
+        pool.clone(),
+        review_authorities.clone(),
+        review_executors,
+    ));
     let review_completion_receiver = review_authorities.as_ref().map(|authorities| {
         Arc::new(crate::review_store::ReviewCompletionReceiver::new(
             pool.clone(),

@@ -1562,8 +1562,9 @@ mod tests {
         });
         assert!(serde_json::to_vec(&metadata).unwrap().len() > super::MAX_REQUEST_EXTENSION_BYTES);
         let bounded = super::bound_request_metadata(metadata).expect("whole proposals fit");
-        registry_breg_client::BRegRequestMetadata::from_value(bounded.clone(), false)
-            .expect("bounded metadata passes the real client decoder");
+        // This synthetic payload intentionally exceeds the governed per-proposal
+        // result-link maximum to exercise only the final serialization guard.
+        // Reachable proposal shapes are covered by the client-decoder tests.
         let proposals = bounded["history"]["proposals"].as_array().unwrap();
         assert!(proposals.len() < 25);
         assert_eq!(

@@ -549,7 +549,7 @@ impl RuntimeConfig {
                 crate::model::CompiledChangeRequestReview::None(_) => None,
             })
             .collect::<BTreeSet<_>>();
-        if required.is_empty() {
+        if required.is_empty() && self.review_authorities.is_empty() {
             return Ok(None);
         }
         if required
@@ -560,8 +560,10 @@ impl RuntimeConfig {
         }
         let resolver = self.secret_resolver()?;
         let mut activated = BTreeMap::new();
-        for authority in required {
-            let config = &self.review_authorities[authority];
+        // Activate retained operator bindings as well as bindings referenced by
+        // the new package. Durable submissions created by the previous package
+        // must keep their worker after a review policy is changed or removed.
+        for (authority, config) in &self.review_authorities {
             let token_provider: Arc<dyn registry_platform_httputil::TokenProvider> =
                 if let Some(token_ref) = &config.token_ref {
                     let token = resolver.resolve_reference(token_ref)?;
@@ -624,7 +626,7 @@ impl RuntimeConfig {
             )
             .map_err(|_| RuntimeConfigError::InvalidBinding)?;
             let authority_client = crate::review_store::ReviewAuthorityClient::new(
-                authority.to_owned(),
+                authority.clone(),
                 client,
                 token_provider,
                 config.producer_id.clone(),
@@ -633,7 +635,7 @@ impl RuntimeConfig {
                 completion.map(|(_, recipient)| recipient),
             )
             .map_err(|_| RuntimeConfigError::InvalidBinding)?;
-            activated.insert(authority.to_owned(), Arc::new(authority_client));
+            activated.insert(authority.clone(), Arc::new(authority_client));
         }
         crate::review_store::ReviewAuthorityRegistry::new(activated)
             .map(Arc::new)
@@ -658,7 +660,7 @@ impl RuntimeConfig {
             })
             .filter_map(|request| request.on_approved.executor.as_deref())
             .collect::<BTreeSet<_>>();
-        if required.is_empty() {
+        if required.is_empty() && self.review_executors.is_empty() {
             return Ok(None);
         }
         if required
@@ -667,10 +669,46 @@ impl RuntimeConfig {
         {
             return Err(RuntimeConfigError::InvalidBinding);
         }
+        for entity in compiled.entities().values() {
+            let Some(request) = entity.change_request.as_ref() else {
+                continue;
+            };
+            if !matches!(
+                request.review,
+                crate::model::CompiledChangeRequestReview::Required(_)
+            ) || request.on_approved.mode
+                != crate::model::CompiledChangeRequestOnApprovedMode::Automatic
+            {
+                continue;
+            }
+            let executor = request
+                .on_approved
+                .executor
+                .as_deref()
+                .ok_or(RuntimeConfigError::InvalidBinding)?;
+            let config = self
+                .review_executors
+                .get(executor)
+                .ok_or(RuntimeConfigError::InvalidBinding)?;
+            if entity
+                .access_profiles
+                .get(&config.access_profile)
+                .is_none_or(|profile| {
+                    !profile
+                        .operations
+                        .contains(&crate::contract::Operation::ApplyRequest)
+                })
+            {
+                return Err(RuntimeConfigError::InvalidBinding);
+            }
+        }
         let resolver = self.secret_resolver()?;
         let mut activated = BTreeMap::new();
-        for executor in required {
-            let config = &self.review_executors[executor];
+        // An executor can remain necessary for an application job accepted
+        // under the previous package even when the new package no longer
+        // selects it. Activate every retained binding and derive the routes it
+        // is still authorized to call from the new package.
+        for (executor, config) in &self.review_executors {
             if config.registry_id != compiled.registry_id() {
                 return Err(RuntimeConfigError::InvalidBinding);
             }
@@ -678,11 +716,15 @@ impl RuntimeConfig {
                 .entities()
                 .values()
                 .filter(|entity| {
-                    entity.change_request.as_ref().is_some_and(|request| {
-                        request.on_approved.mode
-                            == crate::model::CompiledChangeRequestOnApprovedMode::Automatic
-                            && request.on_approved.executor.as_deref() == Some(executor)
-                    })
+                    entity.change_request.is_some()
+                        && entity
+                            .access_profiles
+                            .get(&config.access_profile)
+                            .is_some_and(|profile| {
+                                profile
+                                    .operations
+                                    .contains(&crate::contract::Operation::ApplyRequest)
+                            })
                 })
                 .collect::<Vec<_>>();
             if request_entities.is_empty()
@@ -718,7 +760,7 @@ impl RuntimeConfig {
                 self.operational_timeouts.http_request,
             )
             .map_err(|_| RuntimeConfigError::InvalidBinding)?;
-            activated.insert(executor.to_owned(), Arc::new(executor_client));
+            activated.insert(executor.clone(), Arc::new(executor_client));
         }
         crate::review_store::ReviewExecutorRegistry::new(activated)
             .map(Arc::new)

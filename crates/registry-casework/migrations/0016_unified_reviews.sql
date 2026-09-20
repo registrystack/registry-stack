@@ -34,7 +34,10 @@ CREATE TABLE casework_review_requests (
     initiator_subject text CHECK (initiator_subject IS NULL OR octet_length(initiator_subject) BETWEEN 1 AND 2048),
     context_strategy text NOT NULL CHECK (context_strategy IN ('submitted','source')),
     context jsonb NOT NULL CHECK (octet_length(context::text) <= 65536),
-    result_constraints jsonb CHECK (result_constraints IS NULL OR octet_length(result_constraints::text) <= 16384),
+    -- JCS admits compact exponent-form binary64 values that PostgreSQL jsonb
+    -- renders as expanded decimal text. One MiB covers the worst-case expansion
+    -- of an admitted 16 KiB canonical value while retaining a hard storage bound.
+    result_constraints jsonb CHECK (result_constraints IS NULL OR octet_length(result_constraints::text) <= 1048576),
     policy_id text NOT NULL CHECK (octet_length(policy_id) BETWEEN 1 AND 128),
     policy_version text NOT NULL CHECK (octet_length(policy_version) BETWEEN 1 AND 128),
     policy_digest text NOT NULL CHECK (policy_digest ~ '^sha256:[0-9a-f]{64}$'),
@@ -202,7 +205,7 @@ CREATE TABLE casework_review_decisions (
     profile_id text NOT NULL CHECK (octet_length(profile_id) BETWEEN 1 AND 128),
     decision text NOT NULL CHECK (decision IN ('approve','reject','changes_requested','answer')),
     outcome text CHECK (outcome IS NULL OR octet_length(outcome) BETWEEN 1 AND 128),
-    result jsonb CHECK (result IS NULL OR octet_length(result::text) <= 16384),
+    result jsonb CHECK (result IS NULL OR octet_length(result::text) <= 1048576),
     private_reason text CHECK (private_reason IS NULL OR octet_length(private_reason) <= 2000),
     decided_at timestamptz NOT NULL,
     UNIQUE (request_id, stage_index, actor_issuer, actor_subject),
@@ -219,7 +222,7 @@ CREATE TABLE casework_review_results (
     request_id uuid NOT NULL UNIQUE REFERENCES casework_review_requests(request_id) ON DELETE CASCADE,
     status text NOT NULL CHECK (status IN ('approved','rejected','changes_requested','answered','cancelled','superseded')),
     outcome text CHECK (outcome IS NULL OR octet_length(outcome) BETWEEN 1 AND 128),
-    result jsonb CHECK (result IS NULL OR octet_length(result::text) <= 16384),
+    result jsonb CHECK (result IS NULL OR octet_length(result::text) <= 1048576),
     completed_at timestamptz NOT NULL,
     available_until timestamptz NOT NULL,
     CHECK (available_until > completed_at),

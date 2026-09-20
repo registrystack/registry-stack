@@ -20,7 +20,7 @@ use registry_breg::mutation::MutationError;
 use registry_breg::review_store::{
     install_review_storage_for_test, poll_one_result, receive_completion, run_one_submission,
     run_review_application_once_for_test, run_review_authority_once_for_test,
-    ReviewAuthorityClient, ReviewAuthorityRegistry, ReviewExecutorClient,
+    verify_retained_bindings, ReviewAuthorityClient, ReviewAuthorityRegistry, ReviewExecutorClient,
 };
 use registry_review_client::{
     submission_digest, BearerToken, ContentDigest, ReviewClient, ReviewClientConfig,
@@ -271,6 +271,7 @@ fn authority_client(endpoint: reqwest::Url, profile: &str) -> ReviewClient {
 
 fn authority_registry(
     authority: &str,
+    producer_id: &str,
     completion_token: &str,
     completion_recipient: &str,
 ) -> Arc<ReviewAuthorityRegistry> {
@@ -287,7 +288,7 @@ fn authority_registry(
                 registry_platform_httputil::StaticToken::new("outgoing-token".to_owned())
                     .expect("outgoing token"),
             ),
-            "registry-producer".to_owned(),
+            producer_id.to_owned(),
             7,
             Some(Zeroizing::new(completion_token.to_owned())),
             Some(completion_recipient.to_owned()),
@@ -901,7 +902,12 @@ async fn real_postgres_completion_inbox_deduplicates_refuses_substitution_expire
     let authority_canary = "casework-authority-private-canary";
     let recipient_canary = "registry-recipient-private-canary";
     let bearer_canary = "completion-bearer-private-canary";
-    let authorities = authority_registry(authority_canary, bearer_canary, recipient_canary);
+    let authorities = authority_registry(
+        authority_canary,
+        "registry-producer",
+        bearer_canary,
+        recipient_canary,
+    );
     let matched_authority = authorities
         .completion_authority(bearer_canary, recipient_canary)
         .expect("exact completion sender and recipient binding");
@@ -1050,6 +1056,268 @@ async fn real_postgres_completion_inbox_deduplicates_refuses_substitution_expire
     assert_eq!(remaining.get::<_, i64>(0), 1);
     assert!(remaining.get::<_, bool>(1));
     assert!(remaining.get::<_, bool>(2));
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn completion_arriving_after_its_result_is_correlated_immediately() {
+    let mut database = TestDatabase::create(2).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+
+    let source_request_id = Uuid::new_v4();
+    let review_request_id = Uuid::new_v4();
+    let result_id = Uuid::new_v4();
+    seed_submission(
+        &database.admin,
+        source_request_id,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    let accepted = json!({"requestId":review_request_id});
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state='accepted',accepted_binding=$2
+              WHERE request_id=$1",
+            &[&source_request_id, &accepted],
+        )
+        .await
+        .unwrap();
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_request_review_results
+             (request_entity_id,request_id,proposal_version,authority,result_id,result,status,
+              completed_at,available_until)
+             VALUES ('requests',$1,1,'casework-a',$2,$3,'approved',now(),now()+interval '1 day')",
+            &[
+                &source_request_id,
+                &result_id,
+                &json!({"requestId":review_request_id}),
+            ],
+        )
+        .await
+        .unwrap();
+    let exponent_values = vec![1e100_f64; 400];
+    assert!(serde_json::to_vec(&exponent_values).unwrap().len() < 32_768);
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_results
+                SET result=jsonb_set(result,'{numericExpansionProbe}',$2::jsonb)
+              WHERE request_id=$1",
+            &[&source_request_id, &json!(exponent_values)],
+        )
+        .await
+        .expect("store bounded result whose PostgreSQL numeric rendering exceeds 32 KiB");
+    let stored_result_bytes: i32 = database
+        .admin
+        .query_one(
+            "SELECT octet_length(result::text)
+               FROM registry_internal.registry_request_review_results WHERE request_id=$1",
+            &[&source_request_id],
+        )
+        .await
+        .expect("measure PostgreSQL result representation")
+        .get(0);
+    assert!(stored_result_bytes > 32_768);
+    let completion = ReviewCompletion {
+        event_type: ReviewCompletionType::ReviewCompleted,
+        event_id: Uuid::new_v4(),
+        request_id: review_request_id,
+        result_id,
+        completed_at: chrono::Utc::now(),
+    };
+    let transaction = database.admin.transaction().await.unwrap();
+    receive_completion(
+        &transaction,
+        "casework-a",
+        &completion,
+        chrono::Utc::now() + chrono::Duration::days(7),
+    )
+    .await
+    .expect("late completion is accepted");
+    transaction.commit().await.unwrap();
+    let state: String = database
+        .admin
+        .query_one(
+            "SELECT state FROM registry_internal.registry_request_review_completions
+              WHERE authority='casework-a' AND event_id=$1",
+            &[&completion.event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(state, "correlated");
+
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn early_unmatched_completion_is_correlated_by_the_worker_after_result_commit() {
+    let mut database = TestDatabase::create(2).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+
+    let source_request_id = Uuid::new_v4();
+    let review_request_id = Uuid::new_v4();
+    let result_id = Uuid::new_v4();
+    seed_submission(
+        &database.admin,
+        source_request_id,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    let completion = ReviewCompletion {
+        event_type: ReviewCompletionType::ReviewCompleted,
+        event_id: Uuid::new_v4(),
+        request_id: review_request_id,
+        result_id,
+        completed_at: chrono::Utc::now(),
+    };
+    let transaction = database.admin.transaction().await.unwrap();
+    receive_completion(
+        &transaction,
+        "casework-a",
+        &completion,
+        chrono::Utc::now() + chrono::Duration::days(7),
+    )
+    .await
+    .expect("early completion is retained");
+    transaction.commit().await.unwrap();
+
+    let accepted = json!({"requestId":review_request_id});
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state='accepted',accepted_binding=$2
+              WHERE request_id=$1",
+            &[&source_request_id, &accepted],
+        )
+        .await
+        .unwrap();
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_request_review_results
+             (request_entity_id,request_id,proposal_version,authority,result_id,result,status,
+              completed_at,available_until)
+             VALUES ('requests',$1,1,'casework-a',$2,$3,'approved',now(),now()+interval '1 day')",
+            &[
+                &source_request_id,
+                &result_id,
+                &json!({"requestId":review_request_id}),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let authorities = authority_registry("casework-a", "producer-a", "sender", "registry-a");
+    assert!(run_review_authority_once_for_test(&pool, &authorities)
+        .await
+        .expect("stored completion reconciliation"));
+    let state: String = database
+        .admin
+        .query_one(
+            "SELECT state FROM registry_internal.registry_request_review_completions
+              WHERE authority='casework-a' AND event_id=$1",
+            &[&completion.event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(state, "correlated");
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retained_review_work_refuses_startup_without_its_authority_binding() {
+    let database = TestDatabase::create(2).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+    seed_submission(
+        &database.admin,
+        Uuid::new_v4(),
+        "casework-retained",
+        "producer-retained",
+        "policy-retained",
+    )
+    .await;
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    assert!(matches!(
+        verify_retained_bindings(&pool, None, None).await,
+        Err(MutationError::PreconditionFailed)
+    ));
+    let mismatched = authority_registry(
+        "casework-retained",
+        "different-producer",
+        "sender",
+        "registry-a",
+    );
+    assert!(matches!(
+        verify_retained_bindings(&pool, Some(&mismatched), None).await,
+        Err(MutationError::PreconditionFailed)
+    ));
+    let authorities = authority_registry(
+        "casework-retained",
+        "producer-retained",
+        "sender",
+        "registry-a",
+    );
+    verify_retained_bindings(&pool, Some(&authorities), None)
+        .await
+        .expect("retained authority keeps its durable work serviceable");
 
     drop(pool);
     database.cleanup().await;

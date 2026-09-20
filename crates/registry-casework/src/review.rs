@@ -118,7 +118,7 @@ struct ReviewRequestRecord {
     result_available_until: Option<DateTime<Utc>>,
     initiator: Option<IssuerPrincipal>,
     result_constraints: Option<Value>,
-    context: registry_casework_core::ReviewContext,
+    context: Option<registry_casework_core::ReviewContext>,
 }
 
 impl CaseworkService {
@@ -375,7 +375,7 @@ impl CaseworkService {
         require_human_reviewer(actor)?;
         self.store.review_task(actor, task_id).await?;
         let record = self.store.review_request_for_task(task_id).await?;
-        let context = match &record.context {
+        let context = match record.context.as_ref().ok_or(ReviewRuntimeError::Corrupt)? {
             registry_casework_core::ReviewContext::Submitted { snapshot } => {
                 if source_profile_id.is_some() {
                     return Err(ReviewRuntimeError::SourceProfileNotApplicable);
@@ -1987,20 +1987,23 @@ impl PostgresStore {
         producer_id: &str,
         request_id: Uuid,
     ) -> Result<ReviewResultRead, ReviewRuntimeError> {
-        let client = self.client().await?;
-        let record = load_request_client(&client, producer_id, request_id).await?;
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        let record = load_request(&transaction, producer_id, request_id, true).await?;
         if record.lifecycle == ReviewRequestLifecycle::Reviewing {
+            transaction.commit().await?;
             return Ok(ReviewResultRead::Pending);
         }
         if record
             .result_available_until
             .is_none_or(|available_until| available_until <= Utc::now())
         {
+            transaction.commit().await?;
             return Ok(ReviewResultRead::Expired);
         }
-        Ok(ReviewResultRead::Available(Box::new(
-            load_result_client(&client, &record).await?,
-        )))
+        let result = load_result(&transaction, &record).await?;
+        transaction.commit().await?;
+        Ok(ReviewResultRead::Available(Box::new(result)))
     }
 
     async fn review_result_feed(
@@ -3951,6 +3954,27 @@ fn request_from_row(row: &Row) -> Result<ReviewRequestRecord, ReviewRuntimeError
     let lifecycle = parse_lifecycle(&row.get::<_, String>(10))?;
     let policy: ReviewKindPolicySnapshot = serde_json::from_value(row.get(8))?;
     policy.verify().map_err(|_| ReviewRuntimeError::Corrupt)?;
+    let result_available_until = row.get::<_, Option<DateTime<Utc>>>(14);
+    let context_strategy = row.get::<_, String>(18);
+    let context_value = row.get::<_, Value>(19);
+    let context_erased = context_value
+        .as_object()
+        .is_some_and(serde_json::Map::is_empty)
+        && lifecycle != ReviewRequestLifecycle::Reviewing
+        && result_available_until.is_some_and(|until| until <= Utc::now());
+    let context = if context_erased {
+        None
+    } else {
+        match context_strategy.as_str() {
+            "submitted" => Some(registry_casework_core::ReviewContext::Submitted {
+                snapshot: context_value,
+            }),
+            "source" => Some(registry_casework_core::ReviewContext::Source {
+                binding: serde_json::from_value::<SourceContextBinding>(context_value)?,
+            }),
+            _ => return Err(ReviewRuntimeError::Corrupt),
+        }
+    };
     Ok(ReviewRequestRecord {
         request_id: row.get(0),
         producer_id: row.get(1),
@@ -3974,7 +3998,7 @@ fn request_from_row(row: &Row) -> Result<ReviewRequestRecord, ReviewRuntimeError
             .map_err(|_| ReviewRuntimeError::Corrupt)?,
         created_at: row.get(12),
         updated_at: row.get(13),
-        result_available_until: row.get(14),
+        result_available_until,
         initiator: match (
             row.get::<_, Option<String>>(15),
             row.get::<_, Option<String>>(16),
@@ -3984,15 +4008,7 @@ fn request_from_row(row: &Row) -> Result<ReviewRequestRecord, ReviewRuntimeError
             _ => return Err(ReviewRuntimeError::Corrupt),
         },
         result_constraints: row.get(17),
-        context: match row.get::<_, String>(18).as_str() {
-            "submitted" => registry_casework_core::ReviewContext::Submitted {
-                snapshot: row.get(19),
-            },
-            "source" => registry_casework_core::ReviewContext::Source {
-                binding: serde_json::from_value::<SourceContextBinding>(row.get(19))?,
-            },
-            _ => return Err(ReviewRuntimeError::Corrupt),
-        },
+        context,
     })
 }
 
@@ -4038,21 +4054,6 @@ async fn load_result(
     record: &ReviewRequestRecord,
 ) -> Result<ReviewResult, ReviewRuntimeError> {
     let row = transaction
-        .query_opt(
-            "SELECT result_id,status,outcome,result,completed_at,available_until
-             FROM casework_review_results WHERE request_id=$1",
-            &[&record.request_id],
-        )
-        .await?
-        .ok_or(ReviewRuntimeError::Corrupt)?;
-    result_from_row(&row, record)
-}
-
-async fn load_result_client(
-    client: &deadpool_postgres::Client,
-    record: &ReviewRequestRecord,
-) -> Result<ReviewResult, ReviewRuntimeError> {
-    let row = client
         .query_opt(
             "SELECT result_id,status,outcome,result,completed_at,available_until
              FROM casework_review_results WHERE request_id=$1",

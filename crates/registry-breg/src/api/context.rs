@@ -154,11 +154,6 @@ impl VerifiedRequestClaims {
         mut self,
         identity: Option<registry_review_client::HumanIdentity>,
     ) -> Result<Self, VerifiedContextError> {
-        if let Some(identity) = &identity {
-            identity
-                .check()
-                .map_err(|_| VerifiedContextError::InvalidDirectValue)?;
-        }
         self.human_identity = identity;
         Ok(self)
     }
@@ -701,4 +696,32 @@ fn validate_value(value: String) -> Result<String, VerifiedContextError> {
         return Err(VerifiedContextError::InvalidDirectValue);
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authenticated_context_preserves_identity_values_larger_than_review_protocol_bounds() {
+        let identity = registry_review_client::HumanIdentity {
+            issuer: format!("https://identity.example/{}", "i".repeat(300)),
+            subject: "s".repeat(300),
+        };
+        let claims = VerifiedRequestClaims::authenticated(
+            "sub",
+            "ordinary-principal",
+            BTreeSet::new(),
+            None,
+            BTreeMap::new(),
+        )
+        .unwrap()
+        .with_human_identity(Some(identity.clone()))
+        .expect("authentication supports the configured OIDC claim bounds");
+        assert_eq!(claims.human_identity(), Some(&identity));
+        assert!(
+            identity.check().is_err(),
+            "review submission remains bounded"
+        );
+    }
 }
