@@ -41,6 +41,13 @@ pub const BREG_INGESTION_CHUNK_ALGORITHM_VERSION: &str = "greedy-canonical-http-
 /// plain mutation body ceiling.
 pub const MAXIMUM_BREG_INGESTION_CHUNK_BODY_BYTES: usize = MAXIMUM_BREG_MUTATION_BODY_BYTES + 1024;
 
+/// The item ceiling one chunk submission may carry. The Base Registry Engine
+/// reads a chunk under its protocol-wide `MAX_BATCH_ITEMS`; this client
+/// mirrors that number (it cannot link the engine's crate) so a chunk no run
+/// can ever accept is refused before it encodes. Run creation stays at the
+/// encoded-byte ceiling alone.
+pub const MAXIMUM_BREG_INGESTION_CHUNK_ITEMS: usize = 100;
+
 const SHA256_HEX_LENGTH: usize = 64;
 const MAXIMUM_BOUND_TEXT_BYTES: usize = 256;
 const MAXIMUM_TIMESTAMP_BYTES: usize = 128;
@@ -69,6 +76,8 @@ pub enum BRegIngestionError {
     EmptyChunk,
     #[error("a Base Registry Engine ingestion chunk item is not a valid batch item")]
     InvalidItem,
+    #[error("the Base Registry Engine ingestion chunk exceeds its item ceiling")]
+    TooManyItems,
     #[error("the Base Registry Engine ingestion request body exceeds its encoded-byte ceiling")]
     BodyTooLarge,
     #[error("the Base Registry Engine ingestion request body could not be encoded")]
@@ -971,6 +980,9 @@ impl BRegIngestionChunk {
         if items.is_empty() {
             return Err(BRegIngestionError::EmptyChunk);
         }
+        if items.len() > MAXIMUM_BREG_INGESTION_CHUNK_ITEMS {
+            return Err(BRegIngestionError::TooManyItems);
+        }
         if items.iter().any(|item| !item.is_object()) {
             return Err(BRegIngestionError::InvalidItem);
         }
@@ -1863,6 +1875,33 @@ mod tests {
         assert_eq!(
             ingestion_chunk_digest(&[Value::Object(unrepresentable)]),
             Err(BRegIngestionError::InvalidItem)
+        );
+    }
+
+    #[test]
+    fn a_chunk_refuses_more_items_than_the_protocol_ceiling_admits() {
+        let item = json!({"operation": "create", "data": {"legalName": "Example Ltd"}});
+        let at_ceiling: Vec<Value> = (0..MAXIMUM_BREG_INGESTION_CHUNK_ITEMS)
+            .map(|_| item.clone())
+            .collect();
+        let chunk = BRegIngestionChunk::new(0, at_ceiling.clone(), PREFIX_DIGEST).expect("chunk");
+        assert_eq!(chunk.item_count(), MAXIMUM_BREG_INGESTION_CHUNK_ITEMS);
+
+        let mut over_ceiling = at_ceiling;
+        over_ceiling.push(item);
+        assert_eq!(
+            BRegIngestionChunk::new(0, over_ceiling, PREFIX_DIGEST).unwrap_err(),
+            BRegIngestionError::TooManyItems
+        );
+    }
+
+    #[test]
+    fn a_chunk_refuses_a_body_over_its_encoded_byte_ceiling() {
+        let oversized = json!({"operation": "create", "data": {"legalName":
+            "x".repeat(MAXIMUM_BREG_INGESTION_CHUNK_BODY_BYTES) }});
+        assert_eq!(
+            BRegIngestionChunk::new(0, vec![oversized], PREFIX_DIGEST).unwrap_err(),
+            BRegIngestionError::BodyTooLarge
         );
     }
 
