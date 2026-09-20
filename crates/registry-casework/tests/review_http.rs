@@ -1139,7 +1139,7 @@ async fn source_context_review_history_notes_and_clocks_require_current_pinned_s
 }
 
 #[tokio::test]
-async fn review_task_inbox_continues_after_the_concealed_scan_budget() {
+async fn review_task_inbox_continues_after_the_configured_source_read_budget() {
     let idp = MockIdp::start().await;
     let (app, service, _, _, _) = app(&idp).await;
     let producer = ActorContext {
@@ -1150,7 +1150,7 @@ async fn review_task_inbox_continues_after_the_concealed_scan_budget() {
         profile_id: "producer".to_owned(),
         role: CaseworkRole::Requester,
     };
-    for index in 0..1_000 {
+    for index in 0..25 {
         service
             .create_review_request(
                 &producer,

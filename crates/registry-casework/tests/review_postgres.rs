@@ -13,8 +13,9 @@ use async_trait::async_trait;
 use axum::{extract::State, http::StatusCode, routing::post, Router};
 use chrono::{TimeDelta, Utc};
 use registry_casework::{
-    dispatch_review_completions_once_for_test, CaseworkService, DatabaseConfig, PostgresStore,
-    ReviewResultRead, ReviewRuntimeError, ReviewTaskDecisionRequest,
+    dispatch_review_completions_once_for_test, validate_retained_completion_destinations_for_test,
+    CaseworkService, DatabaseConfig, PostgresStore, ReviewResultRead, ReviewRuntimeError,
+    ReviewTaskDecisionRequest, RuntimeError,
 };
 use registry_casework_core::{
     AccessProfile, ActiveSubjectsPage, ActivityClockAnchor, ActorContext, AssignmentRequest,
@@ -859,6 +860,33 @@ async fn completion_dispatcher_leases_one_at_a_time_and_fences_a_stale_owner() {
             && row.get::<_, i32>(2) == 1
             && row.get::<_, Option<chrono::DateTime<Utc>>>(3).is_none()
     }));
+}
+
+#[tokio::test]
+async fn retained_completion_work_requires_its_runtime_destination_until_drain() {
+    let fixture = fixture().await;
+    let request_id =
+        settle_review_for_completion(&fixture, "retained-completion-destination").await;
+    assert!(matches!(
+        validate_retained_completion_destinations_for_test(&fixture.store, &[]).await,
+        Err(RuntimeError::CompletionConfiguration)
+    ));
+    validate_retained_completion_destinations_for_test(&fixture.store, &["registry-completion"])
+        .await
+        .expect("the retained destination permits startup");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+                SET state='delivered',delivered_at=transaction_timestamp()
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("drain retained completion work");
+    validate_retained_completion_destinations_for_test(&fixture.store, &[])
+        .await
+        .expect("a drained destination may be removed");
 }
 
 #[tokio::test]
@@ -3561,6 +3589,25 @@ async fn source_context_task_disclosure_requires_a_current_caller_source_read() 
         task
     );
 
+    fixture.source_read_blocked.store(true, Ordering::SeqCst);
+    let service = fixture.service_v2.clone();
+    let reviewer = fixture.reviewer_a.clone();
+    let raced_inbox = tokio::spawn(async move {
+        service
+            .review_tasks(&reviewer, Some("staff"), "human-bearer", None, None, 10)
+            .await
+    });
+    fixture.source_read_started.notified().await;
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    fixture.source_read_continue.notify_one();
+    assert!(raced_inbox
+        .await
+        .expect("inbox task joins")
+        .expect("revoked authority conceals the stale task")
+        .items
+        .is_empty());
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+
     fixture.source_revoked.store(true, Ordering::SeqCst);
     let concealed = fixture
         .service_v2
@@ -3582,6 +3629,85 @@ async fn source_context_task_disclosure_requires_a_current_caller_source_read() 
             .await,
         Err(ReviewRuntimeError::NotFound)
     ));
+}
+
+#[tokio::test]
+async fn source_context_task_inbox_honors_the_configured_source_read_budget() {
+    let fixture = fixture().await;
+    let mut bounded_project = project("2");
+    bounded_project.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    bounded_project.inbox = InboxPolicy {
+        default_page_size: 1,
+        maximum_candidate_scan: 2,
+        maximum_source_reads: 1,
+        maximum_concurrent_source_reads: 1,
+        page_deadline_milliseconds: 5_000,
+    };
+    bounded_project.check().expect("bounded review project");
+    let bounded_service = CaseworkService::new(
+        fixture.store.clone(),
+        bounded_project,
+        [Arc::new(ReviewSource {
+            revoked: Arc::clone(&fixture.source_revoked),
+            state: Arc::clone(&fixture.source_state),
+            read_blocked: Arc::clone(&fixture.source_read_blocked),
+            read_started: Arc::clone(&fixture.source_read_started),
+            read_continue: Arc::clone(&fixture.source_read_continue),
+        }) as Arc<dyn SourceAdapter>],
+    )
+    .expect("bounded review service");
+
+    let mut task_ids = Vec::new();
+    for index in 0..2 {
+        let subject = format!("record-source-budget-{index}");
+        let mut source_request = request(&subject, &format!("producer-ref-budget-{index}"));
+        source_request.context = ReviewContext::Source {
+            binding: SourceContextBinding {
+                reference: format!("registry:record:{subject}"),
+            },
+        };
+        let created = fixture
+            .service_v2
+            .create_review_request(
+                &fixture.producer,
+                source_request,
+                &format!("create-source-budget-{index}"),
+            )
+            .await
+            .expect("create budgeted source-context review");
+        task_ids.push(task_id(&fixture, created.accepted.request_id, 0).await);
+    }
+
+    let first = bounded_service
+        .review_tasks(
+            &fixture.reviewer_a,
+            Some("staff"),
+            "human-bearer",
+            None,
+            None,
+            10,
+        )
+        .await
+        .expect("first bounded task page");
+    assert_eq!(first.items.len(), 1);
+    let cursor = first.next_cursor.expect("source-read budget continuation");
+    let second = bounded_service
+        .review_tasks(
+            &fixture.reviewer_a,
+            Some("staff"),
+            "human-bearer",
+            None,
+            Some(cursor),
+            10,
+        )
+        .await
+        .expect("second bounded task page");
+    assert_eq!(second.items.len(), 1);
+    assert_eq!(second.next_cursor, None);
+    let observed = [first.items[0].task_id, second.items[0].task_id]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(observed, task_ids.into_iter().collect());
 }
 
 #[tokio::test]

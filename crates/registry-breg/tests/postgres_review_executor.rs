@@ -180,6 +180,29 @@ async fn serve_authority(
     (endpoint, server)
 }
 
+async fn fail_review_submission(
+    State(gate): State<Arc<RemoteGate>>,
+    Json(_request): Json<ReviewCreateRequest>,
+) -> StatusCode {
+    gate.entered.notify_one();
+    gate.release.notified().await;
+    StatusCode::SERVICE_UNAVAILABLE
+}
+
+async fn serve_failing_authority(
+    gate: Arc<RemoteGate>,
+) -> (reqwest::Url, tokio::task::JoinHandle<()>) {
+    let app = Router::new()
+        .route("/v1/review-requests", post(fail_review_submission))
+        .with_state(gate);
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap())
+        .parse()
+        .unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (endpoint, server)
+}
+
 struct AvailableResultState {
     accepted: Value,
     lookups: AtomicUsize,
@@ -1302,6 +1325,90 @@ async fn remote_review_submission_and_result_lookup_hold_no_postgres_transaction
     gate.release.notify_one();
     let (_worker, outcome) = lookup.await.expect("result lookup worker");
     assert!(outcome.expect("pending result lookup succeeds"));
+
+    worker_task.abort();
+    server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn stale_submission_failure_cannot_replace_a_reclaimed_lease() {
+    let database = TestDatabase::create(2).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+    let source_request_id = Uuid::from_u128(0xc3);
+    seed_submission(
+        &database.admin,
+        source_request_id,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+
+    let gate = Arc::new(RemoteGate::default());
+    let (endpoint, server) = serve_failing_authority(Arc::clone(&gate)).await;
+    let review_client = authority_client(endpoint, "producer-profile-a");
+    let token = BearerToken::new("token-a").unwrap();
+    let (worker, worker_task) = database.connect_admin().await;
+    let submission = tokio::spawn(async move {
+        run_one_submission(&worker, "casework-a", &review_client, &token).await
+    });
+    gate.entered.notified().await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET lease_until=lease_until+interval '1 second'
+              WHERE request_id=$1 AND state='submitting'",
+            &[&source_request_id],
+        )
+        .await
+        .expect("simulate replacement lease owner");
+    let replacement_lease = database
+        .admin
+        .query_one(
+            "SELECT lease_until FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&source_request_id],
+        )
+        .await
+        .expect("replacement lease")
+        .get::<_, chrono::DateTime<chrono::Utc>>(0);
+    gate.release.notify_one();
+    assert!(submission
+        .await
+        .expect("submission worker joins")
+        .expect("stale failed request is fenced"));
+    let retained = database
+        .admin
+        .query_one(
+            "SELECT state,lease_until,last_error_code
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&source_request_id],
+        )
+        .await
+        .expect("retained replacement lease");
+    assert_eq!(retained.get::<_, String>(0), "submitting");
+    assert_eq!(
+        retained.get::<_, chrono::DateTime<chrono::Utc>>(1),
+        replacement_lease
+    );
+    assert_eq!(retained.get::<_, Option<String>>(2), None);
 
     worker_task.abort();
     server.abort();

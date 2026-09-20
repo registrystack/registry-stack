@@ -10,6 +10,7 @@ use registry_casework_breg::BregBinding;
 use registry_casework_core::{CaseworkProject, SourceAdapter};
 use registry_platform_audit::{AuditEnvelope, AuditProfile, ChainState, JsonlFileSink};
 use registry_platform_config::{SecretProvider, SecretResolver};
+use registry_platform_httputil::OutboundClientBuilder;
 use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -68,9 +69,8 @@ impl ReviewCompletionDispatcher {
         }
         Ok(Self {
             store,
-            client: reqwest::Client::builder()
-                .no_proxy()
-                .build()
+            client: OutboundClientBuilder::new()
+                .try_build()
                 .map_err(|_| RuntimeError::CompletionConfiguration)?,
             targets,
         })
@@ -191,6 +191,55 @@ impl ReviewCompletionDispatcher {
     }
 }
 
+async fn validate_retained_completion_destinations(
+    store: &PostgresStore,
+    configured: &BTreeMap<String, crate::ReviewCompletionRuntimeConfig>,
+) -> Result<(), RuntimeError> {
+    let client = store.client().await?;
+    let retained = client
+        .query(
+            "SELECT DISTINCT destination_id
+               FROM casework_review_completion_outbox
+              WHERE state IN ('pending','leased')
+                AND retained_until>transaction_timestamp()",
+            &[],
+        )
+        .await
+        .map_err(crate::StoreError::Postgres)?;
+    if retained
+        .iter()
+        .map(|row| row.get::<_, String>(0))
+        .any(|destination| !configured.contains_key(&destination))
+    {
+        return Err(RuntimeError::CompletionConfiguration);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn validate_retained_completion_destinations_for_test(
+    store: &PostgresStore,
+    destination_ids: &[&str],
+) -> Result<(), RuntimeError> {
+    let configured = destination_ids
+        .iter()
+        .map(|id| {
+            (
+                (*id).to_owned(),
+                crate::ReviewCompletionRuntimeConfig {
+                    url: "http://127.0.0.1/completion".to_owned(),
+                    bearer_token_ref: "secret:env/TEST".to_owned(),
+                    timeout_milliseconds: 1_000,
+                    maximum_attempts: 1,
+                    retry_seconds: 1,
+                },
+            )
+        })
+        .collect();
+    validate_retained_completion_destinations(store, &configured).await
+}
+
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
 pub async fn dispatch_review_completions_once_for_test(
@@ -201,9 +250,8 @@ pub async fn dispatch_review_completions_once_for_test(
 ) -> Result<(), crate::ReviewRuntimeError> {
     let dispatcher = ReviewCompletionDispatcher {
         store,
-        client: reqwest::Client::builder()
-            .no_proxy()
-            .build()
+        client: OutboundClientBuilder::new()
+            .try_build()
             .expect("build test review completion client"),
         targets: BTreeMap::from([(
             destination_id.to_owned(),
@@ -286,6 +334,8 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     let secrets = secret_resolver(&config)?;
     let store = PostgresStore::connect_runtime(&config.database, &secrets)?;
     store.ready().await?;
+    validate_retained_completion_destinations(&store, &config.review_completion_destinations)
+        .await?;
 
     let project_root = config.package.root.as_path();
     let mut adapters: Vec<Arc<dyn SourceAdapter>> = Vec::new();
@@ -829,9 +879,8 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .build()
+        let client = OutboundClientBuilder::new()
+            .try_build()
             .expect("completion client");
         let target = ReviewCompletionTarget {
             url: format!("{}/completion", server.uri()),
@@ -848,6 +897,30 @@ mod tests {
 
         assert!(!deliver_review_completion(&client, &target, &delivery).await);
         assert!(deliver_review_completion(&client, &target, &delivery).await);
+
+        Mock::given(method("POST"))
+            .and(path("/redirect"))
+            .respond_with(
+                ResponseTemplate::new(307)
+                    .insert_header("location", format!("{}/redirect-target", server.uri())),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/redirect-target"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let redirect_target = ReviewCompletionTarget {
+            url: format!("{}/redirect", server.uri()),
+            bearer_token: zeroize::Zeroizing::new("dispatch-secret".to_owned()),
+            timeout: Duration::from_secs(1),
+            maximum_attempts: 3,
+            retry: Duration::from_secs(1),
+        };
+        assert!(!deliver_review_completion(&client, &redirect_target, &delivery).await);
     }
 
     #[cfg(unix)]

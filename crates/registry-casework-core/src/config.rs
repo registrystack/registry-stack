@@ -453,7 +453,7 @@ impl ReviewProducerPolicy {
             && self
                 .trusted_initiator_issuer
                 .as_ref()
-                .is_none_or(|issuer| bounded_config_text(issuer, 512))
+                .is_none_or(|issuer| bounded_config_text(issuer, 256))
             && (1..=crate::MAXIMUM_REVIEW_RETENTION_DAYS).contains(&self.recovery_days)
             && !self.source_namespaces.is_empty()
             && self.source_namespaces.len() <= 64
@@ -839,6 +839,14 @@ mod tests {
                 ..
             })
         ));
+
+        let mut oversized_initiator_issuer = candidate.clone();
+        oversized_initiator_issuer.review_producers[0].trusted_initiator_issuer =
+            Some("i".repeat(257));
+        assert_eq!(
+            oversized_initiator_issuer.check(),
+            Err(ConfigError::ReviewProducers)
+        );
 
         let mut unknown_clock = candidate.clone();
         unknown_clock.review_kinds[0].clocks = vec!["missing-clock".to_owned()];

@@ -6,6 +6,7 @@
 //! A claimed job is committed before I/O and every response is written through
 //! an exact proposal and submission-digest comparison.
 
+use chrono::{DateTime, Utc};
 use registry_platform_httputil::client::{
     build_client, OutboundOptions, ServiceBaseUrl, TokenProvider,
 };
@@ -1364,6 +1365,7 @@ pub struct ClaimedReviewSubmission {
     pub idempotency_key: String,
     pub request: ReviewCreateRequest,
     pub expected_submission_digest: registry_review_client::SubmissionDigest,
+    pub lease_until: DateTime<Utc>,
 }
 
 pub async fn claim_submission(
@@ -1402,7 +1404,8 @@ pub async fn claim_submission(
               WHERE s.request_entity_id=c.request_entity_id
                 AND s.request_id=c.request_id AND s.proposal_version=c.proposal_version
              RETURNING s.request_entity_id,s.request_id,s.proposal_version,s.authority,
-                       s.idempotency_key,s.create_request,s.expected_submission_digest",
+                       s.idempotency_key,s.create_request,s.expected_submission_digest,
+                       s.lease_until",
             &[&SUBMISSION_LEASE_SECONDS, &authority],
         )
         .await
@@ -1419,6 +1422,7 @@ pub async fn claim_submission(
                 &row.get::<_, String>(6),
             )
             .map_err(|_| MutationError::Unavailable)?,
+            lease_until: row.get(7),
         })
     })
     .transpose()
@@ -1452,13 +1456,15 @@ pub async fn run_one_submission(
                             accepted_binding=$4,lease_until=NULL,
                             last_error_code=NULL,updated_at=transaction_timestamp()
                       WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
-                        AND state='submitting' AND expected_submission_digest=$5",
+                        AND state='submitting' AND expected_submission_digest=$5
+                        AND lease_until=$6",
                     &[
                         &job.request_entity_id,
                         &job.request_id,
                         &job.proposal_version,
                         &accepted,
                         &job.expected_submission_digest.as_str(),
+                        &job.lease_until,
                     ],
                 )
                 .await
@@ -1475,11 +1481,12 @@ pub async fn run_one_submission(
                             next_attempt_at=transaction_timestamp()+interval '5 seconds',
                             updated_at=transaction_timestamp()
                       WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
-                        AND state='submitting'",
+                        AND state='submitting' AND lease_until=$4",
                     &[
                         &job.request_entity_id,
                         &job.request_id,
                         &job.proposal_version,
+                        &job.lease_until,
                     ],
                 )
                 .await

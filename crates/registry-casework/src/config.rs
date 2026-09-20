@@ -705,7 +705,7 @@ impl RuntimeConfig {
             .keys()
             .map(String::as_str)
             .collect::<BTreeSet<_>>();
-        if declared_destinations != configured_destinations
+        if !declared_destinations.is_subset(&configured_destinations)
             || self
                 .review_completion_destinations
                 .iter()
@@ -1562,6 +1562,25 @@ reviewProducers:
         .unwrap();
         RuntimeConfig::load(&runtime)
             .expect("submitted context does not require a source adapter for its namespace");
+    }
+
+    #[test]
+    fn retained_completion_destinations_may_remain_configured_after_policy_removal() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("source-context");
+        std::fs::create_dir(&package).unwrap();
+        write_package_with_project(&package, SOURCE_CONTEXT_REVIEW_PROJECT);
+        let runtime = root.path().join("source-context.yaml");
+        let mut document = operator_value(&package, "operator-controlled-upstream");
+        document["reviewCompletionDestinations"] = serde_json::json!({
+            "retained-destination": {
+                "url": "https://completion.example.test/v1/reviews",
+                "bearerTokenRef": "secret:file/completion-token"
+            }
+        });
+        std::fs::write(&runtime, serde_norway::to_string(&document).unwrap()).unwrap();
+        RuntimeConfig::load(&runtime)
+            .expect("an undeclared retained destination stays operable during drain");
     }
 
     #[test]

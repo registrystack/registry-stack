@@ -1,5 +1,6 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use deadpool_postgres::GenericClient;
+use futures::{stream, StreamExt};
 use registry_casework_core::{
     evaluate_activity_clock, record_review_decision, resolve_absence_cover, submission_digest,
     AbsenceRecord, ActorContext, AssignmentRequest, CalendarPolicy, CaseworkRole, ClockPolicy,
@@ -18,6 +19,7 @@ use registry_casework_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio_postgres::{Row, Transaction};
 use uuid::Uuid;
@@ -339,37 +341,85 @@ impl CaseworkService {
         if limit == 0 || limit > 100 {
             return Err(ReviewRuntimeError::Invalid);
         }
+        let policy = &self.project.inbox;
+        let started = Instant::now();
+        let deadline = Duration::from_millis(policy.page_deadline_milliseconds);
+        let deadline_at = tokio::time::Instant::now() + deadline;
         let mut scan_cursor = cursor;
         let mut items = Vec::with_capacity(limit + 1);
         let mut examined = 0usize;
+        let mut source_reads = 0usize;
         let mut continuation = None;
-        while items.len() <= limit && examined < 1_000 {
+        let mut budget_exhausted = false;
+        while items.len() <= limit
+            && examined < policy.maximum_candidate_scan
+            && started.elapsed() < deadline
+        {
+            let batch_limit = (policy.maximum_candidate_scan - examined).min(100);
             let page = self
                 .store
-                .review_tasks(actor, queue, scan_cursor, 100)
+                .review_tasks(actor, queue, scan_cursor, batch_limit)
                 .await?;
-            examined += page.items.len();
+            let page_next_cursor = page.next_cursor;
+            let page_length = page.items.len();
+            let mut prepared = Vec::with_capacity(page_length);
             for task in page.items {
-                match self
-                    .preflight_review_source(task.task_id, source_profile_id, token)
-                    .await
-                {
-                    Ok(()) => {
-                        items.push(task);
-                        if items.len() > limit {
-                            break;
-                        }
+                let record = self.store.review_request_for_task(task.task_id).await?;
+                let source_backed = matches!(
+                    record.policy.context_strategy,
+                    registry_casework_core::ReviewContextStrategy::Source
+                );
+                if source_backed && source_reads == policy.maximum_source_reads {
+                    budget_exhausted = true;
+                    break;
+                }
+                examined += 1;
+                source_reads += usize::from(source_backed);
+                prepared.push((task, record));
+            }
+            let prepared_length = prepared.len();
+            let mut checks = stream::iter(prepared)
+                .map(|(task, record)| async move {
+                    let result = tokio::time::timeout_at(
+                        deadline_at,
+                        self.preflight_review_record_source(&record, source_profile_id, token),
+                    )
+                    .await;
+                    (task, result)
+                })
+                .buffered(policy.maximum_concurrent_source_reads);
+            while let Some((task, result)) = checks.next().await {
+                match result {
+                    Ok(Ok(())) => match self.store.review_task(actor, task.task_id).await {
+                        Ok(current) => items.push(current),
+                        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound) => {}
+                        Err(error) => return Err(error),
+                    },
+                    Err(_) => {
+                        budget_exhausted = true;
+                        break;
                     }
-                    Err(
+                    Ok(Err(
                         ReviewRuntimeError::Forbidden
                         | ReviewRuntimeError::NotFound
                         | ReviewRuntimeError::SourceProfileRequired
                         | ReviewRuntimeError::SourceProfileNotApplicable,
-                    ) => {}
-                    Err(error) => return Err(error),
+                    )) => {}
+                    Ok(Err(error)) => return Err(error),
+                }
+                continuation = Some(task.task_id);
+                if items.len() > limit {
+                    break;
                 }
             }
-            let Some(next_cursor) = page.next_cursor else {
+            drop(checks);
+            if items.len() > limit {
+                break;
+            }
+            if budget_exhausted || prepared_length < page_length {
+                break;
+            }
+            let Some(next_cursor) = page_next_cursor else {
                 continuation = None;
                 break;
             };
@@ -379,9 +429,15 @@ impl CaseworkService {
             scan_cursor = Some(next_cursor);
             continuation = Some(next_cursor);
         }
+        if examined == 0 && started.elapsed() >= deadline {
+            return Err(ReviewRuntimeError::SourceUnavailable);
+        }
         let next_cursor = if items.len() > limit {
             Some(items[limit - 1].task_id)
-        } else if examined >= 1_000 {
+        } else if budget_exhausted
+            || examined >= policy.maximum_candidate_scan
+            || started.elapsed() >= deadline
+        {
             continuation
         } else {
             None
