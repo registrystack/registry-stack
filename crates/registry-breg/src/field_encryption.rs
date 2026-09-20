@@ -252,6 +252,16 @@ impl FieldEncryptionService {
                     .generate_datakey()
                     .await
                     .map_err(|_| FieldEncryptionError::DataKeyUnavailable)?;
+                let unwrapped = client
+                    .unwrap_datakey(&wrapped)
+                    .await
+                    .map_err(|_| FieldEncryptionError::DataKeyUnavailable)?;
+                // Verify the exact pair that will become durable. The
+                // client's startup self-test exercises a separate pair.
+                if dek.as_ref() != unwrapped.as_ref() {
+                    return Err(FieldEncryptionError::DataKeyUnavailable);
+                }
+                drop(unwrapped);
                 let transit_key_version = transit_wrapped_key_version(&wrapped)
                     .map_err(|_| FieldEncryptionError::DataKeyUnavailable)?;
                 let proposed = NewFieldKey {

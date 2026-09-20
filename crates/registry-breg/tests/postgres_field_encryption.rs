@@ -21,7 +21,9 @@ use base64::Engine as _;
 use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
-use registry_breg::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
+use registry_breg::field_encryption::{
+    FieldEncryptionError, FieldEncryptionProvider, FieldEncryptionService,
+};
 use registry_breg::package::{
     load_package, prepare_package, PackageBuildRequest, PackageIntent, PackageLoadContext,
     PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile, SignaturePolicy,
@@ -634,6 +636,7 @@ async fn transit_provider_activates_the_first_key_row_and_restart_unwraps_it() {
         datakey_reply(),
         decrypt_reply(),
         datakey_reply(),
+        decrypt_reply(),
         metadata_reply(),
         datakey_reply(),
         decrypt_reply(),
@@ -749,6 +752,52 @@ async fn transit_provider_activates_the_first_key_row_and_restart_unwraps_it() {
 
     drop(first.directory);
     drop(second.directory);
+    migration_task.abort();
+    booted.database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn transit_provider_refuses_a_mismatched_generated_pair_before_persistence() {
+    let booted = boot_encrypted_database().await;
+    let (migration, migration_task) = booted.database.connect_migration().await;
+    let transit_mock = spawn_transit_mock(vec![
+        metadata_reply(),
+        datakey_reply(),
+        decrypt_reply(),
+        datakey_reply(),
+        decrypt_reply_with_plaintext([0x6B; 32]),
+    ]);
+    let transit = TransitDataKeyConfig::new(
+        transit_mock.socket_path.clone(),
+        "transit",
+        "breg-field-dek",
+        Duration::from_secs(2),
+    )
+    .expect("Transit fixture config validates");
+    let secret_root = booted.directory.join("secrets");
+    fs::create_dir_all(&secret_root).expect("fixture secret root creates");
+
+    let result = FieldEncryptionService::activate(
+        &FieldEncryptionProvider::Transit(transit),
+        booted.registry.registry_id(),
+        &booted.fixture.revision,
+        &SecretResolver::new([SecretProvider::File], secret_root)
+            .expect("fixture secret resolver builds"),
+        &migration,
+    )
+    .await;
+
+    assert!(
+        matches!(result, Err(FieldEncryptionError::DataKeyUnavailable)),
+        "the exact generated ciphertext must unwrap to its returned plaintext"
+    );
+    assert_eq!(
+        key_row_count(&migration).await,
+        0,
+        "a mismatched generated pair must not persist key state"
+    );
+
+    drop(transit_mock.directory);
     migration_task.abort();
     booted.database.cleanup().await;
 }
@@ -870,11 +919,15 @@ fn datakey_reply() -> TransitReply {
 }
 
 fn decrypt_reply() -> TransitReply {
+    decrypt_reply_with_plaintext(DEK)
+}
+
+fn decrypt_reply_with_plaintext(plaintext: [u8; 32]) -> TransitReply {
     TransitReply {
         method: "POST",
         path: DECRYPT_PATH,
         body: Some(json!({ "ciphertext": WRAPPED })),
-        response: json!({ "data": { "plaintext": base64::engine::general_purpose::STANDARD.encode(DEK) } }),
+        response: json!({ "data": { "plaintext": base64::engine::general_purpose::STANDARD.encode(plaintext) } }),
     }
 }
 
