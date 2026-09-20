@@ -25,7 +25,7 @@ TRACEPARENT = f"00-{TRACE_ID}-00f067aa0ba902b7-01"
 RUN_ID = "00000000-0000-4000-8000-000000000001"
 INPUT_DIGEST = "a" * 64
 PREFIX_DIGEST = "b" * 64
-CHUNK_DIGEST = "73b2e2a853c51aff25dafdf04d36e97d92a062c385fa2aa41f4a2b9814510aca"
+CHUNK_DIGEST = "afd0c674539faef83a50823a16f6d14567ba387026fc7decfd70959d0f8d4655"
 EMPTY_PREFIX_DIGEST = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ITEMS = [{"operation": "create", "data": {"label": "Example Ltd"}}]
 
@@ -192,7 +192,7 @@ class IngestionRunTests(unittest.TestCase):
         self.assertEqual(fresh.digest(), EMPTY_PREFIX_DIGEST)
 
     def test_encode_ingestion_chunk_derives_the_digest_in_rust(self) -> None:
-        chunk = encode_ingestion_chunk(2, [{"a": 1}], PREFIX_DIGEST)
+        chunk = encode_ingestion_chunk(2, ITEMS, PREFIX_DIGEST)
         self.assertIsInstance(chunk, BRegIngestionChunk)
         self.assertEqual(chunk.chunk_index, 2)
         self.assertEqual(chunk.item_count, 1)
@@ -207,11 +207,11 @@ class IngestionRunTests(unittest.TestCase):
             encode_ingestion_chunk(0, ["not-an-object"], PREFIX_DIGEST)
         self.assertEqual(raised.exception.kind, "invalid_request")
         with self.assertRaises(BaseRegistryClientError) as raised:
-            encode_ingestion_chunk(0, [{"a": 1}], "not-a-digest")
+            encode_ingestion_chunk(0, ITEMS, "not-a-digest")
         self.assertEqual(raised.exception.kind, "invalid_request")
         self.assertNotIn("not-a-digest", str(raised.exception))
         with self.assertRaises(TypeError):
-            encode_ingestion_chunk(1.5, [{"a": 1}], PREFIX_DIGEST)
+            encode_ingestion_chunk(1.5, ITEMS, PREFIX_DIGEST)
 
     def test_create_ingestion_run_announces_the_exact_run_binding(self) -> None:
         outcome = self.client.create_ingestion_run("people", REQUEST)

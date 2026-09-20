@@ -18,7 +18,7 @@ const TRACEPARENT = `00-${TRACE_ID}-00f067aa0ba902b7-01`;
 const RUN_ID = '00000000-0000-4000-8000-000000000001';
 const INPUT_DIGEST = 'a'.repeat(64);
 const PREFIX_DIGEST = 'b'.repeat(64);
-const CHUNK_DIGEST = '73b2e2a853c51aff25dafdf04d36e97d92a062c385fa2aa41f4a2b9814510aca';
+const CHUNK_DIGEST = 'afd0c674539faef83a50823a16f6d14567ba387026fc7decfd70959d0f8d4655';
 const EMPTY_PREFIX_DIGEST = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 const ITEMS = [{ operation: 'create', data: { label: 'Example Ltd' } }];
 
@@ -144,7 +144,7 @@ test('the prefix digest accumulator follows the Rust empty-input base and raw by
 });
 
 test('encodeIngestionChunk derives the chunk digest in Rust', () => {
-  const chunk = encodeIngestionChunk(2, [{ a: 1 }], PREFIX_DIGEST);
+  const chunk = encodeIngestionChunk(2, ITEMS, PREFIX_DIGEST);
   assert.ok(chunk instanceof BRegIngestionChunk);
   assert.equal(chunk.chunkIndex, 2);
   assert.equal(chunk.itemCount, 1);
@@ -159,12 +159,12 @@ test('encodeIngestionChunk refuses broken planning inputs without echoing values
   assert.throws(() => encodeIngestionChunk(0, ['not-an-object'], PREFIX_DIGEST), (error) => (
     error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
   ));
-  assert.throws(() => encodeIngestionChunk(0, [{ a: 1 }], 'not-a-digest'), (error) => (
+  assert.throws(() => encodeIngestionChunk(0, ITEMS, 'not-a-digest'), (error) => (
     error instanceof BaseRegistryClientError
     && error.kind === 'invalid_request'
     && !error.message.includes('not-a-digest')
   ));
-  assert.throws(() => encodeIngestionChunk(1.5, [{ a: 1 }], PREFIX_DIGEST), (error) => (
+  assert.throws(() => encodeIngestionChunk(1.5, ITEMS, PREFIX_DIGEST), (error) => (
     error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
   ));
 });
