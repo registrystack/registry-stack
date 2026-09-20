@@ -113,7 +113,7 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
     .await;
     assert_eq!(
         before_apply.body["data"]["request"]["bregState"],
-        "approved"
+        "submitted"
     );
     let apply = action(&before_apply.body, "apply_request", None);
     assert_eq!(apply.proposal_version, Some(1));
@@ -332,7 +332,7 @@ async fn relevant_package_activation_waits_for_explicit_cancellation_then_starts
         |_| json!({}),
     )
     .await;
-    assert_eq!(canceled["request"]["bregState"], "canceled");
+    assert_eq!(canceled["request"]["bregState"], "cancelled");
 
     let successor_active = apply_package(
         &database,
