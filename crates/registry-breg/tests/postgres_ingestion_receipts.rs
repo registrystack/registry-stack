@@ -40,12 +40,13 @@ const PRINCIPAL: &str = "receipt-principal-must-not-enter-run-rows";
 const PACKAGE_ID: &str = "ingestion-registry";
 const PACKAGE_REVISION: &str = "package-ingestion-1";
 
-/// A stored receipt releases its batch answer only with every sealed member
-/// opened: a successor package that renames an encrypted field's API name
-/// leaves the stored envelope under the retired member name, and both the
-/// replay and the receipt recovery must then refuse instead of serving it.
+/// A successor package that renames an encrypted field's API name leaves the
+/// stored envelope under a member name the current profile no longer reads:
+/// every release of the retained receipt then answers without that member and
+/// without any sealed envelope, while the members the successor still reads
+/// keep serving.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_renamed_encrypted_field_fails_the_receipt_closed() {
+async fn a_renamed_encrypted_member_drops_from_the_released_receipt() {
     let harness =
         IngestionHarness::from_registry_with_encryption(encrypted_widget_registry()).await;
     let claims = operator_claims(PRINCIPAL, "zone-a");
@@ -62,8 +63,8 @@ async fn a_renamed_encrypted_field_fails_the_receipt_closed() {
     assert_eq!(durable_widget_count(&harness).await, 2);
 
     // The successor package renames the encrypted field's API name, so the
-    // stored envelope sits under a member name the active entity no longer
-    // reads. Every release of the retained receipt must fail closed.
+    // stored envelope sits under a member name the active profile no longer
+    // reads. The release drops it rather than serving retired material.
     let successor = harness
         .restart_with_registry(renamed_serial_api_registry())
         .await;
@@ -75,11 +76,30 @@ async fn a_renamed_encrypted_field_fails_the_receipt_closed() {
             chunk_body(&chunks, 0),
         )
         .await;
-    assert_eq!(replay.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replay_raw = body_bytes(replay).await;
     assert!(
-        !contains_envelope_marker(&body_bytes(replay).await),
+        !contains_envelope_marker(&replay_raw),
         "the replayed receipt answer carries no sealed envelope"
     );
+    let replayed: Value = serde_json::from_slice(&replay_raw).expect("replay answer is JSON");
+    assert_eq!(replayed["receipt"]["replayed"], true);
+    for replayed_result in replayed["receipt"]["batch"]["results"]
+        .as_array()
+        .expect("receipt results")
+    {
+        let replayed_data = &replayed_result["data"];
+        assert!(
+            replayed_data.get("serialNumber").is_none()
+                && replayed_data.get("serialCode").is_none(),
+            "the retired member name serves on no release: {replayed_data}"
+        );
+        assert_eq!(replayed_data["jurisdiction"], "zone-a");
+        assert!(
+            replayed_data["label"].is_string(),
+            "a still-readable member keeps serving"
+        );
+    }
 
     let recovered = successor
         .get_json(
@@ -87,17 +107,31 @@ async fn a_renamed_encrypted_field_fails_the_receipt_closed() {
             &claims,
         )
         .await;
-    assert_eq!(recovered.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(recovered.status(), StatusCode::OK);
+    let recovered_raw = body_bytes(recovered).await;
     assert!(
-        !contains_envelope_marker(&body_bytes(recovered).await),
+        !contains_envelope_marker(&recovered_raw),
         "the recovered receipt answer carries no sealed envelope"
     );
+    let recovered: Value = serde_json::from_slice(&recovered_raw).expect("recovery answer is JSON");
+    for recovered_result in recovered["batch"]["results"].as_array().expect("results") {
+        let recovered_data = &recovered_result["data"];
+        assert!(
+            recovered_data.get("serialNumber").is_none()
+                && recovered_data.get("serialCode").is_none(),
+            "the retired member name serves on no release: {recovered_data}"
+        );
+        assert!(
+            recovered_data["label"].is_string(),
+            "a still-readable member keeps serving"
+        );
+    }
 
     assert_receipt_stays_sealed(&harness, &run_id).await;
     assert_eq!(
         durable_widget_count(&harness).await,
         2,
-        "the refused releases commit nothing"
+        "the releases commit nothing"
     );
 }
 
@@ -157,6 +191,83 @@ async fn a_successor_that_retires_encryption_fails_the_receipt_closed() {
         2,
         "the refused releases commit nothing"
     );
+}
+
+/// A stored receipt releases its batch answer through the readable set the
+/// current registry grants the run's profile: a successor that revokes a
+/// readable field drops that member from every later release of the receipt,
+/// while the members the successor still grants, encrypted ones included,
+/// keep serving opened.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_successor_that_revokes_a_readable_field_drops_it_from_released_receipts() {
+    let harness =
+        IngestionHarness::from_registry_with_encryption(encrypted_widget_registry()).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&encrypted_items("revoked-readable", 1), 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let fresh: Value =
+        serde_json::from_slice(&body_bytes(committed).await).expect("fresh answer is JSON");
+    assert_eq!(
+        fresh["receipt"]["batch"]["results"][0]["data"]["quantity"], 0,
+        "the fresh answer serves the field the producing package granted"
+    );
+
+    // The successor package revokes quantity from the profile's readable
+    // fields, so the stored receipt must stop serving that member.
+    let successor = harness
+        .restart_with_registry(readability_revoked_registry())
+        .await;
+
+    let replay = successor
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replayed: Value =
+        serde_json::from_slice(&body_bytes(replay).await).expect("replay answer is JSON");
+    assert_eq!(replayed["receipt"]["replayed"], true);
+    let replayed_data = &replayed["receipt"]["batch"]["results"][0]["data"];
+    assert!(
+        replayed_data.get("quantity").is_none(),
+        "the replayed receipt drops the revoked member: {replayed_data}"
+    );
+    assert_eq!(replayed_data["jurisdiction"], "zone-a");
+    assert_eq!(replayed_data["label"], "revoked-readable-0");
+    assert_eq!(
+        replayed_data["serialNumber"], "SN-0000",
+        "a still-readable encrypted member keeps opening"
+    );
+
+    let recovered = successor
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::OK);
+    let recovered: Value =
+        serde_json::from_slice(&body_bytes(recovered).await).expect("recovery answer is JSON");
+    let recovered_data = &recovered["batch"]["results"][0]["data"];
+    assert!(
+        recovered_data.get("quantity").is_none(),
+        "the recovered receipt drops the revoked member: {recovered_data}"
+    );
+    assert_eq!(recovered_data["jurisdiction"], "zone-a");
+    assert_eq!(recovered_data["label"], "revoked-readable-0");
+    assert_eq!(recovered_data["serialNumber"], "SN-0000");
+
+    assert_receipt_stays_sealed(&harness, &run_id).await;
 }
 
 /// A plaintext member may legitimately carry the envelope tag shape: the
@@ -657,6 +768,22 @@ fn encryption_retired_registry() -> Arc<registry_breg::CompiledRegistry> {
     Arc::new(
         compile_project(&project, &[], CompileProfile::Authoring)
             .expect("the retired fixture compiles to trusted inventories"),
+    )
+}
+
+/// The same encrypted fixture under a successor package that revokes
+/// quantity from the profile's readable fields: the field keeps existing and
+/// stays writable, so the change is purely a readability revocation.
+fn readability_revoked_registry() -> Arc<registry_breg::CompiledRegistry> {
+    let fixture = encrypted_widget_fixture().replacen(
+        r#""readableFields":["jurisdiction","label","quantity","serial-number"]"#,
+        r#""readableFields":["jurisdiction","label","serial-number"]"#,
+        1,
+    );
+    let project = parse_project_json(fixture.as_bytes()).expect("the revoked fixture parses");
+    Arc::new(
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("the revoked fixture compiles to trusted inventories"),
     )
 }
 
