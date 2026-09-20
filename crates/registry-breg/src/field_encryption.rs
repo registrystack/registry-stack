@@ -730,6 +730,12 @@ pub(crate) enum BatchOpenError {
 /// state, which resolves lazily on the first map that needs opening. Returns
 /// whether any map was opened, so a caller can serve unopened bytes through
 /// exactly as stored.
+///
+/// The per-field pass reads only the active entity's encrypted members, so an
+/// envelope stored under a member name the active package no longer declares
+/// would otherwise survive untouched. Any member that still parses as a
+/// sealed envelope after opening fails the whole answer closed: sealed
+/// ciphertext never leaves as an answer.
 pub(crate) fn open_batch_result_members(
     entity: &crate::model::CompiledEntity,
     results: &mut [Value],
@@ -754,6 +760,12 @@ pub(crate) fn open_batch_result_members(
             let service = service.ok_or(BatchOpenError::KeyStateUnavailable)?;
             open_member_map(entity, &record_id, data, service, true)
                 .map_err(|_| BatchOpenError::OpenFailed)?;
+            if data
+                .values()
+                .any(|member| parse_envelope_member(member).is_some())
+            {
+                return Err(BatchOpenError::OpenFailed);
+            }
             opened = true;
         }
     }
