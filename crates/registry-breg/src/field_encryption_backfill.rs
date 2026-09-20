@@ -400,16 +400,29 @@ async fn field_preflight(
             "SELECT count(*)::bigint
                FROM registry_internal.registry_request_proposals AS proposal
               WHERE snapshot IS NOT NULL
-                AND EXISTS (
-                    SELECT 1
-                      FROM jsonb_array_elements(
-                               COALESCE(proposal.snapshot -> 'effects', '[]'::jsonb)
-                           ) AS effect
-                      CROSS JOIN LATERAL jsonb_array_elements(
-                          COALESCE(effect -> 'fieldChanges', '[]'::jsonb)
-                      ) AS field_change
-                     WHERE effect -> 'target' ->> 'entityId' = $1
-                       AND field_change ->> 'field' = $2
+                AND (
+                    EXISTS (
+                        SELECT 1
+                          FROM jsonb_array_elements(
+                                   COALESCE(proposal.snapshot -> 'effects', '[]'::jsonb)
+                               ) AS effect
+                          CROSS JOIN LATERAL jsonb_array_elements(
+                              COALESCE(effect -> 'fieldChanges', '[]'::jsonb)
+                          ) AS field_change
+                         WHERE effect -> 'target' ->> 'entityId' = $1
+                           AND field_change ->> 'field' = $2
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                          FROM jsonb_array_elements(
+                              COALESCE(
+                                  proposal.snapshot #> '{applicationPreconditions,targets}',
+                                  '[]'::jsonb
+                              )
+                          ) AS guard
+                         WHERE guard ->> 'entityId' = $1
+                           AND guard -> 'values' ? $2
+                    )
                 )",
             &[&entity_id, &field_id],
         )
@@ -772,6 +785,17 @@ async fn scrub_plaintext_request_snapshots(
                         )
                         OR EXISTS (
                             SELECT 1
+                              FROM jsonb_array_elements(
+                                  COALESCE(
+                                      proposal.snapshot #> '{applicationPreconditions,targets}',
+                                      '[]'::jsonb
+                                  )
+                              ) AS guard
+                             WHERE guard ->> 'entityId' = flip.entity_id
+                               AND guard -> 'values' ? flip.field_id
+                        )
+                        OR EXISTS (
+                            SELECT 1
                               FROM registry_internal.registry_request_targets AS target
                              WHERE target.request_entity_id = proposal.request_entity_id
                                AND target.request_id = proposal.request_id
@@ -900,16 +924,32 @@ async fn scrub_plaintext_request_snapshots(
                         ON origin.package_revision =
                            proposal.snapshot ->> 'originatingPackage'
                        AND origin.inferred_count = 1
-                      CROSS JOIN LATERAL jsonb_array_elements(
-                          COALESCE(proposal.snapshot -> 'effects', '[]'::jsonb)
-                      ) AS effect
-                      CROSS JOIN LATERAL jsonb_array_elements(
-                          COALESCE(effect -> 'fieldChanges', '[]'::jsonb)
-                      ) AS field_change
                      WHERE flip.history_choice = 'erase-and-rebaseline'
-                       AND effect -> 'target' ->> 'entityId' = flip.entity_id
-                       AND field_change ->> 'field' = flip.field_id
                        AND origin.package_sequence < boundary.package_sequence
+                       AND (
+                           EXISTS (
+                               SELECT 1
+                                 FROM jsonb_array_elements(
+                                     COALESCE(proposal.snapshot -> 'effects', '[]'::jsonb)
+                                 ) AS effect
+                                 CROSS JOIN LATERAL jsonb_array_elements(
+                                     COALESCE(effect -> 'fieldChanges', '[]'::jsonb)
+                                 ) AS field_change
+                                WHERE effect -> 'target' ->> 'entityId' = flip.entity_id
+                                  AND field_change ->> 'field' = flip.field_id
+                           )
+                           OR EXISTS (
+                               SELECT 1
+                                 FROM jsonb_array_elements(
+                                     COALESCE(
+                                         proposal.snapshot #> '{applicationPreconditions,targets}',
+                                         '[]'::jsonb
+                                     )
+                                 ) AS guard
+                                WHERE guard ->> 'entityId' = flip.entity_id
+                                  AND guard -> 'values' ? flip.field_id
+                           )
+                       )
                 )",
             &[],
         )

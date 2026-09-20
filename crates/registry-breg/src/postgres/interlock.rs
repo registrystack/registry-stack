@@ -1108,22 +1108,35 @@ impl DedicatedApplyConnection {
                              SELECT 1
                                FROM registry_internal.registry_request_proposals AS proposal
                               WHERE proposal.snapshot IS NOT NULL
-                                AND EXISTS (
-                                    SELECT 1
-                                      FROM jsonb_array_elements(
-                                          COALESCE(
-                                              proposal.snapshot -> 'effects',
-                                              '[]'::jsonb
-                                          )
-                                      ) AS effect
-                                      CROSS JOIN LATERAL jsonb_array_elements(
-                                          COALESCE(
-                                              effect -> 'fieldChanges',
-                                              '[]'::jsonb
-                                          )
-                                      ) AS field_change
-                                     WHERE effect -> 'target' ->> 'entityId' = $1
-                                       AND field_change ->> 'field' = $2
+                                AND (
+                                    EXISTS (
+                                        SELECT 1
+                                          FROM jsonb_array_elements(
+                                              COALESCE(
+                                                  proposal.snapshot -> 'effects',
+                                                  '[]'::jsonb
+                                              )
+                                          ) AS effect
+                                          CROSS JOIN LATERAL jsonb_array_elements(
+                                              COALESCE(
+                                                  effect -> 'fieldChanges',
+                                                  '[]'::jsonb
+                                              )
+                                          ) AS field_change
+                                         WHERE effect -> 'target' ->> 'entityId' = $1
+                                           AND field_change ->> 'field' = $2
+                                    )
+                                    OR EXISTS (
+                                        SELECT 1
+                                          FROM jsonb_array_elements(
+                                              COALESCE(
+                                                  proposal.snapshot #> '{applicationPreconditions,targets}',
+                                                  '[]'::jsonb
+                                              )
+                                          ) AS guard
+                                         WHERE guard ->> 'entityId' = $1
+                                           AND guard -> 'values' ? $2
+                                    )
                                 )
                          )",
                     &[&field.entity_id, &field.candidate.id.as_str()],
@@ -2907,8 +2920,8 @@ async fn verify_field_encryption_content(
     // Every target copy present while the flip transaction holds the apply
     // lock predates the flip. A structured plaintext value can legitimately
     // have the envelope tag's JSON shape, so value shape cannot subtract it
-    // from the accepted pre-flip count. Proposal copies use their frozen
-    // nested effects and field changes.
+    // from the accepted pre-flip count. Proposal copies include both frozen
+    // effect changes and application-precondition guard values.
     let request_targets = transaction
         .query_one(
             "SELECT count(*) FILTER (
@@ -2929,16 +2942,29 @@ async fn verify_field_encryption_content(
             "SELECT count(*)::bigint
                FROM registry_internal.registry_request_proposals AS proposal
               WHERE snapshot IS NOT NULL
-                AND EXISTS (
-                    SELECT 1
-                      FROM jsonb_array_elements(
-                               COALESCE(proposal.snapshot -> 'effects', '[]'::jsonb)
-                           ) AS effect
-                      CROSS JOIN LATERAL jsonb_array_elements(
-                          COALESCE(effect -> 'fieldChanges', '[]'::jsonb)
-                      ) AS field_change
-                     WHERE effect -> 'target' ->> 'entityId' = $1
-                       AND field_change ->> 'field' = $2
+                AND (
+                    EXISTS (
+                        SELECT 1
+                          FROM jsonb_array_elements(
+                                   COALESCE(proposal.snapshot -> 'effects', '[]'::jsonb)
+                               ) AS effect
+                          CROSS JOIN LATERAL jsonb_array_elements(
+                              COALESCE(effect -> 'fieldChanges', '[]'::jsonb)
+                          ) AS field_change
+                         WHERE effect -> 'target' ->> 'entityId' = $1
+                           AND field_change ->> 'field' = $2
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                          FROM jsonb_array_elements(
+                              COALESCE(
+                                  proposal.snapshot #> '{applicationPreconditions,targets}',
+                                  '[]'::jsonb
+                              )
+                          ) AS guard
+                         WHERE guard ->> 'entityId' = $1
+                           AND guard -> 'values' ? $2
+                    )
                 )",
             &[&entity_id, &field_id],
         )

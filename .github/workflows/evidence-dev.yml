@@ -130,6 +130,10 @@ jobs:
     needs: validate
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
+    env:
+      # Development artifacts are self-contained. aws-lc-fips-sys otherwise
+      # defaults to a build-directory dylib on macOS.
+      AWS_LC_FIPS_SYS_STATIC: "1"
     permissions:
       contents: read
     strategy:
@@ -211,6 +215,9 @@ jobs:
       # Clippy components while maturin or napi invokes Cargo on hosted ARM
       # runners, where those component shims may already exist.
       RUSTUP_TOOLCHAIN: "1.95.0"
+      # Development client packages are self-contained. aws-lc-fips-sys
+      # otherwise defaults to a build-directory dylib on macOS.
+      AWS_LC_FIPS_SYS_STATIC: "1"
     permissions:
       contents: read
     strategy:

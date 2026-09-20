@@ -1087,6 +1087,72 @@ async fn real_postgres_field_encryption_flip_retains_pre_boundary_plaintext_hist
     );
     let keys = flip_key_source();
 
+    // A pre-flip guard snapshot can retain plaintext even when neither the
+    // proposal effects nor request-target snapshots mention the field.
+    let request_id = Uuid::from_u128(0xFE71);
+    let fingerprint = format!("sha256:{}", "7".repeat(64));
+    let guard_plaintext = "retained-guard-plaintext-canary".to_owned();
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_request_state
+                 (request_entity_id, request_id, owner_reference, state,
+                  proposal_version, workflow_revision, review_completed_at)
+             VALUES ('encryption-request', $1, 'owner:hash', 'canceled', 1, 1,
+                     transaction_timestamp())",
+            &[&request_id],
+        )
+        .await
+        .expect("retained guard request state inserts");
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_request_proposals
+                 (request_entity_id, request_id, proposal_version, request_record_revision,
+                  contract_fingerprint, effect_digest, snapshot)
+             VALUES ('encryption-request', $1, 1, 1, $2, $2, $3)",
+            &[
+                &request_id,
+                &fingerprint,
+                &serde_json::json!({
+                    "originatingPackage": active.package_revision,
+                    "effects": [],
+                    "applicationPreconditions": {"targets": [{
+                        "id": "guard-asset",
+                        "entityId": "asset",
+                        "recordId": Uuid::from_u128(1).to_string(),
+                        "expectedRevision": 1,
+                        "values": {"secret": guard_plaintext}
+                    }]}
+                }),
+            ],
+        )
+        .await
+        .expect("retained guard proposal inserts");
+
+    let refused = apply_flip(&database, &package, &active, &keys, None)
+        .await
+        .expect_err("retain mode refuses frozen guard plaintext");
+    assert_eq!(
+        refused,
+        MigrationError::FieldEncryptionRetainedRequestSnapshots {
+            entity_id: "asset".to_owned(),
+            field_id: "secret".to_owned(),
+        }
+    );
+    assert_flip_value_free(&refused, std::slice::from_ref(&guard_plaintext));
+    assert_plaintext_column_present(&database, &prior).await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_proposals
+                SET snapshot = NULL, erased_at = transaction_timestamp()
+              WHERE request_entity_id = 'encryption-request' AND request_id = $1",
+            &[&request_id],
+        )
+        .await
+        .expect("operator clears the retained guard snapshot");
+
     let target = apply_flip(&database, &package, &active, &keys, None)
         .await
         .expect("the retained-history flip applies");

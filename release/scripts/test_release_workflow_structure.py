@@ -72,6 +72,10 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
         _, document = workflow("evidence-dev.yml")
         for job in ("build", "clients"):
             assert_pinned_go(self, document, job)
+            self.assertEqual(
+                document["jobs"][job]["env"]["AWS_LC_FIPS_SYS_STATIC"],
+                "1",
+            )
             cache = next(
                 step
                 for step in document["jobs"][job]["steps"]

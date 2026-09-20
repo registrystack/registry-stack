@@ -592,6 +592,8 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
     let reserved_record_id = Uuid::from_u128(0xCA12);
     let post_flip_request_id = Uuid::from_u128(0xCA13);
     let post_flip_record_id = Uuid::from_u128(0xCA14);
+    let guard_request_id = Uuid::from_u128(0xCA15);
+    let guard_record_id = Uuid::from_u128(0xCA16);
     let fingerprint = format!("sha256:{}", "7".repeat(64));
 
     let transaction = migration
@@ -659,6 +661,41 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
         )
         .await
         .expect("orphan create target inserts");
+    transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_request_state
+                 (request_entity_id, request_id, owner_reference, state,
+                  proposal_version, workflow_revision, review_completed_at)
+             VALUES ('membership-request', $1, 'owner:hash', 'canceled', 1, 1,
+                     transaction_timestamp())",
+            &[&guard_request_id],
+        )
+        .await
+        .expect("guard-only request state inserts");
+    transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_request_proposals
+                 (request_entity_id, request_id, proposal_version, request_record_revision,
+                  contract_fingerprint, effect_digest, snapshot)
+             VALUES ('membership-request', $1, 1, 1, $2, $2, $3)",
+            &[
+                &guard_request_id,
+                &fingerprint,
+                &json!({
+                    "originatingPackage": OLD_PACKAGE,
+                    "effects": [],
+                    "applicationPreconditions": {"targets": [{
+                        "id": "guard-membership",
+                        "entityId": ENTITY,
+                        "recordId": guard_record_id.to_string(),
+                        "expectedRevision": 1,
+                        "values": {"details": "guard-plaintext-canary"}
+                    }]}
+                }),
+            ],
+        )
+        .await
+        .expect("guard-only proposal inserts");
     transaction
         .execute(
             "INSERT INTO registry_internal.registry_request_state
@@ -844,7 +881,7 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
     .expect("field-encryption erasure handles a request with no created revision");
     assert_eq!(outcome.erased_record_count, 0);
     assert_eq!(outcome.scrubbed_request_target_count, 1);
-    assert_eq!(outcome.scrubbed_request_proposal_count, 1);
+    assert_eq!(outcome.scrubbed_request_proposal_count, 2);
 
     let erased = migration
         .query_one(
@@ -852,13 +889,19 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
                  (SELECT snapshot IS NULL AND erased_at IS NOT NULL
                     FROM registry_internal.registry_request_proposals WHERE request_id = $1),
                  (SELECT base_snapshot IS NULL AND after_snapshot IS NULL AND erased_at IS NOT NULL
-                    FROM registry_internal.registry_request_targets WHERE request_id = $1)",
-            &[&request_id],
+                    FROM registry_internal.registry_request_targets WHERE request_id = $1),
+                 (SELECT snapshot IS NULL AND erased_at IS NOT NULL
+                    FROM registry_internal.registry_request_proposals WHERE request_id = $2)",
+            &[&request_id, &guard_request_id],
         )
         .await
         .expect("migration can inspect erased orphan snapshots");
     assert!(erased.get::<_, bool>(0));
     assert!(erased.get::<_, bool>(1));
+    assert!(
+        erased.get::<_, bool>(2),
+        "a pre-flip application guard value is erased with its proposal snapshot"
+    );
     let post_flip_preserved = migration
         .query_one(
             "SELECT
