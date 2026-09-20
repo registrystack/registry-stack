@@ -1414,6 +1414,79 @@ async fn a_row_lock_replay_discloses_an_audited_receipt() {
     );
 }
 
+/// The retained-receipt releases take their durable identity gate inside the
+/// transaction that writes the disclosure record, not in a separate earlier
+/// read: while an activation holds the Registry lock exclusively, a replay
+/// and a recovery park before serving, and both release once it frees.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn receipt_releases_serve_only_under_the_registry_lock() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("release-lock", 2);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+
+    // Hold the Registry lock exclusively, as an activation would while it
+    // swaps the durable binding. The hold stays inside the 2-second lock
+    // timeout the release transactions run under.
+    harness
+        .database
+        .admin
+        .execute("BEGIN", &[])
+        .await
+        .expect("administrator opens a locking transaction");
+    harness
+        .database
+        .admin
+        .execute(
+            "SELECT pg_advisory_xact_lock($1)",
+            &[&harness.lock_key.get()],
+        )
+        .await
+        .expect("administrator holds the Registry lock");
+
+    let uri = format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks");
+    let replay = {
+        let app = harness.app.clone();
+        let uri = uri.clone();
+        let claims = claims.clone();
+        let body = chunk_body(&chunks, 0);
+        tokio::spawn(async move { post_json(&app, &uri, &claims, body).await })
+    };
+    let recovered = {
+        let app = harness.app.clone();
+        let uri = format!("{uri}/0/receipt");
+        let claims = claims.clone();
+        tokio::spawn(async move { get_json(&app, &uri, &claims).await })
+    };
+    assert_eq!(
+        poll_waiting_registry_locks(&harness, 2, Duration::from_millis(1500)).await,
+        2,
+        "the replay and the recovery park on the Registry lock before serving"
+    );
+
+    // Release the lock: the identity checks succeed and both releases serve.
+    harness
+        .database
+        .admin
+        .execute("COMMIT", &[])
+        .await
+        .expect("administrator releases the Registry lock");
+    let replayed = replay.await.expect("the replay completes");
+    let receipt = recovered.await.expect("the recovery completes");
+    assert_eq!(replayed.status(), StatusCode::OK);
+    assert_eq!(body_json(replayed).await["receipt"]["replayed"], true);
+    assert_eq!(receipt.status(), StatusCode::OK);
+}
+
 /// A chunk receipt over an encrypted field stores the sealed envelope exactly
 /// as the batch route's idempotency cache does, and opens it at the same
 /// release edge: the fresh answer carries the plaintext member, no envelope
@@ -3433,6 +3506,38 @@ async fn poll_waiting_runtime_locks(
             )
             .await
             .expect("administrator inspects waiting locks")
+            .get(0);
+        if parked >= expected || started.elapsed() >= deadline {
+            return parked;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Poll until `expected` runtime sessions wait on the Registry advisory lock,
+/// in the same spirit as `poll_waiting_runtime_locks`: the count walks the
+/// lock manager, and a miss past the deadline fails the test instead of
+/// passing vacuously.
+async fn poll_waiting_registry_locks(
+    harness: &IngestionHarness,
+    expected: i64,
+    deadline: Duration,
+) -> i64 {
+    let started = std::time::Instant::now();
+    let mut parked;
+    loop {
+        parked = harness
+            .database
+            .admin
+            .query_one(
+                "SELECT count(*) FROM pg_locks
+                  WHERE NOT granted AND locktype = 'advisory'
+                    AND database = (SELECT oid FROM pg_database
+                                     WHERE datname = current_database())",
+                &[],
+            )
+            .await
+            .expect("administrator inspects waiting Registry locks")
             .get(0);
         if parked >= expected || started.elapsed() >= deadline {
             return parked;

@@ -1141,12 +1141,6 @@ impl PostgresRecordMutationService {
         ))
     }
 
-    /// Whether this process still serves the package the database holds
-    /// active: the durable activation interlock ordinary mutations take.
-    fn instance_is_current(&self, active: &(String, String)) -> bool {
-        active.0 == self.expected.package_revision && active.1 == self.expected.schema_fingerprint
-    }
-
     /// Submit the next exact chunk of one run. The server derives the
     /// idempotency key from the run binding, so an interrupted submission
     /// replays the original receipt without a duplicate mutation.
@@ -1206,14 +1200,6 @@ impl PostgresRecordMutationService {
         let announced_body =
             canonical_digest == input.digest && canonical_body.len() <= run.maximum_bytes as usize;
         if input.chunk_index < run.next_chunk_index {
-            // Releasing a retained receipt serves committed values, so it
-            // owes the same durable activation interlock ordinary mutations
-            // take: an instance whose package a successor retired refuses
-            // the release, while a current instance serves the receipt the
-            // committed prefix retains.
-            if !self.instance_is_current(&active) {
-                return Err(IngestionServiceError::Unavailable);
-            }
             // The checkpoint already covers this chunk, so the caller is
             // recovering a lost response: return the stored receipt, never a
             // second mutation. This holds for every terminal status and for
@@ -1237,18 +1223,14 @@ impl PostgresRecordMutationService {
                 .ok_or(IngestionServiceError::Unavailable)?;
             let replayed =
                 stored.chunk_digest == input.digest && stored.prefix_digest == input.prefix_digest;
-            self.record_ingestion_attempt(
-                &**client,
-                run.run_id,
-                if replayed {
-                    IngestionAttemptOutcome::Replayed
-                } else {
-                    IngestionAttemptOutcome::ChunkMismatch
-                },
-                input.chunk_index,
-            )
-            .await;
             if !replayed {
+                self.record_ingestion_attempt(
+                    &**client,
+                    run.run_id,
+                    IngestionAttemptOutcome::ChunkMismatch,
+                    input.chunk_index,
+                )
+                .await;
                 return Err(IngestionServiceError::ChunkMismatch);
             }
             if stored.erased && stored.receipt.is_some() {
@@ -1280,19 +1262,41 @@ impl PostgresRecordMutationService {
                 !run.active_binding_matches(&active.0, &active.1),
                 &mut batch,
             )?;
-            // The replay releases the retained batch answer a second time,
-            // so its disclosure record commits before the answer leaves: an
-            // audit outage gates the release instead of passing silently.
+            // The replay releases the retained batch answer a second time, so
+            // the release takes the same guarded transaction ordinary
+            // mutations take: the registry lock plus the durable identity
+            // check inside it leave an instance whose package a successor
+            // retired no window to serve the receipt under permissions the
+            // successor already revoked, while a current instance serves the
+            // receipt the committed prefix retains. The replayed attempt
+            // marker and the disclosure record commit atomically with that
+            // check, so a refused release moves no marker and writes no
+            // record: an audit outage gates the release instead of passing
+            // silently.
             if !crate::audit::profile_is_keyed(&self.audit_profile) {
                 return Err(IngestionServiceError::Unavailable);
             }
             let mut disclosure_writer = self.client().await?;
-            let disclosure_transaction = disclosure_writer
-                .transaction()
-                .await
-                .map_err(|_| IngestionServiceError::Unavailable)?;
+            let disclosure_transaction = begin_record_transaction(
+                &mut disclosure_writer,
+                self.lock_key,
+                self.lock_timeout,
+                &self.expected,
+                &claims,
+            )
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+            let tx: &tokio_postgres::Transaction<'_> = disclosure_transaction.transaction();
+            ingestion_store::record_attempt(
+                tx,
+                run.run_id,
+                IngestionAttemptOutcome::Replayed,
+                input.chunk_index,
+            )
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
             ingestion_store::append_run_audit(
-                &disclosure_transaction,
+                tx,
                 &self.audit_profile,
                 ingestion_store::receipt_disclosure_record(
                     &run,
@@ -1661,13 +1665,6 @@ impl PostgresRecordMutationService {
         let active = ingestion_store::active_binding(&**client)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
-        // Releasing the stored receipt serves committed values, so the same
-        // durable activation interlock the replay release owes gates it too:
-        // an instance whose package a successor retired refuses, and a
-        // current instance serves the receipt under the contract.
-        if !self.instance_is_current(&active) {
-            return Err(IngestionServiceError::Unavailable);
-        }
         let stored = ingestion_store::load_chunk(&**client, run.run_id, chunk_index)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?
@@ -1699,18 +1696,29 @@ impl PostgresRecordMutationService {
             &mut batch,
         )?;
         // Recovery releases the same retained batch answer a replay does,
-        // so it owes the journal the same disclosure record, committed
-        // before the answer leaves: an audit outage gates the release.
+        // so the release takes the same guarded transaction the replay
+        // release takes: the registry lock plus the durable identity check
+        // inside it leave an instance whose package a successor retired no
+        // window to serve the receipt under permissions the successor
+        // already revoked, while a current instance owes the journal the
+        // disclosure record, committed before the answer leaves, so an audit
+        // outage gates the release.
         if !crate::audit::profile_is_keyed(&self.audit_profile) {
             return Err(IngestionServiceError::Unavailable);
         }
         let mut writer = self.client().await?;
-        let transaction = writer
-            .transaction()
-            .await
-            .map_err(|_| IngestionServiceError::Unavailable)?;
+        let transaction = begin_record_transaction(
+            &mut writer,
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+            &claims,
+        )
+        .await
+        .map_err(|_| IngestionServiceError::Unavailable)?;
+        let tx: &tokio_postgres::Transaction<'_> = transaction.transaction();
         ingestion_store::append_run_audit(
-            &transaction,
+            tx,
             &self.audit_profile,
             ingestion_store::receipt_disclosure_record(
                 &run,
