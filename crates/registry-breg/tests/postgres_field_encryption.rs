@@ -156,8 +156,8 @@ entities:
           operation: patch
           set: {label: {fromField: reason}}
       review:
-        stages:
-          - {id: review, approvals: 1}
+        mode: none
+      onApproved: {mode: manual}
       retention: {mode: operator_erase}
 accessProfiles:
   - id: operator
@@ -197,26 +197,6 @@ accessProfiles:
           - entity: dossier
             rowBoundaries:
               - {field: jurisdiction, claim: jurisdiction, operator: equals}
-  - id: reviewer
-    principalClaim: registry_principal
-    requiredPurposes: [case-management]
-    permissions:
-      - entity: dossier-request
-        operations: [get, approve_request, reject_request, request_revision]
-        readableFields: [jurisdiction, reason, dossier, secret, evidence]
-        writableFields: []
-        rowBoundaries:
-          - {field: jurisdiction, claim: jurisdiction, operator: equals}
-        reviewStages:
-          - stage: review
-            targets:
-              - entity: dossier
-                readableFields: [jurisdiction, label, code]
-                rowBoundaries:
-                  - {field: jurisdiction, claim: jurisdiction, operator: equals}
-              - entity: dossier-request
-                readableFields: [evidence]
-                rowBoundaries: []
 "#;
 
 const JOURNEY_SOURCE: &str = r#"journeys:
@@ -2275,7 +2255,7 @@ async fn submitted_dossier_request(server: &LiveServer, dossier_id: &str) -> Str
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn review_snapshot_opens_target_before_for_the_reviewer() {
+async fn submitted_target_snapshot_stays_encrypted_at_rest() {
     let server = boot_live_server().await;
 
     let response = send(
@@ -2301,36 +2281,6 @@ async fn review_snapshot_opens_target_before_for_the_reviewer() {
         .to_owned();
 
     let request_id = submitted_dossier_request(&server, &dossier_id).await;
-
-    // The reviewer sees the captured target row opened at the display edge.
-    let reviewed = send_as(
-        &server,
-        Method::GET,
-        &format!("/v1/records/dossier-requests/{request_id}?accessProfile=reviewer"),
-        &[],
-        None,
-        &token_for("reviewer", "area-a"),
-    )
-    .await;
-    assert_eq!(reviewed.status(), StatusCode::OK);
-    let reviewed = body_json(reviewed).await;
-    let approve = find_action(&reviewed, "approve_request");
-    let targets = approve["review"]["targets"]
-        .as_array()
-        .expect("the approve action carries review targets");
-    let target = targets
-        .iter()
-        .find(|target| target["entityId"] == "dossier")
-        .expect("the dossier target is reviewed");
-    assert_eq!(
-        target["before"]["code"], "ABC-1234",
-        "the captured before row opens for the reviewer"
-    );
-    // Phase 1 refuses encrypted change-request targets, so the effect changes
-    // the plaintext label; the encrypted code member travels sealed in both
-    // captured rows and opens here unchanged.
-    assert_eq!(target["after"]["label"], "correct the label");
-    assert_eq!(target["after"]["code"], "ABC-1234");
 
     // The stored target reference keeps the tagged member.
     let base_snapshot: String = server

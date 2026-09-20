@@ -1459,22 +1459,6 @@ mod tests {
         );
     }
 
-    fn request_revision(workflow: RequestWorkflow, actor_ref: &str, second: u8) -> RequestWorkflow {
-        let proposal = workflow.current_proposal().expect("current proposal");
-        let digest = proposal.effect_digest().clone();
-        let version = workflow.current_version();
-        workflow
-            .decide(
-                context(actor_ref, second),
-                "review",
-                version,
-                &digest,
-                ReviewDecisionKind::RequestRevision,
-            )
-            .expect("request revision")
-            .into_workflow()
-    }
-
     #[tokio::test]
     async fn request_schema_installs_repeatably_and_grants_declared_table_privileges() {
         let (database, migration, migration_task) = install_schema().await;
