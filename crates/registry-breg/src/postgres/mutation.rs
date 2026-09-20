@@ -787,20 +787,7 @@ impl PostgresRecordMutationService {
         &self,
         claims: &ClaimContext,
     ) -> Result<String, IngestionServiceError> {
-        let context = crate::idempotency::canonical_claim_context(&self.audit_profile, claims, "")
-            .map_err(|_| IngestionServiceError::Unavailable)?;
-        let canonical = registry_platform_canonical_json::canonicalize_json(&context)
-            .map_err(|_| IngestionServiceError::Unavailable)?;
-        let canonical =
-            std::str::from_utf8(&canonical).map_err(|_| IngestionServiceError::Unavailable)?;
-        self.audit_profile
-            .key_hasher()
-            .audit_reference_hash(
-                "breg-ingestion-context-v1",
-                &self.expected.database_id,
-                canonical,
-            )
-            .map_err(|_| IngestionServiceError::Unavailable)
+        ingestion_context_reference(&self.audit_profile, &self.expected.database_id, claims)
     }
 
     async fn client(&self) -> Result<deadpool_postgres::Client, IngestionServiceError> {
@@ -1742,6 +1729,33 @@ enum MutationFaultControl {
     RefusalAudit,
 }
 
+/// The keyed reference of the claim context one run is bound to. It
+/// covers the same members an ordinary mutation's idempotency binding
+/// covers, including the task grant when the claims carry one, with the
+/// database rather than the package revision as its scope, so a committed
+/// chunk's replay still answers across a package change while a drifted
+/// context cannot replay or continue the run.
+fn ingestion_context_reference(
+    audit_profile: &AuditProfile,
+    database_id: &str,
+    claims: &ClaimContext,
+) -> Result<String, IngestionServiceError> {
+    let mut context = crate::idempotency::canonical_claim_context(audit_profile, claims, "")
+        .map_err(|_| IngestionServiceError::Unavailable)?;
+    if let Some(grant) = claims.task_grant() {
+        context["taskGrant"] =
+            serde_json::to_value(grant).map_err(|_| IngestionServiceError::Unavailable)?;
+    }
+    let canonical = registry_platform_canonical_json::canonicalize_json(&context)
+        .map_err(|_| IngestionServiceError::Unavailable)?;
+    let canonical =
+        std::str::from_utf8(&canonical).map_err(|_| IngestionServiceError::Unavailable)?;
+    audit_profile
+        .key_hasher()
+        .audit_reference_hash("breg-ingestion-context-v1", database_id, canonical)
+        .map_err(|_| IngestionServiceError::Unavailable)
+}
+
 fn strict_claim_context(
     registry: &CompiledRegistry,
     context: &AuthorizedRequestContext,
@@ -1866,4 +1880,125 @@ fn receipt_json(
         "erased": erased,
         "batch": batch,
     })
+}
+
+#[cfg(test)]
+mod ingestion_context_tests {
+    use super::*;
+    use crate::compiler::{compile_project, CompileProfile};
+    use crate::contract::parse_project_json;
+    use crate::task_grant::TaskGrantBinding;
+
+    const CONTEXT_FIXTURE: &str = r#"{
+      "apiVersion":"registry.registrystack.org/v1alpha1",
+      "kind":"RegistryProject",
+      "registry":{"id":"run-context-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "entities":[{
+        "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
+        "fields":[{"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}]
+      }],
+      "accessProfiles":[{
+        "id":"operator","default":true,"principalClaim":"registry_principal",
+        "requiredPurposes":["review"],
+        "permissions":[{
+          "entity":"entry","operations":["get"],
+          "readableFields":["tenant"],
+          "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
+        }]
+      }]
+    }"#;
+
+    fn fixture_claims() -> ClaimContext {
+        let project =
+            parse_project_json(CONTEXT_FIXTURE.as_bytes()).expect("the fixture project parses");
+        let registry = compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("the fixture project compiles");
+        ClaimContext::for_compiled(
+            &registry,
+            "entry",
+            Some("agent".to_owned()),
+            "operator",
+            Some("review".to_owned()),
+            vec![RowBoundaryContext::Equals {
+                field: "tenant".to_owned(),
+                value: "tenant-a".to_owned(),
+            }],
+        )
+        .expect("the fixture context is exact")
+    }
+
+    fn grant(id: &str) -> TaskGrantBinding {
+        serde_json::from_value(json!({
+            "grantId": id,
+            "sourceIssuer": "https://casework.example",
+            "principal": "agent",
+            "client": "task-agent",
+            "resource": "urn:breg:test",
+            "purpose": "review",
+            "bounds": {"type": "breg", "permissions": [
+                {"collection": "entries", "operations": ["get"]}
+            ]},
+            "subjects": {"tenant_claim": "tenant-a"},
+            "expiresAt": chrono::Utc::now().timestamp() + 900,
+        }))
+        .expect("the fixture grant binds")
+    }
+
+    /// The run context reference is total over the verified authorization
+    /// inputs: two scope-identical sibling task grants differ only in grant
+    /// id, and the reference must separate them exactly the way the ordinary
+    /// mutation idempotency binding's taskGrant member does, while a
+    /// grant-free context keeps the reference shape it has always had.
+    #[test]
+    fn a_sibling_task_grant_changes_the_run_context_reference() {
+        let profile = AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
+            .expect("the test owns a keyed audit profile");
+        let claims = fixture_claims();
+        let plain = ingestion_context_reference(&profile, "run-database", &claims)
+            .expect("the grant-free reference derives");
+        let first = ingestion_context_reference(
+            &profile,
+            "run-database",
+            &claims
+                .clone()
+                .with_task_grant(grant("11111111-1111-4111-8111-111111111111"))
+                .expect("the first grant binds to the claims"),
+        )
+        .expect("the first granted reference derives");
+        let second = ingestion_context_reference(
+            &profile,
+            "run-database",
+            &claims
+                .clone()
+                .with_task_grant(grant("22222222-2222-4222-8222-222222222222"))
+                .expect("the second grant binds to the claims"),
+        )
+        .expect("the second granted reference derives");
+
+        assert_ne!(
+            first, second,
+            "scope-identical sibling grants must not share one run context reference"
+        );
+        assert_ne!(
+            first, plain,
+            "a granted context must not answer the grant-free reference"
+        );
+
+        // The grant-free shape is stable: a context without a task grant
+        // hashes exactly the member set the reference has always covered, so
+        // references stored before grants could reach a run still answer.
+        let context = crate::idempotency::canonical_claim_context(&profile, &claims, "")
+            .expect("the grant-free canonical context derives");
+        let canonical = registry_platform_canonical_json::canonicalize_json(&context)
+            .expect("the canonical context encodes");
+        let legacy = profile
+            .key_hasher()
+            .audit_reference_hash(
+                "breg-ingestion-context-v1",
+                "run-database",
+                std::str::from_utf8(&canonical).expect("canonical JSON is UTF-8"),
+            )
+            .expect("the legacy reference derives");
+        assert_eq!(plain, legacy);
+    }
 }
