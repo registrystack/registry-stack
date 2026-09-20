@@ -14,6 +14,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
+use tokio::sync::Notify;
 use tower::ServiceExt;
 
 const ISSUER: &str = "https://task-token.test";
@@ -29,6 +30,8 @@ fn binding() -> SourceBinding {
 }
 struct Source {
     mode: Arc<AtomicUsize>,
+    read_started: Arc<Notify>,
+    read_continue: Arc<Notify>,
 }
 #[async_trait]
 impl SourceAdapter for Source {
@@ -66,6 +69,10 @@ impl SourceAdapter for Source {
         if self.mode.load(Ordering::SeqCst) == 5 {
             return Err(SourceAdapterError::Unavailable);
         }
+        if self.mode.load(Ordering::SeqCst) == 7 {
+            self.read_started.notify_one();
+            self.read_continue.notified().await;
+        }
         Ok(CallerSubjectView {
             display_reference: None,
             subject: subject.clone(),
@@ -86,6 +93,10 @@ impl SourceAdapter for Source {
             3 if caller.is_some() => return Err(SourceAdapterError::Denied),
             4 if caller.is_none() => {
                 tokio::time::sleep(std::time::Duration::from_millis(1250)).await
+            }
+            6 if caller.is_some() => {
+                self.read_started.notify_one();
+                self.read_continue.notified().await;
             }
             _ => (),
         }
@@ -131,6 +142,8 @@ fn token_claims(mut claims: Value) -> String {
 struct Fixture {
     app: Router,
     mode: Arc<AtomicUsize>,
+    read_started: Arc<Notify>,
+    read_continue: Arc<Notify>,
     item: Uuid,
     review_task: Uuid,
     profile_id: &'static str,
@@ -236,10 +249,20 @@ async fn fixture_for_role(lifetime: u64, role: CaseworkRole) -> Fixture {
     .await
     .unwrap();
     let mode = Arc::new(AtomicUsize::new(0));
-    let app = test_app(&store, &project, mode.clone());
+    let read_started = Arc::new(Notify::new());
+    let read_continue = Arc::new(Notify::new());
+    let app = test_app(
+        &store,
+        &project,
+        mode.clone(),
+        read_started.clone(),
+        read_continue.clone(),
+    );
     Fixture {
         app,
         mode,
+        read_started,
+        read_continue,
         item,
         review_task,
         profile_id,
@@ -251,7 +274,13 @@ async fn fixture_for_role(lifetime: u64, role: CaseworkRole) -> Fixture {
     }
 }
 
-fn test_app(store: &PostgresStore, project: &CaseworkProject, mode: Arc<AtomicUsize>) -> Router {
+fn test_app(
+    store: &PostgresStore,
+    project: &CaseworkProject,
+    mode: Arc<AtomicUsize>,
+    read_started: Arc<Notify>,
+    read_continue: Arc<Notify>,
+) -> Router {
     let mut key = registry_platform_crypto::generate_private_jwk(
         registry_platform_crypto::GeneratedKeyAlgorithm::Rs384,
     )
@@ -273,7 +302,11 @@ fn test_app(store: &PostgresStore, project: &CaseworkProject, mode: Arc<AtomicUs
     let service = crate::CaseworkService::new(
         store.clone(),
         project.clone(),
-        [Arc::new(Source { mode: mode.clone() }) as Arc<dyn SourceAdapter>],
+        [Arc::new(Source {
+            mode: mode.clone(),
+            read_started,
+            read_continue,
+        }) as Arc<dyn SourceAdapter>],
     )
     .unwrap()
     .with_task_authority(Some(authority));
@@ -319,6 +352,35 @@ async fn request(
     key: Option<&str>,
 ) -> (StatusCode, Value) {
     request_with_profiles(f, method, path, token, human, human, body, key).await
+}
+
+async fn start_blocked_get(
+    f: &Fixture,
+    path: &str,
+    token: &str,
+    mode: usize,
+) -> tokio::task::JoinHandle<(StatusCode, Value)> {
+    f.mode.store(mode, Ordering::SeqCst);
+    let app = f.app.clone();
+    let path = path.to_owned();
+    let token = token.to_owned();
+    let profile_id = f.profile_id.to_owned();
+    let request = tokio::spawn(async move {
+        let request = Request::builder()
+            .method("GET")
+            .uri(path)
+            .header("authorization", format!("Bearer {token}"))
+            .header(CASEWORK_PROFILE_HEADER, profile_id)
+            .header(SOURCE_PROFILE_HEADER, "source-reader")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 65_536).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    });
+    f.read_started.notified().await;
+    request
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -386,6 +448,25 @@ async fn replace_membership(store: &PostgresStore, kind: &str) {
         .await
         .unwrap();
     transaction.commit().await.unwrap();
+}
+
+async fn replace_task_holder(store: &PostgresStore, task_id: Uuid, review: bool, subject: &str) {
+    let db = store.client().await.unwrap();
+    let table = if review {
+        "casework_review_tasks"
+    } else {
+        "casework_items"
+    };
+    db.execute(
+        &format!(
+            "UPDATE {table} SET holder_subject=$2,revision=revision+1,updated_at=now() \
+             WHERE {}=$1",
+            if review { "task_id" } else { "item_id" }
+        ),
+        &[&task_id, &subject],
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -641,6 +722,85 @@ async fn task_http_approval_assertion_status_and_revocation_enforce_current_auth
 }
 
 #[tokio::test]
+async fn task_grant_previews_and_lists_recheck_eligibility_after_source_reads() {
+    let f = fixture(900).await;
+    let human = token("human", "human-client", "human", "casework:staff");
+    let item_grants = format!("/v1/work-items/{}/task-grants", f.item);
+    let review_grants = format!("/v1/review-tasks/{}/task-grants", f.review_task);
+    assert_eq!(
+        request(
+            &f,
+            "POST",
+            &item_grants,
+            &human,
+            true,
+            Some(json!({"templateId":"summary","templateVersion":"1"})),
+            Some("race-item-grant"),
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(
+            &f,
+            "POST",
+            &review_grants,
+            &human,
+            true,
+            Some(json!({"templateId":"review-summary","templateVersion":"1"})),
+            Some("race-review-grant"),
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+
+    let pending = start_blocked_get(&f, &item_grants, &human, 7).await;
+    f.store.activate_task_templates(&[]).await.unwrap();
+    f.read_continue.notify_one();
+    let (status, _) = pending.await.unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    f.store
+        .activate_task_templates(&f.project.task_templates)
+        .await
+        .unwrap();
+
+    let item_preview = format!("/v1/work-items/{}/task-templates", f.item);
+    let pending = start_blocked_get(&f, &item_preview, &human, 6).await;
+    f.store.activate_task_templates(&[]).await.unwrap();
+    f.read_continue.notify_one();
+    let (status, body) = pending.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["templates"], json!([]));
+    f.store
+        .activate_task_templates(&f.project.task_templates)
+        .await
+        .unwrap();
+
+    let review_preview = format!("/v1/review-tasks/{}/task-templates", f.review_task);
+    let pending = start_blocked_get(&f, &review_preview, &human, 6).await;
+    replace_task_holder(&f.store, f.review_task, true, "other").await;
+    f.read_continue.notify_one();
+    let (status, body) = pending.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["itemRevision"], 0);
+    assert_eq!(body["templates"], json!([]));
+    replace_task_holder(&f.store, f.review_task, true, "human").await;
+
+    let pending = start_blocked_get(&f, &review_grants, &human, 6).await;
+    replace_task_holder(&f.store, f.review_task, true, "other").await;
+    f.read_continue.notify_one();
+    let (status, _) = pending.await.unwrap();
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn task_grants_do_not_survive_an_approver_profile_role_change() {
     let mut f = fixture(900).await;
     let human = token("human", "human-client", "human", "casework:staff");
@@ -693,7 +853,13 @@ async fn task_grants_do_not_survive_an_approver_profile_role_change() {
     changed_project
         .check()
         .expect("the changed project is valid");
-    f.app = test_app(&f.store, &changed_project, f.mode.clone());
+    f.app = test_app(
+        &f.store,
+        &changed_project,
+        f.mode.clone(),
+        f.read_started.clone(),
+        f.read_continue.clone(),
+    );
 
     let assertion_path = format!("/v1/task-grants/{assertion_id}/assertion");
     let status_path = format!("/v1/task-grants/{status_id}/status");

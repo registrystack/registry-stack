@@ -231,7 +231,16 @@ impl CaseworkClient {
                 .query(query),
             &auth,
         )?;
-        self.send_json(request, StatusCode::OK).await
+        let complete: CaseworkComplete<ReviewResultFeedPage> =
+            self.send_json(request, StatusCode::OK).await?;
+        if !valid_review_result_feed_page(&complete.value) {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete)
     }
 
     pub async fn cancel_review_request(
@@ -1712,6 +1721,16 @@ fn valid_review_request_view(value: &ReviewRequestView, expected_request_id: Uui
             !stage.is_empty() && stage.len() <= 128 && !stage.chars().any(char::is_control)
         })
         && value.updated_at >= value.created_at
+}
+
+fn valid_review_result_feed_page(value: &ReviewResultFeedPage) -> bool {
+    value.items.len() <= MAXIMUM_PAGE_SIZE
+        && value.next_cursor.as_ref().is_none_or(|cursor| {
+            !cursor.is_empty()
+                && cursor.len() <= MAXIMUM_CURSOR_BYTES
+                && !cursor.chars().any(char::is_control)
+                && Uuid::parse_str(cursor).is_ok()
+        })
 }
 
 fn review_validation_reason(value: &str) -> Option<ReviewValidationReason> {

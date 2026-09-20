@@ -1664,7 +1664,7 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
         .database
         .execute(
             "UPDATE casework_review_requests
-             SET terminal_at=$2,result_available_until=$3,result_erased_at=$3
+             SET terminal_at=$2,result_available_until=$3
              WHERE request_id=$1",
             &[
                 &request_id,
@@ -1673,7 +1673,83 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
             ],
         )
         .await
-        .expect("simulate an earlier cleanup that left terminal tasks behind");
+        .expect("expire terminal review before cleanup runs");
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_task(&fixture.reviewer_b, primary, None, "")
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_task_context(&fixture.reviewer_b, primary, None, "")
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_task_draft(&fixture.reviewer_b, primary, None, "")
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    for actor in [&fixture.producer, &fixture.reviewer_b] {
+        assert!(matches!(
+            fixture
+                .service_v1
+                .review_history(actor, request_id, None, "", None, 100)
+                .await,
+            Err(ReviewRuntimeError::ResultExpired)
+        ));
+    }
+
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests
+             SET result_available_until=$2,result_erased_at=$3
+             WHERE request_id=$1",
+            &[
+                &request_id,
+                &(now + TimeDelta::days(1)),
+                &(now - TimeDelta::seconds(1)),
+            ],
+        )
+        .await
+        .expect("mark terminal result erased while task rows remain");
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_task(&fixture.reviewer_b, primary, None, "")
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_history(
+                &fixture.producer,
+                request_id,
+                None,
+                "producer-token",
+                None,
+                100,
+            )
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests
+             SET result_available_until=$2,result_erased_at=$2
+             WHERE request_id=$1",
+            &[&request_id, &(now - TimeDelta::days(1))],
+        )
+        .await
+        .expect("restore expired retention markers for cleanup");
     fixture
         .service_v1
         .erase_expired_reviews()

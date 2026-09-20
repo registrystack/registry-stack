@@ -18,7 +18,10 @@ use registry_breg::compiler::{
     compile_project, compile_project_with_assets, module_digest, module_digest_with_assets,
     CompileProfile,
 };
-use registry_breg::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
+use registry_breg::contract::{
+    parse_module_yaml, parse_project_yaml, ChangeRequestNoReviewModeSource,
+    ChangeRequestNoReviewSource, ChangeRequestReviewSource, ModuleAssetSource,
+};
 use registry_breg::fixtures::{
     execute_schema_test, validate_fixture_journeys, validate_schema_test_receipt_for_package,
     FixtureError, FixtureModuleSource, FixtureSourceFile, PostgresFixtureTestRunner,
@@ -77,9 +80,8 @@ const HOUSEHOLD_DEMOGRAPHICS_MODULE_SOURCE: &[u8] = include_bytes!(
 const HOUSEHOLD_DEMOGRAPHICS_SQL: &[u8] = include_bytes!(
     "../../../products/breg/acceptance/publicschema-household-change-requests/modules/publicschema-household-demographics/sql/household-demographics.sql"
 );
-const HOUSEHOLD_JOURNEY_SOURCE: &[u8] = include_bytes!(
-    "../../../products/breg/acceptance/publicschema-household-change-requests/tests/journeys.yaml"
-);
+const HOUSEHOLD_RESULT_CAPTURE_JOURNEY_SOURCE: &[u8] =
+    include_bytes!("fixtures/household-no-review-capture-journey.yaml");
 const COMPILER_SOURCE_REVISION: &str = "fixture-project-source";
 const DATABASE_ID: &str = "fixture-database";
 const INSTANCE_ID: &str = "fixture-instance";
@@ -527,13 +529,13 @@ async fn public_spatial_fixture_schema_test_runs_through_the_production_executor
 async fn entity_apply_result_captures_resolve_committed_records_through_the_production_executor() {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let (compiled, project_source, modules) = compiled_household_fixture();
-    let suite = validate_fixture_journeys(HOUSEHOLD_JOURNEY_SOURCE, &compiled)
+    let suite = validate_fixture_journeys(HOUSEHOLD_RESULT_CAPTURE_JOURNEY_SOURCE, &compiled)
         .expect("household journey with entity apply result captures preflights");
     let schema_fingerprint = measure_compiled_schema_fingerprint(&compiled).await;
     let package = package_fixture_with_modules(
         &project_source,
         &schema_fingerprint,
-        HOUSEHOLD_JOURNEY_SOURCE,
+        HOUSEHOLD_RESULT_CAPTURE_JOURNEY_SOURCE,
         modules,
     );
     let idp = MockIdp::start().await;
@@ -562,10 +564,10 @@ async fn entity_apply_result_captures_resolve_committed_records_through_the_prod
         household_credential_bindings(&suite, &idp),
     )
     .await
-    .expect("submit, independent review, final approval, apply, and captured-result GETs succeed");
+    .expect("submit, apply, and captured-result GETs succeed");
     assert_eq!(
         receipt.successful_journey_ids(),
-        ["household-contact-registration-request-flow"]
+        ["household-contact-registration-result-capture"]
     );
     validate_schema_test_receipt_for_package(
         &receipt
@@ -1220,8 +1222,9 @@ fn household_credential_bindings(
     suite: &registry_breg::fixtures::ValidatedFixtureJourneys,
     idp: &MockIdp,
 ) -> SchemaTestCredentialBindings {
-    let document: serde_json::Value = serde_norway::from_slice(HOUSEHOLD_JOURNEY_SOURCE)
-        .expect("validated household journeys decode for synthetic credential binding");
+    let document: serde_json::Value =
+        serde_norway::from_slice(HOUSEHOLD_RESULT_CAPTURE_JOURNEY_SOURCE)
+            .expect("validated household journeys decode for synthetic credential binding");
     let mut bindings = Vec::new();
     for journey in document["journeys"]
         .as_array()
@@ -1625,6 +1628,15 @@ fn compiled_household_fixture() -> (
     identity.environment = "production".to_owned();
     identity.instance_id = INSTANCE_ID.to_owned();
     identity.source_revision = COMPILER_SOURCE_REVISION.to_owned();
+    let request = project
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == "register-household-contact-request")
+        .and_then(|entity| entity.change_request.as_mut())
+        .expect("household fixture declares the contact request");
+    request.review = ChangeRequestReviewSource::None(ChangeRequestNoReviewSource {
+        mode: ChangeRequestNoReviewModeSource::None,
+    });
     let registry = compile_project_with_assets(
         &project,
         &[core, demographics],

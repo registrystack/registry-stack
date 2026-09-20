@@ -950,6 +950,13 @@ impl crate::CaseworkService {
             let Ok(subjects) = template.disclosed_subjects(&context.values) else {
                 continue;
             };
+            if !self
+                .store
+                .eligible_task_template(actor, item_id, template)
+                .await?
+            {
+                continue;
+            }
             templates.push(TaskTemplatePreview {
                 id: template.id.clone(),
                 version: template.version.clone(),
@@ -1059,6 +1066,25 @@ impl crate::CaseworkService {
     ) -> Result<TaskGrantList, crate::ServiceError> {
         self.caller_item(actor, item, profile, token).await?;
         let grants = self.store.task_grants_for_item(item).await?;
+        let mut eligible = false;
+        for template in self
+            .project
+            .task_templates
+            .iter()
+            .filter(|template| template.review_kinds.is_empty())
+        {
+            if self
+                .store
+                .eligible_task_template(actor, item, template)
+                .await?
+            {
+                eligible = true;
+                break;
+            }
+        }
+        if !eligible {
+            return Err(crate::ServiceError::Forbidden);
+        }
         Ok(TaskGrantList {
             grants: grants.iter().map(grant_view).collect(),
         })
@@ -1102,14 +1128,13 @@ impl crate::CaseworkService {
             .iter()
             .filter(|template| !template.review_kinds.is_empty())
         {
-            let Some((_request_id, revision, subject)) = self
+            let Some((request_id, revision, subject)) = self
                 .store
                 .eligible_review_task_template(actor, task_id, template)
                 .await?
             else {
                 continue;
             };
-            task_revision = Some(revision);
             let source_subject = SubjectRef {
                 source_id: subject.source.clone(),
                 kind: subject.subject_type.clone(),
@@ -1141,6 +1166,19 @@ impl crate::CaseworkService {
             let Ok(subjects) = template.disclosed_subjects(&context.values) else {
                 continue;
             };
+            let Some((current_request_id, current_revision, current_subject)) = self
+                .store
+                .eligible_review_task_template(actor, task_id, template)
+                .await?
+            else {
+                continue;
+            };
+            if (current_request_id, current_revision, &current_subject)
+                != (request_id, revision, &subject)
+            {
+                continue;
+            }
+            task_revision = Some(revision);
             templates.push(TaskTemplatePreview {
                 id: template.id.clone(),
                 version: template.version.clone(),
@@ -1261,6 +1299,26 @@ impl crate::CaseworkService {
             return Err(crate::ServiceError::NotFound);
         }
         let grants = self.store.review_task_grants_for_task(task_id).await?;
+        let mut eligible = false;
+        for template in self
+            .project
+            .task_templates
+            .iter()
+            .filter(|template| !template.review_kinds.is_empty())
+        {
+            if self
+                .store
+                .eligible_review_task_template(actor, task_id, template)
+                .await?
+                .is_some_and(|(_, revision, _)| revision == previews.item_revision)
+            {
+                eligible = true;
+                break;
+            }
+        }
+        if !eligible {
+            return Err(crate::ServiceError::NotFound);
+        }
         Ok(TaskGrantList {
             grants: grants.iter().map(review_grant_view).collect(),
         })

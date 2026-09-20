@@ -120,6 +120,7 @@ struct ReviewRequestRecord {
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     result_available_until: Option<DateTime<Utc>>,
+    result_erased_at: Option<DateTime<Utc>>,
     initiator: Option<IssuerPrincipal>,
     result_constraints: Option<Value>,
     context: Option<registry_casework_core::ReviewContext>,
@@ -919,6 +920,7 @@ impl CaseworkService {
         token: &str,
     ) -> Result<(), ReviewRuntimeError> {
         let record = self.store.review_request_for_task(task_id).await?;
+        ensure_review_result_retained(&record)?;
         self.preflight_review_record_source(&record, source_profile_id, token)
             .await
     }
@@ -1415,7 +1417,8 @@ impl PostgresStore {
         let row = client
             .query_opt(
                 "SELECT t.task_id,t.request_id,t.stage_index,t.stage_id,t.queue_id,t.state,
-                        t.holder_issuer,t.holder_subject,t.revision,r.policy_snapshot
+                        t.holder_issuer,t.holder_subject,t.revision,r.policy_snapshot,
+                        r.lifecycle,r.result_available_until,r.result_erased_at
                  FROM casework_review_tasks t
                  JOIN casework_review_requests r ON r.request_id=t.request_id
                  JOIN casework_queue_service q ON q.queue_id=t.queue_id
@@ -1430,6 +1433,14 @@ impl PostgresStore {
             )
             .await?
             .ok_or(ReviewRuntimeError::NotFound)?;
+        if row.get::<_, String>(10) != "reviewing"
+            && (row.get::<_, Option<DateTime<Utc>>>(12).is_some()
+                || row
+                    .get::<_, Option<DateTime<Utc>>>(11)
+                    .is_none_or(|available_until| available_until <= Utc::now()))
+        {
+            return Err(ReviewRuntimeError::ResultExpired);
+        }
         let policy: ReviewKindPolicySnapshot = serde_json::from_value(row.get(9))?;
         let stage_index =
             u16::try_from(row.get::<_, i32>(2)).map_err(|_| ReviewRuntimeError::Corrupt)?;
@@ -2304,12 +2315,7 @@ impl PostgresStore {
     ) -> Result<ReviewRequestView, ReviewRuntimeError> {
         let client = self.client().await?;
         let record = load_request_client(&client, producer_id, request_id).await?;
-        if record
-            .result_available_until
-            .is_some_and(|available_until| available_until <= Utc::now())
-        {
-            return Err(ReviewRuntimeError::ResultExpired);
-        }
+        ensure_review_result_retained(&record)?;
         Ok(request_view(&record))
     }
 
@@ -2320,6 +2326,7 @@ impl PostgresStore {
     ) -> Result<(), ReviewRuntimeError> {
         let client = self.client().await?;
         let record = load_request_by_id(&client, request_id, false).await?;
+        ensure_review_result_retained(&record)?;
         ensure_review_reviewer_access(&client, &record, actor, None, false).await
     }
 
@@ -2335,10 +2342,7 @@ impl PostgresStore {
             transaction.commit().await?;
             return Ok(ReviewResultRead::Pending);
         }
-        if record
-            .result_available_until
-            .is_none_or(|available_until| available_until <= Utc::now())
-        {
+        if ensure_review_result_retained(&record).is_err() {
             transaction.commit().await?;
             return Ok(ReviewResultRead::Expired);
         }
@@ -2932,6 +2936,7 @@ impl PostgresStore {
             .ok_or(ReviewRuntimeError::NotFound)?
             .get::<_, Uuid>(0);
         let record = load_request_by_id(&client, request_id, false).await?;
+        ensure_review_result_retained(&record)?;
         ensure_review_reviewer_access(&client, &record, actor, Some(task_id), false).await?;
         let row = client
             .query_opt(
@@ -3172,6 +3177,7 @@ impl PostgresStore {
     ) -> Result<ReviewHistoryPage, ReviewRuntimeError> {
         let client = self.client().await?;
         let record = load_request_by_id(&client, request_id, false).await?;
+        ensure_review_result_retained(&record)?;
         if let Some(producer_id) = producer_id {
             client
                 .query_opt(
@@ -3252,12 +3258,7 @@ impl PostgresStore {
     ) -> Result<Vec<ReviewClockOccurrence>, ReviewRuntimeError> {
         let client = self.client().await?;
         let record = load_request_by_id(&client, request_id, false).await?;
-        if record
-            .result_available_until
-            .is_some_and(|available_until| available_until <= Utc::now())
-        {
-            return Err(ReviewRuntimeError::ResultExpired);
-        }
+        ensure_review_result_retained(&record)?;
         if let Some(producer_id) = producer_id {
             if client
                 .query_opt(
@@ -4400,7 +4401,8 @@ fn request_query(predicate: &str) -> String {
         "SELECT request_id,producer_id,subject_source,subject_type,subject_id,subject_version,
                 subject_digest,requester_reference,policy_snapshot,submission_digest,lifecycle,
                 active_stage_index,created_at,updated_at,result_available_until,
-                initiator_issuer,initiator_subject,result_constraints,context_strategy,context
+                initiator_issuer,initiator_subject,result_constraints,context_strategy,context,
+                result_erased_at
          FROM casework_review_requests WHERE {predicate}"
     )
 }
@@ -4410,13 +4412,15 @@ fn request_from_row(row: &Row) -> Result<ReviewRequestRecord, ReviewRuntimeError
     let policy: ReviewKindPolicySnapshot = serde_json::from_value(row.get(8))?;
     policy.verify().map_err(|_| ReviewRuntimeError::Corrupt)?;
     let result_available_until = row.get::<_, Option<DateTime<Utc>>>(14);
+    let result_erased_at = row.get::<_, Option<DateTime<Utc>>>(20);
     let context_strategy = row.get::<_, String>(18);
     let context_value = row.get::<_, Value>(19);
     let context_erased = context_value
         .as_object()
         .is_some_and(serde_json::Map::is_empty)
         && lifecycle != ReviewRequestLifecycle::Reviewing
-        && result_available_until.is_some_and(|until| until <= Utc::now());
+        && (result_erased_at.is_some()
+            || result_available_until.is_some_and(|until| until <= Utc::now()));
     let context = if context_erased {
         None
     } else {
@@ -4454,6 +4458,7 @@ fn request_from_row(row: &Row) -> Result<ReviewRequestRecord, ReviewRuntimeError
         created_at: row.get(12),
         updated_at: row.get(13),
         result_available_until,
+        result_erased_at,
         initiator: match (
             row.get::<_, Option<String>>(15),
             row.get::<_, Option<String>>(16),
@@ -4893,6 +4898,18 @@ fn require_human_reviewer(actor: &ActorContext) -> Result<(), ReviewRuntimeError
     )
     .then_some(())
     .ok_or(ReviewRuntimeError::Forbidden)
+}
+
+fn ensure_review_result_retained(record: &ReviewRequestRecord) -> Result<(), ReviewRuntimeError> {
+    if record.lifecycle != ReviewRequestLifecycle::Reviewing
+        && (record.result_erased_at.is_some()
+            || record
+                .result_available_until
+                .is_none_or(|available_until| available_until <= Utc::now()))
+    {
+        return Err(ReviewRuntimeError::ResultExpired);
+    }
+    Ok(())
 }
 
 async fn ensure_review_reviewer_access(

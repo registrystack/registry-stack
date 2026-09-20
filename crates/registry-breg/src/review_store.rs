@@ -357,6 +357,12 @@ impl ReviewAuthorityRegistry {
             || authorities
                 .iter()
                 .any(|(id, authority)| id != &authority.authority)
+            || authorities.values().enumerate().any(|(index, authority)| {
+                authorities
+                    .values()
+                    .skip(index + 1)
+                    .any(|other| same_completion_binding(authority, other))
+            })
         {
             return Err(ReviewConfigurationError);
         }
@@ -670,6 +676,44 @@ impl ReviewAuthorityRegistry {
             Ok(false)
         }
     }
+}
+
+fn same_completion_binding(left: &ReviewAuthorityClient, right: &ReviewAuthorityClient) -> bool {
+    let (Some(left_token), Some(left_recipient)) =
+        (&left.completion_token, &left.completion_recipient)
+    else {
+        return false;
+    };
+    let (Some(right_token), Some(right_recipient)) =
+        (&right.completion_token, &right.completion_recipient)
+    else {
+        return false;
+    };
+    left_token.len() == right_token.len()
+        && left_token
+            .as_bytes()
+            .ct_eq(right_token.as_bytes())
+            .unwrap_u8()
+            == 1
+        && left_recipient.len() == right_recipient.len()
+        && left_recipient
+            .as_bytes()
+            .ct_eq(right_recipient.as_bytes())
+            .unwrap_u8()
+            == 1
+}
+
+fn terminal_submission_error(error: &ReviewClientError) -> bool {
+    matches!(
+        error,
+        ReviewClientError::Configuration { .. }
+            | ReviewClientError::InvalidRequest { .. }
+            | ReviewClientError::Protocol { .. }
+            | ReviewClientError::Problem {
+                status: 400..=499,
+                ..
+            }
+    )
 }
 
 async fn erase_expired_review_completions(
@@ -1498,7 +1542,25 @@ pub async fn run_one_submission(
                 return Err(MutationError::PreconditionFailed);
             }
         }
-        Err(_error) => {
+        Err(error) if terminal_submission_error(&error) => {
+            client
+                .execute(
+                    "UPDATE registry_internal.registry_request_review_submissions
+                        SET state='failed',lease_until=NULL,last_error_code='remote-refused',
+                            updated_at=transaction_timestamp()
+                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                        AND state='submitting' AND lease_until=$4",
+                    &[
+                        &job.request_entity_id,
+                        &job.request_id,
+                        &job.proposal_version,
+                        &job.lease_until,
+                    ],
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+        }
+        Err(_) => {
             client
                 .execute(
                     "UPDATE registry_internal.registry_request_review_submissions
@@ -1575,6 +1637,7 @@ pub async fn run_one_cancellation(
                 .transaction()
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
+            reconcile_result(&transaction, &authority, &accepted, &result).await?;
             let updated = transaction
                 .execute(
                     "UPDATE registry_internal.registry_request_review_submissions
@@ -1593,7 +1656,6 @@ pub async fn run_one_cancellation(
                     .map_err(|_| MutationError::Unavailable)?;
                 return Ok(true);
             }
-            reconcile_result(&transaction, &authority, &accepted, &result).await?;
             transaction
                 .commit()
                 .await
@@ -2618,6 +2680,62 @@ mod tests {
             registry.completion_authority("outgoing-token", "registry-a"),
             None
         );
+    }
+
+    #[test]
+    fn completion_sender_bindings_must_be_unique_pairs() {
+        assert!(ReviewAuthorityRegistry::new(BTreeMap::from([
+            (
+                "casework-a".to_owned(),
+                authority("casework-a", Some(("shared-sender", "registry-a"))),
+            ),
+            (
+                "casework-b".to_owned(),
+                authority("casework-b", Some(("shared-sender", "registry-a"))),
+            ),
+        ]))
+        .is_err());
+
+        assert!(ReviewAuthorityRegistry::new(BTreeMap::from([
+            (
+                "casework-a".to_owned(),
+                authority("casework-a", Some(("shared-sender", "registry-a"))),
+            ),
+            (
+                "casework-b".to_owned(),
+                authority("casework-b", Some(("shared-sender", "registry-b"))),
+            ),
+            (
+                "casework-c".to_owned(),
+                authority("casework-c", Some(("other-sender", "registry-a"))),
+            ),
+        ]))
+        .is_ok());
+    }
+
+    #[test]
+    fn submission_error_classification_retries_only_uncertain_failures() {
+        assert!(terminal_submission_error(
+            &ReviewClientError::InvalidRequest {
+                reason: "invalid request"
+            }
+        ));
+        assert!(terminal_submission_error(&ReviewClientError::Protocol {
+            status: 201,
+            failure: registry_review_client::ReviewProtocolFailure::Body,
+            trace_id: None,
+        }));
+        assert!(terminal_submission_error(&ReviewClientError::Problem {
+            status: 409,
+            trace_id: None,
+        }));
+        assert!(!terminal_submission_error(&ReviewClientError::Problem {
+            status: 503,
+            trace_id: None,
+        }));
+        assert!(!terminal_submission_error(&ReviewClientError::Transport {
+            kind: registry_platform_httputil::client::TransportKind::Timeout,
+        }));
     }
 
     #[test]

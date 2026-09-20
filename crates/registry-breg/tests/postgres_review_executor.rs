@@ -203,6 +203,34 @@ async fn serve_failing_authority(
     (endpoint, server)
 }
 
+async fn refuse_review_submission(Json(_request): Json<ReviewCreateRequest>) -> impl IntoResponse {
+    (
+        StatusCode::CONFLICT,
+        [
+            ("content-type", "application/problem+json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        Json(json!({
+            "type": "https://id.registrystack.org/problems/registry-casework/request/conflict",
+            "title": "Conflicting request",
+            "status": 409,
+            "detail": "The review submission conflicts with retained work.",
+            "code": "request.conflict",
+            "traceId": "0123456789abcdef0123456789abcdef"
+        })),
+    )
+}
+
+async fn serve_refusing_authority() -> (reqwest::Url, tokio::task::JoinHandle<()>) {
+    let app = Router::new().route("/v1/review-requests", post(refuse_review_submission));
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap())
+        .parse()
+        .unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (endpoint, server)
+}
+
 async fn fail_review_cancellation(
     State(gate): State<Arc<RemoteGate>>,
     Json(_request): Json<Value>,
@@ -221,6 +249,49 @@ async fn serve_failing_cancellation(
             post(fail_review_cancellation),
         )
         .with_state(gate);
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap())
+        .parse()
+        .unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (endpoint, server)
+}
+
+async fn accept_review_cancellation(
+    State(accepted): State<Arc<Value>>,
+    Path(request_id): Path<Uuid>,
+    Json(cancellation): Json<Value>,
+) -> impl IntoResponse {
+    assert_eq!(accepted["requestId"], request_id.to_string());
+    assert_eq!(cancellation["subject"], accepted["subject"]);
+    (
+        StatusCode::OK,
+        [("traceparent", TRACEPARENT)],
+        Json(json!({
+            "outcome": "cancelled",
+            "result": {
+                "resultId": Uuid::from_u128(0xc7),
+                "requestId": request_id,
+                "subject": accepted["subject"].clone(),
+                "policy": accepted["policy"].clone(),
+                "submissionDigest": accepted["submissionDigest"].clone(),
+                "status": "cancelled",
+                "completedAt": "2026-09-20T00:00:00Z",
+                "availableUntil": "2030-09-20T00:00:00Z"
+            }
+        })),
+    )
+}
+
+async fn serve_successful_cancellation(
+    accepted: Value,
+) -> (reqwest::Url, tokio::task::JoinHandle<()>) {
+    let app = Router::new()
+        .route(
+            "/v1/review-requests/{request_id}/cancel",
+            post(accept_review_cancellation),
+        )
+        .with_state(Arc::new(accepted));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
     let endpoint = format!("http://{}/", listener.local_addr().unwrap())
         .parse()
@@ -1358,6 +1429,64 @@ async fn remote_review_submission_and_result_lookup_hold_no_postgres_transaction
 }
 
 #[tokio::test]
+async fn deterministic_review_submission_refusal_becomes_terminal() {
+    let database = TestDatabase::create(2).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+    let source_request_id = Uuid::from_u128(0xc8);
+    seed_submission(
+        &database.admin,
+        source_request_id,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+
+    let (endpoint, server) = serve_refusing_authority().await;
+    assert!(run_one_submission(
+        &database.admin,
+        "casework-a",
+        &authority_client(endpoint, "producer-profile-a"),
+        &BearerToken::new("token-a").unwrap(),
+    )
+    .await
+    .expect("refused submission is handled"));
+    let submission = database
+        .admin
+        .query_one(
+            "SELECT state,lease_until,last_error_code
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&source_request_id],
+        )
+        .await
+        .expect("terminal submission");
+    assert_eq!(submission.get::<_, String>(0), "failed");
+    assert_eq!(
+        submission.get::<_, Option<chrono::DateTime<chrono::Utc>>>(1),
+        None
+    );
+    assert_eq!(submission.get::<_, String>(2), "remote-refused");
+
+    server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
 async fn stale_submission_failure_cannot_replace_a_reclaimed_lease() {
     let database = TestDatabase::create(2).await;
     database
@@ -1537,6 +1666,84 @@ async fn stale_cancellation_failure_cannot_replace_a_reclaimed_lease() {
         replacement_lease
     );
     assert_eq!(retained.get::<_, Option<String>>(2), None);
+
+    worker_task.abort();
+    server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn successful_cancellation_reconciles_before_becoming_cancelled() {
+    let database = TestDatabase::create(2).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+    let source_request_id = Uuid::from_u128(0xc6);
+    seed_submission(
+        &database.admin,
+        source_request_id,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    let request = create_request(source_request_id, "policy-a");
+    let submission_digest = submission_digest("producer-a", "registry-a", &request).unwrap();
+    let accepted = json!({
+        "requestId": Uuid::from_u128(0xc7),
+        "subject": request.subject,
+        "policy": {"id":"policy-a","version":"1","digest":DIGEST},
+        "submissionDigest": submission_digest,
+    });
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state='cancelling',withdrawn=true,accepted_binding=$2
+              WHERE request_id=$1",
+            &[&source_request_id, &accepted],
+        )
+        .await
+        .expect("seed cancellation");
+
+    let (endpoint, server) = serve_successful_cancellation(accepted).await;
+    let (mut worker, worker_task) = database.connect_admin().await;
+    assert!(run_one_cancellation(
+        &mut worker,
+        "casework-a",
+        &authority_client(endpoint, "producer-profile-a"),
+        &BearerToken::new("token-a").unwrap(),
+    )
+    .await
+    .expect("successful cancellation is reconciled"));
+    let row = database
+        .admin
+        .query_one(
+            "SELECT s.state,s.lease_until,r.status,r.result_id
+               FROM registry_internal.registry_request_review_submissions s
+               JOIN registry_internal.registry_request_review_results r
+                 USING (request_entity_id,request_id,proposal_version)
+              WHERE s.request_id=$1",
+            &[&source_request_id],
+        )
+        .await
+        .expect("cancelled submission and reconciled result");
+    assert_eq!(row.get::<_, String>(0), "cancelled");
+    assert_eq!(row.get::<_, Option<chrono::DateTime<chrono::Utc>>>(1), None);
+    assert_eq!(row.get::<_, String>(2), "cancelled");
+    assert_eq!(row.get::<_, Uuid>(3), Uuid::from_u128(0xc7));
 
     worker_task.abort();
     server.abort();

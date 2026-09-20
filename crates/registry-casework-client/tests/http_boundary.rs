@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -92,6 +95,86 @@ async fn review_create_refuses_an_accepted_binding_for_another_policy() {
 async fn review_create_fixture_response(State(response): State<Value>) -> impl IntoResponse {
     (
         StatusCode::CREATED,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        response.to_string(),
+    )
+}
+
+#[tokio::test]
+async fn review_result_feed_refuses_unbounded_or_invalid_continuations() {
+    let entry = json!({
+        "eventId": Uuid::from_u128(8),
+        "requestId": Uuid::from_u128(7),
+        "resultId": Uuid::from_u128(99),
+        "completedAt": "2026-09-19T00:00:00Z"
+    });
+    let cursor = Uuid::from_u128(8).to_string();
+    let responses = Arc::new(Mutex::new(VecDeque::from([
+        json!({"items": vec![entry.clone(); 100], "nextCursor": cursor}),
+        json!({"items": vec![entry.clone(); 101]}),
+        json!({"items": [], "nextCursor": ""}),
+        json!({"items": [], "nextCursor": "x".repeat(4097)}),
+        json!({"items": [], "nextCursor": "cursor\n8"}),
+        json!({"items": [], "nextCursor": "not-an-event-uuid"}),
+    ])));
+    let app = Router::new()
+        .route(
+            "/v1/review-results",
+            get(review_result_feed_fixture_response),
+        )
+        .with_state(responses);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let query = registry_casework_client::ReviewPageQuery {
+        cursor: None,
+        limit: Some(100),
+    };
+
+    let boundary = client
+        .review_results(CaseworkAuth::new(&token, "requester"), &query)
+        .await
+        .expect("bounded result feed page");
+    assert_eq!(boundary.value.items.len(), 100);
+    assert_eq!(boundary.value.next_cursor.as_deref(), Some(cursor.as_str()));
+
+    for _ in 0..5 {
+        assert!(matches!(
+            client
+                .review_results(CaseworkAuth::new(&token, "requester"), &query)
+                .await,
+            Err(CaseworkClientError::Protocol {
+                status: 200,
+                failure: CaseworkProtocolFailure::Body,
+                trace_id: Some(ref trace_id),
+            }) if trace_id == "0123456789abcdef0123456789abcdef"
+        ));
+    }
+    server.abort();
+}
+
+async fn review_result_feed_fixture_response(
+    State(responses): State<Arc<Mutex<VecDeque<Value>>>>,
+) -> impl IntoResponse {
+    let response = responses
+        .lock()
+        .expect("responses")
+        .pop_front()
+        .expect("fixture response");
+    (
+        StatusCode::OK,
         [
             ("content-type", "application/json"),
             ("traceparent", TRACEPARENT),
