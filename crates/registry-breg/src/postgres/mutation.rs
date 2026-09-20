@@ -565,7 +565,7 @@ impl PostgresRecordMutationService {
         };
         let request_id =
             uuid::Uuid::parse_str(input.record_id).map_err(|_| MutationError::InvalidRequest)?;
-        let (authority, accepted, reconciled_evidence) = {
+        let (authority, accepted) = {
             let client = self
                 .pool
                 .get()
@@ -579,22 +579,13 @@ impl PostgresRecordMutationService {
                 effect_digest,
             )
             .await?;
-            let evidence = crate::review_store::load_reconciled_approved_evidence(
-                &**client, &authority, &accepted,
-            )
-            .await?;
-            (authority, accepted, evidence)
+            (authority, accepted)
         };
-        let review_evidence = match reconciled_evidence {
-            Some(evidence) => evidence,
-            None => {
-                let source = self
-                    .review_result_source
-                    .as_ref()
-                    .ok_or(MutationError::Unavailable)?;
-                source.approved_evidence(&authority, &accepted).await?
-            }
-        };
+        let source = self
+            .review_result_source
+            .as_ref()
+            .ok_or(MutationError::Unavailable)?;
+        let review_evidence = source.approved_evidence(&authority, &accepted).await?;
         if needs_action_evidence {
             return self
                 .request_evidence_apply(input, claims, Some(&review_evidence))

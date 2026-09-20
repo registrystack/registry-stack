@@ -52,6 +52,23 @@ struct ConvergenceState {
     posts: AtomicUsize,
 }
 
+struct CompetingApplicationState {
+    request_id: Uuid,
+    application_id: Uuid,
+    posts: AtomicUsize,
+    first_entered: Notify,
+    second_entered: Notify,
+    release_first: Notify,
+    release_second: Notify,
+}
+
+struct ExhaustedApplicationState {
+    request_id: Uuid,
+    discovery_status: StatusCode,
+    gets: AtomicUsize,
+    posts: AtomicUsize,
+}
+
 struct AuthorityState {
     producer_id: &'static str,
     expected_token: &'static str,
@@ -491,6 +508,128 @@ async fn reject_unexpected_apply(State(state): State<Arc<ConvergenceState>>) -> 
     StatusCode::INTERNAL_SERVER_ERROR
 }
 
+async fn read_competing_application(
+    State(state): State<Arc<CompetingApplicationState>>,
+    Path(request_id): Path<Uuid>,
+) -> impl IntoResponse {
+    assert_eq!(request_id, state.request_id);
+    Json(json!({
+        "data": {
+            "recordIdentifier": request_id,
+            "revisionIdentifier": "3",
+            "domainData": {},
+            "request": {
+                "bregState": "submitted",
+                "proposalVersion": 7,
+                "effectDigest": DIGEST,
+                "editable": false,
+                "actions": [{
+                    "operation": "apply_request",
+                    "method": "POST",
+                    "href": format!(
+                        "/v1/records/requests/{request_id}/actions/apply?accessProfile=automatic-applier"
+                    ),
+                    "ifMatch": "\"breg-request-etag\"",
+                    "proposalVersion": 7,
+                    "effectDigest": DIGEST,
+                }]
+            }
+        },
+        "meta": {
+            "registryIdentifier": "registry-a",
+            "datasetIdentifier": "requests",
+            "entityTypeIdentifier": "requests"
+        }
+    }))
+}
+
+async fn apply_competing_application(
+    State(state): State<Arc<CompetingApplicationState>>,
+    Path(request_id): Path<Uuid>,
+) -> axum::response::Response {
+    assert_eq!(request_id, state.request_id);
+    match state.posts.fetch_add(1, Ordering::SeqCst) {
+        0 => {
+            state.first_entered.notify_one();
+            state.release_first.notified().await;
+            StatusCode::FORBIDDEN.into_response()
+        }
+        1 => {
+            state.second_entered.notify_one();
+            state.release_second.notified().await;
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "id": request_id,
+                    "revision": 4,
+                    "snapshot": "breg1_00000000-0000-4000-8000-000000000024",
+                    "actorReference": "ordinary-executor",
+                    "request": {
+                        "bregState": "applied",
+                        "proposalVersion": 7,
+                        "effectDigest": DIGEST,
+                        "application": {
+                            "applicationId": state.application_id,
+                            "proposalVersion": 7,
+                            "effectDigest": DIGEST,
+                            "appliedAt": "2026-09-20T00:00:00Z"
+                        }
+                    }
+                })),
+            )
+                .into_response()
+        }
+        request => panic!("unexpected automatic application request {request}"),
+    }
+}
+
+async fn read_exhausted_application(
+    State(state): State<Arc<ExhaustedApplicationState>>,
+    Path(request_id): Path<Uuid>,
+) -> axum::response::Response {
+    assert_eq!(request_id, state.request_id);
+    state.gets.fetch_add(1, Ordering::SeqCst);
+    if state.discovery_status != StatusCode::OK {
+        return state.discovery_status.into_response();
+    }
+    Json(json!({
+        "data": {
+            "recordIdentifier": request_id,
+            "revisionIdentifier": "3",
+            "domainData": {},
+            "request": {
+                "bregState": "submitted",
+                "proposalVersion": 7,
+                "effectDigest": DIGEST,
+                "editable": false,
+                "actions": [{
+                    "operation": "apply_request",
+                    "method": "POST",
+                    "href": format!(
+                        "/v1/records/requests/{request_id}/actions/apply?accessProfile=automatic-applier"
+                    ),
+                    "ifMatch": "\"breg-request-etag\"",
+                    "proposalVersion": 7,
+                    "effectDigest": DIGEST,
+                }]
+            }
+        },
+        "meta": {
+            "registryIdentifier": "registry-a",
+            "datasetIdentifier": "requests",
+            "entityTypeIdentifier": "requests"
+        }
+    }))
+    .into_response()
+}
+
+async fn reject_exhausted_application(
+    State(state): State<Arc<ExhaustedApplicationState>>,
+) -> impl IntoResponse {
+    state.posts.fetch_add(1, Ordering::SeqCst);
+    StatusCode::PRECONDITION_FAILED
+}
+
 fn executor(endpoint: reqwest::Url) -> ReviewExecutorClient {
     ReviewExecutorClient::new(
         "registry-automatic".to_owned(),
@@ -695,6 +834,304 @@ async fn real_postgres_lost_apply_response_recovers_source_receipt_before_redisc
     assert_eq!(source.posts.load(Ordering::SeqCst), 2);
 
     server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn real_postgres_automatic_application_claim_fences_stale_owner() {
+    let database = TestDatabase::create(4).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+
+    let request_id = Uuid::parse_str("00000000-0000-4000-8000-000000000021").unwrap();
+    let job_id = Uuid::parse_str("00000000-0000-4000-8000-000000000022").unwrap();
+    let application_id = Uuid::parse_str("00000000-0000-4000-8000-000000000023").unwrap();
+    seed_application_job(&database.admin, request_id, Uuid::new_v4(), job_id).await;
+
+    let source = Arc::new(CompetingApplicationState {
+        request_id,
+        application_id,
+        posts: AtomicUsize::new(0),
+        first_entered: Notify::new(),
+        second_entered: Notify::new(),
+        release_first: Notify::new(),
+        release_second: Notify::new(),
+    });
+    let app = Router::new()
+        .route(
+            "/v1/records/requests/{request_id}",
+            get(read_competing_application),
+        )
+        .route(
+            "/v1/records/requests/{request_id}/actions/apply",
+            post(apply_competing_application),
+        )
+        .with_state(Arc::clone(&source));
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+    let endpoint: reqwest::Url = format!("http://{}/", listener.local_addr().unwrap())
+        .parse()
+        .unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+    let (mut first_connection, first_connection_task) = database.connect_admin().await;
+    let first_executor = executor(endpoint.clone());
+    let first_worker = tokio::spawn(async move {
+        let result =
+            run_review_application_once_for_test(&mut first_connection, &first_executor).await;
+        (first_connection, result)
+    });
+    source.first_entered.notified().await;
+    let first_claim: Uuid = database
+        .admin
+        .query_one(
+            "SELECT claim_token FROM registry_internal.registry_request_application_jobs
+              WHERE job_id=$1",
+            &[&job_id],
+        )
+        .await
+        .expect("first worker claim")
+        .get(0);
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_application_jobs
+                SET next_attempt_at=transaction_timestamp()-interval '1 second'
+              WHERE job_id=$1",
+            &[&job_id],
+        )
+        .await
+        .expect("expire first worker lease");
+
+    let (mut second_connection, second_connection_task) = database.connect_admin().await;
+    let second_executor = executor(endpoint);
+    let second_worker = tokio::spawn(async move {
+        let result =
+            run_review_application_once_for_test(&mut second_connection, &second_executor).await;
+        (second_connection, result)
+    });
+    source.second_entered.notified().await;
+    let second_claim: Uuid = database
+        .admin
+        .query_one(
+            "SELECT claim_token FROM registry_internal.registry_request_application_jobs
+              WHERE job_id=$1",
+            &[&job_id],
+        )
+        .await
+        .expect("replacement worker claim")
+        .get(0);
+    assert_ne!(first_claim, second_claim);
+
+    source.release_first.notify_one();
+    let (_first_connection, first_result) = first_worker.await.expect("first worker joins");
+    assert!(matches!(first_result, Err(MutationError::Unavailable)));
+    let reclaimed = database
+        .admin
+        .query_one(
+            "SELECT state,claim_token,last_error_code
+               FROM registry_internal.registry_request_application_jobs WHERE job_id=$1",
+            &[&job_id],
+        )
+        .await
+        .expect("replacement claim survives stale terminal response");
+    assert_eq!(reclaimed.get::<_, String>(0), "applying");
+    assert_eq!(reclaimed.get::<_, Uuid>(1), second_claim);
+    assert_eq!(reclaimed.get::<_, Option<String>>(2), None);
+
+    source.release_second.notify_one();
+    let (_second_connection, second_result) = second_worker.await.expect("second worker joins");
+    assert!(second_result.expect("replacement worker applies"));
+    let applied = database
+        .admin
+        .query_one(
+            "SELECT state,claim_token,application_id,attempt_count
+               FROM registry_internal.registry_request_application_jobs WHERE job_id=$1",
+            &[&job_id],
+        )
+        .await
+        .expect("replacement worker terminal result");
+    assert_eq!(applied.get::<_, String>(0), "applied");
+    assert_eq!(applied.get::<_, Option<Uuid>>(1), None);
+    assert_eq!(applied.get::<_, Uuid>(2), application_id);
+    assert_eq!(applied.get::<_, i32>(3), 2);
+    assert_eq!(source.posts.load(Ordering::SeqCst), 2);
+
+    first_connection_task.abort();
+    second_connection_task.abort();
+    server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn real_postgres_automatic_application_exhausts_transient_and_stale_retry_budgets() {
+    for (name, discovery_status, expected_gets, expected_posts) in [
+        ("transient", StatusCode::SERVICE_UNAVAILABLE, 1, 0),
+        ("stale", StatusCode::OK, 1, 1),
+    ] {
+        let mut database = TestDatabase::create(2).await;
+        database
+            .admin
+            .batch_execute(
+                "CREATE TABLE registry_internal.registry_request_proposals (
+                    request_entity_id text NOT NULL,
+                    request_id uuid NOT NULL,
+                    proposal_version bigint NOT NULL,
+                    PRIMARY KEY (request_entity_id,request_id,proposal_version)
+                );",
+            )
+            .await
+            .expect("proposal parent table");
+        install_review_storage_for_test(&database.admin, &database.runtime_role)
+            .await
+            .expect("review storage");
+        let request_id = Uuid::new_v4();
+        let job_id = Uuid::new_v4();
+        seed_application_job(&database.admin, request_id, Uuid::new_v4(), job_id).await;
+        database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_request_application_jobs
+                    SET attempt_count=999 WHERE job_id=$1",
+                &[&job_id],
+            )
+            .await
+            .expect("job reaches its final available attempt");
+
+        let source = Arc::new(ExhaustedApplicationState {
+            request_id,
+            discovery_status,
+            gets: AtomicUsize::new(0),
+            posts: AtomicUsize::new(0),
+        });
+        let app = Router::new()
+            .route(
+                "/v1/records/requests/{request_id}",
+                get(read_exhausted_application),
+            )
+            .route(
+                "/v1/records/requests/{request_id}/actions/apply",
+                post(reject_exhausted_application),
+            )
+            .with_state(Arc::clone(&source));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let endpoint: reqwest::Url = format!("http://{}/", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let executor = executor(endpoint);
+
+        assert!(
+            run_review_application_once_for_test(&mut database.admin, &executor)
+                .await
+                .expect("final attempt settles")
+        );
+        let row = database
+            .admin
+            .query_one(
+                "SELECT state,attempt_count,claim_token,last_error_code
+                   FROM registry_internal.registry_request_application_jobs WHERE job_id=$1",
+                &[&job_id],
+            )
+            .await
+            .expect("exhausted job remains visible");
+        assert_eq!(row.get::<_, String>(0), "blocked", "{name}");
+        assert_eq!(row.get::<_, i32>(1), 1_000, "{name}");
+        assert_eq!(row.get::<_, Option<Uuid>>(2), None, "{name}");
+        assert_eq!(
+            row.get::<_, Option<String>>(3).as_deref(),
+            Some("application-attempts-exhausted"),
+            "{name}"
+        );
+        assert!(
+            !run_review_application_once_for_test(&mut database.admin, &executor)
+                .await
+                .expect("blocked job is not reclaimable"),
+            "{name}"
+        );
+        assert_eq!(source.gets.load(Ordering::SeqCst), expected_gets, "{name}");
+        assert_eq!(
+            source.posts.load(Ordering::SeqCst),
+            expected_posts,
+            "{name}"
+        );
+
+        server.abort();
+        database.cleanup().await;
+    }
+}
+
+#[tokio::test]
+async fn real_postgres_review_feed_checkpoint_accepts_client_cursor_bound_after_upgrade() {
+    let database = TestDatabase::create(2).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+    database
+        .admin
+        .batch_execute(
+            "ALTER TABLE registry_internal.registry_request_review_feed_checkpoints
+                 DROP CONSTRAINT registry_request_review_feed_checkpoints_cursor_check;
+             ALTER TABLE registry_internal.registry_request_review_feed_checkpoints
+                 ADD CONSTRAINT registry_request_review_feed_checkpoints_cursor_check
+                 CHECK (cursor IS NULL OR
+                     (cursor <> '' AND octet_length(cursor) <= 1024));",
+        )
+        .await
+        .expect("represent the previous cursor schema");
+
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("cursor constraint upgrade");
+    let accepted = "c".repeat(4096);
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_request_review_feed_checkpoints
+             (authority,cursor) VALUES ('casework-a',$1)",
+            &[&accepted],
+        )
+        .await
+        .expect("the review client's maximum opaque cursor persists");
+    let over_bound = "c".repeat(4097);
+    let refusal = database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_feed_checkpoints
+                SET cursor=$1 WHERE authority='casework-a'",
+            &[&over_bound],
+        )
+        .await
+        .expect_err("a cursor beyond the client contract is refused");
+    assert_eq!(
+        refusal.as_db_error().and_then(|error| error.constraint()),
+        Some("registry_request_review_feed_checkpoints_cursor_check")
+    );
+
     database.cleanup().await;
 }
 
@@ -1190,6 +1627,14 @@ async fn early_unmatched_completion_is_correlated_by_the_worker_after_result_com
     install_review_storage_for_test(&database.admin, &database.runtime_role)
         .await
         .expect("review storage");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT USAGE ON SCHEMA registry_internal TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime review schema access");
 
     let source_request_id = Uuid::new_v4();
     let review_request_id = Uuid::new_v4();
@@ -1286,6 +1731,14 @@ async fn retained_review_work_refuses_startup_without_its_authority_binding() {
     install_review_storage_for_test(&database.admin, &database.runtime_role)
         .await
         .expect("review storage");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT USAGE ON SCHEMA registry_internal TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime review schema access");
     seed_submission(
         &database.admin,
         Uuid::new_v4(),

@@ -1424,6 +1424,28 @@ impl MutationCoordinator {
             )
             .await?;
         }
+        if matches!(input.action, RequestActionBody::Apply { .. }) {
+            let application = next.application().ok_or(MutationError::Unavailable)?;
+            let application_id = Uuid::parse_str(application.application_id().as_str())
+                .map_err(|_| MutationError::Unavailable)?;
+            transaction
+                .transaction()
+                .execute(
+                    "UPDATE registry_internal.registry_request_application_jobs
+                        SET state='applied',application_id=$4,claim_token=NULL,
+                            last_error_code=NULL,updated_at=transaction_timestamp()
+                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                        AND state <> 'applied'",
+                    &[
+                        &entity.id,
+                        &record_uuid,
+                        &i64::from(next.current_version().get()),
+                        &application_id,
+                    ],
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+        }
         crate::request_store::link_request_revision(
             transaction.transaction(),
             &entity.id,

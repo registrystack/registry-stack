@@ -33,6 +33,8 @@ use crate::request_workflow::ProposalSnapshot;
 
 const SUBJECT_TYPE: &str = "change-request";
 const SUBMISSION_LEASE_SECONDS: i64 = 30;
+const MAX_APPLICATION_ATTEMPTS: i32 = 1_000;
+const APPLICATION_ATTEMPTS_EXHAUSTED: &str = "application-attempts-exhausted";
 const MAX_APPLICATION_RESPONSE_BYTES: u64 = 256 * 1024;
 pub(crate) const MAXIMUM_COMPLETION_RECIPIENT_BYTES: usize = 256;
 pub(crate) const MAXIMUM_REVIEW_RECOVERY_DAYS: u32 = 3_650;
@@ -141,14 +143,30 @@ impl ReviewExecutorRegistry {
     }
 
     async fn run_one(&self, client: &mut tokio_postgres::Client) -> Result<bool, MutationError> {
+        let exhausted = client
+            .execute(
+                "UPDATE registry_internal.registry_request_application_jobs
+                    SET state='blocked',claim_token=NULL,last_error_code=$1,
+                        updated_at=transaction_timestamp()
+                  WHERE attempt_count >= $2
+                    AND (state='queued' OR (state='applying'
+                         AND next_attempt_at <= transaction_timestamp()))",
+                &[&APPLICATION_ATTEMPTS_EXHAUSTED, &MAX_APPLICATION_ATTEMPTS],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        if exhausted != 0 {
+            return Ok(true);
+        }
         let Some(row) = client
             .query_opt(
                 "SELECT executor,job_id
                    FROM registry_internal.registry_request_application_jobs
                   WHERE state IN ('queued','applying')
+                    AND attempt_count < $1
                     AND next_attempt_at <= transaction_timestamp()
                   ORDER BY next_attempt_at,created_at LIMIT 1",
-                &[],
+                &[&MAX_APPLICATION_ATTEMPTS],
             )
             .await
             .map_err(|_| MutationError::Unavailable)?
@@ -161,9 +179,12 @@ impl ReviewExecutorRegistry {
             client
                 .execute(
                     "UPDATE registry_internal.registry_request_application_jobs
-                        SET state='blocked',last_error_code='executor-unconfigured',
+                        SET state='blocked',claim_token=NULL,
+                            last_error_code='executor-unconfigured',
                             updated_at=transaction_timestamp()
-                      WHERE job_id=$1 AND state IN ('queued','applying')",
+                      WHERE job_id=$1
+                        AND (state='queued' OR (state='applying'
+                             AND next_attempt_at <= transaction_timestamp()))",
                     &[&job_id],
                 )
                 .await
@@ -914,6 +935,9 @@ impl ReviewResultSource for ReviewAuthorityClient {
             }
             _ => return Err(MutationError::Unavailable),
         };
+        if result.available_until <= chrono::Utc::now() {
+            return Err(MutationError::PreconditionFailed);
+        }
         crate::review_integration::AcceptedReviewEvidence::from_protocol(
             authority, accepted, &result,
         )
@@ -946,36 +970,6 @@ pub(crate) async fn load_accepted_binding(
         .ok_or(MutationError::PreconditionFailed)?;
     let accepted = serde_json::from_value(row.get(1)).map_err(|_| MutationError::Unavailable)?;
     Ok((row.get(0), accepted))
-}
-
-pub(crate) async fn load_reconciled_approved_evidence(
-    client: &impl GenericClient,
-    authority: &str,
-    accepted: &ReviewRequestAccepted,
-) -> Result<Option<crate::review_integration::AcceptedReviewEvidence>, MutationError> {
-    let row = client
-        .query_opt(
-            "SELECT r.result
-               FROM registry_internal.registry_request_review_results r
-               JOIN registry_internal.registry_request_review_submissions s
-                 USING (request_entity_id,request_id,proposal_version)
-              WHERE s.authority=$1 AND r.authority=s.authority AND s.accepted_binding=$2",
-            &[
-                &authority,
-                &serde_json::to_value(accepted).map_err(|_| MutationError::Unavailable)?,
-            ],
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
-    row.map(|row| {
-        let result: ReviewResult =
-            serde_json::from_value(row.get(0)).map_err(|_| MutationError::Unavailable)?;
-        crate::review_integration::AcceptedReviewEvidence::from_protocol(
-            authority, accepted, &result,
-        )
-        .map_err(|_| MutationError::PreconditionFailed)
-    })
-    .transpose()
 }
 
 pub(crate) const REVIEW_TABLES: &[(&str, &[&str])] = &[
@@ -1129,7 +1123,7 @@ pub(crate) async fn install(
                  );
              CREATE TABLE IF NOT EXISTS registry_internal.registry_request_review_feed_checkpoints (
                  authority text PRIMARY KEY CHECK (authority <> '' AND octet_length(authority) <= 128),
-                 cursor text CHECK (cursor IS NULL OR (cursor <> '' AND octet_length(cursor) <= 1024)),
+                 cursor text CHECK (cursor IS NULL OR (cursor <> '' AND octet_length(cursor) <= 4096)),
                  updated_at timestamptz NOT NULL DEFAULT transaction_timestamp()
              );
              CREATE TABLE IF NOT EXISTS registry_internal.registry_request_application_jobs (
@@ -1143,6 +1137,7 @@ pub(crate) async fn install(
                  state text NOT NULL CHECK (state IN ('queued','applying','applied','blocked')),
                  attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 1000),
                  next_attempt_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 claim_token uuid,
                  last_error_code text CHECK (
                      last_error_code IS NULL OR
                      (last_error_code <> '' AND octet_length(last_error_code) <= 128)
@@ -1170,7 +1165,15 @@ pub(crate) async fn install(
         .map_err(|_| MutationError::Unavailable)?;
     client
         .batch_execute(
-            "ALTER TABLE registry_internal.registry_request_application_jobs
+            "ALTER TABLE registry_internal.registry_request_review_feed_checkpoints
+                 DROP CONSTRAINT IF EXISTS registry_request_review_feed_checkpoints_cursor_check;
+             ALTER TABLE registry_internal.registry_request_review_feed_checkpoints
+                 ADD CONSTRAINT registry_request_review_feed_checkpoints_cursor_check
+                 CHECK (cursor IS NULL OR
+                     (cursor <> '' AND octet_length(cursor) <= 4096));
+             ALTER TABLE registry_internal.registry_request_application_jobs
+                 ADD COLUMN IF NOT EXISTS claim_token uuid;
+             ALTER TABLE registry_internal.registry_request_application_jobs
                  ADD COLUMN IF NOT EXISTS action_href text;
              ALTER TABLE registry_internal.registry_request_application_jobs
                  ADD COLUMN IF NOT EXISTS action_if_match text;
@@ -1839,6 +1842,8 @@ struct ApplicationJob {
     proposal_version: i64,
     job_id: Uuid,
     proposal_digest: String,
+    claim_token: Uuid,
+    attempt_count: i32,
     action_href: Option<String>,
     action_if_match: Option<String>,
 }
@@ -1852,21 +1857,23 @@ async fn run_one_application(
     client: &mut tokio_postgres::Client,
     executor: &ReviewExecutorClient,
 ) -> Result<bool, MutationError> {
+    let claim_token = Uuid::new_v4();
     let Some(row) = client
         .query_opt(
             "UPDATE registry_internal.registry_request_application_jobs j
-                SET state='applying',attempt_count=LEAST(attempt_count+1,1000),
+                SET state='applying',attempt_count=attempt_count+1,
                     next_attempt_at=transaction_timestamp()+interval '30 seconds',
-                    last_error_code=NULL,updated_at=transaction_timestamp()
+                    claim_token=$2,last_error_code=NULL,updated_at=transaction_timestamp()
               WHERE (request_entity_id,request_id,proposal_version)=(
                     SELECT q.request_entity_id,q.request_id,q.proposal_version
                       FROM registry_internal.registry_request_application_jobs q
                      WHERE q.executor=$1 AND q.state IN ('queued','applying')
+                       AND q.attempt_count < $3
                        AND q.next_attempt_at <= transaction_timestamp()
                      ORDER BY q.next_attempt_at,q.created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
           RETURNING request_entity_id,request_id,proposal_version,job_id,proposal_digest,
-                    action_href,action_if_match",
-            &[&executor.executor],
+                    action_href,action_if_match,attempt_count",
+            &[&executor.executor, &claim_token, &MAX_APPLICATION_ATTEMPTS],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?
@@ -1879,8 +1886,10 @@ async fn run_one_application(
         proposal_version: row.get(2),
         job_id: row.get(3),
         proposal_digest: row.get(4),
+        claim_token,
         action_href: row.get(5),
         action_if_match: row.get(6),
+        attempt_count: row.get(7),
     };
     if job.action_href.is_none() {
         match discover_application(executor, &job).await {
@@ -1894,8 +1903,9 @@ async fn run_one_application(
                         "UPDATE registry_internal.registry_request_application_jobs
                             SET action_href=$2,action_if_match=$3,updated_at=transaction_timestamp()
                           WHERE job_id=$1 AND state='applying'
+                            AND claim_token=$4
                             AND action_href IS NULL AND action_if_match IS NULL",
-                        &[&job.job_id, &href, &if_match],
+                        &[&job.job_id, &href, &if_match, &job.claim_token],
                     )
                     .await
                     .map_err(|_| MutationError::Unavailable)?;
@@ -1913,12 +1923,20 @@ async fn run_one_application(
                 block_application_job(client, &job, "source-action-unavailable").await?;
                 return Ok(true);
             }
-            Err(ApplicationExchangeError::Transient) => return Ok(true),
+            Err(ApplicationExchangeError::Transient) => {
+                exhaust_application_job_if_limit(client, &job).await?;
+                return Ok(true);
+            }
             Err(ApplicationExchangeError::InvalidResponse) => {
                 block_application_job(client, &job, "source-response-invalid").await?;
                 return Ok(true);
             }
-            Err(ApplicationExchangeError::Stale) => return Err(MutationError::Unavailable),
+            Err(ApplicationExchangeError::Stale) => {
+                if exhaust_application_job_if_limit(client, &job).await? {
+                    return Ok(true);
+                }
+                return Err(MutationError::Unavailable);
+            }
         }
     }
     match send_application(executor, &job).await {
@@ -1933,19 +1951,60 @@ async fn run_one_application(
             block_application_job(client, &job, "source-response-invalid").await?
         }
         Err(ApplicationExchangeError::Stale) => {
-            client
+            let updated = client
                 .execute(
                     "UPDATE registry_internal.registry_request_application_jobs
-                        SET state='queued',action_href=NULL,action_if_match=NULL,
-                            next_attempt_at=transaction_timestamp(),last_error_code='source-precondition-changed',
+                        SET state=CASE WHEN attempt_count >= $3 THEN 'blocked' ELSE 'queued' END,
+                            action_href=NULL,action_if_match=NULL,
+                            claim_token=NULL,
+                            next_attempt_at=transaction_timestamp(),
+                            last_error_code=CASE WHEN attempt_count >= $3 THEN $4
+                                ELSE 'source-precondition-changed' END,
                             updated_at=transaction_timestamp()
-                      WHERE job_id=$1 AND state='applying'",
-                    &[&job.job_id],
+                      WHERE job_id=$1 AND state='applying' AND claim_token=$2",
+                    &[
+                        &job.job_id,
+                        &job.claim_token,
+                        &MAX_APPLICATION_ATTEMPTS,
+                        &APPLICATION_ATTEMPTS_EXHAUSTED,
+                    ],
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
+            if updated != 1 {
+                return Err(MutationError::Unavailable);
+            }
         }
-        Err(ApplicationExchangeError::Transient) => {}
+        Err(ApplicationExchangeError::Transient) => {
+            exhaust_application_job_if_limit(client, &job).await?;
+        }
+    }
+    Ok(true)
+}
+
+async fn exhaust_application_job_if_limit(
+    client: &tokio_postgres::Client,
+    job: &ApplicationJob,
+) -> Result<bool, MutationError> {
+    if job.attempt_count < MAX_APPLICATION_ATTEMPTS {
+        return Ok(false);
+    }
+    let updated = client
+        .execute(
+            "UPDATE registry_internal.registry_request_application_jobs
+                SET state='blocked',claim_token=NULL,last_error_code=$2,
+                    updated_at=transaction_timestamp()
+              WHERE job_id=$1 AND state='applying' AND claim_token=$3",
+            &[
+                &job.job_id,
+                &APPLICATION_ATTEMPTS_EXHAUSTED,
+                &job.claim_token,
+            ],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    if updated != 1 {
+        return Err(MutationError::Unavailable);
     }
     Ok(true)
 }
@@ -2235,15 +2294,26 @@ async fn finish_application_job(
     let updated = client
         .execute(
             "UPDATE registry_internal.registry_request_application_jobs
-                SET state='applied',application_id=$2,last_error_code=NULL,
+                SET state='applied',application_id=$2,claim_token=NULL,last_error_code=NULL,
                     updated_at=transaction_timestamp()
-              WHERE job_id=$1 AND state='applying'",
-            &[&job.job_id, &application_id],
+              WHERE job_id=$1 AND state='applying' AND claim_token=$3",
+            &[&job.job_id, &application_id, &job.claim_token],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
     if updated != 1 {
-        return Err(MutationError::Unavailable);
+        let converged = client
+            .query_opt(
+                "SELECT 1 FROM registry_internal.registry_request_application_jobs
+                  WHERE job_id=$1 AND state='applied' AND application_id=$2",
+                &[&job.job_id, &application_id],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+            .is_some();
+        if !converged {
+            return Err(MutationError::Unavailable);
+        }
     }
     Ok(())
 }
@@ -2253,15 +2323,19 @@ async fn block_application_job(
     job: &ApplicationJob,
     code: &'static str,
 ) -> Result<(), MutationError> {
-    client
+    let updated = client
         .execute(
             "UPDATE registry_internal.registry_request_application_jobs
-                SET state='blocked',last_error_code=$2,updated_at=transaction_timestamp()
-              WHERE job_id=$1 AND state='applying'",
-            &[&job.job_id, &code],
+                SET state='blocked',claim_token=NULL,last_error_code=$2,
+                    updated_at=transaction_timestamp()
+              WHERE job_id=$1 AND state='applying' AND claim_token=$3",
+            &[&job.job_id, &code, &job.claim_token],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
+    if updated != 1 {
+        return Err(MutationError::Unavailable);
+    }
     Ok(())
 }
 
@@ -2291,7 +2365,7 @@ pub(crate) async fn read_projection(
                     r.status,r.result_id,
                     to_char(r.completed_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
                     to_char(r.available_until AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
-                    j.state,j.application_id,s.last_error_code,
+                    j.state,j.application_id,COALESCE(j.last_error_code,s.last_error_code),
                     c.state,c.event_id,
                     to_char(c.received_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
                     s.withdrawn
@@ -2442,6 +2516,8 @@ mod tests {
             job_id: Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap(),
             proposal_digest:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            claim_token: Uuid::parse_str("00000000-0000-4000-8000-000000000006").unwrap(),
+            attempt_count: 1,
             action_href: None,
             action_if_match: None,
         }

@@ -41,7 +41,10 @@ CREATE TABLE casework_review_requests (
     policy_id text NOT NULL CHECK (octet_length(policy_id) BETWEEN 1 AND 128),
     policy_version text NOT NULL CHECK (octet_length(policy_version) BETWEEN 1 AND 128),
     policy_digest text NOT NULL CHECK (policy_digest ~ '^sha256:[0-9a-f]{64}$'),
-    policy_snapshot jsonb NOT NULL CHECK (octet_length(policy_snapshot::text) <= 262144),
+    -- Canonical policy snapshots are capped at 256 KiB. PostgreSQL jsonb text
+    -- can expand compact JCS exponent-form binary64 values, so the same 64x
+    -- storage factor used for other bounded review JSON permits up to 16 MiB.
+    policy_snapshot jsonb NOT NULL CHECK (octet_length(policy_snapshot::text) <= 16777216),
     submission_digest text NOT NULL CHECK (submission_digest ~ '^sha256:[0-9a-f]{64}$'),
     completion_destination text CHECK (completion_destination IS NULL OR octet_length(completion_destination) BETWEEN 1 AND 128),
     completion_recipient_binding text CHECK (completion_recipient_binding IS NULL OR octet_length(completion_recipient_binding) BETWEEN 1 AND 256),

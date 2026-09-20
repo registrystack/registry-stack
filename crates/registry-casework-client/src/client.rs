@@ -12,12 +12,13 @@ use registry_casework_core::{
     NextWorkItemQuery, RecoverAttemptRequest, ReleaseRequest, ReviewAccountabilityRecord,
     ReviewCancelRequest, ReviewCancelResponse, ReviewCreateRequest, ReviewHistoryEntry,
     ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewRequestAccepted,
-    ReviewRequestView, ReviewResult, ReviewResultFeedPage, ReviewTaskContext, ReviewTaskDraft,
-    ReviewTaskDraftInput, ReviewTaskPage, ReviewValidationError, ReviewValidationReason,
-    ReviewerTask, SaveDraftRequest, WorkItem, WorkItemPage, CASEWORK_PROBLEM_TYPE_BASE,
-    CASEWORK_PROFILE_HEADER, DIRECTORY_TARGETS_PATH, HOLDINGS_PATH, IDEMPOTENCY_KEY_HEADER,
-    MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES, NEXT_WORK_ITEM_PATH,
-    SOURCE_PROFILE_HEADER, VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER, WORK_ITEMS_PATH,
+    ReviewRequestView, ReviewResult, ReviewResultFeedPage, ReviewResultStatus, ReviewTaskContext,
+    ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage, ReviewValidationError,
+    ReviewValidationReason, ReviewerTask, SaveDraftRequest, WorkItem, WorkItemPage,
+    CASEWORK_PROBLEM_TYPE_BASE, CASEWORK_PROFILE_HEADER, DIRECTORY_TARGETS_PATH, HOLDINGS_PATH,
+    IDEMPOTENCY_KEY_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES,
+    NEXT_WORK_ITEM_PATH, SOURCE_PROFILE_HEADER, VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
+    WORK_ITEMS_PATH,
 };
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
@@ -258,7 +259,28 @@ impl CaseworkClient {
                 HeaderName::from_static(IDEMPOTENCY_KEY_HEADER),
                 idempotency_key,
             );
-        self.send_json(request, StatusCode::OK).await
+        let complete: CaseworkComplete<ReviewCancelResponse> =
+            self.send_json(request, StatusCode::OK).await?;
+        let result = match &complete.value {
+            ReviewCancelResponse::Cancelled { result }
+            | ReviewCancelResponse::AlreadyTerminal { result } => result,
+        };
+        if result.check().is_err()
+            || result.request_id != request_id
+            || result.subject != cancellation.subject
+            || matches!(
+                &complete.value,
+                ReviewCancelResponse::Cancelled { result }
+                    if result.status != ReviewResultStatus::Cancelled
+            )
+        {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete)
     }
 
     pub async fn review_kinds(
@@ -523,7 +545,6 @@ impl CaseworkClient {
         request_id: Uuid,
         query: &ReviewPageQuery,
     ) -> Result<CaseworkComplete<ReviewHistoryPage>, CaseworkClientError> {
-        reject_source_profile(&auth)?;
         validate_review_page(query.limit)?;
         let request = self.authorized(
             self.http
@@ -541,7 +562,6 @@ impl CaseworkClient {
         idempotency_key: &str,
         note: &ReviewNoteRequest,
     ) -> Result<CaseworkComplete<ReviewHistoryEntry>, CaseworkClientError> {
-        reject_source_profile(&auth)?;
         validate_idempotency_key(idempotency_key)?;
         let request = self
             .authorized(

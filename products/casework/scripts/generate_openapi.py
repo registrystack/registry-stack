@@ -376,6 +376,12 @@ def review_schemas() -> dict:
         ],
         "discriminator": {"propertyName": "type"},
     }
+    review_note = {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+        "description": "Must contain at least one non-whitespace Unicode character and no Unicode control characters. The runtime maximum is 2,000 UTF-8 bytes. OpenAPI maxLength is intentionally omitted because it counts Unicode code points rather than UTF-8 bytes.",
+    }
     result = {
         "ReviewRetentionPolicy": retention,
         "ReviewOutcomePolicy": outcome,
@@ -413,7 +419,7 @@ def review_schemas() -> dict:
         "ReviewTaskDecisionRequest": obj({"decision": decision}, ["decision"]),
         "ReviewHistoryEntry": obj({"eventId": uuid, "requestId": uuid, "taskId": nullable(uuid), "kind": text, "actorRef": nullable(text), "detail": value, "occurredAt": instant}, ["eventId", "requestId", "kind", "detail", "occurredAt"]),
         "ReviewHistoryPage": obj({"items": array(ref("ReviewHistoryEntry")), "nextCursor": nullable(uuid)}, ["items"]),
-        "ReviewNoteRequest": obj({"audience": {"type": "string", "enum": ["reviewers", "requester"]}, "note": text}, ["audience", "note"]),
+        "ReviewNoteRequest": obj({"audience": {"type": "string", "enum": ["reviewers", "requester"]}, "note": review_note}, ["audience", "note"]),
         "ReviewAccountabilityRecord": obj({"eventId": uuid, "requestId": uuid, "taskId": uuid, "actorRef": text, "actor": ref("IssuerPrincipal"), "profileId": text, "decision": text, "privateReason": nullable(text), "resultDigest": nullable(text), "occurredAt": instant, "retainedUntil": instant}, ["eventId", "requestId", "taskId", "actorRef", "actor", "profileId", "decision", "occurredAt", "retainedUntil"]),
         "ReviewClockOccurrence": value,
         "ReviewClockOccurrenceList": array(ref("ReviewClockOccurrence")),
@@ -1384,9 +1390,9 @@ def document(contract: dict) -> dict:
             "delete": operation("Delete the caller's private review draft", source=True, source_required=False, mutation=True, parameters=[TASK_ID], status="204"),
         },
         "/v1/review-tasks/{task_id}/decisions": {"post": operation("Record a held review-task decision", source=True, source_required=False, mutation=True, body="ReviewTaskDecisionRequest", parameters=[TASK_ID], status="204")},
-        "/v1/review-requests/{request_id}/history": {"get": operation("Read audience-filtered review history", "ReviewHistoryPage", parameters=[REQUEST_ID, parameter("cursor", "query", "Last delivered history event UUID.", required=False), parameter("limit", "query", "Bounded page size.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)])},
+        "/v1/review-requests/{request_id}/history": {"get": operation("Read audience-filtered review history", "ReviewHistoryPage", source=True, source_required=False, parameters=[REQUEST_ID, parameter("cursor", "query", "Last delivered history event UUID.", required=False), parameter("limit", "query", "Bounded page size.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Requester history remains bound to the admitted producer. Human reviewer history requires current Casework queue authority; source context also requires the current caller's source profile and token to disclose the pinned source binding, while submitted context rejects a source profile.")},
         "/v1/review-requests/{request_id}/clocks": {"get": operation("Read review clock occurrences", "ReviewClockOccurrenceList", parameters=[REQUEST_ID])},
-        "/v1/review-requests/{request_id}/notes": {"post": operation("Add an explicitly audience-bound review note", "ReviewHistoryEntry", idempotency=True, body="ReviewNoteRequest", parameters=[REQUEST_ID])},
+        "/v1/review-requests/{request_id}/notes": {"post": operation("Add an explicitly audience-bound review note", "ReviewHistoryEntry", source=True, source_required=False, idempotency=True, body="ReviewNoteRequest", parameters=[REQUEST_ID], description="Requester notes remain bound to the admitted producer and reject a source profile. Human reviewer notes require current Casework queue authority; source context also requires the current caller's source profile and token to disclose the pinned source binding, while submitted context rejects a source profile.")},
         "/v1/review-accountability/{event_id}": {"get": operation("Resolve protected review accountability", "ReviewAccountabilityRecord", parameters=[EVENT_ID])},
         "/v1/review-tasks/{task_id}/task-templates": {"get": operation("Preview task grants for a held review task", "TaskTemplatePreviews", source=True, parameters=[TASK_ID])},
         "/v1/review-tasks/{task_id}/task-grants": {"get": operation("List grants for a held review task", "TaskGrantList", source=True, parameters=[TASK_ID]), "post": operation("Approve a grant for a held review task", "TaskGrantView", source=True, mutation=True, body="TaskApprovalRequest", parameters=[TASK_ID])},

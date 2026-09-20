@@ -683,18 +683,29 @@ impl CaseworkService {
         &self,
         actor: &ActorContext,
         request_id: Uuid,
+        source_profile_id: Option<&str>,
+        token: &str,
         cursor: Option<Uuid>,
         limit: usize,
     ) -> Result<ReviewHistoryPage, ReviewRuntimeError> {
         let producer_id = if actor.role == CaseworkRole::Requester {
+            if source_profile_id.is_some() {
+                return Err(ReviewRuntimeError::SourceProfileNotApplicable);
+            }
             Some(self.producer_for_actor(actor)?.producer.id)
         } else {
             require_human_reviewer(actor)?;
             None
         };
-        self.store
+        let history = self
+            .store
             .review_history(actor, request_id, producer_id.as_deref(), cursor, limit)
-            .await
+            .await?;
+        if producer_id.is_none() {
+            self.preflight_review_request_source(request_id, source_profile_id, token)
+                .await?;
+        }
+        Ok(history)
     }
 
     pub async fn review_clocks(
@@ -728,10 +739,15 @@ impl CaseworkService {
         &self,
         actor: &ActorContext,
         request_id: Uuid,
+        source_profile_id: Option<&str>,
+        token: &str,
         request: ReviewNoteRequest,
         idempotency_key: &str,
     ) -> Result<ReviewHistoryEntry, ReviewRuntimeError> {
         let producer_id = if actor.role == CaseworkRole::Requester {
+            if source_profile_id.is_some() {
+                return Err(ReviewRuntimeError::SourceProfileNotApplicable);
+            }
             let producer_id = self.producer_for_actor(actor)?.producer.id;
             if request.audience != ReviewHistoryAudience::Requester {
                 return Err(ReviewRuntimeError::Forbidden);
@@ -741,6 +757,10 @@ impl CaseworkService {
             require_human_reviewer(actor)?;
             None
         };
+        if producer_id.is_none() {
+            self.preflight_review_request_source(request_id, source_profile_id, token)
+                .await?;
+        }
         self.store
             .add_review_note(
                 actor,
@@ -827,6 +847,27 @@ impl CaseworkService {
         token: &str,
     ) -> Result<(), ReviewRuntimeError> {
         let record = self.store.review_request_for_task(task_id).await?;
+        self.preflight_review_record_source(&record, source_profile_id, token)
+            .await
+    }
+
+    async fn preflight_review_request_source(
+        &self,
+        request_id: Uuid,
+        source_profile_id: Option<&str>,
+        token: &str,
+    ) -> Result<(), ReviewRuntimeError> {
+        let record = self.store.review_request_record(request_id).await?;
+        self.preflight_review_record_source(&record, source_profile_id, token)
+            .await
+    }
+
+    async fn preflight_review_record_source(
+        &self,
+        record: &ReviewRequestRecord,
+        source_profile_id: Option<&str>,
+        token: &str,
+    ) -> Result<(), ReviewRuntimeError> {
         match record.policy.context_strategy {
             registry_casework_core::ReviewContextStrategy::Submitted => {
                 if source_profile_id.is_some() {
@@ -1742,6 +1783,14 @@ impl PostgresStore {
             .await?
             .ok_or(ReviewRuntimeError::NotFound)?;
         request_from_row(&row)
+    }
+
+    async fn review_request_record(
+        &self,
+        request_id: Uuid,
+    ) -> Result<ReviewRequestRecord, ReviewRuntimeError> {
+        let client = self.client().await?;
+        load_request_by_id(&client, request_id, false).await
     }
 
     async fn review_stage_for_task(

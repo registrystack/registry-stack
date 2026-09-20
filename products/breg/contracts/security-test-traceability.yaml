@@ -75,3 +75,6 @@ traceability:
   - {id: BREG-SEC-72, state: enforced, negativeId: BREG-NEG-72, negativeTest: {path: crates/registry-breg/tests/field_encryption_contract.rs, name: change_request_paths_refuse_encrypted_fields}}
   - {id: BREG-SEC-73, state: enforced, negativeId: BREG-NEG-73, negativeTest: {path: crates/registry-breg/tests/postgres_field_encryption.rs, name: aad_binds_the_record_row}}
   - {id: BREG-SEC-74, state: enforced, negativeId: BREG-NEG-74, negativeTest: {path: crates/registry-breg/tests/postgres_field_encryption.rs, name: missing_field_encryption_provider_refuses_startup}}
+  - {id: BREG-SEC-75, state: enforced, negativeId: BREG-NEG-75, negativeTest: {path: crates/registry-breg/tests/postgres_review_executor.rs, name: real_postgres_automatic_application_claim_fences_stale_owner}}
+  - {id: BREG-SEC-76, state: enforced, negativeId: BREG-NEG-76, negativeTest: {path: crates/registry-breg/tests/postgres_change_requests.rs, name: cached_review_result_cannot_authorize_fresh_apply_but_committed_receipt_recovers_offline}}
+  - {id: BREG-SEC-77, state: enforced, negativeId: BREG-NEG-77, negativeTest: {path: crates/registry-breg/tests/postgres_change_requests.rs, name: expired_online_review_blocks_final_automatic_attempt_until_authorized_recovery}}

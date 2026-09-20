@@ -440,6 +440,34 @@ fn create_http_request(body: &ReviewCreateRequest, token: Option<&str>) -> Reque
         .expect("review HTTP request")
 }
 
+fn review_note_http_request(
+    request_id: Uuid,
+    token: &str,
+    idempotency_key: &str,
+    note: &str,
+    source_profile: Option<&str>,
+) -> Request<Body> {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri(format!("/v1/review-requests/{request_id}/notes"))
+        .header("authorization", format!("Bearer {token}"))
+        .header(CASEWORK_PROFILE_HEADER, "staff")
+        .header(CONTENT_TYPE, "application/json")
+        .header("idempotency-key", idempotency_key);
+    if let Some(source_profile) = source_profile {
+        request = request.header(SOURCE_PROFILE_HEADER, source_profile);
+    }
+    request
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "audience": "reviewers",
+                "note": note,
+            }))
+            .expect("serialize review note"),
+        ))
+        .expect("review note HTTP request")
+}
+
 #[tokio::test]
 async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
     let idp = MockIdp::start().await;
@@ -520,7 +548,7 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
     drop(lost_create_response);
 
     let reviewer_token = reviewer_token(&idp);
-    let missing_source_profile = app
+    let tasks_without_source_profile = app
         .clone()
         .oneshot(
             Request::builder()
@@ -532,7 +560,14 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
         )
         .await
         .expect("task list response without source profile");
-    assert_eq!(missing_source_profile.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(tasks_without_source_profile.status(), StatusCode::OK);
+    let tasks_without_source_profile: ReviewTaskPage = serde_json::from_slice(
+        &to_bytes(tasks_without_source_profile.into_body(), 32 * 1024)
+            .await
+            .expect("bounded task list without source profile"),
+    )
+    .expect("task list without source profile JSON");
+    assert!(tasks_without_source_profile.items.is_empty());
 
     let visible_tasks = app
         .clone()
@@ -862,6 +897,173 @@ async fn requester_history_and_notes_require_the_admitted_producer_id_over_http(
 }
 
 #[tokio::test]
+async fn source_context_review_history_and_notes_require_current_pinned_source_visibility_over_http(
+) {
+    let idp = MockIdp::start().await;
+    let (app, _, source_revoked, _, _) = app(&idp).await;
+    let producer_token = token(&idp);
+    let created = app
+        .clone()
+        .oneshot(create_http_request(
+            &review_request("source-history", &idp.issuer()),
+            Some(&producer_token),
+        ))
+        .await
+        .expect("create source-context review");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created: ReviewRequestAccepted = serde_json::from_slice(
+        &to_bytes(created.into_body(), 32 * 1024)
+            .await
+            .expect("bounded source-context create response"),
+    )
+    .expect("source-context create JSON");
+
+    let reviewer_token = reviewer_token(&idp);
+    let note_canary = "SOURCE_HISTORY_NOTE_CANARY";
+    let missing_note_source_profile = app
+        .clone()
+        .oneshot(review_note_http_request(
+            created.request_id,
+            &reviewer_token,
+            "source-history-note-missing-profile",
+            "must not be stored",
+            None,
+        ))
+        .await
+        .expect("source note response without source profile");
+    assert_eq!(
+        missing_note_source_profile.status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    let note = app
+        .clone()
+        .oneshot(review_note_http_request(
+            created.request_id,
+            &reviewer_token,
+            "source-history-note",
+            note_canary,
+            Some("reviewer-source"),
+        ))
+        .await
+        .expect("source history note response");
+    assert_eq!(note.status(), StatusCode::OK);
+
+    let missing_source_profile = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/review-requests/{}/history",
+                    created.request_id
+                ))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .body(Body::empty())
+                .expect("source history without source profile"),
+        )
+        .await
+        .expect("source history response without source profile");
+    assert_eq!(missing_source_profile.status(), StatusCode::BAD_REQUEST);
+
+    let authorized = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/review-requests/{}/history",
+                    created.request_id
+                ))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("authorized source history"),
+        )
+        .await
+        .expect("authorized source history response");
+    assert_eq!(authorized.status(), StatusCode::OK);
+    let authorized = String::from_utf8(
+        to_bytes(authorized.into_body(), 64 * 1024)
+            .await
+            .expect("bounded authorized source history")
+            .to_vec(),
+    )
+    .expect("authorized source history UTF-8");
+    assert!(authorized.contains(note_canary));
+
+    source_revoked.store(true, Ordering::SeqCst);
+    let revoked_note_canary = "REVOKED_SOURCE_NOTE_CANARY";
+    let revoked_note = app
+        .clone()
+        .oneshot(review_note_http_request(
+            created.request_id,
+            &reviewer_token,
+            "source-history-note-after-revocation",
+            revoked_note_canary,
+            Some("reviewer-source"),
+        ))
+        .await
+        .expect("revoked source note response");
+    assert_eq!(revoked_note.status(), StatusCode::FORBIDDEN);
+
+    let revoked = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/review-requests/{}/history",
+                    created.request_id
+                ))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("revoked source history"),
+        )
+        .await
+        .expect("revoked source history response");
+    assert_eq!(revoked.status(), StatusCode::FORBIDDEN);
+    let revoked = String::from_utf8(
+        to_bytes(revoked.into_body(), 16 * 1024)
+            .await
+            .expect("bounded revoked source history problem")
+            .to_vec(),
+    )
+    .expect("revoked source history problem UTF-8");
+    assert!(!revoked.contains(note_canary));
+
+    source_revoked.store(false, Ordering::SeqCst);
+    let restored = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/review-requests/{}/history",
+                    created.request_id
+                ))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("restored source history"),
+        )
+        .await
+        .expect("restored source history response");
+    assert_eq!(restored.status(), StatusCode::OK);
+    let restored = String::from_utf8(
+        to_bytes(restored.into_body(), 64 * 1024)
+            .await
+            .expect("bounded restored source history")
+            .to_vec(),
+    )
+    .expect("restored source history UTF-8");
+    assert!(restored.contains(note_canary));
+    assert!(!restored.contains(revoked_note_canary));
+
+    idp.stop().await;
+}
+
+#[tokio::test]
 async fn review_task_inbox_continues_after_the_concealed_scan_budget() {
     let idp = MockIdp::start().await;
     let (app, service, _, _, _) = app(&idp).await;
@@ -999,6 +1201,106 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
     .expect("standalone answer task list JSON");
     assert_eq!(tasks.items.len(), 1);
     let task_id = tasks.items[0].task_id;
+
+    let submitted_history = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/review-requests/{}/history",
+                    created.request_id
+                ))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .body(Body::empty())
+                .expect("submitted-context history request"),
+        )
+        .await
+        .expect("submitted-context history response");
+    assert_eq!(submitted_history.status(), StatusCode::OK);
+
+    let submitted_history_with_source_profile = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/review-requests/{}/history",
+                    created.request_id
+                ))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("submitted-context history with source profile"),
+        )
+        .await
+        .expect("submitted-context source-profile response");
+    assert_eq!(
+        submitted_history_with_source_profile.status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    let submitted_note = app
+        .clone()
+        .oneshot(review_note_http_request(
+            created.request_id,
+            &reviewer_token,
+            "submitted-note",
+            "Submitted context note",
+            None,
+        ))
+        .await
+        .expect("submitted-context note response");
+    assert_eq!(submitted_note.status(), StatusCode::OK);
+
+    let submitted_note_with_source_profile = app
+        .clone()
+        .oneshot(review_note_http_request(
+            created.request_id,
+            &reviewer_token,
+            "submitted-note-with-source-profile",
+            "must not be stored",
+            Some("reviewer-source"),
+        ))
+        .await
+        .expect("submitted-context note response with source profile");
+    assert_eq!(
+        submitted_note_with_source_profile.status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    let maximum_utf8_note = "é".repeat(1_000);
+    let maximum_utf8_note_response = app
+        .clone()
+        .oneshot(review_note_http_request(
+            created.request_id,
+            &reviewer_token,
+            "submitted-note-maximum-utf8",
+            &maximum_utf8_note,
+            None,
+        ))
+        .await
+        .expect("maximum UTF-8 note response");
+    assert_eq!(maximum_utf8_note_response.status(), StatusCode::OK);
+
+    for (idempotency_key, invalid_note) in [
+        ("submitted-note-over-maximum-utf8", "é".repeat(1_001)),
+        ("submitted-note-whitespace", " \u{00a0}\u{3000}".to_owned()),
+        ("submitted-note-control", "safe\u{0085}unsafe".to_owned()),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(review_note_http_request(
+                created.request_id,
+                &reviewer_token,
+                idempotency_key,
+                &invalid_note,
+                None,
+            ))
+            .await
+            .expect("invalid review note response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 
     let claimed = app
         .clone()

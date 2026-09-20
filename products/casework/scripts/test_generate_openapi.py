@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -137,6 +138,36 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertEqual(100, history_parameters["limit"]["schema"]["maximum"])
         self.assertIn("cursor.expired", history_parameters["cursor"]["description"])
         self.assertIn("eventId", history_parameters["cursor"]["description"])
+        review_history_parameters = {
+            parameter["name"]: parameter
+            for parameter in self.openapi["paths"][
+                "/v1/review-requests/{request_id}/history"
+            ]["get"]["parameters"]
+        }
+        self.assertFalse(
+            review_history_parameters["Registry-Source-Profile"]["required"]
+        )
+        review_note_parameters = {
+            parameter["name"]: parameter
+            for parameter in self.openapi["paths"][
+                "/v1/review-requests/{request_id}/notes"
+            ]["post"]["parameters"]
+        }
+        self.assertFalse(
+            review_note_parameters["Registry-Source-Profile"]["required"]
+        )
+        review_note = schemas["ReviewNoteRequest"]["properties"]["note"]
+        self.assertEqual(1, review_note["minLength"])
+        self.assertNotIn("maxLength", review_note)
+        self.assertIn("2,000 UTF-8 bytes", review_note["description"])
+        self.assertIn("Unicode code points", review_note["description"])
+        review_note_pattern = re.compile(review_note["pattern"])
+        self.assertIsNotNone(review_note_pattern.fullmatch("Review note"))
+        self.assertIsNotNone(review_note_pattern.fullmatch("é" * 1_001))
+        self.assertIsNone(review_note_pattern.fullmatch(""))
+        self.assertIsNone(review_note_pattern.fullmatch(" \u00a0\u3000"))
+        self.assertIsNone(review_note_pattern.fullmatch("line\nbreak"))
+        self.assertIsNone(review_note_pattern.fullmatch("safe\u0085unsafe"))
         self.assertEqual(
             {
                 "observed", "opened", "claimed", "assigned", "delegated",

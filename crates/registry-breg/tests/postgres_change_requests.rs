@@ -13,13 +13,16 @@ mod client_http;
 mod postgres_harness;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::body::{to_bytes, Body};
+use axum::extract::{Path, State};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
 use axum::middleware::Next;
+use axum::response::IntoResponse;
 use postgres_harness::TestDatabase;
 use registry_breg as breg;
 use registry_breg::action_evidence::ActionEvidenceEvaluator;
@@ -35,6 +38,10 @@ use registry_breg::postgres::{
     begin_record_transaction, initialize_compiled_registry_state_for_test, install_compiled_schema,
     ClaimContext, PostgresRecordMutationService, PostgresRecordReadService,
     PostgresRevisionReadService, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
+};
+use registry_breg::review_store::{
+    run_review_application_once_for_test, ReviewAuthorityClient, ReviewAuthorityRegistry,
+    ReviewExecutorClient,
 };
 use registry_breg::startup::with_request_timeout_for_test;
 use registry_breg_client::{
@@ -145,6 +152,244 @@ async fn reviewed_application_guard_rejects_changed_target_without_partial_effec
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cached_review_result_cannot_authorize_fresh_apply_but_committed_receipt_recovers_offline()
+{
+    let (endpoint, authority_state, authority_server) = serve_review_result_authority().await;
+    let reviews = review_authority_registry(endpoint);
+    let database = TestDatabase::create(8).await;
+    let mut source = serde_json::to_value(two_stage_project()).unwrap();
+    source["entities"][2]["changeRequest"]["review"] =
+        json!({"authority":"casework-a","policyId":"correction-review"});
+    let registry = Arc::new(
+        compile_project(
+            &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .unwrap(),
+    );
+    let identity = install_registry(&database, &registry, "fresh-review-manual", false).await;
+    let (service, _) = change_request_service_with_evidence_options(
+        &database,
+        registry,
+        identity,
+        "fresh-review-manual",
+        None,
+        None,
+        registry_breg::attachment_storage::AttachmentStorage::Database,
+        None,
+        registry_breg::attachment_verification::AttachmentVerification::Disabled,
+        None,
+        Some(reviews),
+    );
+    let app = router(service);
+    let (request, digest) = submit_two_stage_correction(&app).await;
+    let result = reconcile_cached_external_approval(&database, &request.id, false).await;
+    *authority_state.result.lock().unwrap() = result;
+    let applier = claims("applier", APPLIER, Some("apply"));
+    let before = get_record(
+        &app,
+        &format!(
+            "/v1/records/correction-requests/{}?accessProfile=applier",
+            request.id
+        ),
+        applier.clone(),
+    )
+    .await;
+    let apply = action(&before.body, "apply_request", None);
+
+    let unavailable = send_action(
+        &app,
+        &apply,
+        "cached-review-unavailable",
+        applier.clone(),
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(unavailable.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(application_result_count(&database).await, 0);
+    assert_eq!(authority_state.lookups.load(Ordering::SeqCst), 1);
+
+    authority_state.mode.store(2, Ordering::SeqCst);
+    let expired = send_action(
+        &app,
+        &apply,
+        "cached-review-expired",
+        applier.clone(),
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(expired.status, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(application_result_count(&database).await, 0);
+    assert_eq!(authority_state.lookups.load(Ordering::SeqCst), 2);
+
+    authority_state.result.lock().unwrap()["availableUntil"] = json!("2099-09-20T00:00:00Z");
+    let applied = send_action(
+        &app,
+        &apply,
+        "fresh-review-apply",
+        applier.clone(),
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(applied.status, StatusCode::OK, "{}", applied.body);
+    assert_eq!(application_result_count(&database).await, 1);
+    assert_eq!(authority_state.lookups.load(Ordering::SeqCst), 3);
+
+    authority_state.mode.store(0, Ordering::SeqCst);
+    let replay = send_action(
+        &app,
+        &apply,
+        "fresh-review-apply",
+        applier,
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(replay.status, StatusCode::OK, "{}", replay.body);
+    assert_eq!(replay.body, applied.body);
+    assert_eq!(
+        authority_state.lookups.load(Ordering::SeqCst),
+        3,
+        "an exact committed receipt recovers without Casework"
+    );
+
+    authority_server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn expired_online_review_blocks_final_automatic_attempt_until_authorized_recovery() {
+    let (endpoint, authority_state, authority_server) = serve_review_result_authority().await;
+    let reviews = review_authority_registry(endpoint);
+    let mut database = TestDatabase::create(8).await;
+    let mut source = serde_json::to_value(two_stage_project()).unwrap();
+    source["entities"][2]["changeRequest"]["review"] =
+        json!({"authority":"casework-a","policyId":"correction-review"});
+    source["entities"][2]["changeRequest"]["onApproved"] =
+        json!({"mode":"automatic","executor":"registry-automatic"});
+    source["accessProfiles"][4]["permissions"][0]["readableRequestFields"] =
+        json!(["reason", "review_state"]);
+    let registry = Arc::new(
+        compile_project(
+            &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .unwrap(),
+    );
+    let identity = install_registry(&database, &registry, "fresh-review-automatic", false).await;
+    let (service, _) = change_request_service_with_evidence_options(
+        &database,
+        registry,
+        identity,
+        "fresh-review-automatic",
+        None,
+        None,
+        registry_breg::attachment_storage::AttachmentStorage::Database,
+        None,
+        registry_breg::attachment_verification::AttachmentVerification::Disabled,
+        None,
+        Some(reviews),
+    );
+    let app = router(service);
+    let (request, digest) = submit_two_stage_correction(&app).await;
+    let result = reconcile_cached_external_approval(&database, &request.id, true).await;
+    *authority_state.result.lock().unwrap() = result;
+    authority_state.mode.store(1, Ordering::SeqCst);
+    let server = serve_change_request_client_http(app.clone()).await;
+    let executor = ReviewExecutorClient::new(
+        "registry-automatic".to_owned(),
+        format!("{}/", server.base_url()).parse().unwrap(),
+        registry_review_client::BearerToken::new("applier-token").unwrap(),
+        "two-stage-change-request".to_owned(),
+        "applier".to_owned(),
+        BTreeMap::from([(
+            "correction-request".to_owned(),
+            "correction-requests".to_owned(),
+        )]),
+        Duration::from_secs(2),
+    )
+    .unwrap();
+
+    assert!(
+        run_review_application_once_for_test(&mut database.admin, &executor)
+            .await
+            .expect("final automatic attempt settles")
+    );
+    assert_eq!(application_result_count(&database).await, 0);
+    let job = database
+        .admin
+        .query_one(
+            "SELECT state,attempt_count,claim_token,last_error_code
+               FROM registry_internal.registry_request_application_jobs
+              WHERE request_id=$1",
+            &[&Uuid::parse_str(&request.id).unwrap()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(job.get::<_, String>(0), "blocked");
+    assert_eq!(job.get::<_, i32>(1), 1_000);
+    assert_eq!(job.get::<_, Option<Uuid>>(2), None);
+    assert_eq!(
+        job.get::<_, Option<String>>(3).as_deref(),
+        Some("application-attempts-exhausted")
+    );
+    assert_eq!(authority_state.lookups.load(Ordering::SeqCst), 1);
+    assert!(
+        !run_review_application_once_for_test(&mut database.admin, &executor)
+            .await
+            .expect("blocked automatic job stays terminal")
+    );
+
+    let applier = claims("applier", APPLIER, Some("apply"));
+    let blocked = get_record(
+        &app,
+        &format!(
+            "/v1/records/correction-requests/{}?accessProfile=applier",
+            request.id
+        ),
+        applier.clone(),
+    )
+    .await;
+    assert_eq!(
+        blocked.body["request"]["review"]["application"]["state"],
+        "blocked"
+    );
+    assert_eq!(
+        blocked.body["request"]["review"]["recovery"]["code"],
+        "application-attempts-exhausted"
+    );
+
+    authority_state.result.lock().unwrap()["availableUntil"] = json!("2099-09-20T00:00:00Z");
+    authority_state.mode.store(2, Ordering::SeqCst);
+    let apply = action(&blocked.body, "apply_request", None);
+    let recovered = send_action(
+        &app,
+        &apply,
+        "authorized-exhaustion-recovery",
+        applier,
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(recovered.status, StatusCode::OK, "{}", recovered.body);
+    let state: String = database
+        .admin
+        .query_one(
+            "SELECT state FROM registry_internal.registry_request_application_jobs
+              WHERE request_id=$1",
+            &[&Uuid::parse_str(&request.id).unwrap()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(state, "applied");
+
+    server.finish().await;
+    authority_server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_receipt() {
     let provider = EvidenceProvider::start().await;
     let database = TestDatabase::create(8).await;
@@ -218,6 +463,7 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
         None,
         registry_breg::attachment_verification::AttachmentVerification::Disabled,
         Some(evaluator.clone()),
+        None,
     );
     let fault_app = router(fault_service);
     let (replay_service, _) = change_request_service_with_evidence_options(
@@ -231,6 +477,7 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
         None,
         registry_breg::attachment_verification::AttachmentVerification::Disabled,
         Some(evaluator),
+        None,
     );
     let replay_app = router(replay_service);
     let (request, digest) = submit_two_stage_correction(&replay_app).await;
@@ -4772,6 +5019,100 @@ struct ChangeRequestClientHttpServer {
     task: Option<JoinHandle<()>>,
 }
 
+struct ReviewResultAuthorityState {
+    mode: AtomicUsize,
+    lookups: AtomicUsize,
+    result: Mutex<Value>,
+}
+
+async fn controlled_review_result(
+    State(state): State<Arc<ReviewResultAuthorityState>>,
+    Path(request_id): Path<Uuid>,
+) -> axum::response::Response {
+    state.lookups.fetch_add(1, Ordering::SeqCst);
+    match state.mode.load(Ordering::SeqCst) {
+        0 => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        1 => (
+            StatusCode::GONE,
+            [(
+                "traceparent",
+                "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+            )],
+        )
+            .into_response(),
+        2 => {
+            let result = state.result.lock().expect("review result state").clone();
+            assert_eq!(result["requestId"], request_id.to_string());
+            (
+                StatusCode::OK,
+                [(
+                    "traceparent",
+                    "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+                )],
+                axum::Json(result),
+            )
+                .into_response()
+        }
+        mode => panic!("unexpected review authority mode {mode}"),
+    }
+}
+
+async fn serve_review_result_authority() -> (
+    reqwest::Url,
+    Arc<ReviewResultAuthorityState>,
+    JoinHandle<()>,
+) {
+    let state = Arc::new(ReviewResultAuthorityState {
+        mode: AtomicUsize::new(0),
+        lookups: AtomicUsize::new(0),
+        result: Mutex::new(json!({})),
+    });
+    let app = axum::Router::new()
+        .route(
+            "/v1/review-requests/{request_id}/result",
+            axum::routing::get(controlled_review_result),
+        )
+        .with_state(Arc::clone(&state));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("review authority listener");
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap())
+        .parse()
+        .unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("review authority serves")
+    });
+    (endpoint, state, task)
+}
+
+fn review_authority_registry(endpoint: reqwest::Url) -> Arc<ReviewAuthorityRegistry> {
+    let client = registry_review_client::ReviewClient::new(
+        registry_review_client::ReviewClientConfig::new(endpoint).with_profile("producer-profile"),
+    )
+    .expect("review client");
+    let authority = Arc::new(
+        ReviewAuthorityClient::new(
+            "casework-a".to_owned(),
+            client,
+            Arc::new(
+                registry_platform_httputil::StaticToken::new("producer-token".to_owned())
+                    .expect("review token"),
+            ),
+            "registry-producer".to_owned(),
+            7,
+            None,
+            None,
+        )
+        .expect("review authority"),
+    );
+    Arc::new(
+        ReviewAuthorityRegistry::new(BTreeMap::from([("casework-a".to_owned(), authority)]))
+            .expect("review authority registry"),
+    )
+}
+
 impl ChangeRequestClientHttpServer {
     fn base_url(&self) -> &str {
         &self.base_url
@@ -4958,6 +5299,7 @@ fn change_request_service_with_attachment_verification(
         pause,
         verification,
         None,
+        None,
     )
     .0
 }
@@ -4974,6 +5316,7 @@ fn change_request_service_with_evidence_options(
     pause: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     verification: registry_breg::attachment_verification::AttachmentVerification,
     evidence: Option<Arc<ActionEvidenceEvaluator>>,
+    reviews: Option<Arc<ReviewAuthorityRegistry>>,
 ) -> (Arc<HttpService>, registry_breg::postgres::RuntimePool) {
     let pool = database.runtime_config.build_pool().expect("pool builds");
     let lock_key = RegistryLockKey::derive(package_id).expect("lock key derives");
@@ -5024,6 +5367,10 @@ fn change_request_service_with_evidence_options(
         .with_attachment_verification(verification);
     let mutations = match evidence {
         Some(evidence) => mutations.with_evidence_evaluator(evidence),
+        None => mutations,
+    };
+    let mutations = match reviews {
+        Some(reviews) => mutations.with_review_result_source(reviews),
         None => mutations,
     };
     let mutations = match fault {
@@ -5125,6 +5472,85 @@ async fn submit_two_stage_correction(app: &axum::Router) -> (CreatedRecord, Stri
         .expect("submission freezes digest")
         .to_owned();
     (request, digest)
+}
+
+async fn reconcile_cached_external_approval(
+    database: &TestDatabase,
+    request_id: &str,
+    automatic: bool,
+) -> Value {
+    let request_id = Uuid::parse_str(request_id).expect("request id");
+    let row = database
+        .admin
+        .query_one(
+            "SELECT create_request,expected_submission_digest,proposal_digest
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_entity_id='correction-request' AND request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("queued review submission");
+    let create: Value = row.get(0);
+    let submission_digest: String = row.get(1);
+    let proposal_digest: String = row.get(2);
+    let review_request_id = Uuid::new_v4();
+    let result_id = Uuid::new_v4();
+    let accepted = json!({
+        "requestId": review_request_id,
+        "subject": create["subject"].clone(),
+        "policy": {
+            "id": create["kind"].clone(),
+            "version": "1",
+            "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "submissionDigest": submission_digest,
+    });
+    let result = json!({
+        "resultId": result_id,
+        "requestId": review_request_id,
+        "subject": accepted["subject"].clone(),
+        "policy": accepted["policy"].clone(),
+        "submissionDigest": accepted["submissionDigest"].clone(),
+        "status": "approved",
+        "completedAt": "2026-09-01T00:00:00Z",
+        "availableUntil": "2026-09-02T00:00:00Z"
+    });
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state='accepted',accepted_binding=$2
+              WHERE request_entity_id='correction-request' AND request_id=$1",
+            &[&request_id, &accepted],
+        )
+        .await
+        .expect("review submission accepted");
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_request_review_results
+             (request_entity_id,request_id,proposal_version,authority,result_id,result,status,
+              completed_at,available_until)
+             VALUES ('correction-request',$1,1,'casework-a',$2,$3,'approved',
+                     '2026-09-01T00:00:00Z','2026-09-02T00:00:00Z')",
+            &[&request_id, &result_id, &result],
+        )
+        .await
+        .expect("stale reconciled review result");
+    if automatic {
+        database
+            .admin
+            .execute(
+                "INSERT INTO registry_internal.registry_request_application_jobs
+                 (request_entity_id,request_id,proposal_version,job_id,proposal_digest,result_id,
+                  executor,state,attempt_count)
+                 VALUES ('correction-request',$1,1,$2,$3,$4,'registry-automatic','queued',999)",
+                &[&request_id, &Uuid::new_v4(), &proposal_digest, &result_id],
+            )
+            .await
+            .expect("automatic application job");
+    }
+    result
 }
 
 async fn create_approved_correction(

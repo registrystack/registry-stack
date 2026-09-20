@@ -624,12 +624,19 @@ async fn review_history(
     Path(request_id): Path<Uuid>,
     Query(query): Query<ReviewHistoryQuery>,
 ) -> Result<Json<ReviewHistoryPage>, HttpError> {
-    reject_source_profile(&headers)?;
-    let (actor, _) = authenticate(&state, &headers).await?;
+    let source_profile_id = source_profile_optional(&headers)?;
+    let (actor, token) = authenticate(&state, &headers).await?;
     Ok(Json(
         state
             .service
-            .review_history(&actor, request_id, query.cursor, query.limit.unwrap_or(25))
+            .review_history(
+                &actor,
+                request_id,
+                source_profile_id,
+                token,
+                query.cursor,
+                query.limit.unwrap_or(25),
+            )
             .await?,
     ))
 }
@@ -650,12 +657,19 @@ async fn add_review_note(
     Path(request_id): Path<Uuid>,
     Json(request): Json<ReviewNoteRequest>,
 ) -> Result<Json<ReviewHistoryEntry>, HttpError> {
-    reject_source_profile(&headers)?;
-    let (actor, _) = authenticate(&state, &headers).await?;
+    let source_profile_id = source_profile_optional(&headers)?;
+    let (actor, token) = authenticate(&state, &headers).await?;
     Ok(Json(
         state
             .service
-            .add_review_note(&actor, request_id, request, idempotency_key(&headers)?)
+            .add_review_note(
+                &actor,
+                request_id,
+                source_profile_id,
+                token,
+                request,
+                idempotency_key(&headers)?,
+            )
             .await?,
     ))
 }

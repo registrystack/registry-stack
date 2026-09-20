@@ -31,7 +31,7 @@ use registry_casework_core::{
     ReviewerDecisionKind, ReviewerTaskState, SourceAdapter, SourceAdapterError, SourceBinding,
     SourceContextBinding, SourceReceipt, SubjectBinding, SubjectClockAnchor,
     SubjectClockCompletion, SubjectClockPause, SubjectRef, TransitionHint, WorkingDaysAfter,
-    WorkingWeekday,
+    WorkingWeekday, MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
@@ -1595,6 +1595,8 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
             .add_review_note(
                 &fixture.producer,
                 request_id,
+                None,
+                "producer-token",
                 ReviewNoteRequest {
                     audience: ReviewHistoryAudience::Requester,
                     note: "must not resurrect erased history".to_owned(),
@@ -1672,6 +1674,7 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
 async fn canonical_json_bounds_allow_safe_postgresql_expansion_for_context_and_drafts() {
     let fixture = fixture().await;
     let mut project = project("canonical-storage");
+    let schema_examples = vec![1e100_f64; 8_000];
     project.review_kinds[0].display_schema = json!({
         "type": "object",
         "additionalProperties": false,
@@ -1683,9 +1686,40 @@ async fn canonical_json_bounds_allow_safe_postgresql_expansion_for_context_and_d
                 "maxItems": 1200,
                 "items": {"type": "number"}
             }
-        }
+        },
+        "examples": schema_examples
     });
+    project.review_kinds[0]
+        .result_schema
+        .as_mut()
+        .expect("result schema")
+        .as_object_mut()
+        .expect("object result schema")
+        .insert("examples".to_owned(), json!(vec![1e100_f64; 8_000]));
     project.check().expect("canonical storage project");
+    for schema in [
+        &project.review_kinds[0].display_schema,
+        project.review_kinds[0]
+            .result_schema
+            .as_ref()
+            .expect("result schema"),
+    ] {
+        let bytes =
+            registry_platform_canonical_json::canonicalize_json(schema).expect("canonical schema");
+        assert!(bytes.len() > 48 * 1024);
+        assert!(bytes.len() <= 64 * 1024);
+    }
+    let policy_snapshot = project.review_kinds[0]
+        .snapshot()
+        .expect("bounded policy snapshot");
+    assert!(
+        registry_platform_canonical_json::canonicalize_json(
+            &serde_json::to_value(policy_snapshot).expect("policy snapshot value")
+        )
+        .expect("canonical policy snapshot")
+        .len()
+            <= MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES
+    );
     let service = CaseworkService::new(
         fixture.store.clone(),
         project,
@@ -1737,7 +1771,8 @@ async fn canonical_json_bounds_allow_safe_postgresql_expansion_for_context_and_d
     let stored = fixture
         .database
         .query_one(
-            "SELECT octet_length(r.context::text),octet_length(d.body::text)
+            "SELECT octet_length(r.context::text),octet_length(d.body::text),
+                    octet_length(r.policy_snapshot::text)
              FROM casework_review_requests r
              JOIN casework_review_tasks t USING(request_id)
              JOIN casework_review_task_drafts d USING(task_id)
@@ -1748,6 +1783,8 @@ async fn canonical_json_bounds_allow_safe_postgresql_expansion_for_context_and_d
         .expect("measure expanded PostgreSQL jsonb storage");
     assert!(stored.get::<_, i32>(0) > 65_536);
     assert!(stored.get::<_, i32>(1) > 65_536);
+    assert!(stored.get::<_, i32>(2) > 262_144);
+    assert!(stored.get::<_, i32>(2) <= 16 * 1024 * 1024);
     assert!(matches!(
         service
             .save_review_task_draft(
@@ -3955,6 +3992,8 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
         .add_review_note(
             &fixture.reviewer_b,
             created.accepted.request_id,
+            None,
+            "",
             ReviewNoteRequest {
                 audience: ReviewHistoryAudience::Reviewers,
                 note: "reviewer-only note".to_owned(),
@@ -3968,6 +4007,8 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
         .add_review_note(
             &fixture.producer,
             created.accepted.request_id,
+            None,
+            "producer-token",
             ReviewNoteRequest {
                 audience: ReviewHistoryAudience::Requester,
                 note: "requester-visible note".to_owned(),
@@ -3978,7 +4019,14 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
         .expect("add requester note");
     let requester_history = fixture
         .service_v1
-        .review_history(&fixture.producer, created.accepted.request_id, None, 100)
+        .review_history(
+            &fixture.producer,
+            created.accepted.request_id,
+            None,
+            "producer-token",
+            None,
+            100,
+        )
         .await
         .expect("requester history");
     let requester_history_json =

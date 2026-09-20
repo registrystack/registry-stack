@@ -674,6 +674,26 @@ impl RuntimeConfig {
         if self.sources.keys().any(String::is_empty) || configured_sources != declared_sources {
             return Err(RuntimeConfigError::InvalidSourceBindings);
         }
+        let source_context_kinds = project
+            .review_kinds
+            .iter()
+            .filter(|kind| {
+                kind.context_strategy == registry_casework_core::ReviewContextStrategy::Source
+            })
+            .map(|kind| kind.id.as_str())
+            .collect::<BTreeSet<_>>();
+        if project.review_producers.iter().any(|producer| {
+            producer
+                .kinds
+                .iter()
+                .any(|kind| source_context_kinds.contains(kind.as_str()))
+                && producer
+                    .source_namespaces
+                    .iter()
+                    .any(|namespace| !configured_sources.contains(namespace.as_str()))
+        }) {
+            return Err(RuntimeConfigError::InactiveReviewSourceNamespace);
+        }
         let declared_destinations = project
             .review_producers
             .iter()
@@ -1014,6 +1034,43 @@ sources:
     requests: [{entity: correction, queue: review}]
 "#;
 
+    const SOURCE_CONTEXT_REVIEW_PROJECT: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
+kind: CaseworkProject
+casework: {id: packaged-review, version: "1"}
+accessProfiles:
+  - {id: staff, principalClaim: sub, requiredScopes: [staff], role: staff}
+  - {id: supervisor, principalClaim: sub, requiredScopes: [supervisor], role: supervisor}
+  - {id: administrator, principalClaim: sub, requiredScopes: [admin], role: administrator}
+  - {id: requester, principalClaim: sub, requiredScopes: [requester], role: requester}
+queues: [{id: review, label: Review}]
+sources:
+  - id: professional
+    adapter: breg
+    description: sources/professional.json
+    requests: [{entity: correction, queue: review}]
+reviewKinds:
+  - id: correction
+    version: "1"
+    purpose: approval
+    contextStrategy: source
+    stages:
+      - {id: review, queue: review, decidingProfiles: [staff], requiredApprovals: 1}
+    retention: {terminalDays: 30, accountabilityDays: 90}
+    displaySchema:
+      type: object
+      additionalProperties: false
+      required: [summary]
+      properties: {summary: {type: string, maxLength: 160}}
+reviewProducers:
+  - id: registry
+    profile: requester
+    issuer: https://registry.example.test
+    subject: registry-service
+    sourceNamespaces: [professional]
+    kinds: [correction]
+    recoveryDays: 7
+"#;
+
     const SOURCE_DESCRIPTION: &str = r#"{
   "apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1",
   "kind":"BRegCaseworkSourceDescription",
@@ -1033,15 +1090,12 @@ sources:
 }
 "#;
 
-    fn write_package(root: &Path) -> PolicyPackageManifest {
+    fn write_package_with_project(root: &Path, project: &str) -> PolicyPackageManifest {
         std::fs::create_dir_all(root.join("sources")).unwrap();
-        std::fs::write(root.join("casework.yaml"), SOURCE_PROJECT).unwrap();
+        std::fs::write(root.join("casework.yaml"), project).unwrap();
         std::fs::write(root.join("sources/professional.json"), SOURCE_DESCRIPTION).unwrap();
         let manifest = PolicyPackageManifest::build([
-            (
-                "casework.yaml".to_owned(),
-                SOURCE_PROJECT.as_bytes().to_vec(),
-            ),
+            ("casework.yaml".to_owned(), project.as_bytes().to_vec()),
             (
                 "sources/professional.json".to_owned(),
                 SOURCE_DESCRIPTION.as_bytes().to_vec(),
@@ -1052,6 +1106,10 @@ sources:
         bytes.push(b'\n');
         std::fs::write(root.join(POLICY_PACKAGE_MANIFEST_FILE), bytes).unwrap();
         manifest
+    }
+
+    fn write_package(root: &Path) -> PolicyPackageManifest {
+        write_package_with_project(root, SOURCE_PROJECT)
     }
 
     fn operator_document(package: &Path, tls: &str) -> String {
@@ -1459,6 +1517,54 @@ sources:
     }
 
     #[test]
+    fn source_context_review_namespaces_require_activated_adapters() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("source-context");
+        std::fs::create_dir(&package).unwrap();
+        write_package_with_project(&package, SOURCE_CONTEXT_REVIEW_PROJECT);
+        let runtime = root.path().join("source-context.yaml");
+        std::fs::write(
+            &runtime,
+            operator_document(&package, "operator-controlled-upstream"),
+        )
+        .unwrap();
+        RuntimeConfig::load(&runtime).expect("the source namespace has an activated adapter");
+
+        let canary = "UNACTIVATED_SOURCE_NAMESPACE_CANARY";
+        let project =
+            SOURCE_CONTEXT_REVIEW_PROJECT.replace("[professional]", &format!("[{canary}]"));
+        let package = root.path().join("missing-source-context-adapter");
+        std::fs::create_dir(&package).unwrap();
+        write_package_with_project(&package, &project);
+        let runtime = root.path().join("missing-source-context-adapter.yaml");
+        std::fs::write(
+            &runtime,
+            operator_document(&package, "operator-controlled-upstream"),
+        )
+        .unwrap();
+        let error = RuntimeConfig::load(&runtime).expect_err("the absent adapter is refused");
+        assert!(matches!(
+            &error,
+            RuntimeConfigError::InactiveReviewSourceNamespace
+        ));
+        assert_eq!(error.path(), "package.root/casework.yaml");
+        assert!(!error.to_string().contains(canary));
+
+        let project = project.replace("contextStrategy: source", "contextStrategy: submitted");
+        let package = root.path().join("submitted-context");
+        std::fs::create_dir(&package).unwrap();
+        write_package_with_project(&package, &project);
+        let runtime = root.path().join("submitted-context.yaml");
+        std::fs::write(
+            &runtime,
+            operator_document(&package, "operator-controlled-upstream"),
+        )
+        .unwrap();
+        RuntimeConfig::load(&runtime)
+            .expect("submitted context does not require a source adapter for its namespace");
+    }
+
+    #[test]
     fn runtime_envelope_listener_and_operated_paths_are_strict() {
         let root = tempfile::tempdir().unwrap();
         let package = root.path().join("package");
@@ -1751,6 +1857,10 @@ pub enum RuntimeConfigError {
     InvalidAuditReference,
     #[error("sources must exactly match the source ids declared by package.root/casework.yaml")]
     InvalidSourceBindings,
+    #[error(
+        "each source namespace admitted for source-context review work must have an activated source adapter"
+    )]
+    InactiveReviewSourceNamespace,
     #[error("{path} is not a valid Casework source binding")]
     InvalidSourceBinding { path: String },
     #[error("plaintext PostgreSQL is test-only")]
@@ -1781,6 +1891,7 @@ impl RuntimeConfigError {
             Self::InvalidDatabaseReference | Self::PlaintextDatabase => "database",
             Self::InvalidAuditReference => "audit.hashKeyRef",
             Self::InvalidSourceBindings | Self::SourceDescription => "sources",
+            Self::InactiveReviewSourceNamespace => "package.root/casework.yaml",
             Self::Project(_) => "package.root/casework.yaml",
             Self::PolicyPackage(_) | Self::ProductionPolicyPackageRequired => "package.root",
             Self::Invalid => "/",

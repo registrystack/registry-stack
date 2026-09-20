@@ -21,9 +21,9 @@ or replace them. Results use the canonical Rust client's camel-case wire DTOs
 inside a `{"kind": "complete", "value": ..., "trace_id": ...}` envelope.
 
 Requester review operations omit a source profile. Officer task reads, claims,
-assignment, delegation, drafts, and decisions accept an optional source profile
-when resolving source context. History, notes, accountability, and kind
-discovery remain Casework-owned authorization paths.
+assignment, delegation, drafts, decisions, history, and notes accept an optional
+source profile when resolving source context. Accountability and kind discovery
+remain Casework-owned authorization paths.
 
 `CaseworkClientError` preserves problem codes, status, trace context, validation
 details, and original attempt identifiers. Callers can therefore handle cursor

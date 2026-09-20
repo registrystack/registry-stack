@@ -7,10 +7,13 @@ use axum::routing::{get, post};
 use axum::Router;
 use registry_casework_client::{
     AbsencesQuery, BearerToken, CaseworkAction, CaseworkAuth, CaseworkClient, CaseworkClientConfig,
-    CaseworkClientError, CaseworkProblemCode, CaseworkProtocolFailure, DecideRequest,
-    DirectoryTargetPurpose, DirectoryTargetsQuery, HoldingsQuery, RecoverAttemptRequest,
-    ReviewTaskContextData, ReviewValidationReason, SourceBinding,
+    CaseworkClientError, CaseworkProblemCode, CaseworkProtocolFailure, ContentDigest,
+    DecideRequest, DirectoryTargetPurpose, DirectoryTargetsQuery, HoldingsQuery,
+    RecoverAttemptRequest, ReviewCancelRequest, ReviewCancelResponse, ReviewHistoryAudience,
+    ReviewNoteRequest, ReviewTaskContextData, ReviewValidationReason, SourceBinding,
 };
+use registry_casework_core::SubjectBinding;
+use serde_json::{json, Value};
 use url::Url;
 use uuid::Uuid;
 
@@ -213,6 +216,199 @@ async fn decision_forwards_the_selected_source_profile() {
     server.abort();
 }
 
+#[tokio::test]
+async fn review_note_forwards_the_selected_source_profile() {
+    let observations = Arc::new(Mutex::new(Vec::<HeaderMap>::new()));
+    let app = Router::new()
+        .route(
+            "/v1/review-requests/{request}/notes",
+            post(capture_review_note),
+        )
+        .with_state(observations.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let response = client
+        .add_review_note(
+            CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+            Uuid::nil(),
+            "note-1",
+            &ReviewNoteRequest {
+                audience: ReviewHistoryAudience::Reviewers,
+                note: "Review note".to_owned(),
+            },
+        )
+        .await
+        .expect("source-context review note");
+
+    assert_eq!(response.value.kind, "note");
+    let observations = observations.lock().expect("observations");
+    assert_eq!(observations.len(), 1, "a review note is never retried");
+    assert_eq!(observations[0]["authorization"], "Bearer one-call-secret");
+    assert_eq!(observations[0]["registry-casework-profile"], "staff");
+    assert_eq!(observations[0]["registry-source-profile"], "reviewer");
+    assert_eq!(observations[0]["idempotency-key"], "note-1");
+    server.abort();
+}
+
+async fn capture_review_note(
+    State(observations): State<Arc<Mutex<Vec<HeaderMap>>>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    observations.lock().expect("observations").push(headers);
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        r#"{"eventId":"10000000-0000-4000-8000-000000000001","requestId":"00000000-0000-0000-0000-000000000000","kind":"note","detail":{"audience":"reviewers","note":"Review note"},"occurredAt":"2026-09-20T00:00:00Z"}"#,
+    )
+}
+
+#[tokio::test]
+async fn cancellation_accepts_only_a_valid_result_bound_to_the_request_and_subject() {
+    let request_id = Uuid::from_u128(7);
+    let subject = SubjectBinding {
+        source: "registry".to_owned(),
+        subject_type: "change-request".to_owned(),
+        id: "proposal-7".to_owned(),
+        version: "3".to_owned(),
+        digest: ContentDigest::parse(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .expect("fixture digest"),
+    };
+    let cancellation = ReviewCancelRequest {
+        subject: subject.clone(),
+        reason: "source proposal withdrawn".to_owned(),
+    };
+
+    let valid = cancel_response(request_id, "proposal-7", "cancelled", "cancelled");
+    let complete = cancel_with_response(request_id, &cancellation, valid)
+        .await
+        .expect("valid cancellation response");
+    assert!(matches!(
+        complete.value,
+        ReviewCancelResponse::Cancelled { .. }
+    ));
+
+    for invalid in [
+        cancel_response(Uuid::from_u128(8), "proposal-7", "cancelled", "cancelled"),
+        cancel_response(request_id, "other-proposal", "cancelled", "cancelled"),
+        cancel_response(request_id, "proposal-7", "cancelled", "approved"),
+        cancel_response(request_id, "proposal-7", "cancelled", "invalid_window"),
+    ] {
+        assert!(matches!(
+            cancel_with_response(request_id, &cancellation, invalid).await,
+            Err(CaseworkClientError::Protocol {
+                status: 200,
+                failure: CaseworkProtocolFailure::Body,
+                ..
+            })
+        ));
+    }
+
+    let already_terminal =
+        cancel_response(request_id, "proposal-7", "already_terminal", "approved");
+    let complete = cancel_with_response(request_id, &cancellation, already_terminal)
+        .await
+        .expect("a correlated valid prior terminal result");
+    assert!(matches!(
+        complete.value,
+        ReviewCancelResponse::AlreadyTerminal { .. }
+    ));
+}
+
+async fn cancel_with_response(
+    request_id: Uuid,
+    cancellation: &ReviewCancelRequest,
+    response: Value,
+) -> Result<registry_casework_client::CaseworkComplete<ReviewCancelResponse>, CaseworkClientError> {
+    let app = Router::new()
+        .route(
+            "/v1/review-requests/{request}/cancel",
+            post(cancel_fixture_response),
+        )
+        .with_state(response);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let result = client
+        .cancel_review_request(
+            CaseworkAuth::new(&token, "requester"),
+            request_id,
+            "cancel-7",
+            cancellation,
+        )
+        .await;
+    server.abort();
+    result
+}
+
+async fn cancel_fixture_response(State(response): State<Value>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        response.to_string(),
+    )
+}
+
+fn cancel_response(request_id: Uuid, subject_id: &str, outcome: &str, status: &str) -> Value {
+    let available_until = if status == "invalid_window" {
+        "2026-09-19T00:00:00Z"
+    } else {
+        "2026-10-19T00:00:00Z"
+    };
+    let status = if status == "invalid_window" {
+        "cancelled"
+    } else {
+        status
+    };
+    json!({"outcome": outcome, "result": {
+        "resultId": Uuid::from_u128(99),
+        "requestId": request_id,
+        "subject": {
+            "source": "registry",
+            "type": "change-request",
+            "id": subject_id,
+            "version": "3",
+            "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "policy": {
+            "id": "registry-correction",
+            "version": "1",
+            "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "submissionDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "status": status,
+        "completedAt": "2026-09-19T00:00:00Z",
+        "availableUntil": available_until
+    }})
+}
+
 async fn capture_headers(
     State(observations): State<Arc<Mutex<Vec<HeaderMap>>>>,
     headers: HeaderMap,
@@ -233,6 +429,10 @@ async fn source_history_forwards_the_bounded_page_query_and_source_profile() {
     let observations = Arc::new(Mutex::new(Vec::<(String, HeaderMap)>::new()));
     let app = Router::new()
         .route("/v1/work-items/{item}/history", get(capture_history_query))
+        .route(
+            "/v1/review-requests/{request}/history",
+            get(capture_history_query),
+        )
         .with_state(observations.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -275,18 +475,46 @@ async fn source_history_forwards_the_bounded_page_query_and_source_profile() {
         second_page.value.next_cursor.as_deref(),
         Some("10000000-0000-4000-8000-000000000001")
     );
-    let observations = observations.lock().expect("observations");
-    assert_eq!(observations.len(), 2);
+    {
+        let observed = observations.lock().expect("observations");
+        assert_eq!(observed.len(), 2);
+        assert_eq!(
+            observed[0].0,
+            "/v1/work-items/00000000-0000-0000-0000-000000000000/history?limit=1"
+        );
+        assert_eq!(observed[0].1["registry-source-profile"], "reviewer");
+        assert_eq!(
+            observed[1].0,
+            "/v1/work-items/00000000-0000-0000-0000-000000000000/history?cursor=10000000-0000-4000-8000-000000000001&limit=1"
+        );
+        assert_eq!(observed[1].1["registry-source-profile"], "reviewer");
+    }
+
+    let review_page = client
+        .review_history(
+            CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+            Uuid::nil(),
+            &registry_casework_client::ReviewPageQuery {
+                cursor: None,
+                limit: Some(1),
+            },
+        )
+        .await
+        .expect("source-context review history");
     assert_eq!(
-        observations[0].0,
-        "/v1/work-items/00000000-0000-0000-0000-000000000000/history?limit=1"
+        review_page.value.next_cursor,
+        Some(
+            Uuid::parse_str("10000000-0000-4000-8000-000000000001")
+                .expect("fixture review history cursor")
+        )
     );
-    assert_eq!(observations[0].1["registry-source-profile"], "reviewer");
+    let observed = observations.lock().expect("observations");
+    assert_eq!(observed.len(), 3);
     assert_eq!(
-        observations[1].0,
-        "/v1/work-items/00000000-0000-0000-0000-000000000000/history?cursor=10000000-0000-4000-8000-000000000001&limit=1"
+        observed[2].0,
+        "/v1/review-requests/00000000-0000-0000-0000-000000000000/history?limit=1"
     );
-    assert_eq!(observations[1].1["registry-source-profile"], "reviewer");
+    assert_eq!(observed[2].1["registry-source-profile"], "reviewer");
     server.abort();
 }
 
@@ -299,13 +527,18 @@ async fn capture_history_query(
         .lock()
         .expect("observations")
         .push((uri.to_string(), headers));
+    let body = if uri.path().starts_with("/v1/review-requests/") {
+        r#"{"items":[],"nextCursor":"10000000-0000-4000-8000-000000000001"}"#
+    } else {
+        r#"{"items":[],"nextCursor":"10000000-0000-4000-8000-000000000001","status":"complete"}"#
+    };
     (
         StatusCode::OK,
         [
             ("content-type", "application/json"),
             ("traceparent", TRACEPARENT),
         ],
-        r#"{"items":[],"nextCursor":"10000000-0000-4000-8000-000000000001","status":"complete"}"#,
+        body,
     )
 }
 

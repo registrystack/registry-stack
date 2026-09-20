@@ -134,6 +134,8 @@ class _Handler(BaseHTTPRequestHandler):
             })
         elif self.path.startswith(f"/tenant/v1/work-items/{ITEM_ID}/history?"):
             self.respond({"items": [], "nextCursor": "next-cursor", "status": "complete"})
+        elif self.path.startswith(f"/tenant/v1/review-requests/{ITEM_ID}/history?"):
+            self.respond({"items": [], "nextCursor": EXPIRED_CURSOR})
         elif self.path.startswith("/tenant/v1/holdings?"):
             self.respond({"items": [], "nextCursor": "next-holdings", "status": "complete"})
         elif self.path.startswith("/tenant/v1/work-items/next?"):
@@ -220,6 +222,15 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/tenant/v1/directory/caseload/preview"):
             self.respond({"items": [], "status": "complete"})
+            return
+        if self.path == f"/tenant/v1/review-requests/{ITEM_ID}/notes":
+            self.respond({
+                "eventId": EXPIRED_CURSOR,
+                "requestId": ITEM_ID,
+                "kind": "note",
+                "detail": body,
+                "occurredAt": "2026-09-20T00:00:00Z",
+            })
             return
         self.respond({
             "itemId": ITEM_ID,
@@ -417,6 +428,36 @@ class NativeRequestTests(unittest.TestCase):
             f"/tenant/v1/work-items/{ITEM_ID}/history?cursor=opaque-cursor&limit=25",
         )
         self.assertEqual(_Handler.observations[0]["source_profile"], "source-one")
+
+        review_page = self.client.review_history(
+            "staff-token",
+            "staff",
+            ITEM_ID,
+            {"limit": 25},
+            "source-one",
+        )
+        self.assertEqual(review_page["value"]["nextCursor"], EXPIRED_CURSOR)
+        self.assertEqual(
+            _Handler.observations[1]["path"],
+            f"/tenant/v1/review-requests/{ITEM_ID}/history?limit=25",
+        )
+        self.assertEqual(_Handler.observations[1]["source_profile"], "source-one")
+
+        note = self.client.add_review_note(
+            "staff-token",
+            "staff",
+            ITEM_ID,
+            "note-1",
+            {"audience": "reviewers", "note": "Review note"},
+            "source-one",
+        )
+        self.assertEqual(note["value"]["kind"], "note")
+        self.assertEqual(
+            _Handler.observations[2]["path"],
+            f"/tenant/v1/review-requests/{ITEM_ID}/notes",
+        )
+        self.assertEqual(_Handler.observations[2]["source_profile"], "source-one")
+        self.assertEqual(_Handler.observations[2]["idempotency_key"], "note-1")
 
     def test_holdings_forwards_page_query_and_returns_continuation(self) -> None:
         page = self.client.holdings(

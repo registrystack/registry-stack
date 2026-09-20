@@ -464,8 +464,8 @@ export class CaseworkClient {
   saveReviewTaskDraft(token: string, profile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string, draft: ReviewTaskDraftInput, sourceProfile?: string): Promise<CaseworkOutcome<ReviewTaskDraft>>
   deleteReviewTaskDraft(token: string, profile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string, sourceProfile?: string): Promise<CaseworkOutcome<null>>
   decideReviewTask(token: string, profile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string, decision: ReviewTaskDecisionRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<null>>
-  reviewHistory(token: string, profile: string, requestId: string, query?: ReviewPageQuery | null): Promise<CaseworkOutcome<ReviewHistoryPage>>
-  addReviewNote(token: string, profile: string, requestId: string, idempotencyKey: string, note: ReviewNoteRequest): Promise<CaseworkOutcome<ReviewHistoryEntry>>
+  reviewHistory(token: string, profile: string, requestId: string, query?: ReviewPageQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewHistoryPage>>
+  addReviewNote(token: string, profile: string, requestId: string, idempotencyKey: string, note: ReviewNoteRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewHistoryEntry>>
   reviewAccountability(token: string, profile: string, eventId: string): Promise<CaseworkOutcome<ReviewAccountabilityRecord>>
   listWorkItems(token: string, profile: string, sourceProfile: string, query: ListWorkItemsQuery): Promise<CaseworkOutcome<WorkItemPage>>
   nextWorkItem(token: string, profile: string, sourceProfile: string, query?: NextWorkItemQuery | null): Promise<CaseworkOutcome<WorkItemPage>>

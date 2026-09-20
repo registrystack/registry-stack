@@ -3667,6 +3667,9 @@
             "type": "string"
           },
           "note": {
+            "description": "Must contain at least one non-whitespace Unicode character and no Unicode control characters. The runtime maximum is 2,000 UTF-8 bytes. OpenAPI maxLength is intentionally omitted because it counts Unicode code points rather than UTF-8 bytes.",
+            "minLength": 1,
+            "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000][^\\u0000-\\u001F\\u007F-\\u009F]*$",
             "type": "string"
           }
         },
@@ -12380,6 +12383,7 @@
     },
     "/v1/review-requests/{request_id}/history": {
       "get": {
+        "description": "Requester history remains bound to the admitted producer. Human reviewer history requires current Casework queue authority; source context also requires the current caller's source profile and token to disclose the pinned source binding, while submitted context rejects a source profile.",
         "operationId": "getReviewHistory",
         "parameters": [
           {
@@ -12396,6 +12400,18 @@
             "in": "header",
             "name": "Registry-Casework-Profile",
             "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit source profile used for the caller-scoped BReg read or action.",
+            "in": "header",
+            "name": "Registry-Source-Profile",
+            "required": false,
             "schema": {
               "maxLength": 128,
               "minLength": 1,
@@ -12678,6 +12694,7 @@
     },
     "/v1/review-requests/{request_id}/notes": {
       "post": {
+        "description": "Requester notes remain bound to the admitted producer and reject a source profile. Human reviewer notes require current Casework queue authority; source context also requires the current caller's source profile and token to disclose the pinned source binding, while submitted context rejects a source profile.",
         "operationId": "addReviewNote",
         "parameters": [
           {
@@ -12694,6 +12711,18 @@
             "in": "header",
             "name": "Registry-Casework-Profile",
             "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit source profile used for the caller-scoped BReg read or action.",
+            "in": "header",
+            "name": "Registry-Source-Profile",
+            "required": false,
             "schema": {
               "maxLength": 128,
               "minLength": 1,

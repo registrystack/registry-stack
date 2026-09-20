@@ -19,6 +19,12 @@ pub const MAXIMUM_REVIEW_RETENTION_DAYS: u32 = 3_650;
 pub const MAXIMUM_REVIEW_STAGES: usize = 32;
 pub const MAXIMUM_REVIEW_PROFILES_PER_STAGE: usize = 32;
 pub const MAXIMUM_REVIEW_APPROVALS_PER_STAGE: u16 = 32;
+/// The canonical snapshot envelope stored with every accepted review request.
+///
+/// Two individually bounded 64 KiB schemas plus the largest accepted stages,
+/// clocks, outcomes, and identity encode to at most 216,809 bytes. The 256 KiB
+/// envelope preserves those field limits and leaves a closed bound for storage.
+pub const MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES: usize = 256 * 1024;
 
 const MAXIMUM_REVIEW_OUTCOMES: usize = 16;
 const MAXIMUM_REVIEW_SCHEMA_BYTES: usize = 64 * 1024;
@@ -260,7 +266,7 @@ impl ReviewKindPolicy {
     }
 
     pub fn snapshot(&self) -> Result<ReviewKindPolicySnapshot, ReviewPolicyError> {
-        Ok(ReviewKindPolicySnapshot {
+        let snapshot = ReviewKindPolicySnapshot {
             identity: ReviewPolicyIdentity {
                 id: self.id.clone(),
                 version: self.version.clone(),
@@ -274,7 +280,9 @@ impl ReviewKindPolicy {
             display_schema: self.display_schema.clone(),
             result_schema: self.result_schema.clone(),
             outcomes: self.outcomes.clone(),
-        })
+        };
+        snapshot.check_encoding_bound()?;
+        Ok(snapshot)
     }
 }
 
@@ -305,9 +313,20 @@ pub struct ReviewKindPolicySnapshot {
 
 impl ReviewKindPolicySnapshot {
     pub fn verify(&self) -> Result<(), ReviewPolicyError> {
+        self.check_encoding_bound()?;
         let policy = self.as_policy();
         if policy.policy_digest()? != self.identity.digest {
             return Err(ReviewPolicyError::DigestMismatch);
+        }
+        Ok(())
+    }
+
+    fn check_encoding_bound(&self) -> Result<(), ReviewPolicyError> {
+        let value = serde_json::to_value(self).map_err(|_| ReviewPolicyError::Canonical)?;
+        let bytes = registry_platform_canonical_json::canonicalize_json(&value)
+            .map_err(|_| ReviewPolicyError::Canonical)?;
+        if bytes.len() > MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES {
+            return Err(ReviewPolicyError::SnapshotSize);
         }
         Ok(())
     }
@@ -928,6 +947,8 @@ pub enum ReviewPolicyError {
     Outcomes,
     #[error("the review policy could not be canonically encoded")]
     Canonical,
+    #[error("the review policy snapshot exceeds the bounded canonical encoding")]
+    SnapshotSize,
     #[error("the review policy snapshot digest does not match its contents")]
     DigestMismatch,
 }
@@ -1945,6 +1966,70 @@ mod tests {
             clock_snapshot.verify(),
             Err(ReviewPolicyError::DigestMismatch)
         );
+
+        let mut oversized = approval_policy(vec![stage("first", 1)]).snapshot().unwrap();
+        oversized.display_schema = Value::String("x".repeat(MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES));
+        assert_eq!(oversized.verify(), Err(ReviewPolicyError::SnapshotSize));
+    }
+
+    #[test]
+    fn accepted_policy_fields_fit_the_snapshot_envelope() {
+        fn identifier(prefix: char, index: usize) -> String {
+            let suffix = format!("{index:02}");
+            format!("{prefix}{}{suffix}", "a".repeat(63 - suffix.len()))
+        }
+
+        let schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+        });
+        let mut policy = approval_policy(
+            (0..MAXIMUM_REVIEW_STAGES)
+                .map(|stage_index| ReviewStagePolicy {
+                    id: identifier('s', stage_index),
+                    queue: identifier('q', stage_index),
+                    deciding_profiles: (0..MAXIMUM_REVIEW_PROFILES_PER_STAGE)
+                        .map(|profile_index| identifier('p', profile_index))
+                        .collect(),
+                    required_approvals: MAXIMUM_REVIEW_APPROVALS_PER_STAGE,
+                    exclude_initiator: true,
+                    exclude_previous_stage_reviewers: true,
+                })
+                .collect(),
+        );
+        policy.id = "a".repeat(64);
+        policy.version = "v".repeat(64);
+        policy.context_strategy = ReviewContextStrategy::Submitted;
+        policy.clocks = (0..32).map(|index| identifier('c', index)).collect();
+        policy.retention = ReviewRetentionPolicy {
+            terminal_days: MAXIMUM_REVIEW_RETENTION_DAYS,
+            accountability_days: MAXIMUM_REVIEW_RETENTION_DAYS,
+        };
+        policy.display_schema = schema.clone();
+        policy.result_schema = Some(schema.clone());
+        policy.outcomes = (0..MAXIMUM_REVIEW_OUTCOMES)
+            .map(|index| ReviewOutcomePolicy {
+                id: identifier('o', index),
+                label: "\"".repeat(120),
+                settlement: ReviewOutcomeSettlement::ChangesRequested,
+                reason_required: true,
+                result_required: true,
+            })
+            .collect();
+
+        let snapshot = policy.snapshot().expect("maximum bounded policy metadata");
+        let snapshot_bytes = registry_platform_canonical_json::canonicalize_json(
+            &serde_json::to_value(snapshot).expect("snapshot value"),
+        )
+        .expect("canonical snapshot");
+        let schema_bytes = registry_platform_canonical_json::canonicalize_json(&schema)
+            .expect("canonical schema")
+            .len();
+        let maximum_accepted_bytes =
+            snapshot_bytes.len() - 2 * schema_bytes + 2 * MAXIMUM_REVIEW_SCHEMA_BYTES;
+        assert_eq!(maximum_accepted_bytes, 216_809);
+        assert!(maximum_accepted_bytes <= MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES);
     }
 
     #[test]

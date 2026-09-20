@@ -472,13 +472,14 @@ impl CaseworkClient {
         profile: String,
         request_id: String,
         query: Option<Value>,
+        source_profile: Option<String>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
         let query: ReviewPageQuery = query.map(input).transpose()?.unwrap_or_default();
         outcome(
             self.inner
                 .review_history(
-                    CaseworkAuth::new(&token, &profile),
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
                     uuid(&request_id)?,
                     &query,
                 )
@@ -494,13 +495,14 @@ impl CaseworkClient {
         request_id: String,
         idempotency_key: String,
         note: Value,
+        source_profile: Option<String>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
         let note: ReviewNoteRequest = input(note)?;
         outcome(
             self.inner
                 .add_review_note(
-                    CaseworkAuth::new(&token, &profile),
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
                     uuid(&request_id)?,
                     &idempotency_key,
                     &note,

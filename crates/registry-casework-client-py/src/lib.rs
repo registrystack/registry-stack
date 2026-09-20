@@ -829,6 +829,7 @@ impl CaseworkClient {
         )
     }
 
+    #[pyo3(signature = (token, profile, request_id, query=None, source_profile=None))]
     fn review_history<'py>(
         &self,
         py: Python<'py>,
@@ -836,6 +837,7 @@ impl CaseworkClient {
         profile: &str,
         request_id: &str,
         query: Option<&Bound<'_, PyAny>>,
+        source_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
         let request_id = uuid(py, request_id)?;
@@ -844,7 +846,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.review_history(
-                    auth(&token, profile, None),
+                    auth(&token, profile, source_profile),
                     request_id,
                     &query,
                 ))
@@ -853,6 +855,7 @@ impl CaseworkClient {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (token, profile, request_id, idempotency_key, note, source_profile=None))]
     fn add_review_note<'py>(
         &self,
         py: Python<'py>,
@@ -861,6 +864,7 @@ impl CaseworkClient {
         request_id: &str,
         idempotency_key: &str,
         note: &Bound<'_, PyAny>,
+        source_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
         let request_id = uuid(py, request_id)?;
@@ -869,7 +873,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.add_review_note(
-                    auth(&token, profile, None),
+                    auth(&token, profile, source_profile),
                     request_id,
                     idempotency_key,
                     &note,

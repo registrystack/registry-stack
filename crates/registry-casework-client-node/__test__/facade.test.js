@@ -62,6 +62,51 @@ test('review task context uses the exact route and forwards the optional source 
   assert.equal(observed.headers['registry-source-profile'], 'reviewer');
 });
 
+test('review note forwards the optional source profile and idempotency key', async (context) => {
+  let observed;
+  const server = http.createServer((request, response) => {
+    observed = { path: request.url, headers: request.headers };
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end(JSON.stringify({
+        eventId: '10000000-0000-4000-8000-000000000001',
+        requestId: '00000000-0000-0000-0000-000000000000',
+        kind: 'note',
+        detail: { audience: 'reviewers', note: 'Review note' },
+        occurredAt: '2026-09-20T00:00:00Z',
+      }));
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { port } = server.address();
+  const { CaseworkClient } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${port}/` });
+  const result = await client.addReviewNote(
+    'one-call-secret',
+    'staff',
+    '00000000-0000-0000-0000-000000000000',
+    'note-1',
+    { audience: 'reviewers', note: 'Review note' },
+    'reviewer',
+  );
+
+  assert.equal(result.value.kind, 'note');
+  assert.equal(observed.path, '/v1/review-requests/00000000-0000-0000-0000-000000000000/notes');
+  assert.equal(observed.headers.authorization, 'Bearer one-call-secret');
+  assert.equal(observed.headers['registry-casework-profile'], 'staff');
+  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
+  assert.equal(observed.headers['idempotency-key'], 'note-1');
+});
+
 test('decision forwards the selected source profile with mutation headers', async (context) => {
   let observed;
   const server = http.createServer((request, response) => {
@@ -123,7 +168,10 @@ test('source history forwards cursor and limit and returns the continuation', as
         'content-type': 'application/json',
         traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
       });
-      response.end(JSON.stringify({ items: [], nextCursor: 'next-cursor', status: 'complete' }));
+      const reviewHistory = request.url.startsWith('/v1/review-requests/');
+      response.end(JSON.stringify(reviewHistory
+        ? { items: [], nextCursor: '10000000-0000-4000-8000-000000000001' }
+        : { items: [], nextCursor: 'next-cursor', status: 'complete' }));
     });
   });
   await new Promise((resolve, reject) => {
@@ -147,6 +195,20 @@ test('source history forwards cursor and limit and returns the continuation', as
   assert.equal(
     observed.path,
     '/v1/work-items/00000000-0000-0000-0000-000000000000/history?cursor=opaque-cursor&limit=25',
+  );
+  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
+
+  const reviewPage = await client.reviewHistory(
+    'one-call-secret',
+    'staff',
+    '00000000-0000-0000-0000-000000000000',
+    { limit: 25 },
+    'reviewer',
+  );
+  assert.equal(reviewPage.value.nextCursor, '10000000-0000-4000-8000-000000000001');
+  assert.equal(
+    observed.path,
+    '/v1/review-requests/00000000-0000-0000-0000-000000000000/history?limit=25',
   );
   assert.equal(observed.headers['registry-source-profile'], 'reviewer');
 });
