@@ -968,6 +968,13 @@ fn review_authority_completion_recipient_accepts_the_shared_byte_bound() {
             .expect_err("a completion recipient over the shared byte bound is refused"),
         RuntimeConfigError::InvalidBinding
     );
+
+    let non_ascii = valid.replace(&recipient, "récepteur");
+    assert_eq!(
+        parse_runtime_config_with_env(&non_ascii, env_lookup)
+            .expect_err("a completion recipient outside visible ASCII is refused"),
+        RuntimeConfigError::InvalidBinding
+    );
 }
 
 #[test]

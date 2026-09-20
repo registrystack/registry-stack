@@ -28,6 +28,79 @@ const TRACEPARENT: &str = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-
 type HistoryObservations = Arc<Mutex<Vec<(String, HeaderMap)>>>;
 
 #[tokio::test]
+async fn review_kind_refuses_a_valid_snapshot_for_another_identifier() {
+    let snapshot = ReviewKindPolicy {
+        id: "returned-kind".to_owned(),
+        version: "1".to_owned(),
+        purpose: ReviewKindPurpose::Approval,
+        context_strategy: ReviewContextStrategy::Submitted,
+        stages: vec![ReviewStagePolicy {
+            id: "review".to_owned(),
+            queue: "reviews".to_owned(),
+            deciding_profiles: vec!["staff".to_owned()],
+            required_approvals: 1,
+            exclude_initiator: false,
+            exclude_previous_stage_reviewers: false,
+        }],
+        clocks: Vec::new(),
+        retention: ReviewRetentionPolicy {
+            terminal_days: 30,
+            accountability_days: 30,
+        },
+        display_schema: json!({
+            "type":"object",
+            "additionalProperties":false,
+            "properties":{}
+        }),
+        result_schema: None,
+        outcomes: Vec::new(),
+    }
+    .snapshot()
+    .expect("fixture snapshot");
+    let app = Router::new()
+        .route(
+            "/v1/review-kinds/requested-kind",
+            get(review_kind_fixture_response),
+        )
+        .with_state(serde_json::to_value(snapshot).expect("snapshot JSON"));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .review_kind(CaseworkAuth::new(&token, "staff"), "requested-kind")
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+async fn review_kind_fixture_response(State(response): State<Value>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        response.to_string(),
+    )
+}
+
+#[tokio::test]
 async fn review_create_refuses_an_accepted_binding_for_another_policy() {
     let digest = ContentDigest::for_bytes(b"submission");
     let request = ReviewCreateRequest {

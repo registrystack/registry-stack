@@ -327,7 +327,7 @@ impl CaseworkClient {
         let complete: CaseworkComplete<ReviewKindPolicySnapshot> = self
             .get_json(&auth, &["v1", "review-kinds", kind_id], &[])
             .await?;
-        if complete.value.verify().is_err() {
+        if complete.value.identity.id != kind_id || complete.value.verify().is_err() {
             return Err(protocol(
                 StatusCode::OK,
                 CaseworkProtocolFailure::Body,

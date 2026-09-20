@@ -392,7 +392,7 @@ impl CaseworkService {
                 .buffered(policy.maximum_concurrent_source_reads);
             while let Some((task, result)) = checks.next().await {
                 match result {
-                    Ok(Ok(())) => match self.store.review_task(actor, task.task_id).await {
+                    Ok(Ok(())) => match self.store.active_review_task(actor, task.task_id).await {
                         Ok(current) => items.push(current),
                         Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound) => {}
                         Err(error) => return Err(error),
@@ -1406,6 +1406,23 @@ impl PostgresStore {
         actor: &ActorContext,
         task_id: Uuid,
     ) -> Result<ReviewerTask, ReviewRuntimeError> {
+        self.review_task_by_activity(actor, task_id, false).await
+    }
+
+    async fn active_review_task(
+        &self,
+        actor: &ActorContext,
+        task_id: Uuid,
+    ) -> Result<ReviewerTask, ReviewRuntimeError> {
+        self.review_task_by_activity(actor, task_id, true).await
+    }
+
+    async fn review_task_by_activity(
+        &self,
+        actor: &ActorContext,
+        task_id: Uuid,
+        active_only: bool,
+    ) -> Result<ReviewerTask, ReviewRuntimeError> {
         let membership = match actor.role {
             CaseworkRole::Staff => "staff",
             CaseworkRole::Supervisor => "supervisor",
@@ -1423,12 +1440,16 @@ impl PostgresStore {
                  JOIN casework_review_requests r ON r.request_id=t.request_id
                  JOIN casework_queue_service q ON q.queue_id=t.queue_id
                  JOIN casework_memberships m ON m.team_id=q.team_id
-                 WHERE t.task_id=$1 AND m.issuer=$2 AND m.subject=$3 AND m.membership_kind=$4",
+                 WHERE t.task_id=$1 AND m.issuer=$2 AND m.subject=$3 AND m.membership_kind=$4
+                   AND (NOT $5 OR (r.lifecycle='reviewing'
+                       AND t.stage_index=r.active_stage_index
+                       AND t.state IN ('open','claimed')))",
                 &[
                     &task_id,
                     &actor.principal.issuer,
                     &actor.principal.subject,
                     &membership,
+                    &active_only,
                 ],
             )
             .await?

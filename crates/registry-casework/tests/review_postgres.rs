@@ -3667,7 +3667,11 @@ async fn source_context_task_disclosure_requires_a_current_caller_source_read() 
     };
     let created = fixture
         .service_v2
-        .create_review_request(&fixture.producer, source_request, "create-source-visible")
+        .create_review_request(
+            &fixture.producer,
+            source_request.clone(),
+            "create-source-visible",
+        )
         .await
         .expect("create source-context review");
     let task = task_id(&fixture, created.accepted.request_id, 0).await;
@@ -3721,6 +3725,35 @@ async fn source_context_task_disclosure_requires_a_current_caller_source_read() 
         .items
         .is_empty());
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+
+    let service = fixture.service_v2.clone();
+    let reviewer = fixture.reviewer_a.clone();
+    let raced_terminal_inbox = tokio::spawn(async move {
+        service
+            .review_tasks(&reviewer, Some("staff"), "human-bearer", None, None, 10)
+            .await
+    });
+    fixture.source_read_started.notified().await;
+    fixture
+        .service_v2
+        .cancel_review_request(
+            &fixture.producer,
+            created.accepted.request_id,
+            registry_casework_core::ReviewCancelRequest {
+                subject: source_request.subject,
+                reason: "Requester withdrew during source preflight".to_owned(),
+            },
+            "cancel-during-inbox-preflight",
+        )
+        .await
+        .expect("cancel source-context review during inbox preflight");
+    fixture.source_read_continue.notify_one();
+    assert!(raced_terminal_inbox
+        .await
+        .expect("terminal inbox task joins")
+        .expect("terminal task is omitted after source preflight")
+        .items
+        .is_empty());
 
     fixture.source_revoked.store(true, Ordering::SeqCst);
     let concealed = fixture

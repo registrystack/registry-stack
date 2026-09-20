@@ -41,9 +41,9 @@ pub(crate) const MAXIMUM_COMPLETION_RECIPIENT_BYTES: usize = 256;
 pub(crate) const MAXIMUM_REVIEW_RECOVERY_DAYS: u32 = 3_650;
 
 pub(crate) fn valid_completion_recipient(recipient: &str) -> bool {
-    !recipient.trim().is_empty()
+    !recipient.is_empty()
         && recipient.len() <= MAXIMUM_COMPLETION_RECIPIENT_BYTES
-        && !recipient.chars().any(char::is_control)
+        && recipient.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
 }
 
 fn valid_completion_token(token: &str) -> bool {
@@ -223,7 +223,18 @@ pub async fn verify_retained_bindings(
                         SELECT 1 FROM registry_internal.registry_request_application_jobs j
                          WHERE (j.request_entity_id,j.request_id,j.proposal_version)=
                                (s.request_entity_id,s.request_id,s.proposal_version)
-                           AND j.state IN ('queued','applying'))",
+                           AND j.state IN ('queued','applying'))
+                 OR (s.state='accepted' AND s.on_approved_mode='manual'
+                     AND EXISTS (
+                         SELECT 1 FROM registry_internal.registry_request_review_results r
+                          WHERE (r.request_entity_id,r.request_id,r.proposal_version)=
+                                (s.request_entity_id,s.request_id,s.proposal_version)
+                            AND r.status='approved')
+                     AND EXISTS (
+                         SELECT 1 FROM registry_internal.registry_request_state w
+                          WHERE (w.request_entity_id,w.request_id,w.proposal_version)=
+                                (s.request_entity_id,s.request_id,s.proposal_version)
+                            AND w.state='submitted'))",
             &[],
         )
         .await
@@ -2785,9 +2796,16 @@ mod tests {
     }
 
     #[test]
-    fn completion_recipient_accepts_the_shared_byte_bound() {
+    fn completion_recipient_accepts_only_bounded_visible_ascii() {
         let at_bound = "x".repeat(MAXIMUM_COMPLETION_RECIPIENT_BYTES);
         authority("casework-a", Some(("sender-a", &at_bound)));
+
+        for recipient in ["contains space", "contains\t tab", "récepteur"] {
+            assert!(
+                !valid_completion_recipient(recipient),
+                "recipient {recipient:?} cannot be represented by the callback header contract"
+            );
+        }
 
         let over_bound = "x".repeat(MAXIMUM_COMPLETION_RECIPIENT_BYTES + 1);
         let client = ReviewClient::new(

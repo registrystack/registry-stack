@@ -822,7 +822,14 @@ async fn real_postgres_lost_apply_response_recovers_source_receipt_before_redisc
     database
         .admin
         .batch_execute(
-            "CREATE TABLE registry_internal.registry_request_proposals (
+            "CREATE TABLE registry_internal.registry_request_state (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                state text NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id)
+            );
+            CREATE TABLE registry_internal.registry_request_proposals (
                 request_entity_id text NOT NULL,
                 request_id uuid NOT NULL,
                 proposal_version bigint NOT NULL,
@@ -2285,14 +2292,24 @@ async fn retained_review_work_refuses_startup_without_its_authority_binding() {
         ))
         .await
         .expect("runtime review schema access");
+    let request_id = Uuid::new_v4();
     seed_submission(
         &database.admin,
-        Uuid::new_v4(),
+        request_id,
         "casework-retained",
         "producer-retained",
         "policy-retained",
     )
     .await;
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_request_state
+             VALUES ('requests',$1,1,'submitted')",
+            &[&request_id],
+        )
+        .await
+        .expect("request state");
     let pool = database.runtime_config.build_pool().expect("runtime pool");
     assert!(matches!(
         verify_retained_bindings(&pool, None, None).await,
@@ -2317,6 +2334,46 @@ async fn retained_review_work_refuses_startup_without_its_authority_binding() {
     verify_retained_bindings(&pool, Some(&authorities), None)
         .await
         .expect("retained authority keeps its durable work serviceable");
+
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state='accepted',accepted_binding='{}'::jsonb
+              WHERE request_entity_id='requests' AND request_id=$1 AND proposal_version=1",
+            &[&request_id],
+        )
+        .await
+        .expect("submission accepted");
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_request_review_results
+             (request_entity_id,request_id,proposal_version,authority,result_id,result,status,
+              completed_at,available_until)
+             VALUES ('requests',$1,1,'casework-retained',$2,'{}'::jsonb,'approved',
+                     transaction_timestamp(),transaction_timestamp()+interval '1 day')",
+            &[&request_id, &Uuid::new_v4()],
+        )
+        .await
+        .expect("approved result");
+    assert!(matches!(
+        verify_retained_bindings(&pool, None, None).await,
+        Err(MutationError::PreconditionFailed)
+    ));
+
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_state SET state='applied'
+              WHERE request_entity_id='requests' AND request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("request applied");
+    verify_retained_bindings(&pool, None, None)
+        .await
+        .expect("an applied manual request no longer retains its authority");
 
     drop(pool);
     database.cleanup().await;
