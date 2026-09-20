@@ -5,7 +5,7 @@ use std::{
     env,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
 };
 
@@ -22,15 +22,16 @@ use registry_casework_core::{
     CaseworkRole, ClockPolicy, ClockReassignment, ClockReminder, ClockStep, ClockStepAction,
     ClockStepInstant, ContentDigest, DelegateRequest, DiscoveryCursor, ElapsedDuration,
     EphemeralCredential, EventRequest, ExecutePreparedRequest, HolidaySetDocument, HumanIdentity,
-    InboxPolicy, IssuerPrincipal, PrepareActionRequest, PreparedSourceAttempt, QueuePolicy,
-    ReviewClockState, ReviewCompletionDestinationPolicy, ReviewContext, ReviewContextStrategy,
-    ReviewCreateRequest, ReviewHistoryAudience, ReviewKindPolicy, ReviewKindPurpose,
-    ReviewNoteRequest, ReviewOutcomePolicy, ReviewOutcomeSettlement, ReviewProducerPolicy,
-    ReviewRequestLifecycle, ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy,
-    ReviewTaskDraftInput, ReviewTransition, ReviewerDecisionKind, ReviewerTaskState, SourceAdapter,
-    SourceAdapterError, SourceBinding, SourceContextBinding, SourceReceipt, SubjectBinding,
-    SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause, SubjectRef, TransitionHint,
-    WorkingDaysAfter, WorkingWeekday,
+    InboxPolicy, IssuerPrincipal, OccurrenceKind, OccurrenceState, PrepareActionRequest,
+    PreparedSourceAttempt, QueuePolicy, ReviewClockState, ReviewCompletionDestinationPolicy,
+    ReviewContext, ReviewContextStrategy, ReviewCreateRequest, ReviewHistoryAudience,
+    ReviewKindPolicy, ReviewKindPurpose, ReviewNoteRequest, ReviewOutcomePolicy,
+    ReviewOutcomeSettlement, ReviewProducerPolicy, ReviewRequestLifecycle, ReviewResultStatus,
+    ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskDraftInput, ReviewTransition,
+    ReviewerDecisionKind, ReviewerTaskState, SourceAdapter, SourceAdapterError, SourceBinding,
+    SourceContextBinding, SourceReceipt, SubjectBinding, SubjectClockAnchor,
+    SubjectClockCompletion, SubjectClockPause, SubjectRef, TransitionHint, WorkingDaysAfter,
+    WorkingWeekday,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
@@ -48,12 +49,14 @@ struct Fixture {
     reviewer_b: ActorContext,
     supervisor: ActorContext,
     source_revoked: Arc<AtomicBool>,
+    source_state: Arc<Mutex<OccurrenceState>>,
     application_name: String,
 }
 
 #[derive(Clone)]
 struct ReviewSource {
     revoked: Arc<AtomicBool>,
+    state: Arc<Mutex<OccurrenceState>>,
 }
 
 #[async_trait]
@@ -75,9 +78,32 @@ impl SourceAdapter for ReviewSource {
 
     async fn read_authoritative(
         &self,
-        _subject: &SubjectRef,
+        subject: &SubjectRef,
     ) -> Result<AuthoritativeObservation, SourceAdapterError> {
-        Err(SourceAdapterError::Invalid)
+        if self.revoked.load(Ordering::SeqCst) {
+            return Err(SourceAdapterError::Concealed);
+        }
+        Ok(AuthoritativeObservation {
+            subject: subject.clone(),
+            occurrence_key: format!("review:{}", subject.id),
+            ordered_revision: 1,
+            representation_etag: format!("\"{}\"", subject.id),
+            binding: SourceBinding {
+                source_revision: "source-revision-1".to_owned(),
+                version: "1".to_owned(),
+                integrity: Some(ContentDigest::for_bytes(subject.id.as_bytes()).to_string()),
+                generation: self.binding_generation().to_owned(),
+            },
+            display_reference: None,
+            occurrence_kind: OccurrenceKind::Review,
+            stage: Some("review".to_owned()),
+            submitted_at: None,
+            stage_entered_at: None,
+            review_timing: None,
+            routing_context: None,
+            state: *self.state.lock().expect("source state lock"),
+            remaining_actions: Vec::new(),
+        })
     }
 
     async fn discover_active(
@@ -395,6 +421,7 @@ async fn fixture() -> Fixture {
     project_v1.check().expect("version one project");
     project_v2.check().expect("version two project");
     let source_revoked = Arc::new(AtomicBool::new(false));
+    let source_state = Arc::new(Mutex::new(OccurrenceState::Open));
     Fixture {
         service_v1: CaseworkService::new(
             store.clone(),
@@ -407,6 +434,7 @@ async fn fixture() -> Fixture {
             project_v2,
             [Arc::new(ReviewSource {
                 revoked: Arc::clone(&source_revoked),
+                state: Arc::clone(&source_state),
             }) as Arc<dyn SourceAdapter>],
         )
         .expect("version two service"),
@@ -417,6 +445,7 @@ async fn fixture() -> Fixture {
         reviewer_b: actor("reviewer-b", CaseworkRole::Staff, "staff"),
         supervisor: actor("supervisor", CaseworkRole::Supervisor, "supervisor"),
         source_revoked,
+        source_state,
         application_name,
     }
 }
@@ -561,6 +590,32 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
             .await,
         Ok(ReviewResultRead::Pending)
     ));
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_submission_reservations
+                SET recovery_deadline=now()-interval '2 seconds',
+                    retained_until=now()-interval '1 second'
+              WHERE request_id=$1",
+            &[&first.accepted.request_id],
+        )
+        .await
+        .expect("age the active review reservation past its creation-based retention");
+    fixture
+        .service_v1
+        .erase_expired_reviews()
+        .await
+        .expect("run retention while the review remains active");
+    let active_reservations: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_submission_reservations WHERE request_id=$1",
+            &[&first.accepted.request_id],
+        )
+        .await
+        .expect("active review reservation remains")
+        .get(0);
+    assert_eq!(active_reservations, 1);
 
     let primary = task_id(&fixture, first.accepted.request_id, 0).await;
     assert!(matches!(
@@ -2015,6 +2070,246 @@ async fn review_activity_clock_recovers_after_holiday_publication_and_applies_ef
 }
 
 #[tokio::test]
+async fn source_review_clock_defers_effects_until_the_frozen_binding_is_current() {
+    let fixture = fixture().await;
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_queue_service(queue_id,team_id,revision)
+             VALUES('overdue-review','review-team',1)",
+            &[],
+        )
+        .await
+        .expect("serve overdue review queue");
+    let mut project = activity_clock_project();
+    project.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    project.check().expect("source activity clock project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        [Arc::new(ReviewSource {
+            revoked: Arc::clone(&fixture.source_revoked),
+            state: Arc::clone(&fixture.source_state),
+        }) as Arc<dyn SourceAdapter>],
+    )
+    .expect("source activity clock service");
+    let mut create = request("record-source-activity-clock", "source-clock-reference");
+    create.context = ReviewContext::Source {
+        binding: SourceContextBinding {
+            reference: "breg:registry:record:record-source-activity-clock:1".to_owned(),
+        },
+    };
+    let created = service
+        .create_review_request(&fixture.producer, create, "create-source-activity-clock")
+        .await
+        .expect("create source activity-clock review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            Some("staff"),
+            "human-bearer",
+            1,
+            "claim-source-activity-clock",
+        )
+        .await
+        .expect("claim source activity-clock task");
+    service
+        .create_holiday_revision(
+            &actor("admin", CaseworkRole::Administrator, "administrator"),
+            &HolidaySetDocument {
+                holiday_set: "office-holidays".to_owned(),
+                revision: 1,
+                dates: Vec::new(),
+            },
+            "publish-source-clock-holidays",
+        )
+        .await
+        .expect("publish source clock holiday revision");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_clock_occurrences
+             SET anchor_at='2020-01-06T09:00:00Z',updated_at='2020-01-06T09:00:00Z'
+             WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("place source activity clock in the past");
+
+    fixture.source_revoked.store(true, Ordering::SeqCst);
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("defer stale source review clock"),
+        0
+    );
+    let deferred_effects: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_clock_effects e
+              JOIN casework_review_clock_occurrences c USING(clock_occurrence_id)
+             WHERE c.task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("count deferred source clock effects")
+        .get(0);
+    assert_eq!(deferred_effects, 0);
+
+    fixture.source_revoked.store(false, Ordering::SeqCst);
+    for state in [
+        OccurrenceState::Cancelled,
+        OccurrenceState::Completed,
+        OccurrenceState::Superseded,
+        OccurrenceState::Synchronizing,
+    ] {
+        *fixture.source_state.lock().expect("source state lock") = state;
+        fixture
+            .database
+            .execute(
+                "UPDATE casework_review_clock_occurrences
+                 SET next_action_at='2020-01-06T09:00:00Z',updated_at='2020-01-06T09:00:00Z'
+                 WHERE task_id=$1",
+                &[&task],
+            )
+            .await
+            .expect("make deferred source activity clock due");
+        assert_eq!(
+            service
+                .process_due_review_clocks(100)
+                .await
+                .expect("defer inactive source review clock"),
+            0
+        );
+    }
+
+    *fixture.source_state.lock().expect("source state lock") = OccurrenceState::WaitingApplication;
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_clock_occurrences
+             SET next_action_at='2020-01-06T09:00:00Z',updated_at='2020-01-06T09:00:00Z'
+             WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("make current source activity clock due");
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("apply current source review clock"),
+        2
+    );
+}
+
+#[tokio::test]
+async fn later_stage_activity_clock_uses_the_current_requests_pinned_definition() {
+    let fixture = fixture().await;
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_queue_service(queue_id,team_id,revision)
+             VALUES('overdue-review','review-team',1)",
+            &[],
+        )
+        .await
+        .expect("serve overdue review queue");
+    let mut stage_project = project("clock-stages");
+    let stages = stage_project.review_kinds.remove(0).stages;
+    let mut old_project = activity_clock_project();
+    old_project.review_kinds[0].stages.clone_from(&stages);
+    old_project.check().expect("old activity clock project");
+    let old_service = CaseworkService::new(
+        fixture.store.clone(),
+        old_project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("old activity clock service");
+    old_service
+        .create_review_request(
+            &fixture.producer,
+            request("record-clock-definition", "old-clock-definition"),
+            "create-old-clock-definition",
+        )
+        .await
+        .expect("create old clock definition review");
+
+    let mut current_project = activity_clock_project();
+    current_project.casework.version = "activity-clock-2".to_owned();
+    current_project.review_kinds[0].version = "activity-clock-2".to_owned();
+    current_project.review_kinds[0].stages = stages;
+    let ClockPolicy::Activity { due_time, .. } = &mut current_project.clocks[0] else {
+        panic!("activity clock fixture changed shape");
+    };
+    *due_time = "18:00".to_owned();
+    current_project
+        .check()
+        .expect("current activity clock project");
+    let current_service = CaseworkService::new(
+        fixture.store.clone(),
+        current_project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("current activity clock service");
+    let mut current_request = request("record-clock-definition", "current-clock-definition");
+    current_request.subject.version = "2".to_owned();
+    current_request.subject.digest = ContentDigest::for_bytes(b"record-clock-definition-v2");
+    let current = current_service
+        .create_review_request(
+            &fixture.producer,
+            current_request,
+            "create-current-clock-definition",
+        )
+        .await
+        .expect("create current clock definition review");
+    let first_task = task_id(&fixture, current.accepted.request_id, 0).await;
+    current_service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            first_task,
+            None,
+            "",
+            1,
+            "claim-current-clock-definition",
+        )
+        .await
+        .expect("claim current first stage");
+    assert!(matches!(
+        current_service
+            .decide_review_task(
+                &fixture.reviewer_a,
+                first_task,
+                ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Approve,
+                },
+                None,
+                "",
+                2,
+                "advance-current-clock-definition",
+            )
+            .await,
+        Ok(ReviewTransition::StageAdvanced { .. })
+    ));
+    let second_task = task_id(&fixture, current.accepted.request_id, 1).await;
+    let due_time: String = fixture
+        .database
+        .query_one(
+            "SELECT policy->'clock'->>'dueTime'
+               FROM casework_review_clock_occurrences
+              WHERE request_id=$1 AND task_id=$2",
+            &[&current.accepted.request_id, &second_task],
+        )
+        .await
+        .expect("current later-stage activity clock")
+        .get(0);
+    assert_eq!(due_time, "18:00");
+}
+
+#[tokio::test]
 async fn review_task_coordination_preserves_exclusions_drafts_history_and_absence_cover() {
     let fixture = fixture().await;
     let created = fixture
@@ -2304,4 +2599,31 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
         .expect("restored assignment");
     assert_eq!(restored.get::<_, String>(0), "reviewer-b");
     assert_eq!(restored.get::<_, String>(1), "nomination");
+    let stale_scan_time = Utc::now() - TimeDelta::days(1);
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_tasks SET updated_at=$2 WHERE task_id=$1",
+            &[&covered_task, &stale_scan_time],
+        )
+        .await
+        .expect("make unchanged assignment the oldest scan candidate");
+    assert_eq!(
+        fixture
+            .service_v1
+            .reconcile_review_absences(100)
+            .await
+            .expect("rotate unchanged absence candidate"),
+        0
+    );
+    let rotated_at: chrono::DateTime<Utc> = fixture
+        .database
+        .query_one(
+            "SELECT updated_at FROM casework_review_tasks WHERE task_id=$1",
+            &[&covered_task],
+        )
+        .await
+        .expect("read rotated absence candidate")
+        .get(0);
+    assert!(rotated_at > stale_scan_time);
 }

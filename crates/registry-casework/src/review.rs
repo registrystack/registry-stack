@@ -130,7 +130,44 @@ impl CaseworkService {
         &self,
         maximum: usize,
     ) -> Result<usize, ReviewRuntimeError> {
-        self.store.process_due_review_clocks(maximum).await
+        let candidates = self.store.due_review_clock_tasks(maximum).await?;
+        let mut verified = Vec::with_capacity(candidates.len());
+        for task_id in candidates {
+            let record = self.store.review_request_for_task(task_id).await?;
+            let current =
+                match record.policy.context_strategy {
+                    registry_casework_core::ReviewContextStrategy::Submitted => true,
+                    registry_casework_core::ReviewContextStrategy::Source => {
+                        let subject = SubjectRef {
+                            source_id: record.subject.source.clone(),
+                            kind: record.subject.subject_type.clone(),
+                            id: record.subject.id.clone(),
+                        };
+                        match self.adapters.get(&subject.source_id) {
+                            Some(adapter) => adapter.read_authoritative(&subject).await.is_ok_and(
+                                |observation| {
+                                    observation.subject == subject
+                                    && observation.binding.version == record.subject.version
+                                    && observation.binding.integrity.as_deref()
+                                        == Some(record.subject.digest.as_str())
+                                    && observation.state.is_active()
+                                    && observation.state
+                                        != registry_casework_core::OccurrenceState::Synchronizing
+                                },
+                            ),
+                            None => false,
+                        }
+                    }
+                };
+            if current {
+                verified.push(task_id);
+            } else {
+                self.store.defer_review_clock_task(task_id).await?;
+            }
+        }
+        self.store
+            .process_due_review_clocks(maximum, &verified)
+            .await
     }
 
     pub async fn create_review_request(
@@ -870,7 +907,57 @@ impl CaseworkService {
 }
 
 impl PostgresStore {
-    async fn process_due_review_clocks(&self, maximum: usize) -> Result<usize, ReviewRuntimeError> {
+    async fn due_review_clock_tasks(
+        &self,
+        maximum: usize,
+    ) -> Result<Vec<Uuid>, ReviewRuntimeError> {
+        let limit =
+            i64::try_from(maximum.clamp(1, 100)).map_err(|_| ReviewRuntimeError::Invalid)?;
+        let client = self.client().await?;
+        Ok(client
+            .query(
+                "SELECT task_id
+                   FROM casework_review_clock_occurrences
+                  WHERE scope='activity' AND task_id IS NOT NULL
+                    AND (state='source_facts_missing'
+                         OR (state='running' AND next_action_at<=now()))
+                  GROUP BY task_id
+                  ORDER BY min(COALESCE(next_action_at,updated_at)),task_id
+                  LIMIT $1",
+                &[&limit],
+            )
+            .await?
+            .into_iter()
+            .map(|row| row.get(0))
+            .collect())
+    }
+
+    async fn defer_review_clock_task(&self, task_id: Uuid) -> Result<(), ReviewRuntimeError> {
+        let client = self.client().await?;
+        client
+            .execute(
+                "UPDATE casework_review_clock_occurrences
+                    SET next_action_at=CASE WHEN state='running'
+                            THEN transaction_timestamp()+interval '30 seconds'
+                            ELSE next_action_at END,
+                        updated_at=transaction_timestamp()
+                  WHERE task_id=$1 AND scope='activity'
+                    AND (state='source_facts_missing'
+                         OR (state='running' AND next_action_at<=now()))",
+                &[&task_id],
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn process_due_review_clocks(
+        &self,
+        maximum: usize,
+        verified_tasks: &[Uuid],
+    ) -> Result<usize, ReviewRuntimeError> {
+        if verified_tasks.is_empty() {
+            return Ok(0);
+        }
         let limit =
             i64::try_from(maximum.clamp(1, 100)).map_err(|_| ReviewRuntimeError::Invalid)?;
         let now = Utc::now();
@@ -881,11 +968,12 @@ impl PostgresStore {
                 "SELECT clock_occurrence_id,request_id,task_id
                  FROM casework_review_clock_occurrences
                  WHERE scope='activity'
+                   AND task_id=ANY($2)
                    AND (state='source_facts_missing'
                         OR (state='running' AND next_action_at<=now()))
                  ORDER BY COALESCE(next_action_at,updated_at),clock_occurrence_id
                  LIMIT $1",
-                &[&limit],
+                &[&limit, &verified_tasks],
             )
             .await?;
         let mut applied = 0usize;
@@ -1329,6 +1417,12 @@ impl PostgresStore {
         if current == desired
             && row.get::<_, String>(2) == if eligible { "claimed" } else { "open" }
         {
+            transaction
+                .execute(
+                    "UPDATE casework_review_tasks SET updated_at=$2 WHERE task_id=$1",
+                    &[&task_id, &now],
+                )
+                .await?;
             transaction.commit().await?;
             return Ok(0);
         }
@@ -1581,7 +1675,8 @@ impl PostgresStore {
             .await?;
         transaction
             .execute(
-                "DELETE FROM casework_review_submission_reservations WHERE retained_until<=$1",
+                "DELETE FROM casework_review_submission_reservations
+                  WHERE retained_until<=$1 AND request_id IS NULL",
                 &[&now],
             )
             .await?;
@@ -3572,12 +3667,14 @@ async fn insert_advanced_review_activity_clocks(
             .query_opt(
                 "SELECT policy FROM casework_review_clock_occurrences
                  WHERE subject_source=$1 AND subject_type=$2 AND subject_id=$3 AND clock_id=$4
+                   AND request_id=$5
                  ORDER BY created_at LIMIT 1",
                 &[
                     &subject.source,
                     &subject.subject_type,
                     &subject.id,
                     &clock_id,
+                    &request_id,
                 ],
             )
             .await?
