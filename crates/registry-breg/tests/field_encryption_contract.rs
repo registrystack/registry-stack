@@ -554,6 +554,64 @@ fn derived_sql_resolves_qualified_columns_to_their_source_relation() {
         )
         .expect("the qualified secret name belongs to the plaintext source relation");
     }
+
+    for sql in [
+        "WITH visible AS (\
+           SELECT p.id, p.secret FROM registry_source.public_case p\
+         ) \
+         SELECT visible.id AS id, count(visible.secret) AS fact_count \
+         FROM visible GROUP BY visible.id",
+        "WITH visible AS (\
+           SELECT p.id AS id, p.secret AS secret FROM registry_source.public_case p\
+         ) \
+         SELECT visible.id AS id, count(visible.secret) AS fact_count \
+         FROM visible GROUP BY visible.id",
+        "WITH visible(public_id, public_secret) AS (\
+           SELECT p.id, p.secret FROM registry_source.public_case p\
+         ) \
+         SELECT v.public_id AS id, count(v.public_secret) AS fact_count \
+         FROM visible v GROUP BY v.public_id",
+    ] {
+        compile_with_assets(
+            &source,
+            vec![ModuleAssetSource {
+                module: None,
+                path: "sql/case-facts.sql".into(),
+                bytes: sql.as_bytes().to_vec(),
+            }],
+        )
+        .expect("a declared CTE output keeps its plaintext source identity");
+    }
+
+    for sql in [
+        "WITH hidden AS (\
+           SELECT h.id AS id, h.secret AS secret FROM registry_source.case h\
+         ) \
+         SELECT hidden.id AS id, count(hidden.secret) AS fact_count \
+         FROM hidden GROUP BY hidden.id",
+        "WITH visible AS (\
+           SELECT p.secret, p.secret FROM registry_source.public_case p\
+         ) \
+         SELECT visible.secret AS id, count(*) AS fact_count FROM visible \
+         GROUP BY visible.secret",
+        "WITH visible AS (SELECT p.* FROM registry_source.public_case p) \
+         SELECT visible.id AS id, count(visible.secret) AS fact_count \
+         FROM visible GROUP BY visible.id",
+    ] {
+        let failure = compile_with_assets(
+            &source,
+            vec![ModuleAssetSource {
+                module: None,
+                path: "sql/case-facts.sql".into(),
+                bytes: sql.as_bytes().to_vec(),
+            }],
+        )
+        .expect_err("encrypted, duplicate, and wildcard CTE outputs stay fail-closed");
+        assert!(failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "derived.sql.encrypted_column"));
+    }
 }
 
 fn change_request_project() -> Value {

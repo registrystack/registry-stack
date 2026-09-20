@@ -8,6 +8,7 @@ use registry_platform_canonical_json::canonicalize_json;
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
+use crate::change_request::MAX_CHANGE_REQUEST_SNAPSHOT_BYTES;
 use crate::contract::Operation;
 use crate::data::{validate_field_value, FieldValue as DataFieldValue};
 use crate::model::{
@@ -62,7 +63,7 @@ pub(crate) fn resolve_targets(
         .change_request
         .as_ref()
         .ok_or(MutationError::InvalidRequest)?;
-    if canonical_size(intake)? > MAX_REQUEST_SNAPSHOT_BYTES {
+    if canonical_size(intake)? > MAX_CHANGE_REQUEST_SNAPSHOT_BYTES as usize {
         return Err(MutationError::InvalidRequest);
     }
     let mut effect_records = BTreeMap::new();

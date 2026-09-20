@@ -467,6 +467,62 @@ fn unchanged_snapshot_bytes_count_toward_the_full_packet_limit() {
 }
 
 #[test]
+fn unchanged_encrypted_members_fit_the_stored_packet_expansion_budget() {
+    const ENCRYPTED_FIELDS: usize = 48;
+    const PLAINTEXT_BYTES_PER_FIELD: usize = 16 * 1024;
+    const ENVELOPE_FIXED_BYTES: usize = 33;
+    const MAX_ENVELOPE_MEMBER_OVERHEAD: usize = 72;
+
+    let registry = fixture_with(
+        json!([{"target":{"fromField":"one"},"operation":"patch","set":{"first":{"fromField":"value"}}}]),
+        |source| {
+            let fields = source["entities"][0]["fields"]
+                .as_array_mut()
+                .expect("target fields are an array");
+            fields.extend((0..ENCRYPTED_FIELDS).map(|index| {
+                json!({
+                    "id": format!("secret-{index}"),
+                    "type": "string",
+                    "maxLength": PLAINTEXT_BYTES_PER_FIELD,
+                    "classification": "restricted",
+                    "encrypted": true
+                })
+            }));
+        },
+    );
+    let base64_bytes = 4 * (PLAINTEXT_BYTES_PER_FIELD + ENVELOPE_FIXED_BYTES).div_ceil(3);
+    let envelope = json!({
+        crate::history_schema::ENVELOPE_MEMBER_TAG: "A".repeat(base64_bytes)
+    });
+    let mut before = map(json!({"first":"old"}));
+    for index in 0..ENCRYPTED_FIELDS {
+        before.insert(format!("secret-{index}"), envelope.clone());
+    }
+
+    let prepared = existing(
+        &registry,
+        map(json!({"one":TARGET,"value":"changed"})),
+        before,
+    )
+    .expect("a plaintext-only effect retains unchanged ciphertext snapshots");
+    assert!(
+        prepared.proposal.combined_snapshot_bytes()
+            > crate::change_request::MAX_CHANGE_REQUEST_SNAPSHOT_BYTES as usize
+    );
+    assert!(prepared.proposal.combined_snapshot_bytes() <= MAX_REQUEST_SNAPSHOT_BYTES);
+    assert_eq!(prepared.targets[0].after["first"], json!("changed"));
+    assert_eq!(prepared.targets[0].after["secret-0"], envelope);
+
+    let maximum_encrypted_members = 2
+        * crate::request_workflow::MAX_REQUEST_TARGETS
+        * crate::contract::MAX_ENCRYPTED_FIELDS_PER_ENTITY;
+    let worst_case_expanded = 4
+        * (crate::change_request::MAX_CHANGE_REQUEST_SNAPSHOT_BYTES as usize).div_ceil(3)
+        + maximum_encrypted_members * MAX_ENVELOPE_MEMBER_OVERHEAD;
+    assert!(worst_case_expanded <= MAX_REQUEST_SNAPSHOT_BYTES);
+}
+
+#[test]
 fn create_references_reuse_reserved_ids_across_preparation_attempts() {
     let registry = fixture(json!([
         {"id":"parent","target":{"entity":"target"},"operation":"create","set":{"first":{"fromField":"value"}}},

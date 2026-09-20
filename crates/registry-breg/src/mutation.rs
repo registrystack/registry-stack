@@ -54,7 +54,7 @@ use crate::idempotency::{
     insert_result, lock_and_load, resolve_action_binding, resolve_binding,
     resolve_hook_action_binding, resolve_hook_key_reference, ActionIdempotencyBinding,
     HeldResponse, IdempotencyBinding, IdempotencyError, PermittedResponseHeader,
-    StoredResultMetadata, MAX_IMMEDIATE_ACTION_RESULTS,
+    StoredResultMetadata, MAX_HELD_BODY_BYTES, MAX_IMMEDIATE_ACTION_RESULTS,
 };
 use crate::model::{
     ActionRouteKind, CompiledAction, CompiledActionEffect, CompiledActionMutation,
@@ -159,7 +159,7 @@ pub async fn install_mutation_schema(
                  proposal_version bigint CHECK (proposal_version > 0),
                  response_status smallint NOT NULL CHECK (response_status BETWEEN 200 AND 299),
                  response_body bytea NOT NULL
-                     CHECK (octet_length(response_body) > 0 AND octet_length(response_body) <= 2097152),
+                     CHECK (octet_length(response_body) > 0 AND octet_length(response_body) <= {MAX_HELD_BODY_BYTES}),
                  response_headers bytea NOT NULL CHECK (octet_length(response_headers) <= 65536),
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
                  CONSTRAINT registry_idempotency_result_shape CHECK (
@@ -279,7 +279,7 @@ pub async fn install_mutation_schema(
              ALTER TABLE registry_internal.registry_idempotency
                  ADD CONSTRAINT registry_idempotency_response_body_bounds CHECK (
                      response_body IS NULL OR
-                     (octet_length(response_body) > 0 AND octet_length(response_body) <= 2097152)
+                     (octet_length(response_body) > 0 AND octet_length(response_body) <= {MAX_HELD_BODY_BYTES})
                  ),
                  ADD CONSTRAINT registry_idempotency_erasure_shape
                      CHECK ((response_body IS NULL) = (erased_at IS NOT NULL));

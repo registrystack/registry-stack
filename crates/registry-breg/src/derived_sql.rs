@@ -66,6 +66,7 @@ fn refuse_encrypted_columns(
         return;
     }
     let qualified_relations = source_relation_qualifiers(parsed);
+    let cte_outputs = cte_output_qualifiers(parsed);
     for (node, _, _, _) in parsed.protobuf.nodes() {
         let NodeRef::ColumnRef(column) = node else {
             continue;
@@ -91,6 +92,13 @@ fn refuse_encrypted_columns(
                         .get(relation)
                         .is_some_and(|columns| columns.contains(last))
                 })
+            }
+            [qualifier, _column]
+                if cte_outputs
+                    .get(qualifier)
+                    .is_some_and(|columns| columns.contains(last)) =>
+            {
+                false
             }
             // An unqualified reference, or a qualifier not owned by a direct
             // registry_source range, cannot be resolved without full scope
@@ -137,6 +145,80 @@ fn source_relation_qualifiers(
         }
     }
     qualifiers
+}
+
+/// Map each CTE name and authored range alias to output columns declared by an
+/// alias or unambiguously inherited from a simple column reference. References
+/// inside the CTE are still checked on their own against source relations;
+/// this only prevents the outer `cte.column` reference from being mistaken
+/// for an unresolved source column with the same name.
+fn cte_output_qualifiers(parsed: &pg_query::ParseResult) -> BTreeMap<String, BTreeSet<String>> {
+    let ctes = parsed
+        .protobuf
+        .nodes()
+        .into_iter()
+        .filter_map(|(node, _, _, _)| {
+            let NodeRef::CommonTableExpr(cte) = node else {
+                return None;
+            };
+            let column_names = if cte.aliascolnames.is_empty() {
+                let Some(PgNode::SelectStmt(select)) = cte
+                    .ctequery
+                    .as_deref()
+                    .and_then(|query| query.node.as_ref())
+                else {
+                    return None;
+                };
+                select
+                    .target_list
+                    .iter()
+                    .map(cte_target_name)
+                    .collect::<Option<Vec<_>>>()?
+            } else {
+                node_strings(&cte.aliascolnames)?
+            };
+            let columns = column_names.iter().cloned().collect::<BTreeSet<_>>();
+            (!columns.is_empty() && columns.len() == column_names.len())
+                .then(|| (cte.ctename.clone(), columns))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let mut qualifiers = BTreeMap::<String, BTreeSet<String>>::new();
+    for (node, _, _, _) in parsed.protobuf.nodes() {
+        let NodeRef::RangeVar(range) = node else {
+            continue;
+        };
+        if !range.catalogname.is_empty() || !range.schemaname.is_empty() {
+            continue;
+        }
+        let Some(columns) = ctes.get(&range.relname) else {
+            continue;
+        };
+        qualifiers
+            .entry(range.relname.clone())
+            .or_default()
+            .extend(columns.iter().cloned());
+        if let Some(alias) = &range.alias {
+            qualifiers
+                .entry(alias.aliasname.clone())
+                .or_default()
+                .extend(columns.iter().cloned());
+        }
+    }
+    qualifiers
+}
+
+fn cte_target_name(node: &PgNodeWrapper) -> Option<String> {
+    let Some(PgNode::ResTarget(target)) = node.node.as_ref() else {
+        return None;
+    };
+    if !target.name.is_empty() {
+        return Some(target.name.clone());
+    }
+    let Some(PgNode::ColumnRef(column)) = target.val.as_deref()?.node.as_ref() else {
+        return None;
+    };
+    node_strings(&column.fields)?.pop()
 }
 
 fn root_node(parsed: &pg_query::ParseResult) -> Option<&PgNode> {
