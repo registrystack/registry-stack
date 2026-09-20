@@ -1454,10 +1454,10 @@ fn compare_fields(
             };
             push_change(
                 changes,
-                if previous_field.encryption.is_some() {
-                    // The stored envelope is the only source value. Until the
-                    // engine has a keyed conversion step, reviewed SQL cannot
-                    // safely reinterpret it as a different authored type.
+                if previous_field.encryption.is_some() || candidate_field.encryption.is_some() {
+                    // The Phase 1 keyed paths only open an existing envelope
+                    // or seal the predecessor type's serialization. Neither
+                    // converts a value between authored field types.
                     CompiledRegistryChangeClass::Unsupported
                 } else {
                     CompiledRegistryChangeClass::DestructiveOrIrreversible
