@@ -1131,6 +1131,12 @@ impl PostgresRecordMutationService {
         ))
     }
 
+    /// Whether this process still serves the package the database holds
+    /// active: the durable activation interlock ordinary mutations take.
+    fn instance_is_current(&self, active: &(String, String)) -> bool {
+        active.0 == self.expected.package_revision && active.1 == self.expected.schema_fingerprint
+    }
+
     /// Submit the next exact chunk of one run. The server derives the
     /// idempotency key from the run binding, so an interrupted submission
     /// replays the original receipt without a duplicate mutation.
@@ -1190,6 +1196,14 @@ impl PostgresRecordMutationService {
         let announced_body =
             canonical_digest == input.digest && canonical_body.len() <= run.maximum_bytes as usize;
         if input.chunk_index < run.next_chunk_index {
+            // Releasing a retained receipt serves committed values, so it
+            // owes the same durable activation interlock ordinary mutations
+            // take: an instance whose package a successor retired refuses
+            // the release, while a current instance serves the receipt the
+            // committed prefix retains.
+            if !self.instance_is_current(&active) {
+                return Err(IngestionServiceError::Unavailable);
+            }
             // The checkpoint already covers this chunk, so the caller is
             // recovering a lost response: return the stored receipt, never a
             // second mutation. This holds for every terminal status and for
@@ -1590,6 +1604,13 @@ impl PostgresRecordMutationService {
         let active = ingestion_store::active_binding(&**client)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
+        // Releasing the stored receipt serves committed values, so the same
+        // durable activation interlock the replay release owes gates it too:
+        // an instance whose package a successor retired refuses, and a
+        // current instance serves the receipt under the contract.
+        if !self.instance_is_current(&active) {
+            return Err(IngestionServiceError::Unavailable);
+        }
         let stored = ingestion_store::load_chunk(&**client, run.run_id, chunk_index)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?

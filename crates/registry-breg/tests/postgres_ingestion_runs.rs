@@ -1611,6 +1611,79 @@ async fn a_stale_instance_reports_and_blocks_runs_against_the_durable_binding() 
     );
 }
 
+/// The replay and recovery arms release a stored batch answer, so they owe
+/// the same durable activation interlock ordinary protected reads owe: an
+/// instance whose package a successor retired must refuse both releases with
+/// an outage and write no disclosure record, while the current instance
+/// still serves the retained receipt under the contract.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stale_instance_cannot_release_a_retained_receipt() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("stale-receipt", 4);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+
+    // The successor revision activates in the database while the original
+    // process keeps serving its retired identity.
+    let successor = harness.restart_with_revision("package-ingestion-2").await;
+
+    let replay = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(
+        replay.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the stale instance cannot replay a retained receipt"
+    );
+    let recovered = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(
+        recovered.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the stale instance cannot recover a retained receipt"
+    );
+    assert!(
+        receipt_disclosures(&harness, &run_id).await.is_empty(),
+        "the refused releases write no disclosure record"
+    );
+
+    // The current instance owes the caller the receipt either way: the
+    // committed prefix and its receipts survive the package change.
+    let current_replay = successor
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(current_replay.status(), StatusCode::OK);
+    assert_eq!(body_json(current_replay).await["receipt"]["replayed"], true);
+    let current_recovered = successor
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(current_recovered.status(), StatusCode::OK);
+}
+
 /// The published ingestion operations carry every problem response their
 /// handlers can produce: a producible refusal outside the published contract
 /// is invisible to generated clients and contract validators.
