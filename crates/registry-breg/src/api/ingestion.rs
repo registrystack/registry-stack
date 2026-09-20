@@ -458,8 +458,15 @@ async fn submit_chunk(
     // The body is bounded by the stable protocol ceilings, never the current
     // package's batch limits: an exact replay of a chunk a previous package
     // admitted must still reach the service, which enforces the run's own
-    // stored bounds.
-    let Ok(body) = bounded_body_to(body, crate::compiler::MAX_BATCH_BYTES as usize).await else {
+    // stored bounds. The ceiling is the batch byte ceiling plus the chunk
+    // envelope's own members, so a chunk whose canonical batch body sits
+    // exactly at the batch ceiling is read, not refused before parsing.
+    let Ok(body) = bounded_body_to(
+        body,
+        crate::compiler::INGESTION_CHUNK_REQUEST_CEILING as usize,
+    )
+    .await
+    else {
         return audited_mutation_refusal(
             mutations,
             &binding.base,

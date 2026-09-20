@@ -60,6 +60,15 @@ mod attachments;
 pub const AUTHORING_API_VERSION: &str = "registry.registrystack.org/v1alpha1";
 pub const MAX_BATCH_ITEMS: u16 = 100;
 pub const MAX_BATCH_BYTES: u32 = 2_097_152;
+/// The transport ceiling a chunk-submission request body is read under: the
+/// batch byte ceiling plus the chunk envelope's own members. A chunk's
+/// canonical batch body is bounded by the run's `maximumBytes` (whose highest
+/// configurable value is `MAX_BATCH_BYTES`), but the request that carries it
+/// adds the envelope around it: the chunk index, the two 64-character hex
+/// digests, their member names, and the JSON punctuation, which together stay
+/// far below this 1 KiB allowance. Reading at the bare batch ceiling would
+/// refuse a chunk the run's own bounds admit before it is ever parsed.
+pub const INGESTION_CHUNK_REQUEST_CEILING: u32 = MAX_BATCH_BYTES + 1024;
 /// The attempt budget starts at the claim's database timestamp and covers the claim
 /// commit and reload round trips before the request leaves, so this floor is a
 /// validation bound: samples and fixtures should use a realistic value such as 1000 ms.

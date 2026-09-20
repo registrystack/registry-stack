@@ -35,6 +35,7 @@ use registry_breg::postgres::{
 };
 use registry_platform_audit::AuditProfile;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tower::Service as _;
 use zeroize::Zeroizing;
 
@@ -157,8 +158,129 @@ async fn unauthorized_callers_are_concealed_on_run_creation_and_listing() {
     );
 }
 
+/// A chunk whose canonical batch body is exactly the batch byte ceiling is the
+/// largest a planner may lawfully produce, and its request envelope carries
+/// that body plus the envelope's own members. The transport reader must admit
+/// the envelope (the service still enforces the run's own stored bounds) and
+/// must keep refusing beyond the reserved envelope allowance.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chunk_envelopes_within_the_request_ceiling_reach_the_service() {
+    let batch_ceiling = registry_breg::compiler::MAX_BATCH_BYTES;
+    let harness = ContractHarness::create(fixture_registry(batch_ceiling)).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+
+    // One item whose canonical batch body is exactly the batch byte ceiling.
+    let item = |padding: usize| {
+        json!({
+            "operation": "create",
+            "data": {
+                "jurisdiction": "zone-a",
+                "label": "ceiling-probe",
+                "quantity": 1,
+                "payload": "x".repeat(padding)
+            }
+        })
+    };
+    let canonical = |padding: usize| {
+        registry_platform_canonical_json::canonicalize_json(&json!({"items":[item(padding)]}))
+            .expect("canonical batch body derives")
+    };
+    let padding = batch_ceiling as usize - canonical(0).len();
+    assert_eq!(canonical(padding).len(), batch_ceiling as usize);
+
+    // The raw source input the run announces: one canonical JSON line.
+    let mut line = registry_platform_canonical_json::canonicalize_json(&item(padding))
+        .expect("canonical item derives");
+    line.push(b'\n');
+    let input_digest = hex_digest(&line);
+    let run = json!({
+        "operation": "create",
+        "profileId": "operator",
+        "packageRevision": PACKAGE_REVISION,
+        "schemaFingerprint": harness.schema_fingerprint,
+        "inputDigest": input_digest,
+        "inputLength": line.len(),
+        "itemCount": 1,
+        "chunkCount": 1,
+        "chunkAlgorithmVersion": "greedy-canonical-http-batch-v1",
+    });
+    let created = harness
+        .post_json("/v1/records/widgets/ingestion-runs", &claims, run)
+        .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let run_id = body_json(created).await["run"]["runId"]
+        .as_str()
+        .expect("run id")
+        .to_owned();
+
+    // The envelope: the same items plus the index and the two digests. Its
+    // length sits between the batch ceiling and the reserved request ceiling.
+    let chunk_digest = hex_digest(&canonical(padding));
+    let envelope = |padding: usize| {
+        serde_json::to_vec(&json!({
+            "chunkIndex": 0,
+            "items": [item(padding)],
+            "digest": chunk_digest,
+            "prefixDigest": input_digest,
+        }))
+        .expect("chunk envelope encodes")
+    };
+    let request_ceiling =
+        usize::try_from(registry_breg::compiler::INGESTION_CHUNK_REQUEST_CEILING).unwrap();
+    assert!(envelope(padding).len() > batch_ceiling as usize);
+    assert!(envelope(padding).len() <= request_ceiling);
+    let submitted = send(
+        &harness.app,
+        Method::POST,
+        &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+        Some(claims.clone()),
+        &[("content-type", "application/json")],
+        envelope(padding),
+    )
+    .await;
+    assert_eq!(
+        submitted.status(),
+        StatusCode::OK,
+        "a chunk at the batch byte ceiling reaches the service past its envelope"
+    );
+    assert_eq!(
+        body_json(submitted).await["run"]["status"],
+        "complete",
+        "the terminal chunk completes the run"
+    );
+
+    // One envelope byte beyond the request ceiling is refused before parsing,
+    // so the allowance stays bounded.
+    let overhead = envelope(0).len() - canonical(0).len();
+    let beyond_padding = request_ceiling + 1 - overhead - canonical(0).len();
+    let oversized = send(
+        &harness.app,
+        Method::POST,
+        &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+        Some(claims),
+        &[("content-type", "application/json")],
+        envelope(beyond_padding),
+    )
+    .await;
+    assert_eq!(oversized.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(oversized).await["code"],
+        "request.invalid",
+        "an envelope beyond the request ceiling is refused before parsing"
+    );
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(64);
+    for byte in Sha256::digest(bytes) {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
 struct ContractHarness {
     app: axum::Router,
+    schema_fingerprint: String,
 }
 
 impl ContractHarness {
@@ -191,8 +313,12 @@ impl ContractHarness {
             .runtime_config
             .build_pool()
             .expect("bounded runtime pool builds");
+        let schema_fingerprint = identity.schema_fingerprint.clone();
         let app = build_router(pool, registry, identity, lock_key, audit_profile);
-        Self { app }
+        Self {
+            app,
+            schema_fingerprint,
+        }
     }
 
     async fn post_json(
@@ -307,7 +433,9 @@ async fn send(
 }
 
 async fn body_json(response: axum::response::Response) -> Value {
-    let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
+    // Generous beside the request ceilings: a chunk receipt echoes the batch
+    // results of a ceiling-sized item, so the answer is larger than its ask.
+    let bytes = to_bytes(response.into_body(), 8 * 1024 * 1024)
         .await
         .expect("response body");
     serde_json::from_slice(&bytes).expect("JSON response")
@@ -345,44 +473,63 @@ fn claims_with(
 
 /// The compact batch-driven fixture the contract tests build their surface
 /// from: one entity whose batch route the operator profile drives, with the
-/// anonymous reader the concealment proofs stay outside.
-const FIXTURE: &str = r#"{
-  "apiVersion":"registry.registrystack.org/v1alpha1",
-  "kind":"RegistryProject",
-  "registry":{"id":"ingestion-contract-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://contract.example.test"},
-  "entities":[{
-    "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
-    "batch":{"maximumItems":3,"maximumBytes":8192},
-    "constraints":[{"kind":"unique","fields":["label"]}],
-    "fields":[
-      {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
-      {"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"},
-      {"id":"quantity","type":"int64","required":true,"classification":"public"}
-    ]
-  }],
-  "accessProfiles":[{
-    "id":"operator","default":true,"principalClaim":"registry_principal",
-    "requiredPurposes":["case-management"],
-    "permissions":[{
-      "entity":"widget","operations":["create","get","patch","batch"],
-      "readableFields":["jurisdiction","label","quantity"],
-      "writableFields":["jurisdiction","label","quantity"],
-      "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-    }]
-  },{
-    "id":"anonymous-reader","anonymous":true,
-    "permissions":[{
-      "entity":"widget","operations":["get","list"],
-      "readableFields":["label"],
-      "rowBoundaries":[]
-    }]
-  }]
-}"#;
-
-fn compiled_registry() -> Arc<registry_breg::CompiledRegistry> {
-    let project = parse_project_json(FIXTURE.as_bytes()).expect("contract fixture parses");
+/// anonymous reader the concealment proofs stay outside. The batch byte bound
+/// is a parameter so one variant can sit at the protocol's highest.
+fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegistry> {
+    let fixture = json!({
+        "apiVersion": "registry.registrystack.org/v1alpha1",
+        "kind": "RegistryProject",
+        "registry": {
+            "id": "ingestion-contract-registry", "version": "1", "defaultLanguage": "en",
+            "canonicalBaseIri": "https://contract.example.test"
+        },
+        "entities": [{
+            "id": "widget", "primaryDataset": "test-dataset", "route": "widgets",
+            "mutationMode": "mutable", "classification": "public",
+            "batch": {"maximumItems": 3, "maximumBytes": batch_maximum_bytes},
+            "constraints": [{"kind": "unique", "fields": ["label"]}],
+            "fields": [
+                {"id": "jurisdiction", "type": "string", "maxLength": 32,
+                 "required": true, "classification": "public"},
+                {"id": "label", "type": "string", "maxLength": 128,
+                 "required": true, "classification": "public"},
+                {"id": "quantity", "type": "int64", "required": true,
+                 "classification": "public"},
+                {"id": "payload", "type": "text", "maxLength": 3_000_000,
+                 "required": false, "classification": "public"}
+            ]
+        }],
+        "accessProfiles": [
+            {
+                "id": "operator", "default": true, "principalClaim": "registry_principal",
+                "requiredPurposes": ["case-management"],
+                "permissions": [{
+                    "entity": "widget", "operations": ["create", "get", "patch", "batch"],
+                    "readableFields": ["jurisdiction", "label", "quantity", "payload"],
+                    "writableFields": ["jurisdiction", "label", "quantity", "payload"],
+                    "rowBoundaries": [
+                        {"field": "jurisdiction", "claim": "jurisdiction", "operator": "equals"}
+                    ]
+                }]
+            },
+            {
+                "id": "anonymous-reader", "anonymous": true,
+                "permissions": [{
+                    "entity": "widget", "operations": ["get", "list"],
+                    "readableFields": ["label"],
+                    "rowBoundaries": []
+                }]
+            }
+        ]
+    });
+    let project = parse_project_json(&serde_json::to_vec(&fixture).expect("fixture JSON encodes"))
+        .expect("contract fixture parses");
     Arc::new(
         compile_project(&project, &[], CompileProfile::Authoring)
             .expect("contract fixture compiles to trusted inventories"),
     )
+}
+
+fn compiled_registry() -> Arc<registry_breg::CompiledRegistry> {
+    fixture_registry(8192)
 }
