@@ -97,10 +97,15 @@ classifications only: no source rows, no committed record values, and no chunk
 bodies. The listing answers on the access context the caller presents, the
 same bound context every per-run operation enforces, so a changed profile,
 purpose, row-boundary, or grant context lists none of another context's runs
-even under the same principal. Its status filter answers on the status a run
-document renders: after a successor package activation, `status=blocked` finds
-the stored-open runs the durable binding retired, and `status=open` returns
-only runs that still match the active binding. Problem codes are
+even under the same principal. Reading one run owes the run the same
+admission, so a drifted context is refused with `ingestion.profile_mismatch`
+rather than shown the run's binding, digest, counts, or progress. Its status
+filter answers on the status a run document renders: after a successor
+package activation, `status=blocked` finds the stored-open runs the durable
+binding retired, and `status=open` returns only runs that still match the
+active binding. The page renders against the very binding its own filter
+read, so a package activation cannot fall between the filter and the
+rendering. Problem codes are
 `ingestion.profile_mismatch`,
 `ingestion.run_not_open`, `ingestion.run_blocked`, `ingestion.chunk_mismatch`,
 and `ingestion.receipt_erased`, alongside the ordinary `request.invalid`,
@@ -135,10 +140,15 @@ bytes stay sealed, and a process without key state, or one whose open fails,
 answers `service.unavailable` instead of releasing an envelope.
 
 Every release of a retained receipt re-projects the stored answer through the
-readable fields the active package grants the run's profile: a successor that
-revokes or renames a readable field drops that member from every later
-release, while the members the successor still grants keep serving, encrypted
-ones included. A member that still parses as a sealed envelope in a receipt
+field identities it was committed under: chunk commit stores, beside the
+receipt, the map of each answer member to the logical field that produced it,
+and a member is retained only while that field is still a readable field of
+the run's profile carrying the same API name in the current package. A
+successor that revokes or renames a readable field drops that member from
+every later release, and a successor that retires a field while reusing its
+API name inherits none of its stored value, while the members the successor
+still grants keep serving, encrypted ones included. A live receipt whose row
+lost its map is refused as an outage. A member that still parses as a sealed envelope in a receipt
 stored under a package the database no longer holds active fails the release
 closed with `service.unavailable`, unless the active entity declares that
 member's field encrypted; a successor that retires the encryption itself
