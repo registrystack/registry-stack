@@ -574,9 +574,13 @@ pub(crate) fn validate_new_run(run: &NewIngestionRun) -> Result<(), IngestionSto
         || run.maximum_items > i64::from(u16::MAX)
         // The greedy chunker emits at least one item per chunk and at most
         // maximum_items, so the announced counts must respect both bounds.
+        // The minimum count is the ceiling of item_count over
+        // maximum_items; `1 + (item_count - 1) / maximum_items` computes it
+        // without overflow, where `item_count + maximum_items - 1` wraps
+        // near i64::MAX, and both operands are positive because the clause
+        // above has already refused non-positive values.
         || run.chunk_count > run.item_count
-        || run.chunk_count
-            < (run.item_count + run.maximum_items - 1) / run.maximum_items
+        || run.chunk_count < 1 + (run.item_count - 1) / run.maximum_items
     {
         return Err(IngestionStoreError::InvalidInput);
     }
@@ -1170,6 +1174,37 @@ mod tests {
         // More chunks than items is refused the other way.
         let mut binding = run();
         binding.chunk_count = 6;
+        assert_eq!(
+            validate_new_run(&binding),
+            Err(IngestionStoreError::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn an_item_count_near_the_maximum_still_requires_its_minimum_chunk_count() {
+        // The minimum chunk count must stay checkable when the announced
+        // item count approaches i64::MAX; the ceiling arithmetic must not
+        // overflow while refusing one chunk for the whole input.
+        let mut binding = run();
+        binding.item_count = i64::MAX;
+        binding.input_length = i64::MAX;
+        binding.chunk_count = 1;
+        assert_eq!(
+            validate_new_run(&binding),
+            Err(IngestionStoreError::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn the_exact_minimum_chunk_count_boundary_is_accepted() {
+        // Two hundred items with one hundred per chunk need exactly two
+        // chunks; the boundary count is accepted and one below is refused.
+        let mut binding = run();
+        binding.item_count = 200;
+        binding.maximum_items = 100;
+        binding.chunk_count = 2;
+        assert_eq!(validate_new_run(&binding), Ok(()));
+        binding.chunk_count = 1;
         assert_eq!(
             validate_new_run(&binding),
             Err(IngestionStoreError::InvalidInput)
