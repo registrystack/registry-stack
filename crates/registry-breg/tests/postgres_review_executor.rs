@@ -211,11 +211,11 @@ async fn refuse_review_submission(Json(_request): Json<ReviewCreateRequest>) -> 
             ("traceparent", TRACEPARENT),
         ],
         Json(json!({
-            "type": "https://id.registrystack.org/problems/registry-casework/request/conflict",
+            "type": "https://id.registrystack.org/problems/registry-casework/review/submission-conflict",
             "title": "Conflicting request",
             "status": 409,
             "detail": "The review submission conflicts with retained work.",
-            "code": "request.conflict",
+            "code": "review.submission-conflict",
             "traceId": "0123456789abcdef0123456789abcdef"
         })),
     )
