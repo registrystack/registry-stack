@@ -265,7 +265,7 @@ async fn field_preflight(
     target_package_revision: &str,
 ) -> Result<FieldEncryptionBackfillFieldPreflight, FieldEncryptionBackfillPreflightError> {
     let entity_id = field.entity_id;
-    let field_id = field.candidate.id.as_str();
+    let field_id = field.logical_field_id;
     let table = SqlIdentifier::parse(table)
         .map_err(|_| FieldEncryptionBackfillPreflightError::InvalidInput)?;
     let plaintext_projection = prior_plaintext_projection(field.prior);
@@ -362,7 +362,7 @@ async fn field_preflight(
             "SELECT count(*)::bigint
                FROM registry_internal.registry_idempotency
               WHERE convert_from(response_body, 'UTF8')::jsonb @? $1::jsonpath",
-            &[&recursive_member_path(field.api_name)
+            &[&recursive_member_path(field.predecessor_api_name)
                 .map_err(|_| FieldEncryptionBackfillPreflightError::InvalidInput)?],
         )
         .await
@@ -373,7 +373,7 @@ async fn field_preflight(
                FROM registry_internal.registry_outbox
               WHERE payload IS NOT NULL
                 AND convert_from(payload, 'UTF8')::jsonb @? $1::jsonpath",
-            &[&recursive_member_path(field.api_name)
+            &[&recursive_member_path(field.logical_field_id)
                 .map_err(|_| FieldEncryptionBackfillPreflightError::InvalidInput)?],
         )
         .await

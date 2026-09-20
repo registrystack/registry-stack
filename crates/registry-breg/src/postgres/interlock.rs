@@ -147,7 +147,12 @@ pub(crate) struct FieldEncryptionCoveredField<'a> {
     pub(crate) candidate: &'a CompiledField,
     pub(crate) prior: &'a CompiledField,
     pub(crate) blind: Option<&'a CompiledBlindIndex>,
+    /// The successor API name reported to the operator.
     pub(crate) api_name: &'a str,
+    /// The predecessor API name retained in pre-flip idempotency responses.
+    pub(crate) predecessor_api_name: &'a str,
+    /// The stable logical field id retained in outbox projections.
+    pub(crate) logical_field_id: &'a str,
 }
 
 /// The per-chunk request one field-encryption backfill execution carries.
@@ -2439,6 +2444,12 @@ pub(crate) fn covered_field_encryption_fields<'a>(
             .find(|field| field.logical.id == member_id)
             .map(|field| field.logical.api_name.as_str())
             .ok_or(PostgresKernelError::RegistryUnavailable)?;
+        let predecessor_api_name = prior_entity
+            .stored_fields
+            .iter()
+            .find(|field| field.logical.id == member_id)
+            .map(|field| field.logical.api_name.as_str())
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
         covered.push(FieldEncryptionCoveredField {
             entity_id,
             candidate,
@@ -2448,6 +2459,8 @@ pub(crate) fn covered_field_encryption_fields<'a>(
                 .as_ref()
                 .and_then(|encryption| encryption.blind_index.as_ref()),
             api_name,
+            predecessor_api_name,
+            logical_field_id: candidate.id.as_str(),
         });
     }
     if covered.is_empty() {
@@ -2566,7 +2579,7 @@ async fn verify_field_encryption_content(
 ) -> Result<FieldEncryptionContentVerification> {
     let mut verification = FieldEncryptionContentVerification::default();
     let entity_id = field.entity_id;
-    let field_id = field.candidate.id.as_str();
+    let field_id = field.logical_field_id;
 
     let envelope_column = crate::generated_ddl::quote_identifier(&field.candidate.physical_name);
     let plaintext_projection = prior_plaintext_projection(field.prior);
@@ -2749,7 +2762,7 @@ async fn verify_field_encryption_content(
             "SELECT count(*)::bigint
                FROM registry_internal.registry_idempotency
               WHERE convert_from(response_body, 'UTF8')::jsonb @? ($1::text)::jsonpath",
-            &[&recursive_member_path(field.api_name)?],
+            &[&recursive_member_path(field.predecessor_api_name)?],
         )
         .await
         .map_err(|_| PostgresKernelError::Connection)?;
@@ -2762,7 +2775,7 @@ async fn verify_field_encryption_content(
                FROM registry_internal.registry_outbox
               WHERE payload IS NOT NULL
                 AND convert_from(payload, 'UTF8')::jsonb @? ($1::text)::jsonpath",
-            &[&recursive_member_path(field.api_name)?],
+            &[&recursive_member_path(field.logical_field_id)?],
         )
         .await
         .map_err(|_| PostgresKernelError::Connection)?;
@@ -3141,9 +3154,15 @@ mod tests {
     #[cfg(feature = "postgres-test")]
     use std::{env, str::FromStr, time::SystemTime};
 
+    use serde_json::json;
     #[cfg(feature = "postgres-test")]
     use tokio_postgres::Config;
 
+    use crate::compiler::{compile_project, CompileProfile};
+    use crate::contract::parse_project_json;
+    use crate::migration_plan::{
+        ChunkCursorProtocol, ReviewedMigrationObject, ReviewedMigrationObjectKind,
+    };
     #[cfg(feature = "postgres-test")]
     use crate::postgres::PoolBounds;
 
@@ -3258,6 +3277,89 @@ mod tests {
             Err(PostgresKernelError::RegistryUnavailable)
         ));
         assert!(validate_runtime_acl_reconciliation_request(true).is_ok());
+    }
+
+    #[test]
+    fn field_encryption_scan_keys_preserve_predecessor_api_name_and_logical_id() {
+        fn compile(api_name: &str, encrypted: bool) -> CompiledRegistry {
+            let mut secret = json!({
+                "id": "secret",
+                "apiName": api_name,
+                "type": "string",
+                "maxLength": 256,
+                "classification": "restricted"
+            });
+            if encrypted {
+                secret["encrypted"] = json!(true);
+            }
+            let source = json!({
+                "apiVersion": "registry.registrystack.org/v1alpha1",
+                "kind": "RegistryProject",
+                "registry": {
+                    "id": "field-encryption-scan-keys",
+                    "version": "1",
+                    "defaultLanguage": "en",
+                    "canonicalBaseIri": "https://scan-keys.example.test"
+                },
+                "entities": [{
+                    "id": "case",
+                    "primaryDataset": "test-dataset",
+                    "route": "cases",
+                    "mutationMode": "mutable",
+                    "fields": [secret]
+                }],
+                "accessProfiles": [{
+                    "id": "caseworker",
+                    "default": true,
+                    "principalClaim": "principal",
+                    "permissions": [{
+                        "entity": "case",
+                        "rowBoundaries": [],
+                        "operations": ["get", "list", "create", "patch"],
+                        "readableFields": ["secret"],
+                        "writableFields": ["secret"]
+                    }]
+                }]
+            });
+            let project = parse_project_json(&serde_json::to_vec(&source).unwrap())
+                .expect("scan-key fixture parses");
+            compile_project(&project, &[], CompileProfile::Authoring)
+                .expect("scan-key fixture compiles")
+        }
+
+        let prior = compile("legacySecret", false);
+        let candidate = compile("renamedSecret", true);
+        let baseline = CompiledRegistryMigrationBaseline::from_compiled("prior", &prior);
+        let entity = &candidate.entities()["case"];
+        let field = &entity.fields["secret"];
+        let step = ValidatedReviewedMigrationStep {
+            descriptor: ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
+                id: "seal-secret".to_owned(),
+                entity_id: "case".to_owned(),
+                objects: vec![ReviewedMigrationObject {
+                    schema: "registry_data".to_owned(),
+                    table: entity.physical_table.clone(),
+                    entity_id: "case".to_owned(),
+                    kind: ReviewedMigrationObjectKind::Field,
+                    member_id: Some("secret".to_owned()),
+                    physical_name: field.physical_name.clone(),
+                }],
+                cursor: ChunkCursorProtocol::RecordIdUuidArray,
+                chunk_size: 2,
+                max_total_rows: 10,
+                lock_timeout_ms: 50,
+                statement_timeout_ms: 5_000,
+            },
+            sql: String::new(),
+            sha256: String::new(),
+        };
+
+        let covered = covered_field_encryption_fields(&candidate, Some(&baseline), "case", &step)
+            .expect("rename plus encryption resolves one covered field");
+        let covered = &covered[0];
+        assert_eq!(covered.api_name, "renamedSecret");
+        assert_eq!(covered.predecessor_api_name, "legacySecret");
+        assert_eq!(covered.logical_field_id, "secret");
     }
 
     #[cfg(feature = "postgres-test")]
