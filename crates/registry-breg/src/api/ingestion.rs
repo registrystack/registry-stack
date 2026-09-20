@@ -1312,7 +1312,7 @@ fn create_run_schema() -> Value {
             "packageRevision": {"type": "string", "minLength": 1},
             "schemaFingerprint": {"type": "string", "minLength": 1},
             "inputDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-            "inputLength": {"type": "integer", "minimum": 0},
+            "inputLength": {"type": "integer", "minimum": 1},
             "itemCount": {"type": "integer", "minimum": 1},
             "chunkCount": {"type": "integer", "minimum": 1},
             "chunkAlgorithmVersion": {"const": crate::data::RUN_CHUNK_ALGORITHM_VERSION}

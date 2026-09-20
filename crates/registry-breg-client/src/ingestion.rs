@@ -853,7 +853,8 @@ impl BRegIngestionRunRequestBuilder {
         Ok(self)
     }
 
-    /// Announce the complete source input size in bytes.
+    /// Announce the complete source input size in bytes, which must be
+    /// positive; [`Self::build`] refuses zero.
     #[must_use]
     pub fn input_length(mut self, value: u64) -> Self {
         self.input_length = Some(value);
@@ -907,8 +908,11 @@ impl BRegIngestionRunRequestBuilder {
             input_digest: self
                 .input_digest
                 .ok_or(BRegIngestionError::InvalidBinding)?,
+            // The service answers an announcement of zero source bytes with
+            // request.invalid, so zero never encodes.
             input_length: self
                 .input_length
+                .filter(|length| *length > 0)
                 .ok_or(BRegIngestionError::InvalidBinding)?,
             item_count: self.item_count.ok_or(BRegIngestionError::InvalidBinding)?,
             chunk_count: self.chunk_count.ok_or(BRegIngestionError::InvalidBinding)?,
@@ -1979,6 +1983,52 @@ mod tests {
             BRegIngestionRunRequest::builder().input_digest("aabb"),
             Err(BRegIngestionError::InvalidDigest)
         ));
+    }
+
+    #[test]
+    fn the_run_request_refuses_a_zero_input_length_and_builds_a_positive_one() {
+        // The service answers an announcement of zero source bytes with
+        // request.invalid, so the announcement is refused where it is
+        // constructed, and one byte builds.
+        let builder = || {
+            BRegIngestionRunRequest::builder()
+                .operation(BRegBatchOperation::Create)
+                .profile("importer.v1")
+                .unwrap()
+                .package_revision("revision-1")
+                .unwrap()
+                .schema_fingerprint("fingerprint-1")
+                .unwrap()
+                .input_digest(INPUT_DIGEST)
+                .unwrap()
+        };
+        assert_eq!(
+            builder()
+                .input_length(0)
+                .item_count(1)
+                .unwrap()
+                .chunk_count(1)
+                .unwrap()
+                .chunk_algorithm_version(BREG_INGESTION_CHUNK_ALGORITHM_VERSION)
+                .unwrap()
+                .build()
+                .expect_err("a zero input length is refused"),
+            BRegIngestionError::InvalidBinding
+        );
+        let built = builder()
+            .input_length(1)
+            .item_count(1)
+            .unwrap()
+            .chunk_count(1)
+            .unwrap()
+            .chunk_algorithm_version(BREG_INGESTION_CHUNK_ALGORITHM_VERSION)
+            .unwrap()
+            .build()
+            .expect("a positive input length builds");
+        assert_eq!(
+            serde_json::from_slice::<Value>(built.body()).unwrap()["inputLength"],
+            json!(1)
+        );
     }
 
     #[test]

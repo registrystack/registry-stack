@@ -123,6 +123,29 @@ async fn ingestion_operations_publish_exactly_their_producible_problem_codes() {
     }
 }
 
+/// The run creation document publishes the input-length bound the service
+/// enforces. The run store admits only a positive announced source size, so a
+/// schema that admitted zero would advertise a request the service always
+/// answers request.invalid.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn create_run_schema_publishes_the_enforced_positive_input_length() {
+    let harness = ContractHarness::create(compiled_registry()).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let response = harness.get_json("/openapi.json", &claims).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let document = body_json(response).await;
+    let schema = &document["paths"]["/v1/records/widgets/ingestion-runs"]["post"]["requestBody"]
+        ["content"]["application/json"]["schema"];
+    assert_eq!(
+        schema["properties"]["inputLength"],
+        json!({"type": "integer", "minimum": 1}),
+        "the published input length is the positive byte count the service enforces"
+    );
+    // The sibling announcement counts stay positive in the same document.
+    assert_eq!(schema["properties"]["itemCount"]["minimum"], 1);
+    assert_eq!(schema["properties"]["chunkCount"]["minimum"], 1);
+}
+
 /// The catalogue's concealed-404 entries are producible on the operations
 /// without a run-scoped path: an authenticated caller the compiled batch
 /// route does not authorize, here one missing the row-boundary claim, is
