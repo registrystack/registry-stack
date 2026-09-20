@@ -117,6 +117,18 @@ fn apply(config: &Path, records_path: &Path) -> serde_json::Value {
         .expect("records apply succeeds")
 }
 
+fn apply_error(config: &Path, records_path: &Path) -> String {
+    let config = config.to_path_buf();
+    let records_path = records_path.to_path_buf();
+    std::thread::spawn(move || {
+        let error = records::apply(&config, &records_path)
+            .expect_err("records apply refuses a different deployment identity");
+        format!("{error:#}")
+    })
+    .join()
+    .expect("records apply does not panic")
+}
+
 #[tokio::test]
 async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
     let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
@@ -171,17 +183,22 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
         "0123456789abcdef0123456789abcdef",
     );
 
+    let config = RuntimeConfig::load(&config_path).expect("the runtime configuration loads");
+    let resolver = SecretResolver::new([SecretProvider::Environment], "")
+        .expect("the environment secret provider configures");
+    let store = PostgresStore::connect_migration(&config.database, &resolver).unwrap();
+    store.migrate().await.expect("the schema migrates");
+    store
+        .adopt("registry-updates")
+        .await
+        .expect("the policy identity adopts the database");
+
     let report = apply(&config_path, &root.path().join("first.yaml"));
     assert_eq!(report["command"], "records-apply");
     assert_eq!(
         report["applied"],
         json!({"locations": 1, "pools": 1, "members": 2, "exceptions": 1})
     );
-
-    let config = RuntimeConfig::load(&config_path).expect("the runtime configuration loads");
-    let resolver = SecretResolver::new([SecretProvider::Environment], "")
-        .expect("the environment secret provider configures");
-    let store = PostgresStore::connect_runtime(&config.database, &resolver).unwrap();
 
     let (facts, _) = store.facts().await.unwrap();
     assert_eq!(facts.locations.len(), 1);
@@ -235,6 +252,110 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
     assert!(applies
         .iter()
         .all(|(_, record)| record["reason"] == "authorization.allowed"));
+
+    admin
+        .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
+        .await
+        .expect("the disposable schema is dropped");
+}
+
+#[tokio::test]
+async fn records_apply_rejects_a_different_deployment_identity_without_writing() {
+    let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
+        .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    let schema = format!("records_identity_{}", Uuid::new_v4().simple());
+    let (admin, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
+        .await
+        .expect("the test server accepts an administrative connection");
+    tokio::spawn(async move {
+        connection
+            .await
+            .expect("the administrative connection stays up")
+    });
+    admin
+        .batch_execute(&format!("CREATE SCHEMA {schema}"))
+        .await
+        .expect("a disposable schema is created");
+
+    let root = tempfile::tempdir().unwrap();
+    let adopted_project = root.path().join("adopted-project");
+    let other_project = root.path().join("other-project");
+    std::fs::create_dir_all(&adopted_project).unwrap();
+    std::fs::create_dir_all(&other_project).unwrap();
+    std::fs::write(adopted_project.join("scheduling.yaml"), POLICY).unwrap();
+    std::fs::write(
+        other_project.join("scheduling.yaml"),
+        POLICY.replacen("  id: registry-updates\n", "  id: permit-renewals\n", 1),
+    )
+    .unwrap();
+    std::fs::write(root.path().join("first.yaml"), FIRST_RECORDS).unwrap();
+    std::fs::write(root.path().join("second.yaml"), SECOND_RECORDS).unwrap();
+
+    let runtime = |project: &Path, audit: &Path| {
+        format!(
+            "apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1\n\
+             kind: SchedulingRuntimeConfig\n\
+             package:\n  root: {project}\n\
+             listener:\n  bind: 127.0.0.1:8105\n  tlsTermination: development-loopback\n\
+             secretProviders:\n  environment: {{}}\n\
+             authentication:\n  oidc:\n    issuer: https://identity.example.test\n\
+             \x20   audience: urn:example:scheduling\n\
+             database:\n  runtimeUrlRef: secret:env/SCHEDULING_RECORDS_IDENTITY_DATABASE\n\
+             \x20 migrationUrlRef: secret:env/SCHEDULING_RECORDS_IDENTITY_DATABASE\n\
+             \x20 testOnlyPlaintext: true\n\
+             audit:\n  path: {audit}\n  hashKeyRef: secret:env/SCHEDULING_RECORDS_IDENTITY_AUDIT\n\
+             retention:\n  attemptReceiptDays: 2\n",
+            project = project.display(),
+            audit = audit.display(),
+        )
+    };
+    let adopted_config = root.path().join("adopted-runtime.yaml");
+    let other_config = root.path().join("other-runtime.yaml");
+    std::fs::write(
+        &adopted_config,
+        runtime(&adopted_project, &root.path().join("adopted-audit.ndjson")),
+    )
+    .unwrap();
+    std::fs::write(
+        &other_config,
+        runtime(&other_project, &root.path().join("other-audit.ndjson")),
+    )
+    .unwrap();
+    std::env::set_var(
+        "SCHEDULING_RECORDS_IDENTITY_DATABASE",
+        scoped_url(&base, &schema),
+    );
+    std::env::set_var(
+        "SCHEDULING_RECORDS_IDENTITY_AUDIT",
+        "0123456789abcdef0123456789abcdef",
+    );
+
+    let config =
+        RuntimeConfig::load(&adopted_config).expect("the adopted runtime configuration loads");
+    let resolver = SecretResolver::new([SecretProvider::Environment], "")
+        .expect("the environment secret provider configures");
+    let store = PostgresStore::connect_migration(&config.database, &resolver).unwrap();
+    store.migrate().await.expect("the schema migrates");
+    store
+        .adopt("registry-updates")
+        .await
+        .expect("the first policy identity adopts the database");
+    apply(&adopted_config, &root.path().join("first.yaml"));
+    let (before, _) = store.facts().await.expect("the first records landed");
+
+    let error = apply_error(&other_config, &root.path().join("second.yaml"));
+    assert_eq!(
+        error,
+        "replacing the environment records: the Scheduling database belongs to another deployment"
+    );
+    let (after, _) = store
+        .facts()
+        .await
+        .expect("the existing records remain readable");
+    assert_eq!(
+        after, before,
+        "the refused apply changed the existing facts"
+    );
 
     admin
         .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))

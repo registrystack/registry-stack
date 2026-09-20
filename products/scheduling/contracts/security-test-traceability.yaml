@@ -23,6 +23,7 @@ entries:
   - id: SCHEDULING-SEC-03
     tests:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_grant_that_lapses_before_the_commit_never_books}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_foreign_actor_does_not_learn_the_current_revision}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_edge_refuses_unauthenticated_callers_and_unauthorized_mutations}
       - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: expiry_uses_earlier_token_or_grant_deadline_and_refuses_exact_deadline}
   - id: SCHEDULING-SEC-04
@@ -50,6 +51,7 @@ entries:
       - {path: crates/registry-scheduling/src/service.rs, name: the_detailed_code_stays_behind_the_explain_path}
       - {path: crates/registry-scheduling/src/service.rs, name: commit_errors_project_to_their_public_codes}
       - {path: crates/registry-scheduling/src/service.rs, name: a_fully_occupied_slot_is_not_availability}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: explain_assumes_the_offerings_declared_inputs_are_present}
       - {path: crates/registry-scheduling-core/src/admission.rs, name: refusals_carry_their_distinguished_public_codes}
       - {path: crates/registry-scheduling-core/src/problem.rs, name: exactly_one_code_is_detailed_only}
   - id: SCHEDULING-SEC-08
@@ -115,6 +117,7 @@ entries:
       - {path: crates/registry-scheduling/src/config.rs, name: a_refused_authored_policy_names_the_member_and_the_cause}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: the_policy_digest_is_stable_and_moves_with_content}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: adoption_binds_one_identity_and_refuses_a_second}
+      - {path: crates/registry-schedulingctl/tests/records_apply_postgres.rs, name: records_apply_rejects_a_different_deployment_identity_without_writing, features: [postgres-test]}
   - id: SCHEDULING-SEC-16
     tests:
       - {path: crates/registry-scheduling/src/config.rs, name: static_jwks_requires_unique_named_asymmetric_keys}
@@ -173,3 +176,4 @@ entries:
       - {path: crates/registry-scheduling-core/src/policy.rs, name: a_subquota_reduction_strands_its_channel_even_at_an_unchanged_total}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: moving_a_published_window_reports_no_reduction}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: policy_publication_refuses_to_move_a_window_with_standing_commitments}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: policy_publication_refuses_to_remove_an_offering_with_a_live_appointment}

@@ -107,6 +107,8 @@ pub enum StoreError {
     SecretConfiguration(String),
     #[error("the Scheduling database is not in the state this runtime expects")]
     Corrupt,
+    #[error("the Scheduling database belongs to another deployment")]
+    DeploymentIdentity,
     /// The environment records would retire resources that live appointments
     /// or holds still occupy. The swap is refused whole, so the operator
     /// either keeps the resource or closes what stands on it first.
@@ -654,9 +656,10 @@ impl PostgresStore {
         ))
     }
 
-    /// Publish a policy after proving it does not strand standing window
-    /// commitments. Re-applying the same digest backfills its retained policy
-    /// document and remains a no-op for the revision.
+    /// Publish a policy after proving it does not strand standing commitments
+    /// or change the lifecycle terms they still need. Re-applying the same
+    /// digest backfills its retained policy document and remains a no-op for
+    /// the revision.
     ///
     /// Lock order, load-bearing: policy publication takes every existing
     /// supply anchor in order before `scheduling_meta`, the same order as the
@@ -714,6 +717,35 @@ impl PostgresStore {
                 let current: SchedulingPolicy =
                     serde_json::from_value(current_document).map_err(|_| StoreError::Corrupt)?;
                 let now = self.observed_now();
+                let active_offerings = transaction
+                    .query(
+                        "SELECT DISTINCT offering FROM scheduling_claims \
+                         WHERE state='active' \
+                           AND (kind='booking' OR (kind='hold' AND hold_expires_at > $1)) \
+                         ORDER BY offering",
+                        &[&now],
+                    )
+                    .await?;
+                for active in active_offerings {
+                    let offering_id: String = active.get(0);
+                    let Some(current_offering) = current.offering(&offering_id) else {
+                        return Err(StoreError::PolicyInUse(format!(
+                            "offering {offering_id} has active commitments but is absent from the retained current policy"
+                        )));
+                    };
+                    let retained = policy.offering(&offering_id).is_some_and(|proposed| {
+                        proposed.service == current_offering.service
+                            && proposed.location == current_offering.location
+                            && proposed.mode == current_offering.mode
+                            && proposed.cancellation_cutoff_minutes
+                                == current_offering.cancellation_cutoff_minutes
+                    });
+                    if !retained {
+                        return Err(StoreError::PolicyInUse(format!(
+                            "offering {offering_id} has active commitments and must retain its service, location, mode, and cancellation cutoff"
+                        )));
+                    }
+                }
                 let rows = transaction
                     .query(
                         "SELECT c.claim_id, c.offering, c.supply_id, c.kind, c.channel, \
@@ -879,13 +911,21 @@ impl PostgresStore {
     /// that swaps locations, pools, members, and exceptions atomically.
     pub async fn replace_facts(
         &self,
+        scheduling_id: &str,
         facts: &SchedulingFacts,
         audit_event: Uuid,
         audit_record: Value,
     ) -> Result<(), StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        replace_facts_in_transaction(&transaction, facts, audit_event, audit_record).await?;
+        replace_facts_in_transaction(
+            &transaction,
+            scheduling_id,
+            facts,
+            audit_event,
+            audit_record,
+        )
+        .await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -1144,7 +1184,12 @@ impl PostgresStore {
                 "hold:create",
                 AttemptState::Completed,
                 201,
-                json!({"kind": "hold", "claim": claim}),
+                claim_receipt(
+                    "hold",
+                    &claim,
+                    matches!(supply, SupplyContext::ExactTime { .. }),
+                    commitment.policy_revision,
+                ),
             )
             .await?;
         self.recheck_grant(&commitment)?;
@@ -1242,7 +1287,12 @@ impl PostgresStore {
                 "appointment:create",
                 AttemptState::Completed,
                 201,
-                json!({"kind": "booking", "claim": claim}),
+                claim_receipt(
+                    "booking",
+                    &claim,
+                    matches!(supply, SupplyContext::ExactTime { .. }),
+                    commitment.policy_revision,
+                ),
             )
             .await?;
         self.recheck_grant(&commitment)?;
@@ -1386,7 +1436,12 @@ impl PostgresStore {
                 &scope,
                 AttemptState::Completed,
                 201,
-                json!({"kind": "booking", "claim": claim}),
+                claim_receipt(
+                    "booking",
+                    &claim,
+                    matches!(supply, SupplyContext::ExactTime { .. }),
+                    commitment.policy_revision,
+                ),
             )
             .await?;
         self.recheck_grant(&commitment)?;
@@ -1507,11 +1562,11 @@ impl PostgresStore {
         {
             return Err(AdmissionRefusal::PolicyChanged.into());
         }
-        if u64::try_from(appointment.revision) != Ok(observed_revision) {
-            return Err(CommitError::RevisionMismatch);
-        }
         if appointment.actor != commitment.actor {
             return Err(CommitError::Unauthorized);
+        }
+        if u64::try_from(appointment.revision) != Ok(observed_revision) {
+            return Err(CommitError::RevisionMismatch);
         }
         // The appointment's own allocation is the exclusion: a reschedule
         // never competes with the booking it moves. It is read from the row
@@ -1599,7 +1654,12 @@ impl PostgresStore {
                 &scope,
                 AttemptState::Completed,
                 200,
-                json!({"kind": "booking", "claim": moved}),
+                claim_receipt(
+                    "booking",
+                    &moved,
+                    matches!(supply, SupplyContext::ExactTime { .. }),
+                    commitment.policy_revision,
+                ),
             )
             .await?;
         self.recheck_grant(&commitment)?;
@@ -1616,6 +1676,7 @@ impl PostgresStore {
         appointment_id: Uuid,
         observed_revision: u64,
         cancellation_cutoff_minutes: Option<u32>,
+        resource_is_member: bool,
         reason: Option<&str>,
         commitment: Commitment<'_>,
     ) -> Result<CommitOutcome, CommitError> {
@@ -1644,11 +1705,11 @@ impl PostgresStore {
         if appointment.kind != LedgerKind::Booking || appointment.state != ClaimState::Active {
             return Err(AdmissionRefusal::HoldReleased.into());
         }
-        if u64::try_from(appointment.revision) != Ok(observed_revision) {
-            return Err(CommitError::RevisionMismatch);
-        }
         if appointment.actor != commitment.actor {
             return Err(CommitError::Unauthorized);
+        }
+        if u64::try_from(appointment.revision) != Ok(observed_revision) {
+            return Err(CommitError::RevisionMismatch);
         }
         if let Some(cutoff) = cancellation_cutoff_minutes {
             let earliest_cancel_end = appointment
@@ -1722,7 +1783,12 @@ impl PostgresStore {
                 &scope,
                 AttemptState::Completed,
                 200,
-                json!({"kind": "booking", "claim": cancelled.clone()}),
+                claim_receipt(
+                    "booking",
+                    &cancelled,
+                    resource_is_member,
+                    commitment.policy_revision,
+                ),
             )
             .await?;
         self.recheck_grant(&commitment)?;
@@ -2471,8 +2537,26 @@ fn confirmation_payload(claim: &ClaimRow, policy_revision: i64) -> Value {
     })
 }
 
+/// The durable success receipt retains every value the public projection
+/// cannot recover from a claim alone. In particular, whether `supply_id` was
+/// a pool member must survive a later policy mode change or removal.
+fn claim_receipt(
+    kind: &str,
+    claim: &ClaimRow,
+    resource_is_member: bool,
+    policy_revision: i64,
+) -> Value {
+    json!({
+        "kind": kind,
+        "claim": claim,
+        "resource": resource_is_member.then(|| claim.supply_id.clone()),
+        "policyRevision": policy_revision,
+    })
+}
+
 pub(crate) async fn replace_facts_in_transaction(
     transaction: &deadpool_postgres::Transaction<'_>,
+    scheduling_id: &str,
     facts: &SchedulingFacts,
     audit_event: Uuid,
     audit_record: Value,
@@ -2490,6 +2574,16 @@ pub(crate) async fn replace_facts_in_transaction(
             &[],
         )
         .await?;
+    let stored_id: String = transaction
+        .query_one(
+            "SELECT scheduling_id FROM scheduling_meta WHERE singleton FOR UPDATE",
+            &[],
+        )
+        .await?
+        .get(0);
+    if stored_id != scheduling_id {
+        return Err(StoreError::DeploymentIdentity);
+    }
     let occupied = occupied_resources_changed_by(transaction, facts).await?;
     if !occupied.is_empty() {
         return Err(StoreError::FactsInUse(occupied.join(", ")));

@@ -436,8 +436,10 @@ impl SchedulingService {
     /// The separately authorized explanation of one start: the public and the
     /// detailed code of the refusal a booking would receive, or no codes at
     /// all when the start admits as things stand. The probe is a minimal
-    /// party, so the codes explain the calendar and the capacity, never
-    /// another caller's booking.
+    /// party that already meets the offering's declared input requirements,
+    /// so the codes explain the calendar and capacity rather than repeating
+    /// requirements the operator already knows this synthetic probe must
+    /// carry. It never names another caller's booking.
     pub async fn explain(
         &self,
         offering_id: &str,
@@ -456,8 +458,8 @@ impl SchedulingService {
             duplicate_key: None,
             policy_revision: self.revision(),
             window_revision: None,
-            capabilities: Vec::new(),
-            prerequisites: Vec::new(),
+            capabilities: offering.requires_capabilities.clone(),
+            prerequisites: offering.prerequisites.clone(),
         };
         let refusal = match self.supply(offering).await?.0 {
             ResolvedSupply::ExactTime {
@@ -593,8 +595,8 @@ impl SchedulingService {
                 facts_revision,
             )
             .await?;
-        Ok(claim_or_replay(answer, |claim| {
-            hold_document(claim, &self.policy, self.revision())
+        Ok(claim_or_replay(answer, |claim, receipt| {
+            hold_document(claim, &self.policy, self.revision(), receipt)
         }))
     }
 
@@ -681,8 +683,8 @@ impl SchedulingService {
                     .await
             }
         }?;
-        Ok(claim_or_replay(answer, |claim| {
-            appointment_document(claim, &self.policy, self.revision())
+        Ok(claim_or_replay(answer, |claim, receipt| {
+            appointment_document(claim, &self.policy, self.revision(), receipt)
         }))
     }
 
@@ -792,7 +794,12 @@ impl SchedulingService {
             .owned_booking(caller, appointment_id)
             .await?
             .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
-        Ok(appointment_document(&claim, &self.policy, self.revision()))
+        Ok(appointment_document(
+            &claim,
+            &self.policy,
+            self.revision(),
+            None,
+        ))
     }
 
     pub async fn reschedule_appointment(
@@ -860,8 +867,8 @@ impl SchedulingService {
                 facts_revision,
             )
             .await?;
-        Ok(claim_or_replay(answer, |claim| {
-            appointment_document(claim, &self.policy, self.revision())
+        Ok(claim_or_replay(answer, |claim, receipt| {
+            appointment_document(claim, &self.policy, self.revision(), receipt)
         }))
     }
 
@@ -906,6 +913,7 @@ impl SchedulingService {
                 appointment_id,
                 request.observed_revision,
                 Some(offering.cancellation_cutoff_minutes),
+                offering.exact_time.is_some(),
                 request.reason.as_deref(),
                 commitment,
             )
@@ -924,8 +932,8 @@ impl SchedulingService {
                 0,
             )
             .await?;
-        Ok(claim_or_replay(answer, |claim| {
-            appointment_document(claim, &self.policy, self.revision())
+        Ok(claim_or_replay(answer, |claim, receipt| {
+            appointment_document(claim, &self.policy, self.revision(), receipt)
         }))
     }
 
@@ -1419,10 +1427,10 @@ impl FromMinted for () {
 /// refusal receipt carries no claim and flows to the edge untouched.
 fn claim_or_replay<T>(
     answer: CommitmentAnswer<ClaimRow>,
-    project: impl FnOnce(&ClaimRow) -> T,
+    project: impl FnOnce(&ClaimRow, Option<&Value>) -> T,
 ) -> CommitmentAnswer<T> {
     match answer {
-        CommitmentAnswer::Minted(claim) => CommitmentAnswer::Minted(project(&claim)),
+        CommitmentAnswer::Minted(claim) => CommitmentAnswer::Minted(project(&claim, None)),
         CommitmentAnswer::Replay {
             status_code,
             receipt,
@@ -1432,7 +1440,7 @@ fn claim_or_replay<T>(
                 .cloned()
                 .and_then(|value| serde_json::from_value::<ClaimRow>(value).ok())
             {
-                CommitmentAnswer::Minted(project(&claim))
+                CommitmentAnswer::Minted(project(&claim, Some(&receipt)))
             } else {
                 CommitmentAnswer::Replay {
                     status_code,
@@ -1576,36 +1584,42 @@ fn exact_time_slots(
     let latest = now + TimeDelta::days(i64::from(exact.horizon_days));
     let mut entries = Vec::new();
     for interval in open {
-        // Slots anchor on each published opening's own start and step the
-        // authored grid; a start that leaves the opening is not offered.
-        let mut slot_start = interval.start;
-        while slot_start + duration <= interval.end {
+        // Slots anchor on each published opening's own start. Jump directly
+        // to the first grid point in the requested/horizon intersection so a
+        // short page never walks years of an otherwise valid pattern.
+        let lower = interval.start.max(from).max(earliest);
+        let delta_seconds = (lower - interval.start).num_seconds().max(0);
+        let increment_seconds = increment.num_seconds();
+        let steps = (delta_seconds + increment_seconds - 1) / increment_seconds;
+        let Some(mut slot_start) = interval
+            .start
+            .checked_add_signed(TimeDelta::seconds(steps.saturating_mul(increment_seconds)))
+        else {
+            continue;
+        };
+        while slot_start + duration <= interval.end && slot_start < to && slot_start <= latest {
             let slot_end = slot_start + duration;
             let occupied_start =
                 slot_start - TimeDelta::minutes(i64::from(exact.buffer_before_minutes));
             let occupied_end = slot_end + TimeDelta::minutes(i64::from(exact.buffer_after_minutes));
-            let in_range = slot_start >= from && slot_start < to;
-            let in_horizon = slot_start >= earliest && slot_start <= latest;
-            if in_range && in_horizon {
-                let free = members
-                    .iter()
-                    .filter(|member| member.available)
-                    .filter(|member| member.serves(requires_capabilities))
-                    .filter(|member| {
-                        snapshot.claims.iter().all(|claim| {
-                            claim.supply_id != member.resource_id
-                                || claim.end <= occupied_start
-                                || occupied_end <= claim.start
-                        })
+            let free = members
+                .iter()
+                .filter(|member| member.available)
+                .filter(|member| member.serves(requires_capabilities))
+                .filter(|member| {
+                    snapshot.claims.iter().all(|claim| {
+                        claim.supply_id != member.resource_id
+                            || claim.end <= occupied_start
+                            || occupied_end <= claim.start
                     })
-                    .count();
-                if free > 0 {
-                    entries.push(AvailabilityEntry::Slot {
-                        start: slot_start,
-                        end: slot_end,
-                        free: u32::try_from(free).unwrap_or(u32::MAX),
-                    });
-                }
+                })
+                .count();
+            if free > 0 {
+                entries.push(AvailabilityEntry::Slot {
+                    start: slot_start,
+                    end: slot_end,
+                    free: u32::try_from(free).unwrap_or(u32::MAX),
+                });
             }
             slot_start += increment;
             if slot_start >= interval.end {
@@ -1760,18 +1774,17 @@ fn hold_document(
     claim: &ClaimRow,
     policy: &SchedulingPolicy,
     policy_revision: u64,
+    receipt: Option<&Value>,
 ) -> registry_scheduling_core::HoldDocument {
     registry_scheduling_core::HoldDocument {
         hold_id: claim.claim_id.to_string(),
         offering: claim.offering.clone(),
         start: claim.displayed_start,
         end: claim.displayed_end,
-        resource: claim
-            .supply_id_is_member(policy)
-            .then(|| claim.supply_id.clone()),
+        resource: projected_resource(claim, policy, receipt),
         units: u32::try_from(claim.units).unwrap_or(u32::MAX),
         expires_at: claim.hold_expires_at.unwrap_or(claim.created_at),
-        policy_revision,
+        policy_revision: projected_policy_revision(policy_revision, receipt),
     }
 }
 
@@ -1779,15 +1792,14 @@ fn appointment_document(
     claim: &ClaimRow,
     policy: &SchedulingPolicy,
     policy_revision: u64,
+    receipt: Option<&Value>,
 ) -> AppointmentDocument {
     AppointmentDocument {
         appointment_id: claim.claim_id.to_string(),
         offering: claim.offering.clone(),
         start: claim.displayed_start,
         end: claim.displayed_end,
-        resource: claim
-            .supply_id_is_member(policy)
-            .then(|| claim.supply_id.clone()),
+        resource: projected_resource(claim, policy, receipt),
         units: u32::try_from(claim.units).unwrap_or(u32::MAX),
         channel: claim.channel.clone(),
         revision: u64::try_from(claim.revision).unwrap_or(u64::MAX),
@@ -1796,9 +1808,31 @@ fn appointment_document(
         } else {
             AppointmentStateDocument::Confirmed
         },
-        policy_revision,
+        policy_revision: projected_policy_revision(policy_revision, receipt),
         created_at: claim.created_at,
         cancelled_at: claim.closed_at,
+    }
+}
+
+fn projected_policy_revision(current: u64, receipt: Option<&Value>) -> u64 {
+    receipt
+        .and_then(|value| value.get("policyRevision"))
+        .and_then(Value::as_i64)
+        .and_then(|revision| u64::try_from(revision).ok())
+        .unwrap_or(current)
+}
+
+fn projected_resource(
+    claim: &ClaimRow,
+    policy: &SchedulingPolicy,
+    receipt: Option<&Value>,
+) -> Option<String> {
+    match receipt.and_then(|value| value.get("resource")) {
+        Some(Value::String(resource)) => Some(resource.clone()),
+        Some(Value::Null) => None,
+        _ => claim
+            .supply_id_is_member(policy)
+            .then(|| claim.supply_id.clone()),
     }
 }
 
@@ -2192,6 +2226,32 @@ mod tests {
     }
 
     #[test]
+    fn slots_jump_to_the_requested_part_of_a_long_opening() {
+        let opening = CalendarInterval {
+            start: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+            end: Utc.with_ymd_and_hms(2035, 12, 31, 0, 0, 0).unwrap(),
+        };
+        let now = Utc.with_ymd_and_hms(2035, 12, 1, 0, 0, 0).unwrap();
+        let from = Utc.with_ymd_and_hms(2035, 12, 2, 10, 7, 0).unwrap();
+        let to = Utc.with_ymd_and_hms(2035, 12, 2, 11, 0, 0).unwrap();
+        let entries = exact_time_slots(
+            &exact(),
+            &members(1),
+            &[],
+            &[opening],
+            &LedgerSnapshot { claims: Vec::new() },
+            from,
+            to,
+            now,
+        );
+
+        assert_eq!(
+            entries.iter().map(entry_instant).collect::<Vec<_>>(),
+            vec![Utc.with_ymd_and_hms(2035, 12, 2, 10, 30, 0).unwrap()]
+        );
+    }
+
+    #[test]
     fn page_limits_clamp_to_the_published_bound() {
         assert_eq!(page_limit(None), DEFAULT_PAGE_LIMIT);
         assert_eq!(page_limit(Some(0)), 1);
@@ -2262,23 +2322,60 @@ mod tests {
             created_at: at(0, 0),
             closed_at: None,
         };
-        let receipt = json!({"kind": "booking", "claim": claim.clone()});
+        let receipt = json!({
+            "kind": "booking",
+            "claim": claim.clone(),
+            "resource": "station-1",
+            "policyRevision": 4
+        });
         let answer: CommitmentAnswer<ClaimRow> = CommitmentAnswer::Replay {
             status_code: 201,
             receipt,
         };
-        let replayed = claim_or_replay(answer, |replayed| replayed.clone());
+        let replayed = claim_or_replay(answer, |replayed, receipt| {
+            (
+                replayed.clone(),
+                receipt
+                    .and_then(|value| value["resource"].as_str())
+                    .map(str::to_owned),
+            )
+        });
         match replayed {
-            CommitmentAnswer::Minted(replayed) => assert_eq!(replayed, claim),
+            CommitmentAnswer::Minted((replayed, resource)) => {
+                assert_eq!(replayed, claim);
+                assert_eq!(resource.as_deref(), Some("station-1"));
+            }
             CommitmentAnswer::Replay { .. } => panic!("a claim receipt is a minted answer"),
         }
+
+        let current_policy: SchedulingPolicy = serde_json::from_value(json!({
+            "apiVersion": "registry.registrystack.org/scheduling-policy-package/v1alpha1",
+            "kind": "SchedulingPolicyPackage",
+            "scheduling": {"id": "test", "version": 99},
+            "services": [],
+            "offerings": [],
+            "holidaySets": [],
+            "openings": [],
+            "windows": [],
+            "holdPolicy": {"ttlMinutes": 5, "maxPerCaller": 1, "because": "test"}
+        }))
+        .expect("a policy used only for replay projection");
+        let replay_receipt = json!({
+            "kind": "booking",
+            "claim": claim.clone(),
+            "resource": "station-1",
+            "policyRevision": 4
+        });
+        let document = appointment_document(&claim, &current_policy, 99, Some(&replay_receipt));
+        assert_eq!(document.resource.as_deref(), Some("station-1"));
+        assert_eq!(document.policy_revision, 4);
 
         let refused: CommitmentAnswer<ClaimRow> = CommitmentAnswer::Replay {
             status_code: 409,
             receipt: problem_receipt(ProblemCode::CapacityExhausted),
         };
         assert!(matches!(
-            claim_or_replay(refused, |claim| claim.clone()),
+            claim_or_replay(refused, |claim, _| claim.clone()),
             CommitmentAnswer::Replay {
                 status_code: 409,
                 ..

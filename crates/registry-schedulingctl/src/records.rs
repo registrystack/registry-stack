@@ -28,6 +28,9 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
         fs::canonicalize(records_path).context("resolving the Scheduling environment records")?;
     let config = RuntimeConfig::load(&config_path)
         .with_context(|| format!("loading {}", config_path.display()))?;
+    let policy = config
+        .load_policy()
+        .with_context(|| format!("loading {}", config.policy_path().display()))?;
     let text = crate::project::read_authoring_input(&records_path)?;
     let facts = parse_records(&text)?;
     validate(&facts)?;
@@ -40,8 +43,10 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
         .build()
         .context("starting the Scheduling operator runtime")?;
     runtime
-        .block_on(store.migrate())
-        .context("applying the Scheduling schema")?;
+        .block_on(store.ready())
+        .context(
+            "checking the Scheduling schema; run `scheduling --runtime-config <runtime.yaml> migrate` first",
+        )?;
     let audit_event = Uuid::new_v4();
     let audit_record = json!({
         "actorKind": "operator",
@@ -51,7 +56,7 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
         "counts": counts,
     });
     runtime
-        .block_on(store.replace_facts(&facts, audit_event, audit_record))
+        .block_on(store.replace_facts(&policy.scheduling.id, &facts, audit_event, audit_record))
         .context("replacing the environment records")?;
     Ok(json!({
         "ok": true,

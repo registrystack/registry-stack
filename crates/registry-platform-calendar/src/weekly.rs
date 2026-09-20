@@ -133,9 +133,6 @@ pub fn expand_weekly_openings(
         })
         .collect::<Result<_, _>>()?;
 
-    let exceptions_by_id = parse_exceptions(exceptions, timezone)?;
-    validate_layers(&exceptions_by_id)?;
-
     let weekdays: BTreeSet<u32> = pattern
         .weekdays
         .iter()
@@ -152,43 +149,54 @@ pub fn expand_weekly_openings(
             .ok_or(CalendarEvaluationError::Overflow)?;
     }
 
-    // Closures remove pattern time first; authorized reopenings then add time
-    // back, so a reopening can never be subtracted by a later closure.
+    apply_exceptions_to_openings(openings, pattern.timezone, exceptions)
+}
+
+/// Layer dated closures and authorized reopenings over one location's merged
+/// published openings.
+///
+/// Callers with several weekly patterns expand and merge those patterns
+/// first, then call this function once. A reopening is therefore checked
+/// against the location's complete schedule rather than being rejected by an
+/// unrelated pattern that does not cover its date or time.
+pub fn apply_exceptions_to_openings(
+    openings: Vec<CalendarInterval>,
+    timezone: &str,
+    exceptions: &[CalendarException<'_>],
+) -> Result<Vec<CalendarInterval>, CalendarEvaluationError> {
+    let timezone: Tz = timezone
+        .parse()
+        .map_err(|_| CalendarEvaluationError::InvalidTimezone)?;
+    let exceptions_by_id = parse_exceptions(exceptions, timezone)?;
+    validate_layers(&exceptions_by_id)?;
+    let published = merge_intervals(openings);
+    let mut effective = published.clone();
+
+    // Closures remove published time first; authorized reopenings then add
+    // time back, so a reopening can never be subtracted by a later closure.
     for exception in exceptions_by_id.values() {
         if exception.kind == CalendarExceptionKind::Closure {
-            subtract_interval(&mut openings, exception.interval);
+            subtract_interval(&mut effective, exception.interval);
         }
     }
     for (id, exception) in &exceptions_by_id {
         if exception.kind == CalendarExceptionKind::Opening {
-            // A reopening restores pattern time its closure removed; it may
-            // not extend hours past what the pattern publishes. Outside the
-            // effective range, on a holiday, or on a non-pattern weekday
-            // there is no pattern time to restore.
-            let pattern_day = exception.date >= effective_from
-                && exception.date <= effective_until
-                && weekdays.contains(&exception.date.weekday().num_days_from_monday())
-                && !holidays.contains(&exception.date);
-            if pattern_day {
-                let pattern_interval =
-                    day_interval(exception.date, start_time, end_time, timezone)?;
-                if exception.interval.start >= pattern_interval.start
-                    && exception.interval.end <= pattern_interval.end
-                {
-                    openings.push(exception.interval);
-                    continue;
-                }
+            let covered = published.iter().any(|interval| {
+                interval.start <= exception.interval.start && exception.interval.end <= interval.end
+            });
+            if covered {
+                effective.push(exception.interval);
+                continue;
             }
             return Err(CalendarEvaluationError::ReopenOutsidePattern { id: id.clone() });
         }
     }
-    Ok(merge_intervals(openings))
+    Ok(merge_intervals(effective))
 }
 
 struct ParsedException<'a> {
     kind: CalendarExceptionKind,
     interval: CalendarInterval,
-    date: NaiveDate,
     reopens: Option<&'a str>,
     authority: Option<&'a str>,
 }
@@ -203,17 +211,12 @@ fn parse_exceptions<'e>(
             return Err(CalendarEvaluationError::EmptyExceptionId);
         }
         let interval = parse_exception_times(exception, timezone)?;
-        let date =
-            parse_date(exception.date).ok_or(CalendarEvaluationError::InvalidExceptionDate {
-                id: exception.id.to_owned(),
-            })?;
         if parsed
             .insert(
                 exception.id.to_owned(),
                 ParsedException {
                     kind: exception.kind,
                     interval,
-                    date,
                     reopens: exception.reopens,
                     authority: exception.authority,
                 },

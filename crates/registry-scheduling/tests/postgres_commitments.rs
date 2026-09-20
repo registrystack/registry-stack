@@ -1455,6 +1455,39 @@ async fn a_reschedule_moves_under_the_observed_revision_and_refuses_stale_ones()
 }
 
 #[tokio::test]
+async fn a_foreign_actor_does_not_learn_the_current_revision() {
+    let fx = fixture().await;
+    let (appointment_id, _) = booked(&fx, 300, 440, "owner-revision-create").await;
+    let stranger = agent_token_for("principal-stranger");
+    let other = first_slot(&fx, OFFERING, 480, 620).await;
+
+    let (status, problem) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/reschedule"),
+            &stranger,
+            "foreign-reschedule-revision",
+            json!({
+                "observedRevision": 0,
+                "admission": admission(&fx, OFFERING, other),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
+
+    let (status, problem) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/cancel"),
+            &stranger,
+            "foreign-cancel-revision",
+            json!({"observedRevision": 0, "reason": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
+}
+
+#[tokio::test]
 async fn a_reschedule_refuses_an_admission_for_another_offering() {
     let fx = fixture().await;
     let from = first_slot(&fx, OFFERING, 300, 440).await;
@@ -2074,6 +2107,40 @@ async fn the_edge_refuses_unauthenticated_callers_and_unauthorized_mutations() {
 }
 
 #[tokio::test]
+async fn explain_assumes_the_offerings_declared_inputs_are_present() {
+    let authored = POLICY.replacen(
+        "    prerequisites: []",
+        "    prerequisites: [registry-update-permit]",
+        1,
+    );
+    let policy = parse_policy_yaml(&authored).expect("the policy with a required input");
+    let mut pool_ids: Vec<String> = policy
+        .offerings
+        .iter()
+        .filter_map(|offering| offering.exact_time.as_ref().map(|exact| exact.pool.clone()))
+        .collect();
+    pool_ids.sort();
+    pool_ids.dedup();
+    let fx = fixture_publishing(&authored, &pool_ids, &[]).await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+
+    let (status, explanation) = fx
+        .get(
+            &format!(
+                "/v1/availability/explain?offering={OFFERING}&start={}",
+                stamp(slot)
+            ),
+            &fx.agent,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{explanation}");
+    assert!(
+        explanation["publicCode"].is_null(),
+        "the synthetic probe satisfies declared inputs: {explanation}"
+    );
+}
+
+#[tokio::test]
 async fn a_commitment_against_an_unanchored_pool_refuses_loudly() {
     // Publish the policy with only one of its two pools anchored: reads
     // still answer, while a commitment that must lock the unanchored pool
@@ -2528,6 +2595,7 @@ async fn a_records_swap_refuses_to_strand_a_resource_an_active_claim_occupies() 
     let refusal = fx
         .store
         .replace_facts(
+            SCHEDULING_ID,
             &records_without(&["station-1"]),
             Uuid::new_v4(),
             operator_audit(),
@@ -2557,6 +2625,7 @@ async fn a_records_swap_refuses_to_strand_a_resource_an_active_claim_occupies() 
     // Retiring an idle station is exactly what the command is for.
     fx.store
         .replace_facts(
+            SCHEDULING_ID,
             &records_without(&["station-2"]),
             Uuid::new_v4(),
             operator_audit(),
@@ -2590,7 +2659,7 @@ async fn a_records_swap_refuses_to_move_an_occupied_resource_between_pools() {
     moved.pools[1].members.push(station);
     let refusal = fx
         .store
-        .replace_facts(&moved, Uuid::new_v4(), operator_audit())
+        .replace_facts(SCHEDULING_ID, &moved, Uuid::new_v4(), operator_audit())
         .await
         .expect_err("an occupied resource cannot move to another pool");
     assert!(refusal.to_string().contains("station-1"), "{refusal}");
@@ -2624,7 +2693,12 @@ async fn a_records_swap_waits_for_the_capacity_transaction_holding_the_pool() {
     let store = fx.store.clone();
     let swap = tokio::spawn(async move {
         store
-            .replace_facts(&records_without(&[]), Uuid::new_v4(), operator_audit())
+            .replace_facts(
+                SCHEDULING_ID,
+                &records_without(&[]),
+                Uuid::new_v4(),
+                operator_audit(),
+            )
             .await
     });
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -3889,6 +3963,44 @@ async fn policy_publication_refuses_to_move_a_window_with_standing_commitments()
     assert!(refusal.to_string().contains(WINDOW_ID), "{refusal}");
 }
 
+#[tokio::test]
+async fn policy_publication_refuses_to_remove_an_offering_with_a_live_appointment() {
+    let fx = fixture().await;
+    let (appointment_id, revision) = booked(&fx, 300, 440, "retained-offering-create").await;
+    let current = parse_policy_yaml(POLICY).expect("the current policy");
+    let mut replacement = current.clone();
+    replacement.scheduling.version += 1;
+    replacement
+        .offerings
+        .retain(|offering| offering.id != OFFERING);
+    let digest = replacement.policy_digest();
+    let mut pool_ids: Vec<String> = replacement
+        .offerings
+        .iter()
+        .filter_map(|offering| offering.exact_time.as_ref().map(|exact| exact.pool.clone()))
+        .collect();
+    pool_ids.sort();
+    pool_ids.dedup();
+
+    let refusal = fx
+        .store
+        .apply_policy(SCHEDULING_ID, &digest, &pool_ids, &[], &replacement)
+        .await
+        .expect_err("a live appointment keeps its offering operable");
+    assert!(refusal.to_string().contains(OFFERING), "{refusal}");
+
+    let (status, cancelled) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/cancel"),
+            &fx.agent,
+            "retained-offering-cancel",
+            json!({"observedRevision": revision, "reason": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+    assert_eq!(cancelled["state"], "cancelled");
+}
+
 /// An arrival window is a second admission mode with a ledger of its own: its
 /// claims occupy the window rather than a member of a pool, its capacity is
 /// counted in units rather than in slots, and a channel subquota is a ceiling
@@ -4435,7 +4547,7 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
     // it, so the swap commits.
     let swapped = records_without(&["station-1"]);
     fx.store
-        .replace_facts(&swapped, Uuid::new_v4(), operator_audit())
+        .replace_facts(SCHEDULING_ID, &swapped, Uuid::new_v4(), operator_audit())
         .await
         .expect("the records swap commits");
     let supply = SupplyContext::ExactTime {

@@ -39,4 +39,7 @@
   capabilities, reject cross-offering reschedules, keep cancellations
   available during rolling policy changes, prevent occupied resources moving
   between pools, replay the winning idempotency receipt, and refuse policy
-  publications that strand standing window commitments.
+  publications that strand standing commitments. Keep explanation probes,
+  multi-pattern reopenings, long-range availability, deployment-bound records
+  updates, ownership checks, and replayed response fields aligned with those
+  same runtime contracts.

@@ -11,8 +11,8 @@
 
 use chrono::{DateTime, Utc};
 use registry_platform_calendar::{
-    expand_weekly_openings, local_interval, CalendarEvaluationError, CalendarInterval,
-    HolidaySetRevision, WeeklyOpeningPattern,
+    apply_exceptions_to_openings, expand_weekly_openings, local_interval, CalendarEvaluationError,
+    CalendarInterval, HolidaySetRevision, WeeklyOpeningPattern,
 };
 
 use crate::model::{ExceptionRecordKind, SchedulingFacts};
@@ -79,9 +79,9 @@ pub fn location_open_intervals(
             revision: holiday_set.revision,
             dates: &dates,
         };
-        all.extend(expand_weekly_openings(&pattern, exceptions, &revision)?);
+        all.extend(expand_weekly_openings(&pattern, &[], &revision)?);
     }
-    Ok(merge_intervals(all))
+    apply_exceptions_to_openings(merge_intervals(all), timezone, exceptions).map_err(Into::into)
 }
 
 /// Sort intervals and join every pair that overlaps or meets into one.
@@ -155,6 +155,7 @@ pub fn location_closure_intervals(
 mod tests {
     use super::*;
     use crate::policy::parse_policy_yaml;
+    use registry_platform_calendar::{CalendarException, CalendarExceptionKind};
 
     fn opening(id: &str, start: &str, end: &str) -> String {
         format!(
@@ -304,5 +305,60 @@ holdPolicy:
         assert_eq!(open.len(), 2);
         assert_eq!(open[0].end, instant("2026-10-05T05:00:00Z"));
         assert_eq!(open[1].start, instant("2026-10-05T06:00:00Z"));
+    }
+
+    /// Exceptions apply to the location's combined published hours. A
+    /// reopening inside the morning pattern must not be rejected merely
+    /// because the same location also has a disjoint afternoon pattern.
+    #[test]
+    fn reopening_inside_one_of_two_disjoint_openings_resolves_the_combined_union() {
+        let policy = policy_with(&format!(
+            "{}{}",
+            opening("morning", "09:00", "12:00"),
+            opening("afternoon", "13:00", "17:00")
+        ));
+        let exceptions = [
+            CalendarException {
+                id: "morning-closure",
+                kind: CalendarExceptionKind::Closure,
+                date: "2026-10-05",
+                start_time: "09:30",
+                end_time: "11:30",
+                reopens: None,
+                authority: None,
+            },
+            CalendarException {
+                id: "morning-reopening",
+                kind: CalendarExceptionKind::Opening,
+                date: "2026-10-05",
+                start_time: "10:00",
+                end_time: "10:30",
+                reopens: Some("morning-closure"),
+                authority: Some("office-manager"),
+            },
+        ];
+
+        assert_eq!(
+            location_open_intervals(&policy, "north-counter", "Asia/Bangkok", &exceptions)
+                .expect("the combined location schedule accepts the morning reopening"),
+            vec![
+                CalendarInterval {
+                    start: instant("2026-10-05T02:00:00Z"),
+                    end: instant("2026-10-05T02:30:00Z"),
+                },
+                CalendarInterval {
+                    start: instant("2026-10-05T03:00:00Z"),
+                    end: instant("2026-10-05T03:30:00Z"),
+                },
+                CalendarInterval {
+                    start: instant("2026-10-05T04:30:00Z"),
+                    end: instant("2026-10-05T05:00:00Z"),
+                },
+                CalendarInterval {
+                    start: instant("2026-10-05T06:00:00Z"),
+                    end: instant("2026-10-05T10:00:00Z"),
+                },
+            ]
+        );
     }
 }
