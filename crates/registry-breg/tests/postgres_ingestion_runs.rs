@@ -659,6 +659,50 @@ async fn cancel_closes_the_run_and_preserves_the_committed_prefix() {
     assert_eq!(body_json(second).await["code"], "ingestion.run_not_open");
 }
 
+/// Cancellation is itself the run's last attempt, and it is not a chunk
+/// attempt: the metadata renders the refused outcome with no chunk index,
+/// so a cancelled run never reports an earlier chunk's index as its last.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cancelled_run_renders_a_chunkless_refused_last_attempt() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&announce_items("cancel-attempt", 4), 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+
+    let cancelled = harness
+        .post_empty(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/cancel"),
+            &claims,
+        )
+        .await;
+    assert_eq!(cancelled.status(), StatusCode::OK);
+    let run = body_json(cancelled).await["run"].clone();
+    assert_eq!(run["status"], "cancelled");
+    assert_eq!(run["lastAttempt"]["outcome"], "refused");
+    assert_eq!(
+        run["lastAttempt"]["chunkIndex"],
+        Value::Null,
+        "cancellation is not a chunk attempt"
+    );
+
+    // The stored metadata carries the same shape a later read renders.
+    let read = harness.read_run(&claims, &run_id).await;
+    assert_eq!(read["lastAttempt"]["outcome"], "refused");
+    assert_eq!(
+        read["lastAttempt"]["chunkIndex"],
+        Value::Null,
+        "the cancelled run keeps no last chunk index"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn erasing_record_history_erases_the_receipt_that_describes_it() {
     let harness = IngestionHarness::create().await;

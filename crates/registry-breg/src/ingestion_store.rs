@@ -869,6 +869,7 @@ pub(crate) async fn cancel_run(
                     SET status = 'cancelled',
                         blocked_reason = NULL,
                         last_attempt_outcome = $2,
+                        last_attempt_chunk_index = NULL,
                         updated_at = transaction_timestamp()
                   WHERE run_id = $1
                     AND status IN ('open', 'blocked')
