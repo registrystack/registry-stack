@@ -763,6 +763,218 @@ async fn erasing_record_history_erases_the_receipt_that_describes_it() {
     assert_eq!(body_json(replay).await["code"], "ingestion.receipt_erased");
 }
 
+/// The recovery and the replay read the stored receipt inside the guarded
+/// release transaction, so a record-history erasure that commits while the
+/// release parks on the Registry lock answers `receipt_erased` instead of
+/// serving values the erasure already retired: the receipt bytes are read
+/// only after the exclusive lock frees, under the same transaction that
+/// would write the disclosure record.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_erasure_committed_during_a_parked_recovery_refuses_the_release() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("erased-recovery-race", 2);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let erased_record = body_json(committed).await["receipt"]["batch"]["results"][0]["id"]
+        .as_str()
+        .expect("receipt carries a created record id")
+        .to_owned();
+
+    // Hold the erasure's own interlocks open across the recovery, the way the
+    // erasure transaction does: the exclusive Registry lock plus the chunk
+    // row the receipt scrub updates.
+    harness
+        .database
+        .admin
+        .execute("BEGIN", &[])
+        .await
+        .expect("administrator opens the erasure transaction");
+    harness
+        .database
+        .admin
+        .execute(
+            "SELECT pg_advisory_xact_lock($1)",
+            &[&harness.lock_key.get()],
+        )
+        .await
+        .expect("administrator holds the Registry lock");
+    let scrubbed = harness
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_ingestion_run_chunks AS chunk
+                SET receipt = NULL,
+                    erased_at = transaction_timestamp()
+              WHERE chunk.run_id = $1
+                AND chunk.chunk_index = 0
+                AND chunk.erased_at IS NULL
+                AND EXISTS (
+                    SELECT 1
+                      FROM registry_internal.registry_ingestion_run_chunk_records AS link
+                     WHERE link.run_id = chunk.run_id
+                       AND link.chunk_index = chunk.chunk_index
+                       AND link.record_id = $2
+                       AND link.record_revision <= $3
+                )",
+            &[
+                &Uuid::parse_str(&run_id).expect("run id parses"),
+                &Uuid::parse_str(&erased_record).expect("record id parses"),
+                &1_i64,
+            ],
+        )
+        .await
+        .expect("administrator scrubs the receipt");
+    assert_eq!(scrubbed, 1, "the held erasure scrubs the committed receipt");
+
+    let recovered = {
+        let app = harness.app.clone();
+        let uri = format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt");
+        let claims = claims.clone();
+        tokio::spawn(async move { get_json(&app, &uri, &claims).await })
+    };
+    assert_eq!(
+        poll_waiting_registry_locks(&harness, 1, Duration::from_millis(1500)).await,
+        1,
+        "the recovery parks on the Registry lock before it reads the receipt"
+    );
+
+    harness
+        .database
+        .admin
+        .execute("COMMIT", &[])
+        .await
+        .expect("administrator commits the erasure");
+    let receipt = recovered.await.expect("the recovery completes");
+    assert_eq!(receipt.status(), StatusCode::GONE);
+    assert_eq!(body_json(receipt).await["code"], "ingestion.receipt_erased");
+    assert!(
+        receipt_disclosures(&harness, &run_id).await.is_empty(),
+        "the erased receipt releases nothing and writes no disclosure record"
+    );
+    let stored = harness
+        .database
+        .admin
+        .query_one(
+            "SELECT receipt IS NULL AND erased_at IS NOT NULL
+               FROM registry_internal.registry_ingestion_run_chunks
+              WHERE run_id = $1 AND chunk_index = 0",
+            &[&Uuid::parse_str(&run_id).expect("run id parses")],
+        )
+        .await
+        .expect("the stored chunk row reads");
+    assert!(stored.get::<_, bool>(0), "the erasure stays committed");
+}
+
+/// The exact-chunk replay reads the stored receipt inside the guarded release
+/// transaction too, so an erasure that commits while the replay parks refuses
+/// with `receipt_erased` instead of replaying the erased answer, and moves no
+/// replayed attempt marker for a release it never made.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_erasure_committed_during_a_parked_replay_refuses_the_release() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("erased-replay-race", 2);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let erased_record = body_json(committed).await["receipt"]["batch"]["results"][0]["id"]
+        .as_str()
+        .expect("receipt carries a created record id")
+        .to_owned();
+
+    harness
+        .database
+        .admin
+        .execute("BEGIN", &[])
+        .await
+        .expect("administrator opens the erasure transaction");
+    harness
+        .database
+        .admin
+        .execute(
+            "SELECT pg_advisory_xact_lock($1)",
+            &[&harness.lock_key.get()],
+        )
+        .await
+        .expect("administrator holds the Registry lock");
+    let scrubbed = harness
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_ingestion_run_chunks AS chunk
+                SET receipt = NULL,
+                    erased_at = transaction_timestamp()
+              WHERE chunk.run_id = $1
+                AND chunk.chunk_index = 0
+                AND chunk.erased_at IS NULL
+                AND EXISTS (
+                    SELECT 1
+                      FROM registry_internal.registry_ingestion_run_chunk_records AS link
+                     WHERE link.run_id = chunk.run_id
+                       AND link.chunk_index = chunk.chunk_index
+                       AND link.record_id = $2
+                       AND link.record_revision <= $3
+                )",
+            &[
+                &Uuid::parse_str(&run_id).expect("run id parses"),
+                &Uuid::parse_str(&erased_record).expect("record id parses"),
+                &1_i64,
+            ],
+        )
+        .await
+        .expect("administrator scrubs the receipt");
+    assert_eq!(scrubbed, 1, "the held erasure scrubs the committed receipt");
+
+    let replayed = {
+        let app = harness.app.clone();
+        let uri = format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks");
+        let claims = claims.clone();
+        let body = chunk_body(&chunks, 0);
+        tokio::spawn(async move { post_json(&app, &uri, &claims, body).await })
+    };
+    assert_eq!(
+        poll_waiting_registry_locks(&harness, 1, Duration::from_millis(1500)).await,
+        1,
+        "the replay parks on the Registry lock before it reads the receipt"
+    );
+
+    harness
+        .database
+        .admin
+        .execute("COMMIT", &[])
+        .await
+        .expect("administrator commits the erasure");
+    let replay = replayed.await.expect("the replay completes");
+    assert_eq!(replay.status(), StatusCode::GONE);
+    assert_eq!(body_json(replay).await["code"], "ingestion.receipt_erased");
+    assert!(
+        receipt_disclosures(&harness, &run_id).await.is_empty(),
+        "the erased receipt releases nothing and writes no disclosure record"
+    );
+    let run = harness.read_run(&claims, &run_id).await;
+    assert_eq!(
+        run["lastAttempt"]["outcome"], "committed",
+        "the refused replay moves no attempt marker"
+    );
+    assert_eq!(durable_widget_count(&harness).await, 2);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn receipt_recovery_enforces_the_runs_profile() {
     let harness = IngestionHarness::create().await;
