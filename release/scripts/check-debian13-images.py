@@ -119,6 +119,7 @@ ARG SOURCE_DATE_EPOCH
 {RUNTIME_LIBC6_ADDS[1]}
 RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \\
     --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \\
+    --mount=type=bind,source=THIRD_PARTY_NOTICES,target=/workspace/THIRD_PARTY_NOTICES,readonly \\
     {RUNTIME_LIBC6_MOUNT} \\
     {RUNTIME_LIBC6_COMMAND} \\
     && mkdir -p \\
@@ -132,6 +133,7 @@ RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \\
         /workspace/runtime-root/etc/relay \\
     && install -m 0755 /workspace/image-bin/relay /workspace/runtime-root/usr/local/bin/relay \\
     && install -m 0644 /workspace/LICENSE /workspace/runtime-root/licenses/relay/LICENSE \\
+    && install -m 0644 /workspace/THIRD_PARTY_NOTICES /workspace/runtime-root/licenses/relay/THIRD_PARTY_NOTICES \\
     && chown -R 65532:65532 /workspace/runtime-root/var/lib/relay \\
     && chmod 0700 /workspace/runtime-root/var/lib/relay/audit \\
     && find /workspace/runtime-root -exec touch -h --date="@${{SOURCE_DATE_EPOCH}}" {{}} +
