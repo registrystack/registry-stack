@@ -1013,7 +1013,7 @@ impl PostgresRecordMutationService {
                 Some((cursor.created_at, cursor.run_id))
             }
         };
-        let (runs, has_more) = ingestion_store::list_runs(
+        let page = ingestion_store::list_runs(
             &**client,
             &ingestion_store::IngestionRunListFilter {
                 principal_reference: &principal_reference,
@@ -1028,22 +1028,29 @@ impl PostgresRecordMutationService {
         )
         .await
         .map_err(|_| IngestionServiceError::Unavailable)?;
-        let active = ingestion_store::active_binding(&**client)
-            .await
-            .map_err(|_| IngestionServiceError::Unavailable)?;
-        let next_after = if has_more {
-            runs.last()
+        // The page carries the binding its effective-status filter ran
+        // against, so the rendered runs answer to that same snapshot; a
+        // separately fetched binding could already disagree with the rows it
+        // would have rendered.
+        let runs = match &page.active_binding {
+            Some((revision, fingerprint)) => page
+                .runs
+                .iter()
+                .map(|run| Self::run_response(run, (revision, fingerprint)))
+                .collect::<Vec<_>>(),
+            None => Vec::new(),
+        };
+        let next_after = if page.has_more {
+            page.runs
+                .last()
                 .map(|run| json!(run.run_id.to_string()))
                 .unwrap_or(Value::Null)
         } else {
             Value::Null
         };
         Ok(json!({
-            "runs": runs
-                .iter()
-                .map(|run| Self::run_response(run, (&active.0, &active.1)))
-                .collect::<Vec<_>>(),
-            "hasMore": has_more,
+            "runs": runs,
+            "hasMore": page.has_more,
             "nextAfter": next_after,
         }))
     }

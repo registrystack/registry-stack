@@ -756,10 +756,23 @@ pub(crate) struct IngestionRunListFilter<'a> {
     pub(crate) limit: i64,
 }
 
+/// One bounded page of runs together with the active binding the page was
+/// read under. The listing statement itself reads the binding it filters on,
+/// so the page renders against the same singleton row its effective-status
+/// decisions used instead of a later separate read that activation could
+/// have moved in between.
+pub(crate) struct IngestionRunPage {
+    pub(crate) runs: Vec<IngestionRunRecord>,
+    /// The `(package_revision, schema_fingerprint)` pair every row of the
+    /// statement's snapshot carries; empty pages carry none.
+    pub(crate) active_binding: Option<(String, String)>,
+    pub(crate) has_more: bool,
+}
+
 pub(crate) async fn list_runs(
     client: &impl GenericClient,
     filter: &IngestionRunListFilter<'_>,
-) -> Result<(Vec<IngestionRunRecord>, bool), IngestionStoreError> {
+) -> Result<IngestionRunPage, IngestionStoreError> {
     if filter.principal_reference.is_empty()
         || filter.bound_context_reference.is_empty()
         || filter.limit <= 0
@@ -783,7 +796,8 @@ pub(crate) async fn list_runs(
     let rows = client
         .query(
             &format!(
-                "SELECT {RUN_COLUMNS}
+                "SELECT {RUN_COLUMNS},
+                        active.state_package_revision, active.state_schema_fingerprint
                    FROM registry_internal.registry_ingestion_runs
                   CROSS JOIN (
                        SELECT active_package_revision AS state_package_revision,
@@ -822,6 +836,15 @@ pub(crate) async fn list_runs(
         .await
         .map_err(|_| IngestionStoreError::Unavailable)?;
     let has_more = rows.len() > filter.limit as usize;
+    // Every row of one statement shares the CROSS JOINed singleton row, so
+    // the first row's binding is the snapshot the whole page was filtered
+    // and read under.
+    let active_binding = rows.first().map(|row| {
+        (
+            row.get::<_, String>("state_package_revision"),
+            row.get::<_, String>("state_schema_fingerprint"),
+        )
+    });
     let runs = rows
         .into_iter()
         .take(filter.limit as usize)
@@ -830,7 +853,11 @@ pub(crate) async fn list_runs(
     if runs.len() != filter.limit as usize && has_more {
         return Err(IngestionStoreError::Unavailable);
     }
-    Ok((runs, has_more))
+    Ok(IngestionRunPage {
+        runs,
+        active_binding,
+        has_more,
+    })
 }
 
 /// Record the bounded outcome of one refused chunk attempt. The refusal
