@@ -135,7 +135,7 @@ failure has one recovery:
 | The transport drops a submission | Resubmit the chunk the run's `nextChunkIndex` names. |
 | A chunk holds an invalid item or a business refusal | The checkpoint stays where it is. Start a successor run for the remainder; skipping the refused rows is never a default recovery. |
 | Authorization is lost | Progress refuses until the selected profile satisfies the batch route again. |
-| The package or schema changed | The run reports `blocked` with reason `active_package_changed` and stays inspectable. Start a successor run under the new binding. |
+| The package or schema changed | The run reports `blocked` with reason `activePackageChanged` and stays inspectable. Start a successor run under the new binding. |
 | You stop the load on purpose | Cancel the run. Its counts and audit are preserved. |
 
 {/* Evidence: crates/registry-breg/src/ingestion_store.rs, IngestionRunStatus, IngestionBlockedReason, and IngestionAttemptOutcome;
