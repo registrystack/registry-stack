@@ -5580,8 +5580,8 @@ mod held_body_encryption_tests {
     use zeroize::Zeroizing;
 
     use super::exact_mutation;
-    use crate::compiler::{compile_project, CompileProfile};
-    use crate::contract::parse_project_json;
+    use crate::compiler::{compile_project, CompileProfile, MAX_BATCH_ITEMS};
+    use crate::contract::{parse_project_json, MAX_ENCRYPTED_FIELD_STRING_CHARACTERS};
     use crate::field_encryption::FieldEncryptionService;
     use crate::history_schema::ENVELOPE_MEMBER_TAG;
     use crate::idempotency::{HeldResponse, PermittedResponseHeader};
@@ -5595,7 +5595,8 @@ mod held_body_encryption_tests {
 
     fn registry(encrypted: bool) -> CompiledRegistry {
         let mut secret = json!({
-            "id":"secret","type":"string","maxLength":256,"classification":"restricted"
+            "id":"secret","type":"string","maxLength":MAX_ENCRYPTED_FIELD_STRING_CHARACTERS,
+            "classification":"restricted"
         });
         if encrypted {
             secret["encrypted"] = json!(true);
@@ -5761,6 +5762,61 @@ mod held_body_encryption_tests {
             served["results"][1]["data"][&secret_key],
             json!(SECOND_PLAINTEXT)
         );
+    }
+
+    #[tokio::test]
+    async fn batch_cache_budget_accounts_for_envelope_expansion() {
+        let registry = registry(true);
+        let entity = &registry.entities()["case"];
+        let service = service();
+        let secret_key = secret_api_name(&registry);
+        let plaintext = "x".repeat(MAX_ENCRYPTED_FIELD_STRING_CHARACTERS as usize);
+        let results = (1..=MAX_BATCH_ITEMS)
+            .map(|position| {
+                let record_id = format!("00000000-0000-4000-8000-{position:012}");
+                json!({
+                    "operation": "patch",
+                    "id": record_id,
+                    "revision": 2,
+                    "etag": format!("\"etag-{position}\""),
+                    "data": {
+                        secret_key.clone(): sealed_member(&service, &record_id, &plaintext),
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        let body = json!({
+            "snapshot": format!("sha256:{}", "0".repeat(64)),
+            "results": results,
+        });
+
+        let held = HeldResponse::from_json(200, &body, BTreeMap::new()).unwrap();
+        assert!(held.body().len() > 2 * 1024 * 1024);
+        assert!(held.body().len() < 3 * 1024 * 1024);
+        assert!(!String::from_utf8_lossy(held.body()).contains(&plaintext));
+
+        let response = exact_mutation(&held, Some(entity), "", Some(&service));
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
+            .await
+            .unwrap();
+        assert!(bytes.len() < 2 * 1024 * 1024);
+        let served = parse_json_strict(&bytes).unwrap();
+        assert_eq!(
+            served["results"].as_array().unwrap().len(),
+            usize::from(MAX_BATCH_ITEMS)
+        );
+        assert_eq!(served["results"][0]["data"][&secret_key], plaintext);
+        assert_eq!(
+            served["results"][usize::from(MAX_BATCH_ITEMS) - 1]["data"][&secret_key],
+            plaintext
+        );
+    }
+
+    #[test]
+    fn expanded_cache_budget_remains_bounded() {
+        let oversized = json!({"data": "x".repeat(3 * 1024 * 1024)});
+        assert!(HeldResponse::from_json(200, &oversized, BTreeMap::new()).is_err());
     }
 
     #[tokio::test]
