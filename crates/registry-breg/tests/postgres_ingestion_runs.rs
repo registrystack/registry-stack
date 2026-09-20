@@ -1198,6 +1198,111 @@ async fn an_audit_outage_gates_the_receipt_release() {
     assert_eq!(body_json(replayed).await["receipt"]["replayed"], true);
 }
 
+/// Two identical submissions that both pass the service preflight serialize
+/// on the run row lock: the winner commits the chunk and the loser replays
+/// the stored receipt inside the coordinator, under the lock. That row-lock
+/// replay releases the retained record values a second time, so it owes the
+/// journal the same disclosure record the service-level releases owe; an
+/// unaudited second release is indistinguishable from a leak.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_row_lock_replay_discloses_an_audited_receipt() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("row-lock-disclosure", 2);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+
+    // Hold the run row lock just long enough for both submissions to pass
+    // their plain-SELECT preflight and queue inside the coordinator's
+    // lock_run. The hold must stay under the mutation lock timeout, or the
+    // waiters would fail out of the queue instead of racing on the lock.
+    harness
+        .database
+        .admin
+        .execute("BEGIN", &[])
+        .await
+        .expect("administrator opens a locking transaction");
+    let locked = harness
+        .database
+        .admin
+        .query_opt(
+            "SELECT run_id FROM registry_internal.registry_ingestion_runs
+              WHERE run_id = $1 FOR UPDATE",
+            &[&Uuid::parse_str(&run_id).expect("run id parses")],
+        )
+        .await
+        .expect("administrator holds the run row lock");
+    assert!(locked.is_some(), "the created run row is locked");
+
+    let uri = format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks");
+    let submission_b = {
+        let app = harness.app.clone();
+        let uri = uri.clone();
+        let claims = claims.clone();
+        let body = chunk_body(&chunks, 0);
+        tokio::spawn(async move { post_json(&app, &uri, &claims, body).await })
+    };
+    assert_eq!(
+        poll_waiting_runtime_locks(&harness, 1, Duration::from_secs(3)).await,
+        1,
+        "submission B parks on the run row lock"
+    );
+
+    let submission_a = {
+        let app = harness.app.clone();
+        let claims = claims.clone();
+        let body = chunk_body(&chunks, 0);
+        tokio::spawn(async move { post_json(&app, &uri, &claims, body).await })
+    };
+    assert_eq!(
+        poll_waiting_runtime_locks(&harness, 2, Duration::from_millis(1500)).await,
+        2,
+        "submission A parks behind submission B on the run row lock"
+    );
+
+    // Release the row lock: the winner commits the chunk, and the loser
+    // replays the stored receipt under the row lock.
+    harness
+        .database
+        .admin
+        .execute("COMMIT", &[])
+        .await
+        .expect("administrator releases the run row lock");
+    let response_b = submission_b.await.expect("submission B completes");
+    let response_a = submission_a.await.expect("submission A completes");
+    assert_eq!(response_b.status(), StatusCode::OK);
+    assert_eq!(response_a.status(), StatusCode::OK);
+    let replayed_b = body_json(response_b).await["receipt"]["replayed"]
+        .as_bool()
+        .expect("submission B answers a receipt");
+    let replayed_a = body_json(response_a).await["receipt"]["replayed"]
+        .as_bool()
+        .expect("submission A answers a receipt");
+    assert_ne!(
+        replayed_a, replayed_b,
+        "one submission commits and the other replays under the row lock"
+    );
+    assert_eq!(
+        durable_widget_count(&harness).await,
+        2,
+        "the raced chunk mutates exactly once"
+    );
+
+    let disclosures = receipt_disclosures(&harness, &run_id).await;
+    assert_eq!(
+        disclosures.len(),
+        1,
+        "the row-lock replay discloses exactly the one release it makes"
+    );
+    assert_eq!(disclosures[0]["chunkIndex"], 0);
+    assert!(
+        disclosures[0]
+            .get("correlation")
+            .is_some_and(Value::is_string),
+        "the disclosure names the request that caused it"
+    );
+}
+
 /// The binding a stale serving instance reports and enforces is the one the
 /// database holds active, not the retired identity the process started
 /// under: reads report the run blocked, and the next chunk submission takes
@@ -2513,4 +2618,74 @@ async fn durable_widget_count(harness: &IngestionHarness) -> i64 {
         .await
         .expect("widget rows are readable");
     row.get(0)
+}
+
+/// Poll until `expected` sessions queue on the run row lock the
+/// administrator's open transaction holds, and report the last count so a
+/// timeout fails the test instead of passing vacuously. The count walks the
+/// lock manager rather than `pg_stat_activity`, which a pipelined runtime
+/// session in a lock wait does not reliably report: the first waiter parks on
+/// the holder's transaction id, and a second waiter on the same row parks on
+/// the tuple lock instead, so the count is the waits on the holder's own
+/// transaction id (this query runs inside that holding transaction) plus the
+/// tuple waits inside this database, which only the runtime sessions of this
+/// test can hold while the administrator's locks stay granted.
+async fn poll_waiting_runtime_locks(
+    harness: &IngestionHarness,
+    expected: i64,
+    deadline: Duration,
+) -> i64 {
+    let started = std::time::Instant::now();
+    let mut parked;
+    loop {
+        parked = harness
+            .database
+            .admin
+            .query_one(
+                "SELECT count(*)
+                   FROM pg_locks AS locks
+                  WHERE NOT locks.granted
+                    AND (
+                      (locks.locktype = 'transactionid'
+                       AND locks.transactionid::text =
+                           pg_current_xact_id_if_assigned()::text)
+                      OR
+                      (locks.locktype = 'tuple'
+                       AND locks.database::text =
+                           (SELECT oid::text FROM pg_database
+                             WHERE datname = current_database()))
+                    )",
+                &[],
+            )
+            .await
+            .expect("administrator inspects waiting locks")
+            .get(0);
+        if parked >= expected || started.elapsed() >= deadline {
+            return parked;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// The parsed disclosure records the journal holds for one run.
+async fn receipt_disclosures(harness: &IngestionHarness, run_id: &str) -> Vec<Value> {
+    let rows = harness
+        .database
+        .admin
+        .query(
+            "SELECT convert_from(envelope, 'UTF8')
+               FROM registry_internal.registry_audit
+              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionReceipt\"%'",
+            &[],
+        )
+        .await
+        .expect("administrator inspects the run audit journal");
+    rows.iter()
+        .map(|row| {
+            let envelope: Value =
+                serde_json::from_str(&row.get::<_, String>(0)).expect("audit envelope is JSON");
+            envelope["record"].clone()
+        })
+        .filter(|record| record["runId"] == run_id)
+        .collect()
 }

@@ -1638,6 +1638,17 @@ impl MutationCoordinator {
                 .ok_or(MutationError::Unavailable)?;
                 let replayed = stored.chunk_digest == chunk_binding.chunk_digest
                     && stored.prefix_digest == chunk_binding.prefix_digest;
+                // A replay that still holds its receipt releases the retained
+                // batch answer a second time, so it owes the journal a
+                // disclosure record in this same transaction: the append, not
+                // a later writer, gates the release, and an unkeyed process
+                // answers an outage instead of releasing unaudited. Refusals
+                // and erased receipts below release nothing and need no
+                // record.
+                let releasing = replayed && !stored.erased && stored.receipt.is_some();
+                if releasing && !crate::audit::profile_is_keyed(&self.audit_profile) {
+                    return Err(MutationError::Unavailable);
+                }
                 record_attempt(
                     transaction.transaction(),
                     chunk_binding.run_id,
@@ -1650,6 +1661,20 @@ impl MutationCoordinator {
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
+                if releasing {
+                    crate::ingestion_store::append_run_audit(
+                        transaction.transaction(),
+                        &self.audit_profile,
+                        crate::ingestion_store::receipt_disclosure_record(
+                            &run,
+                            chunk_binding.chunk_index,
+                            &run.created_principal_reference,
+                            Some(&request.correlation.request_id().to_string()),
+                        ),
+                    )
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?;
+                }
                 transaction
                     .commit()
                     .await
@@ -1788,6 +1813,14 @@ impl MutationCoordinator {
         }
 
         if let Some(stored) = lock_and_load(transaction.transaction(), &binding).await? {
+            // An ingestion-bound request cannot reach this branch with a
+            // stored result: the chunk's stored result is written in the same
+            // transaction that advances the checkpoint, so a stored result
+            // implies the checkpoint covers the chunk and the row-lock replay
+            // branch above has already returned, while the server-derived
+            // IngestionChunk key domain keeps a caller from preseeding this
+            // key through the ordinary batch route. The chunk arm below is
+            // the shared-shape guard, not a reachable release path.
             let StoredResultMetadata::Batch { result_count } = stored.metadata else {
                 return Err(MutationError::Unavailable);
             };
