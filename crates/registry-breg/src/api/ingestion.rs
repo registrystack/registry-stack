@@ -585,6 +585,7 @@ async fn chunk_receipt(
     match mutations
         .ingestion_chunk_receipt(
             &surface.context,
+            &correlation,
             &binding.base.entity_id,
             run_id,
             chunk_index,

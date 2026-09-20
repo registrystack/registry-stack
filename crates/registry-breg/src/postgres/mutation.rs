@@ -847,11 +847,12 @@ impl PostgresRecordMutationService {
         let _ = ingestion_store::record_attempt(client, run_id, outcome, chunk_index).await;
     }
 
-    fn run_response(&self, run: &ingestion_store::IngestionRunRecord) -> Value {
-        run.response_json(
-            &self.expected.package_revision,
-            &self.expected.schema_fingerprint,
-        )
+    /// Render one run against the binding that decides it. Callers pass the
+    /// package identity the database holds active, never the process's own:
+    /// a stale instance must report runs the way the durable state sees
+    /// them, not the way its retired identity wishes it did.
+    fn run_response(run: &ingestion_store::IngestionRunRecord, active: (&str, &str)) -> Value {
+        run.response_json(active.0, active.1)
     }
 
     /// Create a durable ingestion run bound to the active package revision,
@@ -951,7 +952,15 @@ impl PostgresRecordMutationService {
             .commit()
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
-        Ok(self.run_response(&record))
+        // The guarded transaction just proved the durable binding equals
+        // this process's identity, so the created run renders under it.
+        Ok(Self::run_response(
+            &record,
+            (
+                &self.expected.package_revision,
+                &self.expected.schema_fingerprint,
+            ),
+        ))
     }
 
     /// List the bounded page of runs one caller created for one entity.
@@ -1009,6 +1018,9 @@ impl PostgresRecordMutationService {
         )
         .await
         .map_err(|_| IngestionServiceError::Unavailable)?;
+        let active = ingestion_store::active_binding(&**client)
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
         let next_after = if has_more {
             runs.last()
                 .map(|run| json!(run.run_id.to_string()))
@@ -1019,7 +1031,7 @@ impl PostgresRecordMutationService {
         Ok(json!({
             "runs": runs
                 .iter()
-                .map(|run| self.run_response(run))
+                .map(|run| Self::run_response(run, (&active.0, &active.1)))
                 .collect::<Vec<_>>(),
             "hasMore": has_more,
             "nextAfter": next_after,
@@ -1037,7 +1049,10 @@ impl PostgresRecordMutationService {
         let run = self
             .visible_run(&**client, context, entity_id, run_id)
             .await?;
-        Ok(self.run_response(&run))
+        let active = ingestion_store::active_binding(&**client)
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+        Ok(Self::run_response(&run, (&active.0, &active.1)))
     }
 
     /// Cancel an open or blocked run, preserving the committed prefix, the
@@ -1094,7 +1109,16 @@ impl PostgresRecordMutationService {
             .commit()
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
-        Ok(self.run_response(&cancelled))
+        // A cancelled run is terminal, so it renders identically under any
+        // active binding; the durable pair the open paths fetch is not
+        // needed here.
+        Ok(Self::run_response(
+            &cancelled,
+            (
+                &self.expected.package_revision,
+                &self.expected.schema_fingerprint,
+            ),
+        ))
     }
 
     /// Submit the next exact chunk of one run. The server derives the
@@ -1133,6 +1157,12 @@ impl PostgresRecordMutationService {
         if run.bound_context_reference != self.ingestion_context_reference(&claims)? {
             return Err(IngestionServiceError::ProfileMismatch);
         }
+        // Every binding decision below answers to the package identity the
+        // database holds active, not the one this process started under: a
+        // stale instance must report and block runs a successor retired.
+        let active = ingestion_store::active_binding(&**client)
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
         // The submitted items are parsed and canonicalized once, before any
         // branch decides replay or fresh execution, so the announced digest
         // binds the body the caller actually sent in both.
@@ -1200,6 +1230,33 @@ impl PostgresRecordMutationService {
             };
             let batch: Value =
                 serde_json::from_slice(&receipt).map_err(|_| IngestionServiceError::Unavailable)?;
+            // The replay releases the retained batch answer a second time,
+            // so its disclosure record commits before the answer leaves: an
+            // audit outage gates the release instead of passing silently.
+            if !crate::audit::profile_is_keyed(&self.audit_profile) {
+                return Err(IngestionServiceError::Unavailable);
+            }
+            let mut disclosure_writer = self.client().await?;
+            let disclosure_transaction = disclosure_writer
+                .transaction()
+                .await
+                .map_err(|_| IngestionServiceError::Unavailable)?;
+            ingestion_store::append_run_audit(
+                &disclosure_transaction,
+                &self.audit_profile,
+                ingestion_store::receipt_disclosure_record(
+                    &run,
+                    input.chunk_index,
+                    &principal_reference,
+                    Some(&correlation.request_id().to_string()),
+                ),
+            )
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+            disclosure_transaction
+                .commit()
+                .await
+                .map_err(|_| IngestionServiceError::Unavailable)?;
             // The attempt row above moved the run's last-attempt marker, so
             // the answer describes the run as it now stands, not as this
             // request found it.
@@ -1208,7 +1265,7 @@ impl PostgresRecordMutationService {
                 .map_err(|_| IngestionServiceError::Unavailable)?
                 .ok_or(IngestionServiceError::Unavailable)?;
             return Ok(json!({
-                "run": self.run_response(&run),
+                "run": Self::run_response(&run, (&active.0, &active.1)),
                 "receipt": receipt_json(input.chunk_index, &input.digest, true, false, batch),
             }));
         }
@@ -1223,10 +1280,7 @@ impl PostgresRecordMutationService {
             }
             IngestionRunStatus::Open => {}
         }
-        if !run.active_binding_matches(
-            &self.expected.package_revision,
-            &self.expected.schema_fingerprint,
-        ) {
+        if !run.active_binding_matches(&active.0, &active.1) {
             let mut writer = self.client().await?;
             let transaction = writer
                 .transaction()
@@ -1259,7 +1313,7 @@ impl PostgresRecordMutationService {
                     ingestion_store::run_audit_record(
                         "blocked",
                         &audited_run,
-                        &self.expected.package_revision,
+                        &active.0,
                         &run.created_principal_reference,
                         Some(&correlation.request_id().to_string()),
                     ),
@@ -1421,8 +1475,11 @@ impl PostgresRecordMutationService {
         let run = self
             .visible_run(&**client, context, &input.entity_id, input.run_id)
             .await?;
+        let active = ingestion_store::active_binding(&**client)
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
         Ok(json!({
-            "run": self.run_response(&run),
+            "run": Self::run_response(&run, (&active.0, &active.1)),
             "receipt": receipt_json(
                 input.chunk_index,
                 &input.digest,
@@ -1438,6 +1495,7 @@ impl PostgresRecordMutationService {
     pub async fn ingestion_chunk_receipt(
         &self,
         context: &AuthorizedRequestContext,
+        correlation: &RequestCorrelation,
         entity_id: &str,
         run_id: Uuid,
         chunk_index: i64,
@@ -1451,6 +1509,10 @@ impl PostgresRecordMutationService {
             .await?;
         let claims = strict_claim_context(&self.registry, context, entity_id)
             .map_err(|_| IngestionServiceError::RequestInvalid)?;
+        let Some(principal) = claims.principal() else {
+            return Err(IngestionServiceError::RequestInvalid);
+        };
+        let principal_reference = self.ingestion_principal_reference(principal)?;
         if run.profile_id != claims.access_profile() {
             return Err(IngestionServiceError::ProfileMismatch);
         }
@@ -1472,6 +1534,33 @@ impl PostgresRecordMutationService {
         };
         let batch: Value =
             serde_json::from_slice(&receipt).map_err(|_| IngestionServiceError::Unavailable)?;
+        // Recovery releases the same retained batch answer a replay does,
+        // so it owes the journal the same disclosure record, committed
+        // before the answer leaves: an audit outage gates the release.
+        if !crate::audit::profile_is_keyed(&self.audit_profile) {
+            return Err(IngestionServiceError::Unavailable);
+        }
+        let mut writer = self.client().await?;
+        let transaction = writer
+            .transaction()
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+        ingestion_store::append_run_audit(
+            &transaction,
+            &self.audit_profile,
+            ingestion_store::receipt_disclosure_record(
+                &run,
+                stored.chunk_index,
+                &principal_reference,
+                Some(&correlation.request_id().to_string()),
+            ),
+        )
+        .await
+        .map_err(|_| IngestionServiceError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
         Ok(receipt_json(
             stored.chunk_index,
             &stored.chunk_digest,

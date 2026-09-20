@@ -40,13 +40,18 @@ submitted chunk digest and the submitted prefix digest match the stored ones.
 Chunk mutations, record revisions, run audit, the idempotency receipt, and the
 checkpoint advancement commit in one transaction. A fault after that commit is
 recovered by reading the run and replaying the chunk, never by a second
-mutation.
+mutation. Both receipt releases, the replay and the recovery read, append a
+value-free disclosure record to the run audit before the answer leaves, so an
+audit outage gates the release instead of passing silently.
 
 ## States
 
 A run is `open`, `complete`, `cancelled`, or `blocked`. An open run whose
 package or schema binding no longer matches the active package reports
-`blocked` with reason `activePackageChanged`; it is retained and inspectable,
+`blocked` with reason `activePackageChanged`; the report and the blocked
+transition answer to the binding the database holds active, so a serving
+instance a successor activation has left stale reports and blocks the run the
+same way the successor does. A blocked run is retained and inspectable,
 and a successor run created under the new binding carries the work forward. A
 committed chunk replays its receipt in any run status, including blocked: the
 binding governs only chunks the checkpoint has not covered, and the replay is

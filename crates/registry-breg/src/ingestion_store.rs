@@ -643,6 +643,25 @@ fn empty_digest_hex() -> String {
     encoded
 }
 
+/// The package identity the database holds active right now, so every
+/// instance, including one a successor activation has left stale, reads and
+/// gates runs against the durable binding rather than its own.
+pub(crate) async fn active_binding(
+    client: &impl GenericClient,
+) -> Result<(String, String), IngestionStoreError> {
+    let row = client
+        .query_opt(
+            "SELECT active_package_revision, schema_fingerprint
+               FROM registry_internal.registry_state
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .map_err(|_| IngestionStoreError::Unavailable)?
+        .ok_or(IngestionStoreError::Unavailable)?;
+    Ok((row.get(0), row.get(1)))
+}
+
 pub(crate) async fn load_run(
     client: &impl GenericClient,
     run_id: Uuid,
@@ -1042,6 +1061,34 @@ pub(crate) fn run_audit_record(
         "principalReference": principal_reference,
         "committedItems": run.committed_items,
         "nextChunkIndex": run.next_chunk_index,
+        "status": run.status.as_str(),
+    });
+    if let Some(correlation) = correlation {
+        record["correlation"] = json!(correlation);
+    }
+    record
+}
+
+/// The value-free disclosure record for one retained receipt release: a
+/// replay and a recovery both release the stored batch answer a second
+/// time, so both owe the journal a record of that disclosure, never the
+/// answer itself.
+pub(crate) fn receipt_disclosure_record(
+    run: &IngestionRunRecord,
+    chunk_index: i64,
+    principal_reference: &str,
+    correlation: Option<&str>,
+) -> Value {
+    let mut record = json!({
+        "kind": "ingestionReceipt",
+        "phase": "disclosure",
+        "runId": run.run_id.to_string(),
+        "chunkIndex": chunk_index,
+        "packageRevision": run.package_revision,
+        "entityId": run.entity_id,
+        "operation": run.operation,
+        "selectedAccessProfile": run.profile_id,
+        "principalReference": principal_reference,
         "status": run.status.as_str(),
     });
     if let Some(correlation) = correlation {

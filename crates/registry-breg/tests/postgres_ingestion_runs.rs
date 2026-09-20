@@ -1020,6 +1020,255 @@ async fn a_replayed_chunk_reports_the_replayed_attempt() {
     assert_eq!(run["lastAttempt"]["chunkIndex"], 0);
 }
 
+/// A replay releases the retained batch answer a second time, so the journal
+/// must carry a value-free disclosure record for it: an unaudited second
+/// release is indistinguishable from a leak.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_replayed_chunk_discloses_an_audited_receipt() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("replay-disclosure", 4);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+
+    let replayed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replayed.status(), StatusCode::OK);
+    assert_eq!(body_json(replayed).await["receipt"]["replayed"], true);
+
+    let records = harness
+        .database
+        .admin
+        .query(
+            "SELECT convert_from(envelope, 'UTF8')
+               FROM registry_internal.registry_audit
+              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionReceipt\"%'",
+            &[],
+        )
+        .await
+        .expect("administrator inspects the run audit journal");
+    assert!(
+        !records.is_empty(),
+        "the replayed receipt is disclosed in the audit journal"
+    );
+    for row in records {
+        let envelope: Value =
+            serde_json::from_str(&row.get::<_, String>(0)).expect("audit envelope is JSON");
+        let record = &envelope["record"];
+        assert_eq!(record["runId"], run_id);
+        assert_eq!(record["chunkIndex"], 0);
+        assert!(record["principalReference"].is_string());
+        assert!(
+            record.get("correlation").is_some(),
+            "the disclosure names the request that caused it"
+        );
+    }
+}
+
+/// Receipt recovery projects the same retained record values, so it owes the
+/// same disclosure record the replay owes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_recovered_receipt_discloses_an_audited_receipt() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("recovery-disclosure", 2);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+
+    let recovered = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::OK);
+
+    let records = harness
+        .database
+        .admin
+        .query(
+            "SELECT convert_from(envelope, 'UTF8')
+               FROM registry_internal.registry_audit
+              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionReceipt\"%'",
+            &[],
+        )
+        .await
+        .expect("administrator inspects the run audit journal");
+    assert!(
+        !records.is_empty(),
+        "the recovered receipt is disclosed in the audit journal"
+    );
+    for row in records {
+        let envelope: Value =
+            serde_json::from_str(&row.get::<_, String>(0)).expect("audit envelope is JSON");
+        assert_eq!(envelope["record"]["runId"], run_id);
+        assert_eq!(envelope["record"]["chunkIndex"], 0);
+    }
+}
+
+/// An audit outage gates both release paths: while the journal cannot extend
+/// its chain, a keyed process answers an outage instead of releasing the
+/// retained answer unaudited, and the receipt releases once the chain
+/// extends again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_audit_outage_gates_the_receipt_release() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("audit-outage", 2);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+
+    // A journal the runtime role can no longer extend refuses every further
+    // append, as a revoked grant or an unwritable journal would.
+    let role = harness.database.runtime_role.as_str().to_owned();
+    harness
+        .database
+        .admin
+        .execute(
+            &format!("REVOKE INSERT ON registry_internal.registry_audit FROM \"{role}\""),
+            &[],
+        )
+        .await
+        .expect("the audit insert grant is revoked");
+
+    let replayed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replayed.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let recovered = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    // Once the journal accepts appends again, the same replay discloses and
+    // releases.
+    harness
+        .database
+        .admin
+        .execute(
+            &format!("GRANT INSERT ON registry_internal.registry_audit TO \"{role}\""),
+            &[],
+        )
+        .await
+        .expect("the audit insert grant is restored");
+    let replayed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replayed.status(), StatusCode::OK);
+    assert_eq!(body_json(replayed).await["receipt"]["replayed"], true);
+}
+
+/// The binding a stale serving instance reports and enforces is the one the
+/// database holds active, not the retired identity the process started
+/// under: reads report the run blocked, and the next chunk submission takes
+/// the blocked transition durably even through the stale instance.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stale_instance_reports_and_blocks_runs_against_the_durable_binding() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("stale-instance", 4);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+
+    // The successor revision activates in the database while the original
+    // process keeps serving its retired identity.
+    let successor = harness.restart_with_revision("package-ingestion-2").await;
+
+    let run = harness.read_run(&claims, &run_id).await;
+    assert_eq!(run["status"], "blocked");
+    assert_eq!(run["blockedReason"], "activePackageChanged");
+
+    // The stale instance takes the blocking transition, and its refusal
+    // still answers an outage: the refusal envelope itself cannot be
+    // written under the retired identity, so the caller is told the process
+    // is unavailable while the run is durably blocked.
+    let refused = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 1),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let after = successor
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}"),
+            &claims,
+        )
+        .await;
+    let after = body_json(after).await["run"].clone();
+    assert_eq!(after["status"], "blocked");
+    assert_eq!(after["blockedReason"], "activePackageChanged");
+    assert_eq!(after["committedItems"], 2);
+    assert_eq!(after["nextChunkIndex"], 1);
+
+    let blocked_records = harness
+        .database
+        .admin
+        .query(
+            "SELECT convert_from(envelope, 'UTF8')
+               FROM registry_internal.registry_audit
+              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionRun\"%'
+                AND convert_from(envelope, 'UTF8') LIKE '%\"outcome\":\"blocked\"%'",
+            &[],
+        )
+        .await
+        .expect("administrator inspects the run audit journal");
+    assert!(
+        !blocked_records.is_empty(),
+        "the stale instance wrote the blocked transition"
+    );
+}
+
 /// The published ingestion operations carry every problem response their
 /// handlers can produce: a producible refusal outside the published contract
 /// is invisible to generated clients and contract validators.
