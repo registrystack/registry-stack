@@ -1243,7 +1243,14 @@ impl PostgresRecordMutationService {
             // The stored answer opens its sealed members before any release
             // step runs, so a process without key state refuses here instead
             // of writing a disclosure record for an answer it cannot serve.
-            self.open_receipt_members(&input.entity_id, &mut batch)?;
+            // The receipt was stored under the run's binding, so only a run
+            // the active package no longer matches can carry ciphertext a
+            // successor retired.
+            self.open_receipt_members(
+                &input.entity_id,
+                !run.active_binding_matches(&active.0, &active.1),
+                &mut batch,
+            )?;
             // The replay releases the retained batch answer a second time,
             // so its disclosure record commits before the answer leaves: an
             // audit outage gates the release instead of passing silently.
@@ -1429,9 +1436,14 @@ impl PostgresRecordMutationService {
     /// same serve edge: an entity without encrypted fields serves unchanged
     /// without touching key state, and absent key state or any open failure
     /// refuses the release instead of handing a caller sealed envelopes.
+    /// `retirement_possible` marks a receipt stored under a package the
+    /// database no longer holds active, the only situation where a member
+    /// that still parses as a sealed envelope can be retired ciphertext
+    /// rather than plaintext the caller wrote.
     fn open_receipt_members(
         &self,
         entity_id: &str,
+        retirement_possible: bool,
         batch: &mut Value,
     ) -> Result<(), IngestionServiceError> {
         let Some(results) = batch.get_mut("results").and_then(Value::as_array_mut) else {
@@ -1446,6 +1458,7 @@ impl PostgresRecordMutationService {
             entity,
             results,
             self.field_encryption.as_deref(),
+            retirement_possible,
         )
         .map_err(|_| IngestionServiceError::Unavailable)?;
         Ok(())
@@ -1513,10 +1526,6 @@ impl PostgresRecordMutationService {
         };
         let mut batch: Value = serde_json::from_slice(outcome.response().body())
             .map_err(|_| IngestionServiceError::Unavailable)?;
-        // The fresh answer and the coordinator's replayed receipt both reach
-        // this arm with sealed members still inside; they open here, at the
-        // same serve edge the ordinary batch route opens its answers.
-        self.open_receipt_members(&input.entity_id, &mut batch)?;
         let client = self.client().await?;
         let run = self
             .visible_run(&**client, context, &input.entity_id, input.run_id)
@@ -1524,6 +1533,16 @@ impl PostgresRecordMutationService {
         let active = ingestion_store::active_binding(&**client)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
+        // The fresh answer and the coordinator's replayed receipt both reach
+        // this arm with sealed members still inside; they open here, at the
+        // same serve edge the ordinary batch route opens its answers. The
+        // admission gate above already refused a run the active package no
+        // longer matches, so the receipt cannot carry retired ciphertext.
+        self.open_receipt_members(
+            &input.entity_id,
+            !run.active_binding_matches(&active.0, &active.1),
+            &mut batch,
+        )?;
         Ok(json!({
             "run": Self::run_response(&run, (&active.0, &active.1)),
             "receipt": receipt_json(
@@ -1565,6 +1584,12 @@ impl PostgresRecordMutationService {
         if run.bound_context_reference != self.ingestion_context_reference(&claims)? {
             return Err(IngestionServiceError::ProfileMismatch);
         }
+        // Whether the stored receipt can carry ciphertext a successor retired
+        // is decided by the package the database holds active, never the one
+        // this process started under.
+        let active = ingestion_store::active_binding(&**client)
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
         let stored = ingestion_store::load_chunk(&**client, run.run_id, chunk_index)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?
@@ -1582,8 +1607,14 @@ impl PostgresRecordMutationService {
             serde_json::from_slice(&receipt).map_err(|_| IngestionServiceError::Unavailable)?;
         // The stored answer opens its sealed members before any release step
         // runs, so a process without key state refuses here instead of writing
-        // a disclosure record for an answer it cannot serve.
-        self.open_receipt_members(entity_id, &mut batch)?;
+        // a disclosure record for an answer it cannot serve. The receipt was
+        // stored under the run's binding, so only a run the active package no
+        // longer matches can carry ciphertext a successor retired.
+        self.open_receipt_members(
+            entity_id,
+            !run.active_binding_matches(&active.0, &active.1),
+            &mut batch,
+        )?;
         // Recovery releases the same retained batch answer a replay does,
         // so it owes the journal the same disclosure record, committed
         // before the answer leaves: an audit outage gates the release.

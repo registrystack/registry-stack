@@ -5101,10 +5101,19 @@ fn opened_held_body(
         // A batch body names each record beside its item's domain data, and
         // the shared per-record opening serves it. The immediate-action
         // body's results member is an object, not an array, and carries no
-        // domain data, so it never reaches the helper.
-        opened |=
-            crate::field_encryption::open_batch_result_members(entity, results, field_encryption)
-                .map_err(|_| ())?;
+        // domain data, so it never reaches the helper. An idempotency answer
+        // is stored under the package that produced it and the mutation
+        // boundary already verified the durable activation before this serve,
+        // so no package change can sit between the stored bytes and here:
+        // retirement is impossible and any envelope-shaped member is caller
+        // data, never ciphertext a successor retired.
+        opened |= crate::field_encryption::open_batch_result_members(
+            entity,
+            results,
+            field_encryption,
+            false,
+        )
+        .map_err(|_| ())?;
     }
     if !opened {
         // Nothing needed opening; the held bytes serve exactly as stored.

@@ -159,6 +159,123 @@ async fn a_successor_that_retires_encryption_fails_the_receipt_closed() {
     );
 }
 
+/// A plaintext member may legitimately carry the envelope tag shape: the
+/// sealed-envelope scan owes its refusal to retired ciphertext, not to caller
+/// data, so a chunk answer whose plain structured member holds exactly that
+/// shape serves on the fresh release, the replay, and the recovery alike.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tag_shaped_plaintext_member_serves_on_every_release() {
+    let harness =
+        IngestionHarness::from_registry_with_encryption(tag_shaped_member_registry()).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&tag_shaped_items("tag-shaped", 1), 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let fresh: Value =
+        serde_json::from_slice(&body_bytes(committed).await).expect("fresh answer is JSON");
+    assert_eq!(
+        fresh["receipt"]["batch"]["results"][0]["data"]["payload"],
+        json!({"__bregEncryptedV1": "AAAA"}),
+        "the fresh answer serves the tag-shaped caller data verbatim"
+    );
+    assert_eq!(
+        fresh["receipt"]["batch"]["results"][0]["data"]["serialNumber"],
+        "SN-0000"
+    );
+
+    let replay = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replayed: Value =
+        serde_json::from_slice(&body_bytes(replay).await).expect("replay answer is JSON");
+    assert_eq!(replayed["receipt"]["replayed"], true);
+    assert_eq!(
+        replayed["receipt"]["batch"]["results"][0]["data"]["payload"],
+        json!({"__bregEncryptedV1": "AAAA"}),
+        "the replayed receipt serves the tag-shaped caller data verbatim"
+    );
+
+    let recovered = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::OK);
+    let recovered: Value =
+        serde_json::from_slice(&body_bytes(recovered).await).expect("recovery answer is JSON");
+    assert_eq!(
+        recovered["batch"]["results"][0]["data"]["payload"],
+        json!({"__bregEncryptedV1": "AAAA"}),
+        "the recovered receipt serves the tag-shaped caller data verbatim"
+    );
+
+    assert_receipt_stays_sealed(&harness, &run_id).await;
+}
+
+/// The ordinary batch route stores its idempotency answer sealed and opens it
+/// at the same serve edge: an exact replay of a batch whose stored answer
+/// carries the tag-shaped caller data answers 200 again, byte-identical.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_exact_batch_replay_serves_a_tag_shaped_plaintext_member() {
+    let harness =
+        IngestionHarness::from_registry_with_encryption(tag_shaped_member_registry()).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let body = json!({"items":[{"operation":"create", "data": {
+        "jurisdiction": "zone-a",
+        "label": "tag-shaped-batch",
+        "quantity": 1,
+        "payload": {"__bregEncryptedV1": "AAAA"},
+        "serialNumber": "SN-0000"
+    }}]});
+
+    let first = harness
+        .post_batch_json(
+            "/v1/records/widgets:batch",
+            &claims,
+            "tag-shaped-batch",
+            &body,
+        )
+        .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_bytes = body_bytes(first).await;
+    let answered: Value = serde_json::from_slice(&first_bytes).expect("batch answer is JSON");
+    assert_eq!(
+        answered["results"][0]["data"]["payload"],
+        json!({"__bregEncryptedV1": "AAAA"}),
+        "the fresh batch answer serves the tag-shaped caller data verbatim"
+    );
+    assert_eq!(answered["results"][0]["data"]["serialNumber"], "SN-0000");
+
+    let replay = harness
+        .post_batch_json(
+            "/v1/records/widgets:batch",
+            &claims,
+            "tag-shaped-batch",
+            &body,
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(
+        body_bytes(replay).await,
+        first_bytes,
+        "the exact batch replay serves the stored answer unchanged"
+    );
+}
+
 /// The same successor activation without the rename still opens the stored
 /// members on both release edges, so the refusal above is the rename's doing
 /// and not the activation's.
@@ -232,6 +349,22 @@ fn encrypted_items(label_prefix: &str, count: i64) -> Vec<Value> {
                 "jurisdiction": "zone-a",
                 "label": format!("{label_prefix}-{index}"),
                 "quantity": index,
+                "serialNumber": format!("SN-{index:04}")
+            }})
+        })
+        .collect()
+}
+
+/// Items over the tag-shaped fixture: the plain structured member legitimately
+/// holds the envelope tag shape while the serial number seals.
+fn tag_shaped_items(label_prefix: &str, count: i64) -> Vec<Value> {
+    (0..count)
+        .map(|index| {
+            json!({"operation":"create", "data": {
+                "jurisdiction": "zone-a",
+                "label": format!("{label_prefix}-{index}"),
+                "quantity": index,
+                "payload": {"__bregEncryptedV1": "AAAA"},
                 "serialNumber": format!("SN-{index:04}")
             }})
         })
@@ -527,6 +660,38 @@ fn encryption_retired_registry() -> Arc<registry_breg::CompiledRegistry> {
     )
 }
 
+/// The encrypted fixture with one more plain structured field added, whose
+/// legitimate caller values can carry the envelope tag shape.
+fn tag_shaped_member_registry() -> Arc<registry_breg::CompiledRegistry> {
+    let fixture = encrypted_widget_fixture()
+        .replacen(
+            concat!(
+                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maxLength":64,"classification":"restricted","encrypted":true}"#,
+                "\n",
+            ),
+            concat!(
+                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maxLength":64,"classification":"restricted","encrypted":true},"#,
+                "\n",
+                r#"      {"id":"payload","type":"structured","maxBytes":1024,"schema":{"type":"object","additionalProperties":false,"properties":{"__bregEncryptedV1":{"type":"string"}},"required":["__bregEncryptedV1"]},"classification":"internal"}"#,
+                "\n",
+            ),
+            1,
+        )
+        .replace(
+            r#""readableFields":["jurisdiction","label","quantity","serial-number"]"#,
+            r#""readableFields":["jurisdiction","label","quantity","serial-number","payload"]"#,
+        )
+        .replace(
+            r#""writableFields":["jurisdiction","label","quantity","serial-number"]"#,
+            r#""writableFields":["jurisdiction","label","quantity","serial-number","payload"]"#,
+        );
+    let project = parse_project_json(fixture.as_bytes()).expect("the tag-shaped fixture parses");
+    Arc::new(
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("the tag-shaped fixture compiles to trusted inventories"),
+    )
+}
+
 struct IngestionHarness {
     database: TestDatabase,
     registry: Arc<registry_breg::CompiledRegistry>,
@@ -697,6 +862,43 @@ impl IngestionHarness {
         .await
     }
 
+    async fn post_batch_json(
+        &self,
+        uri: &str,
+        claims: &VerifiedRequestClaims,
+        idempotency_key: &str,
+        body: &Value,
+    ) -> axum::response::Response {
+        send(
+            &self.app,
+            Method::POST,
+            uri,
+            Some(claims.clone()),
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", idempotency_key),
+            ],
+            serde_json::to_vec(body).expect("request JSON"),
+        )
+        .await
+    }
+
+    async fn get_json(
+        &self,
+        uri: &str,
+        claims: &VerifiedRequestClaims,
+    ) -> axum::response::Response {
+        send(
+            &self.app,
+            Method::GET,
+            uri,
+            Some(claims.clone()),
+            &[],
+            Vec::new(),
+        )
+        .await
+    }
+
     async fn create_run(&self, claims: &VerifiedRequestClaims, plan: &ChunkPlan) -> String {
         let response = self
             .post_json(
@@ -783,23 +985,28 @@ fn build_router(
         Duration::from_secs(2),
         profile,
     );
-    let mutations = match field_encryption {
-        Some(service) => mutations.with_field_encryption(service),
+    let mutations = match &field_encryption {
+        Some(service) => mutations.with_field_encryption(service.clone()),
         None => mutations,
     };
-    router(Arc::new(
-        HttpService::new(
-            registry,
-            ReadRuntimeIdentity {
-                package_revision: identity.package_revision,
-                schema_fingerprint: identity.schema_fingerprint,
-            },
-            records,
-            Arc::new(AlwaysReady),
-            cursors,
-        )
-        .with_postgres_mutations(Arc::new(mutations)),
-    ))
+    let service = HttpService::new(
+        registry,
+        ReadRuntimeIdentity {
+            package_revision: identity.package_revision,
+            schema_fingerprint: identity.schema_fingerprint,
+        },
+        records,
+        Arc::new(AlwaysReady),
+        cursors,
+    )
+    .with_postgres_mutations(Arc::new(mutations));
+    // The ordinary routes gate on this same key state, so a surface that
+    // serves encrypted entities installs it exactly when the harness holds it.
+    let service = match field_encryption {
+        Some(keys) => service.with_field_encryption(keys),
+        None => service,
+    };
+    router(Arc::new(service))
 }
 
 struct AlwaysReady;
