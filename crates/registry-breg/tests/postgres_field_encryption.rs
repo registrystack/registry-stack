@@ -550,6 +550,7 @@ async fn assert_key_table_grants(client: &tokio_postgres::Client, runtime_role: 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn local_file_data_key_is_bound_during_apply_and_prepares_ready() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let booted = boot_encrypted_database().await;
     let (migration, migration_task) = booted.database.connect_migration().await;
     assert_key_table_grants(&migration, booted.database.runtime_role.as_str()).await;
@@ -622,6 +623,7 @@ async fn missing_field_encryption_provider_refuses_startup() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn transit_provider_activates_the_first_key_row_and_restart_unwraps_it() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let booted = boot_encrypted_database().await;
     let (migration, migration_task) = booted.database.connect_migration().await;
 
@@ -883,12 +885,15 @@ fn decrypt_reply() -> TransitReply {
 const LOCAL_FILE_FIELD_ENCRYPTION: &str =
     "fieldEncryption:\n  provider:\n    kind: localFile\n    dekRef: secret:file/field-dek\n";
 const AUTHORITY_KID: &str = "registry-platform-testing-ed25519-1";
+// Each prepared server owns the process-global configured WASM runtime.
+static WASM_RUNTIME_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// A prepared runtime over the encrypted fixture with local-file key state.
 /// The booted database stays alive with it: the package directory and the
 /// administrator connection the ciphertext-at-rest assertions need both live
 /// on it.
 struct LiveServer {
+    runtime_guard: tokio::sync::MutexGuard<'static, ()>,
     prepared: PreparedServer,
     booted: BootedDatabase,
 }
@@ -899,13 +904,19 @@ impl LiveServer {
     }
 
     async fn shutdown(self) {
-        let LiveServer { prepared, booted } = self;
+        let LiveServer {
+            runtime_guard,
+            prepared,
+            booted,
+        } = self;
         drop(prepared);
         booted.database.cleanup().await;
+        drop(runtime_guard);
     }
 }
 
 async fn boot_live_server() -> LiveServer {
+    let runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let booted = boot_encrypted_database().await;
     let secrets = booted.directory.join("secrets");
     fs::create_dir_all(&secrets).expect("fixture secret root creates");
@@ -924,7 +935,11 @@ async fn boot_live_server() -> LiveServer {
             .await
             .expect("local file key state prepares the encrypted registry");
     assert_ready(&prepared, StatusCode::OK).await;
-    LiveServer { prepared, booted }
+    LiveServer {
+        runtime_guard,
+        prepared,
+        booted,
+    }
 }
 
 /// One access token for the full authenticated router: issuer, audience, and
