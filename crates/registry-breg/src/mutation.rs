@@ -1715,13 +1715,35 @@ impl MutationCoordinator {
                 &self.expected.package_revision,
                 &self.expected.schema_fingerprint,
             ) {
-                crate::ingestion_store::mark_blocked(
+                // The blocking transition verifies it changed the row: the run
+                // row lock serializes this arm against every other
+                // transition, so a zero-row update means the run was no
+                // longer stored open and belongs to the terminal answer, not
+                // a blocked audit record this request never earned.
+                let changed = crate::ingestion_store::mark_blocked(
                     transaction.transaction(),
                     chunk_binding.run_id,
                     crate::ingestion_store::IngestionBlockedReason::ActivePackageChanged,
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
+                if changed == 0 {
+                    record_attempt(
+                        transaction.transaction(),
+                        chunk_binding.run_id,
+                        IngestionAttemptOutcome::RunNotOpen,
+                        chunk_binding.chunk_index,
+                    )
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?;
+                    transaction
+                        .commit()
+                        .await
+                        .map_err(|_| MutationError::Unavailable)?;
+                    return Err(MutationError::IngestionRefusal(
+                        IngestionRefusal::RunNotOpen,
+                    ));
+                }
                 record_attempt(
                     transaction.transaction(),
                     chunk_binding.run_id,

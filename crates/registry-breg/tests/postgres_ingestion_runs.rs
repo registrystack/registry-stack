@@ -975,6 +975,138 @@ async fn an_erasure_committed_during_a_parked_replay_refuses_the_release() {
     assert_eq!(durable_widget_count(&harness).await, 2);
 }
 
+/// The blocking transition verifies it changed the row: `mark_blocked`
+/// updates only a run still stored open, so a cancellation that commits
+/// while the submission parks on the run row leaves the run cancelled. The
+/// arm then answers the stored status instead of writing a blocked audit
+/// record and an attempt marker that misdescribe a cancelled run, and the
+/// cancellation's refused marker survives.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cancellation_committed_during_a_parked_block_answers_the_stored_status() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("cancel-block-race", 4);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+
+    // The successor revision makes the run binding mismatched, so the next
+    // chunk submission takes the blocking transition. The submission rides
+    // the current surface, so its refusal envelope is writable and the
+    // answer carries the refusal itself.
+    let successor = harness.restart_with_revision("package-ingestion-2").await;
+
+    // Hold the run row across the submission the way a racing cancellation's
+    // transaction does, then cancel the run underneath the parked block.
+    harness
+        .database
+        .admin
+        .execute("BEGIN", &[])
+        .await
+        .expect("administrator opens a locking transaction");
+    let locked = harness
+        .database
+        .admin
+        .query_opt(
+            "SELECT run_id FROM registry_internal.registry_ingestion_runs
+              WHERE run_id = $1 FOR UPDATE",
+            &[&Uuid::parse_str(&run_id).expect("run id parses")],
+        )
+        .await
+        .expect("administrator holds the run row lock");
+    assert!(locked.is_some(), "the created run row is locked");
+
+    let blocked = {
+        let app = successor.app.clone();
+        let uri = format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks");
+        let claims = claims.clone();
+        let body = chunk_body(&chunks, 1);
+        tokio::spawn(async move { post_json(&app, &uri, &claims, body).await })
+    };
+    assert_eq!(
+        poll_waiting_runtime_locks(&harness, 1, Duration::from_millis(1500)).await,
+        1,
+        "the submission parks on the run row before it blocks anything"
+    );
+
+    let run_uuid = Uuid::parse_str(&run_id).expect("run id parses");
+    let cancelled = harness
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_ingestion_runs
+                SET status = 'cancelled',
+                    blocked_reason = NULL,
+                    last_attempt_outcome = 'refused',
+                    last_attempt_chunk_index = NULL,
+                    updated_at = transaction_timestamp()
+              WHERE run_id = $1",
+            &[&run_uuid],
+        )
+        .await
+        .expect("administrator cancels the run");
+    assert_eq!(cancelled, 1, "the parked submission holds no row lock yet");
+    harness
+        .database
+        .admin
+        .execute("COMMIT", &[])
+        .await
+        .expect("administrator commits the cancellation");
+
+    let refused = blocked.await.expect("the submission completes");
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(refused).await["code"],
+        "ingestion.run_not_open",
+        "the stored status decides the answer, not the parked block"
+    );
+    let stored = harness
+        .database
+        .admin
+        .query_one(
+            "SELECT status, last_attempt_outcome, last_attempt_chunk_index
+               FROM registry_internal.registry_ingestion_runs
+              WHERE run_id = $1",
+            &[&run_uuid],
+        )
+        .await
+        .expect("administrator inspects the stored run");
+    assert_eq!(stored.get::<_, String>(0), "cancelled");
+    assert_eq!(
+        stored.get::<_, Option<String>>(1).as_deref(),
+        Some("refused"),
+        "the cancellation's refused marker survives the parked block"
+    );
+    assert!(
+        stored.get::<_, Option<i64>>(2).is_none(),
+        "the cancelled run keeps its chunkless attempt marker"
+    );
+    let blocked_records = harness
+        .database
+        .admin
+        .query(
+            "SELECT convert_from(envelope, 'UTF8')
+               FROM registry_internal.registry_audit
+              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionRun\"%'
+                AND convert_from(envelope, 'UTF8') LIKE '%\"outcome\":\"blocked\"%'
+                AND convert_from(envelope, 'UTF8') LIKE $1",
+            &[&format!("%\"runId\":\"{run_id}\"%")],
+        )
+        .await
+        .expect("administrator inspects the run audit journal");
+    assert!(
+        blocked_records.is_empty(),
+        "a cancelled run takes no blocked audit record"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn receipt_recovery_enforces_the_runs_profile() {
     let harness = IngestionHarness::create().await;

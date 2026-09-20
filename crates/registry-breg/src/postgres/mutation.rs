@@ -1391,13 +1391,36 @@ impl PostgresRecordMutationService {
                 .await
                 .map_err(|_| IngestionServiceError::Unavailable)?;
             let tx: &tokio_postgres::Transaction<'_> = &transaction;
-            ingestion_store::mark_blocked(
+            // The blocking transition verifies it changed the row: a
+            // cancellation or completion that commits between the plain run
+            // read above and this update closes the run first, and the
+            // guarded update then changes nothing. Answer the stored status
+            // instead of writing a blocked audit record and an attempt
+            // marker that would misdescribe a run this request never
+            // transitioned.
+            let changed = ingestion_store::mark_blocked(
                 tx,
                 run.run_id,
                 ingestion_store::IngestionBlockedReason::ActivePackageChanged,
             )
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
+            if changed == 0 {
+                let stored = ingestion_store::load_run(tx, run.run_id)
+                    .await
+                    .map_err(|_| IngestionServiceError::Unavailable)?
+                    .ok_or(IngestionServiceError::Unavailable)?;
+                return match stored.status {
+                    IngestionRunStatus::Blocked => Err(IngestionServiceError::RunBlocked),
+                    IngestionRunStatus::Complete | IngestionRunStatus::Cancelled => {
+                        Err(IngestionServiceError::RunNotOpen)
+                    }
+                    // The guarded update can only miss an open row through a
+                    // state the plain read above cannot explain, so the
+                    // refusal stays conservative.
+                    IngestionRunStatus::Open => Err(IngestionServiceError::Unavailable),
+                };
+            }
             ingestion_store::record_attempt(
                 tx,
                 run.run_id,

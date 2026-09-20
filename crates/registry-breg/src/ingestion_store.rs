@@ -888,11 +888,14 @@ pub(crate) async fn record_attempt(
 
 /// Mark a run blocked for writes because its binding no longer matches the
 /// active package. The run remains inspectable under its retention policy.
+/// Returns the number of rows changed: zero means the run was no longer
+/// stored open, so the caller must answer the stored status instead of
+/// writing a blocked transition that never happened.
 pub(crate) async fn mark_blocked(
     client: &impl GenericClient,
     run_id: Uuid,
     reason: IngestionBlockedReason,
-) -> Result<(), IngestionStoreError> {
+) -> Result<u64, IngestionStoreError> {
     client
         .execute(
             "UPDATE registry_internal.registry_ingestion_runs
@@ -904,8 +907,7 @@ pub(crate) async fn mark_blocked(
             &[&run_id, &reason.as_str()],
         )
         .await
-        .map_err(|_| IngestionStoreError::Unavailable)?;
-    Ok(())
+        .map_err(|_| IngestionStoreError::Unavailable)
 }
 
 /// Cancel an open or blocked run, preserving the committed chunk prefix.
