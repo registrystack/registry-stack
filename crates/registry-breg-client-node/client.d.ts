@@ -626,6 +626,7 @@ export interface BRegIngestionRunInput {
 }
 
 export interface BRegIngestionRunListInput {
+  accessProfile?: string | null
   limit?: SafeInteger | null
   after?: string | null
   status?: BRegIngestionRunStatus | null
@@ -1011,10 +1012,10 @@ export declare class BaseRegistryClient {
   batchRecordsJson(binding: BRegBatchBinding, requestJson: string, idempotencyKey: string): Promise<JsonOutcome>
   createIngestionRun(entityRoute: string, request: BRegIngestionRunInput): Promise<CompleteOutcome<BRegIngestionRun>>
   listIngestionRuns(entityRoute: string, query?: BRegIngestionRunListInput | null): Promise<CompleteOutcome<BRegIngestionRunPage>>
-  readIngestionRun(entityRoute: string, runId: string): Promise<CompleteOutcome<BRegIngestionRun>>
-  submitIngestionChunk(entityRoute: string, runId: string, chunk: BRegIngestionChunk): Promise<CompleteOutcome<BRegIngestionChunkSubmission>>
-  cancelIngestionRun(entityRoute: string, runId: string): Promise<CompleteOutcome<BRegIngestionRun>>
-  ingestionChunkReceipt(entityRoute: string, runId: string, chunkIndex: SafeInteger): Promise<CompleteOutcome<BRegIngestionChunkReceipt>>
+  readIngestionRun(entityRoute: string, runId: string, accessProfile?: string | null): Promise<CompleteOutcome<BRegIngestionRun>>
+  submitIngestionChunk(entityRoute: string, runId: string, chunk: BRegIngestionChunk, profileId: string): Promise<CompleteOutcome<BRegIngestionChunkSubmission>>
+  cancelIngestionRun(entityRoute: string, runId: string, accessProfile?: string | null): Promise<CompleteOutcome<BRegIngestionRun>>
+  ingestionChunkReceipt(entityRoute: string, runId: string, chunkIndex: SafeInteger, profileId: string): Promise<CompleteOutcome<BRegIngestionChunkReceipt>>
   tombstoneRecord(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
   tombstoneRecordJson(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, format?: RecordFormat | null): Promise<JsonOutcome>
   lifecycleActions(authority: BRegLifecycleAuthority, record: RecordEnvelope, format?: RecordFormat | null): ReadonlyArray<BRegLifecycleAction>

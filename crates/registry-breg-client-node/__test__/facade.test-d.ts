@@ -6,6 +6,7 @@ import {
   BRegBatchBinding,
   BRegCreateBinding,
   BRegImmediateActionBinding,
+  BRegIngestionChunk,
   BRegLifecycleAction,
   BRegLifecycleAuthority,
   BRegMetadata,
@@ -46,6 +47,7 @@ declare const recoveredLifecycle: BRegRecoveredLifecycle
 declare const immediateAction: BRegImmediateActionBinding
 declare const conditions: BRegActionTargetConditions
 declare const batch: BRegBatchBinding
+declare const chunk: BRegIngestionChunk
 declare const tombstone: BRegTombstoneBinding
 declare const currentContinuation: CurrentListContinuation
 declare const asOfContinuation: AsOfListContinuation
@@ -121,6 +123,28 @@ client.batchRecords(batch, { items: [{ operation: 'create', data: { name: 'Ada' 
 client.batchRecordsJson(batch, '{"items":[{"operation":"create","data":{"name":"Ada"}}]}', 'batch-2')
 client.tombstoneRecord(tombstone, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', 'remove-1')
 client.tombstoneRecordJson(tombstone, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', 'remove-2')
+client.createIngestionRun('people', {
+  operation: 'create',
+  profileId: 'facility-operator',
+  packageRevision: 'revision-1',
+  schemaFingerprint: 'fingerprint-1',
+  inputDigest: 'a'.repeat(64),
+  inputLength: 640,
+  itemCount: 5,
+  chunkCount: 2,
+  chunkAlgorithmVersion: 'greedy-canonical-http-batch-v1',
+})
+client.listIngestionRuns('people', { accessProfile: 'auditor', limit: 25, after: 'opaque', status: 'open', inputDigest: 'a'.repeat(64) })
+client.readIngestionRun('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', 'auditor')
+client.readIngestionRun('people', '9f6973f9-10b3-4c58-b41b-494cba26796f')
+client.submitIngestionChunk('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', chunk, 'facility-operator')
+client.cancelIngestionRun('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', 'auditor')
+client.cancelIngestionRun('people', '9f6973f9-10b3-4c58-b41b-494cba26796f')
+client.ingestionChunkReceipt('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', 1, 'facility-operator')
+// @ts-expect-error Chunk submissions and receipts must carry the run's access profile.
+client.submitIngestionChunk('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', chunk)
+// @ts-expect-error Run list queries accept only the fields the route parses.
+client.listIngestionRuns('people', { pageSize: 25 })
 client.prepareCreate(create, { name: 'Ada' }, 'prepared-create-1').toBytes()
 client.prepareCreateJson(create, '{"wide":9007199254740992}', 'prepared-create-2').toBytes()
 BRegPreparedCreate.fromBytes(preparedCreate.toBytes())
