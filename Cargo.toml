@@ -28,6 +28,7 @@ members = [
     "crates/registry-platform-audit",
     "crates/registry-platform-authcommon",
     "crates/registry-platform-buildinfo",
+    "crates/registry-platform-calendar",
     "crates/registry-platform-canonical-json",
     "crates/registry-platform-config",
     "crates/registry-platform-crypto",
@@ -58,6 +59,10 @@ members = [
     "crates/registry-stack-client",
     "crates/registry-language-server",
     "crates/registry-linkml",
+    "crates/registry-scheduling-core",
+    "crates/registry-scheduling",
+    "crates/registry-schedulingctl",
+    "crates/registry-scheduling-client",
 ]
 exclude = [
     "products/breg/wasm-handler-sdk",
@@ -116,12 +121,17 @@ registry-relay-client-node = { path = "crates/registry-relay-client-node", versi
 registry-relay-client-py = { path = "crates/registry-relay-client-py", version = "0.32.0" }
 registry-relay-v2 = { path = "crates/registry-relay-v2", version = "0.32.0" }
 registry-relayctl = { path = "crates/registry-relayctl", version = "0.32.0" }
+registry-scheduling = { path = "crates/registry-scheduling", version = "0.32.0" }
+registry-scheduling-core = { path = "crates/registry-scheduling-core", version = "0.32.0" }
+registry-schedulingctl = { path = "crates/registry-schedulingctl", version = "0.32.0" }
+registry-scheduling-client = { path = "crates/registry-scheduling-client", version = "0.32.0" }
 registry-breg = { path = "crates/registry-breg", version = "0.32.0", default-features = false }
 registry-bregctl = { path = "crates/registry-bregctl", version = "0.32.0" }
 registry-stack-client = { path = "crates/registry-stack-client", version = "0.32.0" }
 registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.32.0" }
 registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.32.0" }
 registry-platform-buildinfo = { path = "crates/registry-platform-buildinfo", version = "0.32.0" }
+registry-platform-calendar = { path = "crates/registry-platform-calendar", version = "0.32.0" }
 registry-cli-reference = { path = "crates/registry-cli-reference", version = "0.32.0" }
 registry-platform-canonical-json = { path = "crates/registry-platform-canonical-json", version = "0.32.0" }
 registry-platform-config = { path = "crates/registry-platform-config", version = "0.32.0" }

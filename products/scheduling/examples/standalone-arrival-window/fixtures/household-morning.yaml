@@ -1,0 +1,77 @@
+apiVersion: registry.registrystack.org/scheduling-fixture/v1alpha1
+kind: SchedulingFixture
+name: household-morning
+now: 2026-10-09T20:00:00Z
+facts:
+  locations:
+    - id: civic-hall
+      timezone: Asia/Bangkok
+  windows:
+    - id: household-morning-window
+      revision: 2
+      offering: household-morning
+      location: civic-hall
+      start: 2026-10-10T01:00:00Z
+      end: 2026-10-10T03:00:00Z
+      units: 3
+      unitsPolicy:
+        kind: perRecipient
+        perRecipient: 1
+        because: Each recipient consumes one serving slot.
+      subquotas:
+        - id: public-quota
+          channel: public
+          units: 2
+          because: Most households book the public channel.
+        - id: assisted-quota
+          channel: assisted
+          units: 1
+          because: Assisted bookings hold a protected unit.
+      because: The Saturday morning household block, sized for two officers.
+initial: []
+cases:
+  - name: first-household-takes-the-public-quota
+    request:
+      offering: household-morning
+      start: 2026-10-10T01:00:00Z
+      party:
+        recipients: 2
+        attendees: 3
+      channel: public
+      policyRevision: 3
+      windowRevision: 2
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: admitted
+      units: 2
+  - name: next-public-household-finds-the-quota-spent
+    request:
+      offering: household-morning
+      start: 2026-10-10T01:00:00Z
+      party:
+        recipients: 1
+        attendees: 1
+      channel: public
+      policyRevision: 3
+      windowRevision: 2
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: refused
+      code: capacity.exhausted
+  - name: assisted-household-fits-the-protected-unit
+    request:
+      offering: household-morning
+      start: 2026-10-10T01:00:00Z
+      party:
+        recipients: 1
+        attendees: 1
+      channel: assisted
+      policyRevision: 3
+      windowRevision: 2
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: admitted
+      units: 1

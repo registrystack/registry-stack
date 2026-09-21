@@ -1,0 +1,75 @@
+apiVersion: registry.registrystack.org/scheduling-fixture/v1alpha1
+kind: SchedulingFixture
+name: household-afternoon
+now: 2026-10-09T20:00:00Z
+facts:
+  locations:
+    - id: civic-hall
+      timezone: Asia/Bangkok
+  windows:
+    - id: household-afternoon-window
+      revision: 1
+      offering: household-afternoon
+      location: civic-hall
+      start: 2026-10-10T07:00:00Z
+      end: 2026-10-10T09:00:00Z
+      units: 3
+      unitsPolicy:
+        kind: bandedTable
+        input: serviceRecipientCount
+        bands:
+          - upTo: 4
+            units: 1
+            because: A household of up to four shares one officers' block.
+          - upTo: 8
+            units: 2
+            because: A larger household of up to eight needs two officers' blocks.
+        aboveHighestBand:
+          policy: refuse
+        because: A household above eight needs a scheduled outreach visit instead of a walk-in block.
+      subquotas: []
+      because: The Saturday afternoon household block, sized by party rather than a flat headcount.
+initial: []
+cases:
+  - name: a-small-household-fits-the-first-band
+    request:
+      offering: household-afternoon
+      start: 2026-10-10T07:00:00Z
+      party:
+        recipients: 3
+        attendees: 3
+      policyRevision: 3
+      windowRevision: 1
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: admitted
+      units: 1
+  - name: a-household-above-the-highest-band-is-refused
+    request:
+      offering: household-afternoon
+      start: 2026-10-10T07:00:00Z
+      party:
+        recipients: 9
+        attendees: 9
+      policyRevision: 3
+      windowRevision: 1
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: refused
+      code: party.capacity-inadequate
+  - name: a-mid-size-household-fits-the-second-band
+    request:
+      offering: household-afternoon
+      start: 2026-10-10T07:00:00Z
+      party:
+        recipients: 6
+        attendees: 6
+      policyRevision: 3
+      windowRevision: 1
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: admitted
+      units: 2

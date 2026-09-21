@@ -57,6 +57,7 @@ RELAY_V2_ARTIFACT_INVENTORY = {
 DISCOVERY_RUNTIME_MINIMUM_VERSION = (0, 24, 0)
 BREG_RELEASE_MINIMUM_VERSION = (0, 26, 0)
 CASEWORK_RELEASE_MINIMUM_VERSION = (0, 30, 0)
+SCHEDULING_RELEASE_MINIMUM_VERSION = (0, 33, 0)
 UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 26, 1)
 RELEASE_PLAN_SCHEMA = "registry-release.plan.v1"
 CANDIDATE_VERIFICATION_PLAN_SCHEMA = "registry-release.candidate-verification.v3"
@@ -223,6 +224,8 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
                     "casework-installer",
                 }
             )
+        if parsed_version >= SCHEDULING_RELEASE_MINIMUM_VERSION:
+            expected_inventory.add("scheduling")
         missing = sorted(expected_inventory - artifact_names)
         unexpected = sorted(artifact_names - expected_inventory)
         if missing or unexpected:

@@ -1,0 +1,502 @@
+apiVersion: registry.registrystack.org/product-contract/v1
+product: scheduling
+scope: mvp
+evidenceStatus: source-mapped-not-executed
+evidenceNote: >-
+  Test references identify maintained proof obligations. This file does not
+  assert that any test ran or passed in a particular review. Rows whose named
+  test lives in a PostgreSQL suite are proven only when that suite runs against
+  a disposable database under the postgres-test feature.
+reviewRule: >-
+  This matrix is the baseline every later Scheduling change is reviewed
+  against. A change that weakens a row rewrites the row in the same commit and
+  says why. A row may not lose its negative test, and a deferred entry may not
+  be quietly promoted to an enforced row without the test that earns it.
+invariants:
+  - id: SCHEDULING-SEC-01
+    state: enforced
+    threat: >-
+      Two callers competing for the last unit both commit, or a hold and a
+      direct booking consume the same member, so the deployment oversells
+      capacity it cannot serve.
+    enforcementPoint: >-
+      One PostgreSQL capacity transaction per commitment that reads the ledger
+      snapshot, evaluates admission against it, and writes the claim before it
+      commits.
+    refusal: >-
+      Commit exactly one winner and refuse every competing claim with
+      capacity.exhausted; never write a partial claim.
+    negativeTest:
+      path: crates/registry-scheduling-core/src/admission.rs
+      name: the_second_caller_against_the_last_unit_is_refused
+  - id: SCHEDULING-SEC-02
+    state: enforced
+    threat: >-
+      Capacity is committed over supply no operator anchored, so the runtime
+      books a pool or window that does not exist in this deployment.
+    enforcementPoint: >-
+      Offering anchors resolved from runtime records inside the capacity
+      transaction, not from the authored policy alone.
+    refusal: >-
+      Refuse the commitment loudly rather than inventing supply, and name the
+      unanchored reference in the operator's diagnostics, never to the caller.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments.rs
+      name: an_arrival_offering_without_its_window_record_is_an_operator_gap
+  - id: SCHEDULING-SEC-03
+    state: partial
+    threat: >-
+      A token that passed the door commits capacity after the task grant behind
+      it has expired.
+    enforcementPoint: >-
+      The grant's expiry re-checked inside the capacity transaction, after
+      every lock wait and immediately before the claim commits, against a
+      fresh observation of the store's clock rather than the request's own
+      entry time.
+    refusal: >-
+      Refuse with operation.not-authorized and write the authorization.refused
+      audit row, leaving no claim behind.
+    partialNote: >-
+      Only the grant's expiry is read again inside the transaction. The bounds
+      themselves, the service, the location, the action, and the client, are
+      matched once at the service before the transaction opens, and this
+      milestone has no revocation check, so a grant narrowed or withdrawn at the
+      issuer keeps the authority its token carries until the token or the grant
+      deadline passes. See deferred entry SCHEDULING-DEF-01.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments.rs
+      name: a_grant_that_lapses_before_the_commit_never_books
+  - id: SCHEDULING-SEC-04
+    state: enforced
+    threat: >-
+      A catalogue read scope, an explain scope, or a partially formed grant
+      reaches a commitment route and books capacity.
+    enforcementPoint: >-
+      Three disjoint authority profiles in auth.rs: a read scope, a separately
+      configured explain scope that is never the read scope, and a complete
+      task grant bound to the verified client and this deployment's audience.
+    refusal: >-
+      Refuse an incomplete grant set as a credentials problem and never honour
+      it partially; refuse a grant naming another resource as a profile
+      refusal.
+    negativeTest:
+      path: crates/registry-scheduling/src/auth.rs
+      name: a_partial_grant_is_refused_as_invalid_claims
+  - id: SCHEDULING-SEC-05
+    state: enforced
+    threat: >-
+      A grant for a neighbouring service, location, or action covers this
+      offering because the match widens.
+    enforcementPoint: >-
+      require_permission in service.rs, matching one permission whose service
+      and location both equal the offering's own and whose action list contains
+      the requested action, followed by bound_window requiring the operator
+      record to name that same offering and location before any window capacity
+      is exposed or consumed.
+    refusal: >-
+      Answer operation.not-authorized when the grant does not match, or fail
+      closed as service.unavailable when the operator record is misbound. A
+      broader service or location never covers a narrower one and no action is
+      inferred from another.
+    negativeTest:
+      path: crates/registry-scheduling/src/auth.rs
+      name: a_grant_naming_another_resource_is_a_profile_refusal
+  - id: SCHEDULING-SEC-06
+    state: enforced
+    threat: >-
+      A grant minted for one product is spent on another because the grant
+      union leaks across product boundaries.
+    enforcementPoint: >-
+      The closed GrantBounds tagged union in registry-platform-oidc, with
+      deny_unknown_fields, pinned value and cardinality bounds, and a redacting
+      Debug.
+    refusal: >-
+      Parse a foreign grant as a grant that carries no permission for this
+      product and refuse it before any authorization decision or store access.
+    negativeTest:
+      path: crates/registry-breg/src/task_grant/tests.rs
+      name: a_scheduling_grant_is_refused_by_the_breg_binding
+      features: [runtime]
+  - id: SCHEDULING-SEC-07
+    state: enforced
+    threat: >-
+      A public availability or refusal answer names the member, the resource,
+      or the neighbouring booking that caused it, letting a caller enumerate
+      supply or other people's appointments.
+    enforcementPoint: >-
+      problem_of projecting every admission refusal through public_code, and a
+      separately authorized explain path for the member-level cause.
+    refusal: >-
+      Answer the public code for the same state and name no member; keep the
+      detailed code behind the explain scope.
+    negativeTest:
+      path: crates/registry-scheduling/src/service.rs
+      name: the_detailed_code_stays_behind_the_explain_path
+  - id: SCHEDULING-SEC-08
+    state: enforced
+    threat: >-
+      One caller reads or pages another caller's appointment, history, or
+      listing by guessing an identifier or replaying a cursor.
+    enforcementPoint: >-
+      owned_booking on the appointment read and history paths, and cursors that
+      are opaque version 4 UUIDs bound to their listing context and expiring
+      fifteen minutes out, with ownership re-checked before a cursor is
+      honoured.
+    refusal: >-
+      Answer the same value-free absence for a foreign record as for a missing
+      one, and refuse a cursor presented against a different context.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments.rs
+      name: cursors_page_their_own_listing_and_refuse_foreign_contexts
+  - id: SCHEDULING-SEC-09
+    state: enforced
+    threat: >-
+      A retried commitment books twice, or a replayed key under a different
+      body commits a second decision under the first one's answer.
+    enforcementPoint: >-
+      A caller-chosen Idempotency-Key bounded to 128 graphical bytes on the
+      four caller-driven commitments, hashed with the canonical request, and
+      the hold's own identifier as the key for a release.
+    refusal: >-
+      Replay the stored first answer for the same key and body, refuse the same
+      key under a different body with idempotency.key-reused, and answer the
+      expired code once the receipt has been tombstoned.
+    negativeTest:
+      path: crates/registry-scheduling/src/http.rs
+      name: the_idempotency_key_is_present_bounded_and_graphical
+  - id: SCHEDULING-SEC-10
+    state: enforced
+    threat: >-
+      A caller commits against a policy, published window, or appointment that
+      changed under it, so the booking rests on supply or terms the operator
+      has withdrawn.
+    enforcementPoint: >-
+      The policy revision the request names, the published-window revision for
+      arrival commitments, and the observed appointment revision carried in
+      the request body. Records replacement requires changed window terms to
+      advance that public revision, and the request revisions are fenced inside
+      the capacity transaction after the supply anchor is locked and before the
+      claim is written.
+    refusal: >-
+      Refuse a stale policy revision with policy.changed ahead of any narrower
+      mismatch, and refuse a stale window or appointment revision with
+      revision.mismatch.
+    scopeNote: >-
+      Cancellation is deliberately outside this row: it releases capacity and
+      is guarded by the observed appointment revision and the cutoff, never by
+      the policy revision, so an appointment stays cancellable under whatever
+      policy currently governs its offering. See recorded-decisions.yaml,
+      SCHEDULING-DEC-02.
+    negativeTest:
+      path: crates/registry-scheduling-core/src/admission.rs
+      name: policy_change_outranks_a_window_revision_mismatch
+  - id: SCHEDULING-SEC-11
+    state: enforced
+    threat: >-
+      An expired hold keeps consuming capacity, or is confirmed into an
+      appointment after its window has passed.
+    enforcementPoint: >-
+      Hold lifetime evaluated in the ledger, never against a sweeper having
+      already run. Capacity snapshots use the commitment's clock; confirmation
+      re-checks expiry against a fresh clock observation after it locks the
+      supply anchor, before transferring the reservation into an appointment.
+    refusal: >-
+      Count an expired hold as consuming nothing and refuse its confirmation;
+      the sweeper is housekeeping, not the authority on expiry.
+    negativeTest:
+      path: crates/registry-scheduling-core/src/admission.rs
+      name: an_expired_hold_consumes_nothing_and_cannot_be_confirmed
+  - id: SCHEDULING-SEC-12
+    state: enforced
+    threat: >-
+      Credentials or refusal details cross a public plaintext edge, a browser
+      cache, or an unbounded framework response.
+    enforcementPoint: >-
+      A listener that must be private or an explicitly declared container
+      network, mandatory TLS termination, a 1 MiB body ceiling, security
+      headers without CORS, Cache-Control no-store on every answer, and one
+      problem rendering path that stamps the caller's trace.
+    refusal: >-
+      Refuse to start on a public listener, and normalize every framework
+      rejection into a closed problem rather than a framework error page.
+    negativeTest:
+      path: crates/registry-scheduling/src/config.rs
+      name: listener_requires_a_private_address_or_explicit_container_network
+  - id: SCHEDULING-SEC-13
+    state: enforced
+    threat: >-
+      A submitted value, a secret, or a grant's contents is echoed back into a
+      problem document, a log line, a trace, or a configuration error.
+    enforcementPoint: >-
+      A closed problem vocabulary whose detail is fixed per code, value-free
+      Display implementations, a redacting Debug on the grant bounds, and a
+      configuration parse path that names the field without the value.
+    refusal: >-
+      Emit the closed category and nothing else; no field of a problem document
+      repeats a submitted value.
+    negativeTest:
+      path: crates/registry-scheduling/src/config.rs
+      name: typed_parse_path_does_not_echo_the_rejected_value
+  - id: SCHEDULING-SEC-14
+    state: enforced
+    threat: >-
+      A commitment decision leaves no accountable record, so a booking or a
+      refusal cannot be attributed afterwards, and grant-scope enumeration
+      against the edge passes unseen.
+    enforcementPoint: >-
+      An authorization audit record built with a pseudonymized principal and
+      stamped with its identity exactly once, written for the allowed case,
+      for every commitment the capacity transaction refuses, and for every
+      permission mismatch the service refuses before that transaction opens.
+      A refused commitment is one the ledger decided: an admission refusal,
+      the hold ceiling, a lapsed grant, a stale observed revision, or a
+      cancellation past its cutoff. A failed transaction and a replaced
+      environment decided nothing and are not audited, and an idempotency key
+      refusal is carried by the attempt receipt instead. The match that
+      selects between them is exhaustive, so a new outcome states its side.
+      The journal is published in the order it was written, and the hash
+      chain continues across a restart from its verified tail.
+    refusal: >-
+      Record authorization.allowed or authorization.refused as an audit reason,
+      never as a problem code, and never carry the caller's raw identifier.
+    negativeTest:
+      path: crates/registry-scheduling/src/runtime.rs
+      name: a_pending_audit_record_is_stamped_with_its_identity_exactly_once
+  - id: SCHEDULING-SEC-15
+    state: enforced
+    threat: >-
+      An unverified, drifted, or failing policy package is served, so the
+      deployment answers under terms nobody reviewed.
+    enforcementPoint: >-
+      Startup package verification in production, the authoring exception
+      confined to a loopback listener, and the authoring checks re-run before
+      the policy reaches the runtime.
+    refusal: >-
+      Refuse to start rather than serve an unverified package or a policy that
+      carries findings.
+    negativeTest:
+      path: crates/registry-scheduling/src/config.rs
+      name: production_requires_a_verified_package_while_loopback_accepts_authoring
+  - id: SCHEDULING-SEC-16
+    state: enforced
+    threat: >-
+      An operator-pinned JWKS selects unintended verification material because
+      two keys share a name or a symmetric key slips in.
+    enforcementPoint: >-
+      Static JWKS validation before the verifier is constructed.
+    refusal: >-
+      Refuse the document unless every key is asymmetric and uniquely named.
+    negativeTest:
+      path: crates/registry-scheduling/src/config.rs
+      name: static_jwks_requires_unique_named_asymmetric_keys
+  - id: SCHEDULING-SEC-17
+    state: enforced
+    threat: >-
+      A caller supplies a field the wire contract does not declare, such as the
+      reschedule exclusion the store owns, and changes how the request is
+      evaluated.
+    enforcementPoint: >-
+      Strict request parsing across the core's ledger and request shapes, with
+      unknown fields refused rather than ignored.
+    refusal: >-
+      Refuse the request as malformed; the exclusion is supplied by the store
+      from inside the reschedule transaction and never by the caller.
+    negativeTest:
+      path: crates/registry-scheduling-core/src/model.rs
+      name: an_admission_request_refuses_a_caller_supplied_exclusion
+  - id: SCHEDULING-SEC-18
+    state: enforced
+    threat: >-
+      A scheduling crate reaches a Base Registry Engine, Casework, or Evidence
+      crate, or one of those products reaches a scheduling crate, and the
+      capacity ledger acquires a second writer or a foreign protocol type.
+    enforcementPoint: >-
+      The dependency-direction gate over the Cargo metadata forward closure of
+      every scheduling crate, in both directions.
+    refusal: >-
+      Fail the product check on a direct or transitive forbidden dependency.
+    negativeTest:
+      path: products/scheduling/scripts/test_dependency_direction.py
+      name: test_product_dependency_on_scheduling_is_rejected
+  - id: SCHEDULING-SEC-19
+    state: enforced
+    threat: >-
+      Caller strings stored verbatim in the ledger entry, the idempotency
+      receipt, and the audit journal are bounded only by the body ceiling, and
+      an unbounded duplicate key can be varied at will to slip the duplicate
+      guard.
+    enforcementPoint: >-
+      Edge bounds at the authoring grammar's own identifier, reference,
+      collection, and idempotency-key limits, plus a cancellation reason
+      bounded to the column that stores it.
+    refusal: >-
+      Answer request.invalid at the edge rather than passing the value to a
+      database CHECK that surfaces as a service problem on the caller's own
+      request.
+    negativeTest:
+      path: crates/registry-scheduling/src/http.rs
+      name: an_admission_request_is_bounded_before_it_reaches_the_store
+  - id: SCHEDULING-SEC-20
+    state: enforced
+    threat: >-
+      The accepted token type set admits a plain JWT, so an identity token, or
+      any other JWT the same issuer signs, satisfies the access-token profile
+      and reaches a scheduling operation.
+    enforcementPoint: >-
+      The access-token profile built at configuration time, which admits the
+      RFC 9068 media type and its case variants only. No configuration key
+      widens it.
+    refusal: >-
+      Refuse the credential; a token that is not an access token never reaches
+      authorization.
+    negativeTest:
+      path: crates/registry-scheduling/src/config.rs
+      name: the_access_token_profile_admits_only_the_rfc_9068_pair
+  - id: SCHEDULING-SEC-21
+    state: enforced
+    threat: >-
+      A deployment that names no clients admits every client the issuer
+      verifies, so any application in the issuer's realm reaches the
+      scheduling edge with a token the issuer minted for something else.
+    enforcementPoint: >-
+      Configuration validation at startup, which requires a named client list
+      for any listener that is not loopback.
+    refusal: >-
+      Refuse to start rather than serve a deployment that admits an unnamed
+      client.
+    negativeTest:
+      path: crates/registry-scheduling/src/config.rs
+      name: a_production_deployment_must_name_the_clients_it_admits
+  - id: SCHEDULING-SEC-22
+    state: enforced
+    threat: >-
+      A credential exchanged from a third-party assertion is accepted on the
+      strength of the issuer the token itself names, so any authority the
+      identity provider will exchange from reaches the deployment.
+    enforcementPoint: >-
+      A declared assertion-issuer map binding each accepted authority to the
+      client that may exchange from it, matched when the exchanged credential
+      is authenticated, and bounded in the runtime schema.
+    refusal: >-
+      Refuse the credential until its authority is declared; an undeclared
+      authority is a credentials problem, never a silent acceptance.
+    negativeTest:
+      path: crates/registry-scheduling/src/auth.rs
+      name: an_exchanged_token_is_refused_until_its_authority_is_declared
+  - id: SCHEDULING-SEC-23
+    state: enforced
+    threat: >-
+      A clock the runtime cannot read yields a timestamp against which every
+      grant compares as unexpired, so an expired credential commits.
+    enforcementPoint: >-
+      The expiry comparison in the authenticator, which propagates a clock
+      failure rather than substituting a default instant.
+    refusal: >-
+      Refuse the request as an authentication failure; an unreadable clock
+      never judges an expiry as passed.
+    negativeTest:
+      path: crates/registry-scheduling/src/auth.rs
+      name: an_unreadable_clock_refuses_to_judge_an_expiry_rather_than_passing_it
+  - id: SCHEDULING-SEC-24
+    state: enforced
+    threat: >-
+      An appointment observer gains mutation authority, receives caller or
+      capacity secrets, or observes an event not durably bound to the state
+      change it describes.
+    enforcementPoint: >-
+      A closed policy compiler admitting only after-phase URL handlers for
+      three appointment lifecycle triggers; product-owned projections that
+      cannot name actor, credential, capacity, duplicate-key, or cancellation
+      reason fields; outbox capture in the appointment transaction; and a
+      delivery seam that refuses every proposal.
+    refusal: >-
+      Refuse unsupported declarations before startup, fail the appointment
+      transaction if its matching event cannot be captured, and record a
+      value-free proposal refusal without applying receiver output.
+    negativeTest:
+      path: crates/registry-scheduling/src/hooks.rs
+      name: projections_disclose_only_the_requested_closed_fields
+  - id: SCHEDULING-SEC-25
+    state: enforced
+    threat: >-
+      An operator records replacement drops, moves, or reduces a published window
+      below the bookings and live holds that already consume it.
+    enforcementPoint: >-
+      Records replacement locks every existing supply anchor, loads the current
+      window records and standing window ledger, and assesses the proposal
+      before atomically advancing the durable facts revision.
+    refusal: >-
+      Refuse replacement with an operator-facing deficit and leave all records
+      and their revision unchanged.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments.rs
+      name: records_replacement_refuses_to_move_a_window_with_standing_commitments
+deferred:
+  - id: SCHEDULING-DEF-01
+    subject: Full task-grant bounds re-checked inside the capacity transaction
+    state: deferred
+    reason: >-
+      The grant's bounds travel in the presented token and are matched once at
+      the service. Re-reading them inside the transaction only defends against
+      a grant narrowed at the issuer between the door and the commit, which
+      needs a revocation or introspection path this milestone does not have.
+      The expiry, which is the fact that does change on its own, is re-checked.
+    compensatingControl: >-
+      Short grant deadlines. The published reference states the limit plainly
+      rather than claiming the bounds are re-read.
+    recordedIn: docs/site/src/content/docs/reference/apis/registry-scheduling.mdx
+  - id: SCHEDULING-DEF-04
+    subject: Channel bound to the verified caller
+    state: deferred
+    reason: >-
+      The channel that selects a window subquota is asserted by the caller and
+      persisted verbatim. It is not derived from the verified client or the
+      grant, so a caller entitled to book at all may choose which subquota it
+      draws from.
+    compensatingControl: >-
+      The policy declares a closed channel set, an undeclared channel is
+      refused with a typed code, and every subquota is a ceiling inside the one
+      published total, so a mis-chosen channel cannot oversell the window.
+    recordedIn: products/scheduling/SECURITY-REVIEW-NOTES.md
+  - id: SCHEDULING-DEF-05
+    subject: Database backstop under the duplicate-key guard
+    state: deferred
+    reason: >-
+      The duplicate guard is evaluated in the admission path against an
+      offering-wide indexed read of active bookings. The supporting index is
+      partial rather than unique, so the guard rests on the transaction rather
+      than on a database constraint.
+    compensatingControl: >-
+      The offering's supply lock serializes the guard and the claim it protects,
+      so a concurrent pair cannot straddle it even when their booking intervals
+      lie under different published opening revisions.
+    recordedIn: products/scheduling/SECURITY-REVIEW-NOTES.md
+  - id: SCHEDULING-DEF-06
+    subject: Appointment, history, outbox, and audit retention
+    state: deferred
+    reason: >-
+      Retention windows for committed scheduling data are a product question
+      this milestone does not answer. Idempotency receipts do expire and
+      tombstone; nothing else is swept.
+    compensatingControl: >-
+      The configuration reference says so explicitly rather than implying a
+      sweep that does not run.
+    recordedIn: products/scheduling/RUNTIME-CONFIG.md
+  - id: SCHEDULING-DEF-07
+    subject: Combined policy and records invariants re-checked at the database
+    state: deferred
+    reason: >-
+      The canonical validation of a policy against the published window records
+      it governs runs only in the authoring tooling, against the policy file on
+      the operator's disk. Neither database write repeats it: policy
+      publication fences offerings carrying active claims but never reads the
+      window records, and records replacement never reads the deployed policy.
+      An operator who publishes a policy their own tooling would refuse can
+      therefore back an exact-time offering with a pool that already staffs a
+      published window, and the two modes then draw on the same staffing
+      through separate anchor rows the capacity transaction cannot compare.
+    compensatingControl: >-
+      Every authored path runs the combined check before either document
+      reaches a deployment, and names the offending field in the operator's
+      own vocabulary. Reaching the gap means bypassing that tooling.
+    recordedIn: products/scheduling/SECURITY-REVIEW-NOTES.md

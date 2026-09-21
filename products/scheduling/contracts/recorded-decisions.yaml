@@ -1,0 +1,193 @@
+apiVersion: registry.registrystack.org/product-contract/v1
+product: scheduling
+scope: mvp
+purpose: >-
+  Behaviour a reader could reasonably mistake for an oversight, recorded as a
+  deliberate choice with the reasoning that settled it. A later change may
+  overturn any of these, but it overturns the entry in the same commit rather
+  than rediscovering the question.
+decisions:
+  - id: SCHEDULING-DEC-01
+    subject: Releasing a hold whose lifetime has passed answers 204
+    decision: >-
+      A release names the hold's state, not its clock. The release path admits
+      any claim that is still a hold in the active state and closes it as
+      released, so a hold whose lifetime has passed but whose row the sweeper
+      has not yet touched releases cleanly and answers 204 No Content.
+    reasoning: >-
+      Consumption is a live predicate, never a stored counter: every capacity
+      and quota query counts a hold only while its state is active and its
+      expiry is still ahead of the transaction's clock. An expired hold has
+      therefore already stopped consuming capacity everywhere capacity is
+      computed, whether or not any process has written the expired state yet.
+      Releasing it can return nothing, because nothing is outstanding, so
+      there is no second decrement to protect against. Answering a refusal
+      instead would tell the caller to keep a hold it has correctly finished
+      with, and would make the caller's answer depend on whether a background
+      sweep happened to have run.
+    alsoTrue: >-
+      A release carries no caller-chosen idempotency key: the hold's own
+      identifier is the key, so a retried release replays the first answer. A
+      hold that does not exist, or one no longer in the active state, answers
+      hold.released rather than a not-found, which keeps the answer the same
+      whether the identifier was never valid or was merely finished. A hold
+      belonging to another caller is refused inside the transaction, where the
+      refusal is audited.
+    evidence:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: an_expired_hold_returns_capacity_and_refuses_confirmation}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_release_returns_capacity_answers_replay_and_blocks_confirmation}
+      - {path: crates/registry-scheduling-core/src/admission.rs, name: an_expired_hold_consumes_nothing_and_cannot_be_confirmed}
+  - id: SCHEDULING-DEC-02
+    subject: Cancellation never answers policy.changed
+    decision: >-
+      The cancel path does not read the policy revision at all. It is guarded
+      by the observed appointment revision, the caller's ownership, and the
+      cancellation cutoff, and by nothing else.
+    reasoning: >-
+      Cancellation releases capacity; it evaluates no admission and resolves no
+      offering against a policy, so there is no policy-shaped decision left to
+      fence. An appointment stays cancellable under whatever policy currently
+      governs its offering. The alternative traps a caller in a booking it
+      wants to shed because the operator republished the policy underneath it,
+      which is a worse outcome for both sides than letting the seat go back.
+    contrast: >-
+      Reschedule does check, and deliberately lets the policy guard outrank the
+      revision guard, because a reschedule re-evaluates admission against the
+      policy. Hold creation, direct appointment creation, and hold confirmation
+      check for the same reason.
+    evidence:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: cancellation_respects_the_cutoff_and_replays_its_verdict}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_reschedule_moves_under_the_observed_revision_and_refuses_stale_ones}
+      - {path: crates/registry-scheduling-core/src/admission.rs, name: policy_change_outranks_a_window_revision_mismatch}
+  - id: SCHEDULING-DEC-03
+    subject: The commit-error projection lives in the service, not beside the enum
+    decision: >-
+      CommitError is declared in the runtime's store module, where the
+      transaction raises it, and the single projection from it to a public
+      problem code lives in the service module, in one exhaustive match with no
+      wildcard arm.
+    reasoning: >-
+      The projection is a disclosure decision, and disclosure decisions belong
+      on the layer that answers the caller. The store layer raises what went
+      wrong; the service layer decides what the caller is allowed to learn from
+      it, which is the same layer that projects an admission refusal through
+      its public code and decides which refusals are audited. Moving the
+      projection next to the enum would put a caller-facing choice in the
+      module that talks to PostgreSQL. The source-neutral core stays free of
+      every HTTP library and owns only the numeric status pinned to each
+      problem code, so one binding cannot answer a different status from
+      another.
+    safeguard: >-
+      The match is exhaustive over a closed enum that is not marked
+      non-exhaustive, so a tenth variant fails the build rather than falling
+      through to a wrong status, and there is exactly one projection site.
+    evidence:
+      - {path: crates/registry-scheduling/src/service.rs, name: commit_errors_project_to_their_public_codes}
+      - {path: crates/registry-scheduling/src/service.rs, name: problem_receipts_carry_the_pinned_problem_without_a_trace}
+  - id: SCHEDULING-DEC-04
+    subject: Subquotas are ceilings, not reserved floors
+    decision: >-
+      A channel subquota caps how much of a published window that channel may
+      take. It reserves nothing for that channel: an unclaimed subquota is
+      available to the window's other channels up to the published total.
+    reasoning: >-
+      A ceiling is the bound that prevents one channel exhausting a window; a
+      floor is a different product promise, with its own failure mode when the
+      reserved share goes unused. This milestone implements and tests the
+      ceiling. Reserved floors stay an open product question rather than an
+      implied behaviour.
+    evidence:
+      - {path: crates/registry-scheduling-core/src/admission.rs, name: subquota_channels_are_checked_before_the_total}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: subquota_slices_may_not_overdraw_the_window}
+  - id: SCHEDULING-DEC-05
+    subject: One staffing pool cannot back independently counted overlapping supply
+    decision: >-
+      The authoring check refuses a resource pool that serves an exact-time
+      offering and a published window at the same time. It also refuses two
+      overlapping windows backed by the same pool, whatever reservedMembers
+      either window declares. Those are not supported configurations in this
+      milestone; disjoint windows may reuse the pool.
+    reasoning: >-
+      Exact-time commitments count pool members while arrival commitments count
+      window units, and two windows count separate window ids. Each shared shape
+      therefore needs ledger-level staffing partition enforcement to stay
+      honest. reservedMembers records operator intent but does not create that
+      enforcement. Refusing the configuration at authoring time is a promise
+      the product can keep now; enforcing partitions in the ledger is later
+      work, and until it exists a deployment must not be able to author its way
+      into the unsound shape.
+    evidence:
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: an_unpartitioned_shared_staffing_block_is_rejected}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: overlapping_windows_may_not_share_a_staffing_pool}
+  - id: SCHEDULING-DEC-06
+    subject: Listing cursors carry no actor binding field
+    decision: >-
+      A stored cursor holds its identity, its listing context, its position,
+      and its expiry. It is not keyed by the caller.
+    reasoning: >-
+      Both listing call sites are safe without it: catalogue availability is
+      public to any reader with the read scope, and appointment history sits
+      behind the ownership check, which is re-applied before the cursor is
+      honoured rather than trusted from the cursor. The invariant is therefore
+      held by the call sites, which is why the contract is stated where a
+      reader of the cursor module will see it. A third listing that is neither
+      public nor ownership-checked must add the binding rather than assume it.
+    evidence:
+      - {path: crates/registry-scheduling/src/cursors.rs, name: a_cursor_binds_to_its_listing_context_and_expires}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: cursors_page_their_own_listing_and_refuse_foreign_contexts}
+  - id: SCHEDULING-DEC-07
+    subject: Member selection reads under the pool lock without SKIP LOCKED
+    decision: >-
+      Selecting a member for an exact-time commitment locks the pool row the
+      offering anchors on, then reads the pool's members and their occupancy
+      with plain queries inside that lock. The member rows themselves are
+      never locked.
+    reasoning: >-
+      One pool row is the serialization point for every offering that sells
+      that pool, so every commitment against the pool runs one at a time and
+      the member selection cannot race another selection. SKIP LOCKED on the
+      member rows would add machinery without adding correctness while the
+      pool lock already excludes every competitor, and it would invite the
+      false reading that members are independently selectable. The cost is
+      that a hot pool serializes every commitment on one row, which is the
+      same cost the window anchor already carries; if a pool ever becomes
+      that hot, the anchor is the thing to revisit, not the member query.
+    evidence:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_direct_create_books_without_a_hold_and_exhausts_capacity}
+      - {path: crates/registry-scheduling-core/src/admission.rs, name: the_second_caller_against_the_last_unit_is_refused}
+  - id: SCHEDULING-DEC-08
+    subject: An environment-records swap is refused whole when it retires occupied supply
+    decision: >-
+      `records apply` replaces the environment facts wholesale, but not
+      unconditionally. The swap takes every supply anchor in the anchor's own
+      order before it reads a claim, and refuses the whole apply when any
+      active booking, or any hold whose lifetime is still ahead, occupies a
+      pool member the incoming records remove or move, or when incoming window
+      records remove, move, or reduce capacity below standing commitments.
+      The operator keeps the supply or closes what stands on it first; nothing
+      partial is written.
+    reasoning: >-
+      The ledger's claims name their supply by id and the records give that id
+      its pool membership or published window capacity. Changing those records
+      under a live claim can strand promised capacity that availability no
+      longer counts. Taking the anchors first is what makes
+      the guard honest rather than advisory: a capacity transaction holds its
+      own anchor from its snapshot until it commits, so holding all of them
+      means no commitment is mid-evaluation against a member about to be
+      deleted, and a claim written a moment later is seen by the guard rather
+      than stranded behind it. A capacity transaction takes exactly one anchor
+      and the swap takes them in order, so the two cannot cycle.
+    alsoTrue: >-
+      Window facts and their lock anchors are replaced in the same transaction
+      as locations, pools, members, and exceptions. An expired hold occupies
+      nothing, matching the live-predicate rule the rest of the ledger uses,
+      so it never blocks a swap.
+    residual: >-
+      Emergency capacity reduction remains a separate incident operation and
+      does not pass through ordinary records replacement.
+    evidence:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_records_swap_refuses_to_strand_a_resource_an_active_claim_occupies}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_records_swap_refuses_to_move_an_occupied_resource_between_pools}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: records_replacement_refuses_to_move_a_window_with_standing_commitments}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_records_swap_waits_for_the_capacity_transaction_holding_the_pool}
+      - {path: crates/registry-schedulingctl/tests/records_apply_postgres.rs, name: records_apply_replaces_facts_wholesale_and_audits_each_write}

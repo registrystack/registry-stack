@@ -1,0 +1,5491 @@
+{
+  "components": {
+    "headers": {
+      "CacheControlHeader": {
+        "description": "Every answer is marked no-store, so a booking view is never served from a cache.",
+        "schema": {
+          "const": "no-store"
+        }
+      },
+      "TraceparentHeader": {
+        "description": "W3C trace context for the request and response.",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "schemas": {
+      "AdmissionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "duplicateKey": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "offering": {
+            "type": "string"
+          },
+          "party": {
+            "$ref": "#/components/schemas/PartyCounts"
+          },
+          "policyRevision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "prerequisites": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "windowRevision": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "offering",
+          "start",
+          "party",
+          "policyRevision",
+          "capabilities",
+          "prerequisites"
+        ],
+        "type": "object"
+      },
+      "AppointmentDocument": {
+        "additionalProperties": true,
+        "properties": {
+          "appointmentId": {
+            "type": "string"
+          },
+          "cancelledAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "offering": {
+            "type": "string"
+          },
+          "policyRevision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AppointmentState"
+          },
+          "units": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "appointmentId",
+          "offering",
+          "start",
+          "end",
+          "units",
+          "revision",
+          "state",
+          "policyRevision",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "AppointmentHistoryEntryDocument": {
+        "additionalProperties": true,
+        "properties": {
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "detail": {},
+          "eventId": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "The lifecycle step the store recorded: held, confirmed, consumed, released, rescheduled, or cancelled.",
+            "type": "string"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "eventId",
+          "kind",
+          "revision",
+          "occurredAt",
+          "detail"
+        ],
+        "type": "object"
+      },
+      "AppointmentHistoryPage": {
+        "additionalProperties": true,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AppointmentHistoryEntryDocument"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "AppointmentState": {
+        "enum": [
+          "confirmed",
+          "cancelled"
+        ],
+        "type": "string"
+      },
+      "AvailabilityEntry": {
+        "discriminator": {
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AvailabilitySlot"
+          },
+          {
+            "$ref": "#/components/schemas/AvailabilityWindow"
+          }
+        ]
+      },
+      "AvailabilityPage": {
+        "additionalProperties": true,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AvailabilityEntry"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "AvailabilitySlot": {
+        "additionalProperties": true,
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "free": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "const": "slot"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "start",
+          "end",
+          "free"
+        ],
+        "type": "object"
+      },
+      "AvailabilityWindow": {
+        "additionalProperties": true,
+        "properties": {
+          "channelRemaining": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "kind": {
+            "const": "window"
+          },
+          "remaining": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "window": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "window",
+          "start",
+          "end",
+          "remaining"
+        ],
+        "type": "object"
+      },
+      "CancelAppointmentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "observedRevision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "observedRevision"
+        ],
+        "type": "object"
+      },
+      "CreateAppointmentRequest": {
+        "additionalProperties": false,
+        "description": "Exactly one of hold or admission: confirming a held allocation, or a direct create. Both, or neither, is request.invalid.",
+        "minProperties": 1,
+        "properties": {
+          "admission": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdmissionRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hold": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ExplainDocument": {
+        "additionalProperties": true,
+        "properties": {
+          "detailedCode": {
+            "type": "string"
+          },
+          "explanation": {
+            "type": "string"
+          },
+          "offering": {
+            "type": "string"
+          },
+          "publicCode": {
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "offering",
+          "start"
+        ],
+        "type": "object"
+      },
+      "HoldDocument": {
+        "additionalProperties": true,
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "holdId": {
+            "type": "string"
+          },
+          "offering": {
+            "type": "string"
+          },
+          "policyRevision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "units": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "holdId",
+          "offering",
+          "start",
+          "end",
+          "units",
+          "expiresAt",
+          "policyRevision"
+        ],
+        "type": "object"
+      },
+      "LocationDocument": {
+        "additionalProperties": true,
+        "properties": {
+          "locationId": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "locationId",
+          "timezone"
+        ],
+        "type": "object"
+      },
+      "LocationPage": {
+        "additionalProperties": true,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LocationDocument"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "OfferingDocument": {
+        "additionalProperties": true,
+        "properties": {
+          "bufferAfterMinutes": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bufferBeforeMinutes": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cancellationCutoffMinutes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "durationMinutes": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "horizonDays": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "leadTimeMinutes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "location": {
+            "type": "string"
+          },
+          "maxRecipients": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mode": {
+            "enum": [
+              "exact-time",
+              "arrival-window"
+            ],
+            "type": "string"
+          },
+          "prerequisites": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reminders": {
+            "items": {
+              "$ref": "#/components/schemas/ReminderDocument"
+            },
+            "type": "array"
+          },
+          "requiresCapabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "service": {
+            "type": "string"
+          },
+          "startIncrementMinutes": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WindowDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "service",
+          "label",
+          "mode",
+          "location",
+          "leadTimeMinutes",
+          "horizonDays",
+          "cancellationCutoffMinutes",
+          "reminders",
+          "requiresCapabilities",
+          "prerequisites"
+        ],
+        "type": "object"
+      },
+      "OfferingPage": {
+        "additionalProperties": true,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OfferingDocument"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "PartyCounts": {
+        "additionalProperties": false,
+        "properties": {
+          "attendees": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "recipients": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "recipients",
+          "attendees"
+        ],
+        "type": "object"
+      },
+      "Problem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "authentication.refused",
+              "booking.duplicate-active",
+              "cancellation.cutoff-passed",
+              "capability.unmatched",
+              "capacity.exhausted",
+              "cursor.expired",
+              "cursor.invalid",
+              "eligibility.unavailable",
+              "hold.expired",
+              "hold.released",
+              "hook.unavailable",
+              "horizon.outside",
+              "idempotency.expired",
+              "idempotency.key-reused",
+              "location.closed",
+              "operation.not-authorized",
+              "party.capacity-inadequate",
+              "policy.changed",
+              "precondition.failed",
+              "precondition.required",
+              "prerequisite.missing",
+              "profile.not-authorized",
+              "request.body-too-large",
+              "request.invalid",
+              "request.method-not-allowed",
+              "request.not-found",
+              "request.unprocessable",
+              "request.unsupported-media-type",
+              "resource.unavailable",
+              "revision.mismatch",
+              "schedule.unpublished",
+              "service.unavailable"
+            ],
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "traceId": {
+            "type": "string"
+          },
+          "type": {
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail",
+          "code",
+          "traceId"
+        ],
+        "type": "object"
+      },
+      "ProblemAuthenticationRefused": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "authentication.refused"
+              },
+              "detail": {
+                "const": "The bearer credential is missing, invalid, or expired. Sign in again."
+              },
+              "status": {
+                "const": 401
+              },
+              "title": {
+                "const": "Authentication refused"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/authentication/refused"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemBookingDuplicateActive": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "booking.duplicate-active"
+              },
+              "detail": {
+                "const": "An active booking already holds this party's duplicate key. Cancel or complete it before booking again."
+              },
+              "status": {
+                "const": 409
+              },
+              "title": {
+                "const": "Duplicate active booking"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/booking/duplicate-active"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemCancellationCutoffPassed": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "cancellation.cutoff-passed"
+              },
+              "detail": {
+                "const": "The cancellation cutoff for this appointment has passed, so it can no longer be cancelled."
+              },
+              "status": {
+                "const": 409
+              },
+              "title": {
+                "const": "Cancellation cutoff passed"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/cancellation/cutoff-passed"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemCapabilityUnmatched": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "capability.unmatched"
+              },
+              "detail": {
+                "const": "The party or backing supply does not carry every capability this offering requires."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Capability unmatched"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/capability/unmatched"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemCapacityExhausted": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "capacity.exhausted"
+              },
+              "detail": {
+                "const": "The supply is fully committed for the requested interval. Choose another time."
+              },
+              "status": {
+                "const": 409
+              },
+              "title": {
+                "const": "Capacity exhausted"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/capacity/exhausted"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemCursorExpired": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "cursor.expired"
+              },
+              "detail": {
+                "const": "This cursor has expired. Start again without a cursor and deduplicate entries by id."
+              },
+              "status": {
+                "const": 410
+              },
+              "title": {
+                "const": "Cursor expired"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/cursor/expired"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemCursorInvalid": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "cursor.invalid"
+              },
+              "detail": {
+                "const": "The cursor is invalid for this request."
+              },
+              "status": {
+                "const": 400
+              },
+              "title": {
+                "const": "Cursor invalid"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/cursor/invalid"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemEligibilityUnavailable": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "eligibility.unavailable"
+              },
+              "detail": {
+                "const": "A required eligibility check could not run. Retry; do not treat this as permission."
+              },
+              "status": {
+                "const": 503
+              },
+              "title": {
+                "const": "Eligibility unavailable"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/eligibility/unavailable"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemHoldExpired": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "hold.expired"
+              },
+              "detail": {
+                "const": "The hold expired before confirmation. Its capacity is bookable again; start a new request."
+              },
+              "status": {
+                "const": 410
+              },
+              "title": {
+                "const": "Hold expired"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/hold/expired"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemHoldReleased": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "hold.released"
+              },
+              "detail": {
+                "const": "The claim is not an active hold. It may already be confirmed or released."
+              },
+              "status": {
+                "const": 409
+              },
+              "title": {
+                "const": "Hold released"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/hold/released"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemHookUnavailable": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "hook.unavailable"
+              },
+              "detail": {
+                "const": "A required lifecycle hook could not run, so the request was refused rather than half-applied."
+              },
+              "status": {
+                "const": 503
+              },
+              "title": {
+                "const": "Hook unavailable"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/hook/unavailable"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemHorizonOutside": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "horizon.outside"
+              },
+              "detail": {
+                "const": "The requested start is earlier than the lead time allows or further ahead than the horizon allows."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Start outside the booking horizon"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/horizon/outside"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemIdempotencyExpired": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "idempotency.expired"
+              },
+              "detail": {
+                "const": "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key."
+              },
+              "status": {
+                "const": 410
+              },
+              "title": {
+                "const": "Idempotency window expired"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/idempotency/expired"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemIdempotencyKeyReused": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "idempotency.key-reused"
+              },
+              "detail": {
+                "const": "This idempotency key was used for a different request."
+              },
+              "status": {
+                "const": 409
+              },
+              "title": {
+                "const": "Idempotency key reused"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/idempotency/key-reused"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemLocationClosed": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "location.closed"
+              },
+              "detail": {
+                "const": "A closure covers the requested start. Choose a start outside the closure."
+              },
+              "status": {
+                "const": 409
+              },
+              "title": {
+                "const": "Location closed"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/location/closed"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemOperationNotAuthorized": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "operation.not-authorized"
+              },
+              "detail": {
+                "const": "Your current Scheduling authority does not allow this operation."
+              },
+              "status": {
+                "const": 403
+              },
+              "title": {
+                "const": "Operation not authorized"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/operation/not-authorized"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemPartyCapacityInadequate": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "party.capacity-inadequate"
+              },
+              "detail": {
+                "const": "The party is larger than this offering can ever serve, or its size falls outside the published units."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Party capacity inadequate"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/party/capacity-inadequate"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemPolicyChanged": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "policy.changed"
+              },
+              "detail": {
+                "const": "The policy revision changed before the request committed. Reload the catalogue and try again with the current revision."
+              },
+              "status": {
+                "const": 412
+              },
+              "title": {
+                "const": "Policy changed"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/policy/changed"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemPreconditionFailed": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "precondition.failed"
+              },
+              "detail": {
+                "const": "The appointment changed since you loaded it. Reload and try again."
+              },
+              "status": {
+                "const": 412
+              },
+              "title": {
+                "const": "Precondition failed"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/precondition/failed"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemPreconditionRequired": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "precondition.required"
+              },
+              "detail": {
+                "const": "This mutation requires the revision you loaded, or the duplicate key this offering keys on."
+              },
+              "status": {
+                "const": 428
+              },
+              "title": {
+                "const": "Precondition required"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/precondition/required"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemPrerequisiteMissing": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "prerequisite.missing"
+              },
+              "detail": {
+                "const": "The party is missing a prerequisite this offering requires."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Prerequisite missing"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/prerequisite/missing"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemProfileNotAuthorized": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "profile.not-authorized"
+              },
+              "detail": {
+                "const": "The selected Scheduling profile does not authorize this request."
+              },
+              "status": {
+                "const": 403
+              },
+              "title": {
+                "const": "Profile not authorized"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/profile/not-authorized"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemRequestBodyTooLarge": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "request.body-too-large"
+              },
+              "detail": {
+                "const": "The request body exceeds the accepted size."
+              },
+              "status": {
+                "const": 413
+              },
+              "title": {
+                "const": "Payload too large"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/request/body-too-large"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemRequestInvalid": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "request.invalid"
+              },
+              "detail": {
+                "const": "The request could not be read as a Scheduling request."
+              },
+              "status": {
+                "const": 400
+              },
+              "title": {
+                "const": "Request invalid"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/request/invalid"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemRequestMethodNotAllowed": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "request.method-not-allowed"
+              },
+              "detail": {
+                "const": "The route exists but not for this method."
+              },
+              "status": {
+                "const": 405
+              },
+              "title": {
+                "const": "Method not allowed"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/request/method-not-allowed"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemRequestNotFound": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "request.not-found"
+              },
+              "detail": {
+                "const": "The requested route does not exist."
+              },
+              "status": {
+                "const": 404
+              },
+              "title": {
+                "const": "Route not found"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/request/not-found"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemRequestUnprocessable": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "request.unprocessable"
+              },
+              "detail": {
+                "const": "The request body could not be processed."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Request unprocessable"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/request/unprocessable"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemRequestUnsupportedMediaType": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "request.unsupported-media-type"
+              },
+              "detail": {
+                "const": "The request body is not JSON."
+              },
+              "status": {
+                "const": 415
+              },
+              "title": {
+                "const": "Unsupported media type"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/request/unsupported-media-type"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemResourceUnavailable": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "resource.unavailable"
+              },
+              "detail": {
+                "const": "Every capable member is unavailable for this interval."
+              },
+              "status": {
+                "const": 409
+              },
+              "title": {
+                "const": "Resource unavailable"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/resource/unavailable"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemRevisionMismatch": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "revision.mismatch"
+              },
+              "detail": {
+                "const": "The window revision changed before the request committed. Reload the catalogue and try again."
+              },
+              "status": {
+                "const": 412
+              },
+              "title": {
+                "const": "Revision mismatch"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/revision/mismatch"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemScheduleUnpublished": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "schedule.unpublished"
+              },
+              "detail": {
+                "const": "No published schedule serves that start. Choose a start on the published grid."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Schedule unpublished"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/schedule/unpublished"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemServiceUnavailable": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "service.unavailable"
+              },
+              "detail": {
+                "const": "Scheduling storage is unavailable. Try again after the service recovers."
+              },
+              "status": {
+                "const": 503
+              },
+              "title": {
+                "const": "Scheduling service unavailable"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/service/unavailable"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ReminderDocument": {
+        "additionalProperties": true,
+        "properties": {
+          "minutesBefore": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "minutesBefore"
+        ],
+        "type": "object"
+      },
+      "RescheduleAppointmentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "admission": {
+            "$ref": "#/components/schemas/AdmissionRequest"
+          },
+          "observedRevision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "observedRevision",
+          "admission"
+        ],
+        "type": "object"
+      },
+      "ResourceDocument": {
+        "additionalProperties": true,
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pool": {
+            "type": "string"
+          },
+          "resourceId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resourceId",
+          "pool",
+          "capabilities",
+          "available"
+        ],
+        "type": "object"
+      },
+      "ResourcePage": {
+        "additionalProperties": true,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ResourceDocument"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "SchedulingServiceDocument": {
+        "additionalProperties": true,
+        "properties": {
+          "policyDigest": {
+            "type": "string"
+          },
+          "policyRevision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schedulingId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedulingId",
+          "policyRevision",
+          "policyDigest"
+        ],
+        "type": "object"
+      },
+      "ServiceDocument": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "type": "object"
+      },
+      "ServicePage": {
+        "additionalProperties": true,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceDocument"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "WindowDocument": {
+        "additionalProperties": true,
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "units": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "start",
+          "end",
+          "units"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "bearerFormat": "JWT",
+        "description": "A fresh access token from the configured issuer, for this deployment's audience, signed by a key the issuer published. Catalogue, availability, and owned-record reads demand the configured reads scope (scheduling-read by default); the explain path demands the configured explain scope (scheduling-explain by default), which is never the reads scope. A mutating route demands no scope at all: its authority is the complete task grant the token carries, whose scheduling permissions the service checks against the offering's service and location and the action the route performs (hold.create, hold.release, appointment.create, appointment.reschedule, appointment.cancel). A token with partial grant claims is refused rather than half-trusted.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Implemented Scheduling HTTP contract: published openings, exact-time offerings over interchangeable resource pools, published arrival windows with channel subquotas, holds, and accountable bookings. Mutating authority is a complete task grant; every refusal is one problem from the closed vocabulary.",
+    "license": {
+      "identifier": "Apache-2.0",
+      "name": "Apache-2.0"
+    },
+    "title": "Registry Scheduling API",
+    "version": "v1alpha1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/healthz": {
+      "get": {
+        "description": "Process is live. No authentication, no storage, no policy.",
+        "operationId": "getLiveness",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [],
+        "summary": "Liveness",
+        "x-scheduling-authority": "unauthenticated"
+      }
+    },
+    "/readyz": {
+      "get": {
+        "description": "Asks the Scheduling store to answer. A store that cannot answer is service.unavailable, with Retry-After.",
+        "operationId": "getReadiness",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [],
+        "summary": "Readiness",
+        "x-scheduling-authority": "unauthenticated"
+      }
+    },
+    "/v1/appointments": {
+      "post": {
+        "description": "Carries exactly one of hold or admission. Confirming transfers the hold's own reservation, so capacity is re-checked only for identity: the hold must still be active and unexpired, its policy revision still current, and its holder still the caller. A direct create is evaluated against the live ledger like a hold, and commits instead of reserving. Both branches demand a complete task grant naming the offering's service, location, and appointment.create.",
+        "operationId": "createAppointment",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-selected ASCII graphic key bound to this exact request. An exact retry replays the first answer, a changed request is idempotency.key-reused, and a receipt retained past its window is idempotency.expired.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAppointmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppointmentDocument"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, operation.not-authorized",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestNotFound"
+                }
+              }
+            },
+            "description": "Problem response: request.not-found",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemBookingDuplicateActive"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemCapacityExhausted"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemLocationClosed"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemHoldReleased"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: booking.duplicate-active, capacity.exhausted, location.closed, idempotency.key-reused, hold.released",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemHoldExpired"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired, hold.expired",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemPolicyChanged"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemRevisionMismatch"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: policy.changed, revision.mismatch",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemCapabilityUnmatched"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemHorizonOutside"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPartyCapacityInadequate"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPrerequisiteMissing"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemScheduleUnpublished"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: request.unprocessable, capability.unmatched, horizon.outside, party.capacity-inadequate, prerequisite.missing, schedule.unpublished",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                }
+              }
+            },
+            "description": "Problem response: precondition.required",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Confirm a hold or book directly",
+        "x-maximum-body-bytes": 1048576,
+        "x-scheduling-authority": "task-grant"
+      }
+    },
+    "/v1/appointments/{appointment_id}": {
+      "get": {
+        "description": "Answers only to the caller that owns the booking. Another caller's appointment, a hold, and an unknown identifier are all operation.not-authorized, so existence is never disclosed.",
+        "operationId": "getAppointment",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The appointment's identifier.",
+            "in": "path",
+            "name": "appointment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppointmentDocument"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, operation.not-authorized",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Read one owned appointment",
+        "x-scheduling-authority": "reads-scope"
+      }
+    },
+    "/v1/appointments/{appointment_id}/cancel": {
+      "post": {
+        "description": "Releases the appointment's capacity and records the reason, under the task grant that names appointment.cancel. It is guarded by observedRevision and the offering's cancellation cutoff, never by the policy revision, so an appointment is always cancellable under the policy that currently governs its offering.",
+        "operationId": "cancelAppointment",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-selected ASCII graphic key bound to this exact request. An exact retry replays the first answer, a changed request is idempotency.key-reused, and a receipt retained past its window is idempotency.expired.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The appointment's identifier.",
+            "in": "path",
+            "name": "appointment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelAppointmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppointmentDocument"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, operation.not-authorized",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemCancellationCutoffPassed"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemHoldReleased"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: idempotency.key-reused, cancellation.cutoff-passed, hold.released",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRevisionMismatch"
+                }
+              }
+            },
+            "description": "Problem response: revision.mismatch",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                }
+              }
+            },
+            "description": "Problem response: request.unprocessable",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Cancel an owned appointment",
+        "x-maximum-body-bytes": 1048576,
+        "x-scheduling-authority": "task-grant"
+      }
+    },
+    "/v1/appointments/{appointment_id}/history": {
+      "get": {
+        "description": "Newest first, one bounded page at a time. Each step carries the revision it produced, the pseudonymized actor reference when it had one, and the detail the store recorded. Existence is never disclosed: another caller's appointment answers operation.not-authorized.",
+        "operationId": "listAppointmentHistory",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The appointment's identifier.",
+            "in": "path",
+            "name": "appointment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque 15-minute cursor bound to this listing. A malformed, unknown, or foreign cursor is cursor.invalid; an expired one is cursor.expired, and the listing restarts from its first page. Deduplicate entries by id.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size from 1 through 200; the default is 50 and larger values are served as 200.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppointmentHistoryPage"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemCursorInvalid"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: request.invalid, cursor.invalid",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, operation.not-authorized",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemCursorExpired"
+                }
+              }
+            },
+            "description": "Problem response: cursor.expired",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Read an owned appointment's history",
+        "x-scheduling-authority": "reads-scope"
+      }
+    },
+    "/v1/appointments/{appointment_id}/reschedule": {
+      "post": {
+        "description": "Re-books the appointment under the task grant that names appointment.reschedule, with a fresh admission evaluation; the appointment it replaces is excluded from the conflict checks, so a reschedule never competes with itself. The policy guard wins over the revision guard: a caller whose observed revision is also stale learns the policy moved first.",
+        "operationId": "rescheduleAppointment",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-selected ASCII graphic key bound to this exact request. An exact retry replays the first answer, a changed request is idempotency.key-reused, and a receipt retained past its window is idempotency.expired.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The appointment's identifier.",
+            "in": "path",
+            "name": "appointment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RescheduleAppointmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppointmentDocument"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, operation.not-authorized",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemBookingDuplicateActive"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemCapacityExhausted"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemLocationClosed"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemHoldReleased"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: booking.duplicate-active, capacity.exhausted, location.closed, idempotency.key-reused, hold.released",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemPolicyChanged"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemRevisionMismatch"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: policy.changed, revision.mismatch",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemCapabilityUnmatched"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemHorizonOutside"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPartyCapacityInadequate"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPrerequisiteMissing"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemScheduleUnpublished"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: request.unprocessable, capability.unmatched, horizon.outside, party.capacity-inadequate, prerequisite.missing, schedule.unpublished",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                }
+              }
+            },
+            "description": "Problem response: precondition.required",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Move an owned appointment",
+        "x-maximum-body-bytes": 1048576,
+        "x-scheduling-authority": "task-grant"
+      }
+    },
+    "/v1/availability": {
+      "get": {
+        "description": "Bounded availability. Exact-time offerings answer in grid slots and arrival-window offerings answer in published windows; only entries with capacity left are listed, so a slot nobody can serve is not availability. A search spans at most 62 days from start, and a wider ask continues by cursor.",
+        "operationId": "searchAvailability",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required offering identifier. An offering the deployed policy does not publish is request.not-found.",
+            "in": "query",
+            "name": "offering",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Earliest answerable start, defaulting to now.",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Latest answerable start. An end earlier than one minute after start is raised to it, and one further ahead than the 62-day span allows is clipped to it.",
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque 15-minute cursor bound to this offering, its range, and the instant the last page ended at. A malformed, unknown, or foreign cursor is cursor.invalid; an expired one is cursor.expired. Deduplicate entries by their start.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size from 1 through 200; the default is 50 and larger values are served as 200.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvailabilityPage"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemCursorInvalid"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: request.invalid, cursor.invalid",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestNotFound"
+                }
+              }
+            },
+            "description": "Problem response: request.not-found",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemCursorExpired"
+                }
+              }
+            },
+            "description": "Problem response: cursor.expired",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Search published availability",
+        "x-scheduling-authority": "reads-scope"
+      }
+    },
+    "/v1/availability/explain": {
+      "get": {
+        "description": "The separately authorized explanation of one start: the problem code every caller may see, the detailed code only this path discloses, and the refusal in words. A start that admits as things stand answers with no codes at all. The probe is a minimal party, so the answer explains the calendar and the capacity, never another caller's booking. resource.unavailable is disclosed here and never on the public path, whose answer is capacity.exhausted.",
+        "operationId": "explainAvailability",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required offering identifier. An offering the deployed policy does not publish is request.not-found.",
+            "in": "query",
+            "name": "offering",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "The start to explain.",
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplainDocument"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestNotFound"
+                }
+              }
+            },
+            "description": "Problem response: request.not-found",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Explain one start's refusal",
+        "x-scheduling-authority": "explain-scope"
+      }
+    },
+    "/v1/holds": {
+      "post": {
+        "description": "Reserves supply instead of committing it and answers the hold with its expiry. The caller must carry a complete task grant whose scheduling permission names the offering's service, its location, and hold.create; readable availability is not authority to book. The hold expires on its own, so its capacity returns without a release.",
+        "operationId": "createHold",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Caller-selected ASCII graphic key bound to this exact request. An exact retry replays the first answer, a changed request is idempotency.key-reused, and a receipt retained past its window is idempotency.expired.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!-~]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdmissionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldDocument"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, operation.not-authorized",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestNotFound"
+                }
+              }
+            },
+            "description": "Problem response: request.not-found",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemBookingDuplicateActive"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemCapacityExhausted"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemLocationClosed"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: booking.duplicate-active, capacity.exhausted, location.closed, idempotency.key-reused",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemPolicyChanged"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemRevisionMismatch"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: policy.changed, revision.mismatch",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestUnsupportedMediaType"
+                }
+              }
+            },
+            "description": "Problem response: request.unsupported-media-type",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemCapabilityUnmatched"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemHorizonOutside"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPartyCapacityInadequate"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPrerequisiteMissing"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemScheduleUnpublished"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: request.unprocessable, capability.unmatched, horizon.outside, party.capacity-inadequate, prerequisite.missing, schedule.unpublished",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
+                }
+              }
+            },
+            "description": "Problem response: precondition.required",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Reserve an admission",
+        "x-maximum-body-bytes": 1048576,
+        "x-scheduling-authority": "task-grant"
+      }
+    },
+    "/v1/holds/{hold_id}": {
+      "delete": {
+        "description": "Gives a hold's capacity back before it expires, under the task grant that names hold.release. The hold's own identifier is the idempotency key, so a retried release answers as the first one did; a receipt retained past its window is idempotency.expired. A claim that is not an active hold is hold.released, whether unknown, already confirmed, or already released, and a grant naming another holder is operation.not-authorized.",
+        "operationId": "releaseHold",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The hold's identifier.",
+            "in": "path",
+            "name": "hold_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized, operation.not-authorized",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemHoldReleased"
+                }
+              }
+            },
+            "description": "Problem response: hold.released",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
+                }
+              }
+            },
+            "description": "Problem response: idempotency.expired",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Release a hold",
+        "x-scheduling-authority": "task-grant"
+      }
+    },
+    "/v1/locations": {
+      "get": {
+        "description": "Each location carries the IANA timezone its published openings expand in.",
+        "operationId": "listLocations",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque 15-minute cursor bound to this listing. A malformed, unknown, or foreign cursor is cursor.invalid; an expired one is cursor.expired, and the listing restarts from its first page. Deduplicate entries by id.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size from 1 through 200; the default is 50 and larger values are served as 200.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationPage"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemCursorInvalid"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: request.invalid, cursor.invalid",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemCursorExpired"
+                }
+              }
+            },
+            "description": "Problem response: cursor.expired",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List the locations",
+        "x-scheduling-authority": "reads-scope"
+      }
+    },
+    "/v1/offerings": {
+      "get": {
+        "description": "The public view of the authored policy, sorted by identifier. Exact-time offerings carry durationMinutes, bufferBeforeMinutes, bufferAfterMinutes, startIncrementMinutes, and maxRecipients; arrival-window offerings carry window. A field the offering's mode does not use is null, never zero.",
+        "operationId": "listOfferings",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque 15-minute cursor bound to this listing. A malformed, unknown, or foreign cursor is cursor.invalid; an expired one is cursor.expired, and the listing restarts from its first page. Deduplicate entries by id.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size from 1 through 200; the default is 50 and larger values are served as 200.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferingPage"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemCursorInvalid"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: request.invalid, cursor.invalid",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemCursorExpired"
+                }
+              }
+            },
+            "description": "Problem response: cursor.expired",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List the published offering catalogue",
+        "x-scheduling-authority": "reads-scope"
+      }
+    },
+    "/v1/resources": {
+      "get": {
+        "description": "A pool is its concrete members, never an independent counter. available carries no reason: why a member is unavailable is private staff information, and the public answer to a caller is capacity.exhausted.",
+        "operationId": "listResources",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque 15-minute cursor bound to this listing. A malformed, unknown, or foreign cursor is cursor.invalid; an expired one is cursor.expired, and the listing restarts from its first page. Deduplicate entries by id.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size from 1 through 200; the default is 50 and larger values are served as 200.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourcePage"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemCursorInvalid"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: request.invalid, cursor.invalid",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemCursorExpired"
+                }
+              }
+            },
+            "description": "Problem response: cursor.expired",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List the backing resource pool members",
+        "x-scheduling-authority": "reads-scope"
+      }
+    },
+    "/v1/scheduling": {
+      "get": {
+        "description": "Answers the deployment identifier, the current authored policy revision, and its digest, so a caller can detect that the policy it read has since moved. Reading it grants no catalogue, availability, or booking authority.",
+        "operationId": "describeScheduling",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchedulingServiceDocument"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Describe this Scheduling deployment",
+        "x-scheduling-authority": "reads-scope"
+      }
+    },
+    "/v1/services": {
+      "get": {
+        "description": "Sorted by identifier. A page is a 15-minute view of a live catalogue; follow nextCursor until it is absent.",
+        "operationId": "listServices",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque 15-minute cursor bound to this listing. A malformed, unknown, or foreign cursor is cursor.invalid; an expired one is cursor.expired, and the listing restarts from its first page. Deduplicate entries by id.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size from 1 through 200; the default is 50 and larger values are served as 200.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServicePage"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemCursorInvalid"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Problem response: request.invalid, cursor.invalid",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                }
+              }
+            },
+            "description": "Problem response: authentication.refused",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge.",
+                "schema": {
+                  "const": "Bearer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
+                }
+              }
+            },
+            "description": "Problem response: profile.not-authorized",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemCursorExpired"
+                }
+              }
+            },
+            "description": "Problem response: cursor.expired",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List the service catalogue",
+        "x-scheduling-authority": "reads-scope"
+      }
+    }
+  },
+  "servers": [
+    {
+      "description": "Operator-managed TLS endpoint in front of the private Scheduling runtime.",
+      "url": "https://scheduling.example.test"
+    }
+  ],
+  "x-registry-scheduling-edge-problems": [
+    "request.body-too-large",
+    "request.invalid",
+    "request.method-not-allowed",
+    "request.not-found",
+    "request.unprocessable",
+    "request.unsupported-media-type"
+  ],
+  "x-registry-scheduling-reserved-problems": [
+    "eligibility.unavailable",
+    "hook.unavailable",
+    "precondition.failed",
+    "resource.unavailable"
+  ]
+}

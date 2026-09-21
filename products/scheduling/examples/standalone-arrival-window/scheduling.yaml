@@ -1,0 +1,63 @@
+apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
+kind: SchedulingPolicyPackage
+scheduling:
+  id: household-days
+  version: 3
+services:
+  - id: household-day
+    label: Household registration day
+offerings:
+  - id: household-morning
+    service: household-day
+    label: Morning household block
+    mode: arrival-window
+    location: civic-hall
+    because: Households arrive in a served morning block.
+    arrival:
+      window: household-morning-window
+      leadTimeMinutes: 60
+      horizonDays: 45
+    cancellationCutoffMinutes: 1440
+    requiresCapabilities: []
+    prerequisites: []
+  - id: household-afternoon
+    service: household-day
+    label: Afternoon household block
+    mode: arrival-window
+    location: civic-hall
+    because: Larger households arrive in an afternoon block sized by party, not a flat headcount.
+    arrival:
+      window: household-afternoon-window
+      leadTimeMinutes: 60
+      horizonDays: 45
+    cancellationCutoffMinutes: 1440
+    requiresCapabilities: []
+    prerequisites: []
+holidaySets:
+  - id: office-holidays
+    revision: 1
+    because: Public holidays observed by the registry office.
+    dates: []
+openings:
+  - id: hall-hours
+    location: civic-hall
+    holidaySet: office-holidays
+    weekdays: [sat]
+    startTime: "08:00"
+    endTime: "12:00"
+    effectiveFrom: "2026-10-01"
+    effectiveUntil: "2026-12-31"
+    because: The hall opens on Saturday mornings.
+  - id: hall-afternoon-hours
+    location: civic-hall
+    holidaySet: office-holidays
+    weekdays: [sat]
+    startTime: "13:00"
+    endTime: "17:00"
+    effectiveFrom: "2026-10-01"
+    effectiveUntil: "2026-12-31"
+    because: The hall reopens on Saturday afternoons for banded household visits.
+holdPolicy:
+  ttlMinutes: 10
+  maxPerCaller: 2
+  because: Households need a few minutes to gather documents.

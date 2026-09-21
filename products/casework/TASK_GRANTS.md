@@ -16,8 +16,10 @@ Add `taskTemplates` to the Casework project. Each template declares:
   `itemStates` for retained source work items. A template cannot mix the two.
 - Exact `agent: {issuer, subject}`, OAuth `client`, one absolute `resource`,
   and `purpose`, plus explicit OAuth `scopes` for that resource.
-- `bounds`, either `{type: evidence, requirement: ...}` or
-  `{type: breg, permissions: [{collection: ..., operations: [...]}]}`.
+- `bounds`, one of `{type: evidence, requirement: ...}`,
+  `{type: breg, permissions: [{collection: ..., operations: [...]}]}`, or
+  `{type: scheduling, permissions: [{service: ..., location: ...,
+  actions: [...]}]}`.
 - `subjects`, mapping token identity keys to governed source logical fields.
 - `lifetimeSeconds`, no more than 900 seconds.
 
@@ -28,6 +30,14 @@ Required source fields must be disclosed to the approving human and exposed to
 the configured service reader for later checks. Callers cannot supply subject
 values. Changing a template requires a new version. Retiring a version
 invalidates its live grants; reactivation does not restore those grants.
+
+Scheduling permissions use the same strict claim grammar its runtime verifies:
+one to 64 unique `(service, location)` pairs, each with one to 32 unique action
+names. Services and locations are exact, whitespace-free values with no
+wildcard. Actions are lowercase operation names such as
+`appointment.create`, `appointment.reschedule`, `appointment.cancel`,
+`hold.create`, or `hold.release`. Casework copies these governed bounds into
+the signed assertion; it does not import Scheduling or infer an offering.
 
 ## Configure the authority
 

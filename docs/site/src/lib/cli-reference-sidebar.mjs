@@ -12,6 +12,8 @@ const binaries = [
   'bregctl',
   'casework',
   'caseworkctl',
+  'scheduling',
+  'schedulingctl',
   'relay',
   'relayctl',
   'evidence',

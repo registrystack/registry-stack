@@ -1,0 +1,27 @@
+locations:
+  - id: bangkok-counter
+    timezone: Asia/Bangkok
+  - id: new-york-hall
+    timezone: America/New_York
+pools:
+  - id: update-stations
+    members:
+      - resourceId: station-1
+        capabilities: []
+        available: true
+      - resourceId: station-2
+        capabilities: []
+        available: true
+  - id: hall-stations
+    members:
+      - resourceId: hall-station-1
+        capabilities: []
+        available: true
+windows: []
+exceptions:
+  - id: hall-prep
+    location: new-york-hall
+    kind: closure
+    date: "2026-11-01"
+    startTime: "00:15"
+    endTime: "00:45"

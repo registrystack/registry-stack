@@ -16,6 +16,8 @@ const MAX_CLAIM_VALUE_BYTES: usize = 512;
 const MAX_PURPOSE_BYTES: usize = 128;
 const MAX_BREG_PERMISSIONS: usize = 64;
 const MAX_BREG_OPERATIONS: usize = 32;
+const MAX_SCHEDULING_PERMISSIONS: usize = 64;
+const MAX_SCHEDULING_ACTIONS: usize = 32;
 
 /// Claim naming the assertion authority that signed the exchanged subject token.
 ///
@@ -164,12 +166,56 @@ impl fmt::Debug for BregPermission {
     }
 }
 
+/// A bounded Scheduling permission carried inside a signed grant.
+#[derive(Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingPermission {
+    service: String,
+    location: String,
+    actions: Vec<String>,
+}
+
+impl SchedulingPermission {
+    #[must_use]
+    pub fn service(&self) -> &str {
+        &self.service
+    }
+
+    #[must_use]
+    pub fn location(&self) -> &str {
+        &self.location
+    }
+
+    #[must_use]
+    pub fn actions(&self) -> &[String] {
+        &self.actions
+    }
+}
+
+impl fmt::Debug for SchedulingPermission {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SchedulingPermission")
+            .field("service", &"<redacted>")
+            .field("location", &"<redacted>")
+            .field("action_count", &self.actions.len())
+            .finish()
+    }
+}
+
 /// Product-specific bounds carried by a task grant.
 #[derive(Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum GrantBounds {
-    Evidence { requirement: String },
-    Breg { permissions: Vec<BregPermission> },
+    Evidence {
+        requirement: String,
+    },
+    Breg {
+        permissions: Vec<BregPermission>,
+    },
+    Scheduling {
+        permissions: Vec<SchedulingPermission>,
+    },
 }
 
 impl GrantBounds {
@@ -177,15 +223,23 @@ impl GrantBounds {
     pub fn evidence_requirement(&self) -> Option<&str> {
         match self {
             Self::Evidence { requirement } => Some(requirement),
-            Self::Breg { .. } => None,
+            Self::Breg { .. } | Self::Scheduling { .. } => None,
         }
     }
 
     #[must_use]
     pub fn breg_permissions(&self) -> Option<&[BregPermission]> {
         match self {
-            Self::Evidence { .. } => None,
+            Self::Evidence { .. } | Self::Scheduling { .. } => None,
             Self::Breg { permissions } => Some(permissions),
+        }
+    }
+
+    #[must_use]
+    pub fn scheduling_permissions(&self) -> Option<&[SchedulingPermission]> {
+        match self {
+            Self::Evidence { .. } | Self::Breg { .. } => None,
+            Self::Scheduling { permissions } => Some(permissions),
         }
     }
 
@@ -218,6 +272,32 @@ impl GrantBounds {
                 }
                 Ok(())
             }
+            Self::Scheduling { permissions } => {
+                if permissions.is_empty() || permissions.len() > MAX_SCHEDULING_PERMISSIONS {
+                    return Err(ClaimError::Malformed(ClaimMember::GrantBounds));
+                }
+                let mut scopes = HashSet::with_capacity(permissions.len());
+                for permission in permissions {
+                    if !validate_bound_value(&permission.service, MAX_CLAIM_VALUE_BYTES)
+                        || !validate_bound_value(&permission.location, MAX_CLAIM_VALUE_BYTES)
+                        || !scopes
+                            .insert((permission.service.as_str(), permission.location.as_str()))
+                        || permission.actions.is_empty()
+                        || permission.actions.len() > MAX_SCHEDULING_ACTIONS
+                    {
+                        return Err(ClaimError::Malformed(ClaimMember::GrantBounds));
+                    }
+                    let mut actions = HashSet::with_capacity(permission.actions.len());
+                    if permission
+                        .actions
+                        .iter()
+                        .any(|action| !valid_operation(action) || !actions.insert(action.as_str()))
+                    {
+                        return Err(ClaimError::Malformed(ClaimMember::GrantBounds));
+                    }
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -231,6 +311,10 @@ impl fmt::Debug for GrantBounds {
                 .finish(),
             Self::Breg { permissions } => formatter
                 .debug_struct("Breg")
+                .field("permission_count", &permissions.len())
+                .finish(),
+            Self::Scheduling { permissions } => formatter
+                .debug_struct("Scheduling")
                 .field("permission_count", &permissions.len())
                 .finish(),
         }
@@ -933,29 +1017,48 @@ mod tests {
     }
 
     #[test]
-    fn evidence_and_breg_bounds_are_distinct_and_strict() {
+    fn grant_bounds_variants_are_distinct_and_strict() {
         let evidence = claims(complete_grant(
             json!({"type":"evidence","requirement":"urn:requirement:one"}),
         ));
-        assert!(matches!(
-            grant_claims(&evidence, &ClaimNames::default(), 1_500)
-                .expect("valid")
-                .expect("present")
-                .bounds(),
-            GrantBounds::Evidence { .. }
-        ));
+        let evidence_bounds = grant_claims(&evidence, &ClaimNames::default(), 1_500)
+            .expect("valid")
+            .expect("present")
+            .bounds()
+            .clone();
+        assert!(matches!(evidence_bounds, GrantBounds::Evidence { .. }));
+        assert!(evidence_bounds.breg_permissions().is_none());
+        assert!(evidence_bounds.scheduling_permissions().is_none());
 
         let breg = claims(complete_grant(json!({
             "type":"breg",
             "permissions":[{"collection":"person.reviewer","operations":["get","patch"]}]
         })));
-        assert!(matches!(
-            grant_claims(&breg, &ClaimNames::default(), 1_500)
-                .expect("valid")
-                .expect("present")
-                .bounds(),
-            GrantBounds::Breg { .. }
-        ));
+        let breg_bounds = grant_claims(&breg, &ClaimNames::default(), 1_500)
+            .expect("valid")
+            .expect("present")
+            .bounds()
+            .clone();
+        assert!(matches!(breg_bounds, GrantBounds::Breg { .. }));
+        assert!(breg_bounds.evidence_requirement().is_none());
+        assert!(breg_bounds.scheduling_permissions().is_none());
+
+        let scheduling = claims(complete_grant(json!({
+            "type":"scheduling",
+            "permissions":[{
+                "service":"urn:service:intake",
+                "location":"urn:location:north-counter",
+                "actions":["book","hold","cancel"]
+            }]
+        })));
+        let scheduling_bounds = grant_claims(&scheduling, &ClaimNames::default(), 1_500)
+            .expect("valid")
+            .expect("present")
+            .bounds()
+            .clone();
+        assert!(matches!(scheduling_bounds, GrantBounds::Scheduling { .. }));
+        assert!(scheduling_bounds.evidence_requirement().is_none());
+        assert!(scheduling_bounds.breg_permissions().is_none());
 
         for invalid in [
             json!({"type":"evidence","requirement":"*"}),
@@ -964,6 +1067,16 @@ mod tests {
             json!({"type":"breg","permissions":[{"collection":"person.*","operations":["get"]}]}),
             json!({"type":"breg","permissions":[{"collection":"person.reviewer","operations":[]}]}),
             json!({"type":"breg","permissions":[{"collection":"person.reviewer","operations":["*"]}]}),
+            json!({"type":"scheduling","permissions":[]}),
+            json!({"type":"scheduling","permissions":[{"service":"intake counter","location":"north","actions":["book"]}]}),
+            json!({"type":"scheduling","permissions":[{"service":"intake*","location":"north","actions":["book"]}]}),
+            json!({"type":"scheduling","permissions":[{"service":"intake","location":"north","actions":[]}]}),
+            json!({"type":"scheduling","permissions":[{"service":"intake","location":"north","actions":["Book"]}]}),
+            json!({"type":"scheduling","permissions":[
+                {"service":"intake","location":"north","actions":["book"]},
+                {"service":"intake","location":"north","actions":["hold"]}
+            ]}),
+            json!({"type":"scheduling","permissions":[{"service":"intake","location":"north","actions":["book","book"]}]}),
         ] {
             assert_eq!(
                 grant_claims(
@@ -974,6 +1087,164 @@ mod tests {
                 Err(ClaimError::Malformed(ClaimMember::GrantBounds))
             );
         }
+    }
+
+    #[test]
+    fn scheduling_permission_cardinality_bounds_are_enforced() {
+        let at_limit = json!({
+            "type":"scheduling",
+            "permissions":(0..MAX_SCHEDULING_PERMISSIONS)
+                .map(|index| json!({
+                    "service": format!("urn:service:{index}"),
+                    "location": "north",
+                    "actions": (0..MAX_SCHEDULING_ACTIONS)
+                        .map(|action| format!("book.{action}"))
+                        .collect::<Vec<_>>()
+                }))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            grant_claims(
+                &claims(complete_grant(at_limit)),
+                &ClaimNames::default(),
+                1_500
+            )
+            .map(|grant| grant.is_some()),
+            Ok(true)
+        );
+
+        let over_limit = json!({
+            "type":"scheduling",
+            "permissions":(0..=MAX_SCHEDULING_PERMISSIONS)
+                .map(|index| json!({
+                    "service": format!("urn:service:{index}"),
+                    "location": "north",
+                    "actions": ["book"]
+                }))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            grant_claims(
+                &claims(complete_grant(over_limit)),
+                &ClaimNames::default(),
+                1_500
+            ),
+            Err(ClaimError::Malformed(ClaimMember::GrantBounds))
+        );
+
+        let over_actions = json!({
+            "type":"scheduling",
+            "permissions":[{
+                "service":"urn:service:intake",
+                "location":"north",
+                "actions":(0..=MAX_SCHEDULING_ACTIONS)
+                    .map(|action| format!("book.{action}"))
+                    .collect::<Vec<_>>()
+            }]
+        });
+        assert_eq!(
+            grant_claims(
+                &claims(complete_grant(over_actions)),
+                &ClaimNames::default(),
+                1_500
+            ),
+            Err(ClaimError::Malformed(ClaimMember::GrantBounds))
+        );
+    }
+
+    #[test]
+    fn scheduling_value_boundaries_and_unknown_fields_are_enforced() {
+        let at_bound = json!({
+            "type":"scheduling",
+            "permissions":[{
+                "service":"s".repeat(MAX_CLAIM_VALUE_BYTES),
+                "location":"l".repeat(MAX_CLAIM_VALUE_BYTES),
+                "actions":["a".repeat(MAX_PURPOSE_BYTES)]
+            }]
+        });
+        assert_eq!(
+            grant_claims(
+                &claims(complete_grant(at_bound)),
+                &ClaimNames::default(),
+                1_500
+            )
+            .map(|grant| grant.is_some()),
+            Ok(true)
+        );
+
+        for (over_service, over_location, over_action) in [
+            (Some("s".repeat(MAX_CLAIM_VALUE_BYTES + 1)), None, None),
+            (None, Some("l".repeat(MAX_CLAIM_VALUE_BYTES + 1)), None),
+            (None, None, Some("a".repeat(MAX_PURPOSE_BYTES + 1))),
+        ] {
+            let permission = json!({
+                "service": over_service.unwrap_or_else(|| "urn:service:intake".to_owned()),
+                "location": over_location.unwrap_or_else(|| "north".to_owned()),
+                "actions": [over_action.unwrap_or_else(|| "book".to_owned())]
+            });
+            assert_eq!(
+                grant_claims(
+                    &claims(complete_grant(json!({
+                        "type":"scheduling","permissions":[permission]
+                    }))),
+                    &ClaimNames::default(),
+                    1_500
+                ),
+                Err(ClaimError::Malformed(ClaimMember::GrantBounds))
+            );
+        }
+
+        // Unknown members are refused at the union level and inside a
+        // permission value alike.
+        for permission_extra in [
+            json!({"type":"scheduling","permissions":[
+                {"service":"intake","location":"north","actions":["book"],"extra":true}
+            ]}),
+            json!({"type":"scheduling","permissions":[
+                {"service":"intake","location":"north","actions":["book"]}
+            ],"extra":true}),
+        ] {
+            assert_eq!(
+                grant_claims(
+                    &claims(complete_grant(permission_extra)),
+                    &ClaimNames::default(),
+                    1_500
+                ),
+                Err(ClaimError::Malformed(ClaimMember::GrantBounds))
+            );
+        }
+    }
+
+    #[test]
+    fn the_scheduling_tag_round_trips_through_serde() {
+        let bounds = GrantBounds::Scheduling {
+            permissions: vec![SchedulingPermission {
+                service: "urn:service:intake".to_owned(),
+                location: "urn:location:north-counter".to_owned(),
+                actions: vec!["book".to_owned(), "hold.cancel".to_owned()],
+            }],
+        };
+        let wire = serde_json::to_value(&bounds).expect("serializes");
+        assert_eq!(
+            wire,
+            json!({
+                "type":"scheduling",
+                "permissions":[{
+                    "service":"urn:service:intake",
+                    "location":"urn:location:north-counter",
+                    "actions":["book","hold.cancel"]
+                }]
+            })
+        );
+        let parsed = serde_json::from_value::<GrantBounds>(wire.clone()).expect("round trips");
+        assert_eq!(parsed, bounds);
+        // A write-side regression that changed the tag spelling would stop
+        // parsing before any validation runs.
+        assert!(serde_json::from_value::<GrantBounds>(json!({
+            "type":"Scheduling",
+            "permissions":[{"service":"intake","location":"north","actions":["book"]}]
+        }))
+        .is_err());
     }
 
     #[test]
@@ -1042,6 +1313,29 @@ mod tests {
             "agent-client",
             "sensitive-requirement-canary",
             "approver-canary",
+        ] {
+            assert!(!rendered.contains(canary));
+        }
+    }
+
+    #[test]
+    fn scheduling_debug_redacts_service_location_and_actions() {
+        let input = claims(complete_grant(json!({
+            "type":"scheduling",
+            "permissions":[{
+                "service":"sensitive-service-canary",
+                "location":"sensitive-location-canary",
+                "actions":["sensitive-action-canary"]
+            }]
+        })));
+        let grant = grant_claims(&input, &ClaimNames::default(), 1_500)
+            .expect("valid")
+            .expect("present");
+        let rendered = format!("{:?}", grant.bounds());
+        for canary in [
+            "sensitive-service-canary",
+            "sensitive-location-canary",
+            "sensitive-action-canary",
         ] {
             assert!(!rendered.contains(canary));
         }

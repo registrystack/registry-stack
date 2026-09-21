@@ -30,6 +30,7 @@ const required = {
   'breg-events': ['id', 'title', 'columns', 'rows'],
   'breg-api': ['id', 'title', 'columns', 'rows'],
   'casework-api': ['id', 'title', 'columns', 'rows'],
+  'scheduling-api': ['id', 'title', 'columns', 'rows'],
 };
 
 const generated = [];

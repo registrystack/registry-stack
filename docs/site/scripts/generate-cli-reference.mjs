@@ -35,6 +35,8 @@ export const expectedBinaries = [
   'registry-render',
   'relay',
   'relayctl',
+  'scheduling',
+  'schedulingctl',
 ];
 
 const generatedTree = 'src/content/docs/reference/cli';
@@ -51,6 +53,7 @@ const hiddenCommands = new Set([
 const groups = [
   { title: 'Base Registry Engine', binaries: ['breg', 'bregctl'] },
   { title: 'Registry Casework', binaries: ['casework', 'caseworkctl'] },
+  { title: 'Registry Scheduling', binaries: ['scheduling', 'schedulingctl'] },
   { title: 'Registry Relay', binaries: ['relay', 'relayctl'] },
   { title: 'Evidence Gateway', binaries: ['evidence', 'evidencectl'] },
   { title: 'Evidence credential delivery', binaries: ['evidence-oid4vci'] },

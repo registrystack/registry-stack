@@ -3,6 +3,8 @@ extends:
 apis:
   registry-casework:
     root: openapi/registry-casework.openapi.json
+  registry-scheduling:
+    root: openapi/registry-scheduling.openapi.json
   registry-evidence:
     root: openapi/registry-evidence.openapi.json
 rules:

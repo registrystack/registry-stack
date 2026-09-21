@@ -640,7 +640,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
             build_calls = [
                 call for call in read_calls(docker_log) if call[:2] == ["buildx", "build"]
             ]
-            self.assertEqual(12, len(build_calls))
+            self.assertEqual(14, len(build_calls))
             dockerfiles = []
             for call in build_calls:
                 self.assertEqual(["buildx", "build"], call[:2])
@@ -669,6 +669,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                     str(ROOT / "release/docker/Dockerfile.evidence"),
                     str(ROOT / "release/docker/Dockerfile.breg"),
                     str(ROOT / "release/docker/Dockerfile.casework"),
+                    str(ROOT / "release/docker/Dockerfile.scheduling"),
                     str(ROOT / "release/docker/Dockerfile.relay"),
                 },
                 set(dockerfiles),
@@ -679,7 +680,13 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                     str(ROOT / "release/docker/Dockerfile.relay")
                 ),
             )
-            for name in ("discovery", "evidence", "breg", "casework"):
+            for name in (
+                "discovery",
+                "evidence",
+                "breg",
+                "casework",
+                "scheduling",
+            ):
                 self.assertEqual(
                     2,
                     dockerfiles.count(
@@ -700,6 +707,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                     "correct-evidence-first",
                     "correct-breg-first",
                     "correct-casework-first",
+                    "correct-scheduling-first",
                     "correct-relay-first",
                 },
                 {
@@ -723,7 +731,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                 for call in python_calls
                 if call and call[0].endswith("compare-release-image-layouts.py")
             ]
-            self.assertEqual(6, len(comparisons))
+            self.assertEqual(7, len(comparisons))
             self.assertEqual(1, sum("--rootfs-only" in call for call in comparisons))
 
 

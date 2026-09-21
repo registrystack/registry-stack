@@ -38,8 +38,8 @@ pub struct TaskTemplate {
     pub purpose: String,
     pub bounds: TaskGrantBounds,
     /// Evidence-only requester context signed into the authority assertion.
-    /// BREG derives neither requester admission nor relying-party audience
-    /// from these fields and therefore forbids the block entirely.
+    /// Other products derive neither requester admission nor relying-party
+    /// audience from these fields and therefore forbid the block entirely.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_context: Option<EvidenceRequesterContext>,
     /// Exact token identity keys mapped to governed source logical fields.
@@ -76,8 +76,15 @@ impl fmt::Debug for TaskTemplate {
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskGrantBounds {
-    Evidence { requirement: String },
-    Breg { permissions: Vec<TaskPermission> },
+    Evidence {
+        requirement: String,
+    },
+    Breg {
+        permissions: Vec<TaskPermission>,
+    },
+    Scheduling {
+        permissions: Vec<SchedulingTaskPermission>,
+    },
 }
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
@@ -85,6 +92,19 @@ pub enum TaskGrantBounds {
 pub struct TaskPermission {
     pub collection: String,
     pub operations: Vec<String>,
+}
+
+/// Exact Scheduling commitment authority copied into a task grant.
+///
+/// This duplicates the public wire shape deliberately: Casework is an
+/// authority for governed templates, not a dependency on Scheduling's runtime
+/// or model crate.
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchedulingTaskPermission {
+    pub service: String,
+    pub location: String,
+    pub actions: Vec<String>,
 }
 
 impl TaskGrantBounds {
@@ -101,6 +121,25 @@ impl TaskGrantBounds {
                             .operations
                             .iter()
                             .any(|op| !op.bytes().all(|c| c.is_ascii_lowercase() || c == b'_'))
+                    {
+                        return Err(TaskGrantError::Policy);
+                    }
+                }
+                Ok(())
+            }
+            Self::Scheduling { permissions }
+                if !permissions.is_empty() && permissions.len() <= 64 =>
+            {
+                let mut offerings = BTreeSet::new();
+                for permission in permissions {
+                    if !bounded_grant_identifier(&permission.service, 512)
+                        || !bounded_grant_identifier(&permission.location, 512)
+                        || !offerings.insert((&permission.service, &permission.location))
+                        || !unique(&permission.actions, 32)
+                        || permission
+                            .actions
+                            .iter()
+                            .any(|action| !valid_operation(action))
                     {
                         return Err(TaskGrantError::Policy);
                     }
@@ -204,7 +243,7 @@ impl TaskTemplate {
         self.bounds.check()?;
         match (&self.bounds, &self.evidence_context) {
             (TaskGrantBounds::Evidence { .. }, Some(context)) => context.check(),
-            (TaskGrantBounds::Breg { .. }, None) => Ok(()),
+            (TaskGrantBounds::Breg { .. } | TaskGrantBounds::Scheduling { .. }, None) => Ok(()),
             _ => Err(TaskGrantError::Policy),
         }
     }
@@ -365,6 +404,17 @@ fn bounded(value: &str, maximum: usize) -> bool {
 fn bounded_grant_identifier(value: &str, maximum: usize) -> bool {
     bounded(value, maximum) && !value.chars().any(char::is_whitespace)
 }
+fn valid_operation(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z'))
+        && value.len() <= 128
+        && !value.contains('*')
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'_' | b':' | b'-')
+        })
+}
 fn unique(values: &[String], maximum: usize) -> bool {
     !values.is_empty()
         && values.len() <= maximum
@@ -457,7 +507,34 @@ mod tests {
     }
 
     #[test]
-    fn evidence_templates_require_closed_requester_context_and_breg_forbids_it() {
+    fn scheduling_bounds_match_the_runtime_claim_grammar() {
+        let bounds: TaskGrantBounds = serde_json::from_value(serde_json::json!({
+            "type":"scheduling",
+            "permissions":[{
+                "service":"registry-update",
+                "location":"bangkok-counter",
+                "actions":["appointment.create","appointment.reschedule"]
+            }]
+        }))
+        .unwrap();
+        assert!(bounds.check().is_ok());
+
+        for value in [
+            serde_json::json!({"type":"scheduling","permissions":[]}),
+            serde_json::json!({"type":"scheduling","permissions":[{"service":"registry update","location":"bangkok-counter","actions":["appointment.create"]}]}),
+            serde_json::json!({"type":"scheduling","permissions":[{"service":"registry-update","location":"*","actions":["appointment.create"]}]}),
+            serde_json::json!({"type":"scheduling","permissions":[{"service":"registry-update","location":"bangkok-counter","actions":[]}]}),
+            serde_json::json!({"type":"scheduling","permissions":[{"service":"registry-update","location":"bangkok-counter","actions":["Appointment.create"]}]}),
+            serde_json::json!({"type":"scheduling","permissions":[{"service":"registry-update","location":"bangkok-counter","actions":["appointment.create","appointment.create"]}]}),
+            serde_json::json!({"type":"scheduling","permissions":[{"service":"registry-update","location":"bangkok-counter","actions":["appointment.create"]},{"service":"registry-update","location":"bangkok-counter","actions":["appointment.cancel"]}]}),
+        ] {
+            let bounds: TaskGrantBounds = serde_json::from_value(value).unwrap();
+            assert!(bounds.check().is_err());
+        }
+    }
+
+    #[test]
+    fn evidence_templates_require_closed_requester_context_and_other_products_forbid_it() {
         let project: CaseworkProject = serde_json::from_value(serde_json::json!({
             "apiVersion": crate::CASEWORK_API_VERSION, "kind": crate::CASEWORK_KIND,
             "casework": {"id":"tasks", "version":"1"},
@@ -488,6 +565,15 @@ mod tests {
         template.evidence_context = context;
         template.bounds = serde_json::from_value(serde_json::json!({
             "type":"breg", "permissions":[{"collection":"records", "operations":["get"]}]
+        }))
+        .unwrap();
+        assert!(template.check(&project).is_err());
+
+        template.bounds = serde_json::from_value(serde_json::json!({
+            "type":"scheduling", "permissions":[{
+                "service":"registry-update", "location":"bangkok-counter",
+                "actions":["appointment.create"]
+            }]
         }))
         .unwrap();
         assert!(template.check(&project).is_err());

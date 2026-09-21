@@ -26,6 +26,9 @@ docsets:
       registry-casework:
         version: main source (unreleased)
         ref: HEAD
+      registry-scheduling:
+        version: main source (unreleased)
+        ref: HEAD
       registry-render:
         version: main source (unreleased)
         ref: HEAD

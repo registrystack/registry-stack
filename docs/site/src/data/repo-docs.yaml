@@ -5,6 +5,16 @@
 # standards_referenced and last_reviewed so future current-page reviews cannot
 # rewrite historical metadata.
 repos:
+  # Scheduling is unreleased MVP work. Only its product-owned OpenAPI artifact
+  # is pulled; the API reference page beside it is hand-authored, and no other
+  # Scheduling doc lane exists yet.
+  registry-scheduling:
+    remote: https://github.com/registrystack/registry-stack
+    ref: HEAD
+    version: main source (unreleased)
+    local: ../..
+    openapi: products/scheduling/generated/registry-scheduling.openapi.json
+
   # Casework first enters an archived docset at v0.30.0. Its product-owned
   # OpenAPI artifact is rendered directly; adopter prose remains hand-authored
   # in the Casework product lane rather than duplicating the long product README.

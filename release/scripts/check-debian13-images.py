@@ -84,6 +84,7 @@ DOCKERFILES = (
     Path("release/docker/Dockerfile.breg"),
     Path("release/docker/Dockerfile.casework"),
     Path("release/docker/Dockerfile.relay"),
+    Path("release/docker/Dockerfile.scheduling"),
 )
 
 # Adopter and development images. They build from source like the per-product
@@ -174,6 +175,11 @@ HTTP_PROBE_DOCKERFILES = {
         "binary": "casework",
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/casework"]',
         "command": 'CMD ["--runtime-config", "/etc/registry-casework/runtime.yaml", "serve"]',
+    },
+    Path("release/docker/Dockerfile.scheduling"): {
+        "binary": "scheduling",
+        "entrypoint": 'ENTRYPOINT ["/usr/local/bin/scheduling"]',
+        "command": 'CMD ["--runtime-config", "/etc/registry-scheduling/runtime.yaml", "serve"]',
     },
 }
 
