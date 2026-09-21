@@ -431,25 +431,19 @@ impl PostgresStore {
         if !template_active(&transaction, &grant.template).await? {
             return Err(StoreError::Forbidden);
         }
+        // The revision-agnostic eligibility call confirms the caller's current
+        // authority without binding it to the retry's original revision.
         let Some((request_id, revision, subject)) = Self::review_task_grant_eligible(
             &transaction,
             actor,
             grant.task_id,
             &grant.template,
-            Some(grant.task_revision),
+            None,
         )
         .await?
         else {
             return Err(StoreError::Forbidden);
         };
-        if request_id != grant.request_id
-            || revision != grant.task_revision
-            || subject != grant.subject
-            || grant.holder != actor.principal
-            || template_digest(&grant.template)? != grant.template_digest
-        {
-            return Err(StoreError::Conflict);
-        }
         let request = json!({
             "taskId": grant.task_id,
             "requestId": grant.request_id,
@@ -465,6 +459,10 @@ impl PostgresStore {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
+        // A stored response is returned before the revision check so an
+        // approval whose response was lost stays recoverable after an
+        // intervening draft save advanced the task revision; the hash covers
+        // every field the comparison below would check.
         if let Some(previous) = transaction
             .query_opt(
                 "SELECT request_hash,record,invalidated_at IS NOT NULL
@@ -489,6 +487,14 @@ impl PostgresStore {
                 grant: serde_json::from_value(previous.get(1))?,
                 invalidated: previous.get(2),
             });
+        }
+        if request_id != grant.request_id
+            || revision != grant.task_revision
+            || subject != grant.subject
+            || grant.holder != actor.principal
+            || template_digest(&grant.template)? != grant.template_digest
+        {
+            return Err(StoreError::Conflict);
         }
         let count: i64 = transaction
             .query_one(

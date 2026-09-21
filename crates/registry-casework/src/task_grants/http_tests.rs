@@ -1487,6 +1487,129 @@ async fn review_task_grant_approval_reaches_history_and_audit() {
 }
 
 #[tokio::test]
+async fn review_task_grant_approval_recovers_a_lost_response_after_the_task_revision_advances() {
+    let f = fixture(900).await;
+    let actor = ActorContext {
+        principal: IssuerPrincipal {
+            issuer: ISSUER.into(),
+            subject: "human".into(),
+        },
+        profile_id: "staff".into(),
+        role: CaseworkRole::Staff,
+    };
+    let database = f.store.client().await.unwrap();
+    let request_id: Uuid = database
+        .query_one(
+            "SELECT request_id FROM casework_review_tasks WHERE task_id=$1",
+            &[&f.review_task],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let template = f.project.task_templates[1].clone();
+    let now = u64::try_from(Utc::now().timestamp()).unwrap();
+    let grant = ReviewTaskGrant {
+        id: Uuid::new_v4(),
+        task_id: f.review_task,
+        request_id,
+        task_revision: 1,
+        holder: actor.principal.clone(),
+        template: template.clone(),
+        template_digest: template_digest(&template).unwrap(),
+        source_issuer: "https://task-authority.test".into(),
+        approver_profile: actor.profile_id.clone(),
+        subject: SubjectBinding {
+            source: "source".into(),
+            subject_type: "request".into(),
+            id: "request-1".into(),
+            version: "proposal-1".into(),
+            digest: ContentDigest::for_bytes(b"request-1"),
+        },
+        source_subject: SubjectRef {
+            source_id: "source".into(),
+            kind: "request".into(),
+            id: "request-1".into(),
+        },
+        proposal: TaskProposalIdentity::from(&binding()),
+        subjects: BTreeMap::from([("person_reference".into(), json!("synthetic-person"))]),
+        approved_at: now,
+        expires_at: now + 900,
+    };
+    // The approval commits, but the response is lost before the caller sees it.
+    f.store
+        .approve_review_task_grant(&actor, "lost-response", grant.clone())
+        .await
+        .unwrap();
+    // An intervening draft save advances the task revision the same way
+    // save_review_task_draft does, without touching holder or state.
+    database
+        .execute(
+            "UPDATE casework_review_tasks SET revision=revision+1,updated_at=now()
+             WHERE task_id=$1",
+            &[&f.review_task],
+        )
+        .await
+        .unwrap();
+    // The documented exact retry: same idempotency key, original task_revision.
+    let recovered = f
+        .store
+        .approve_review_task_grant(&actor, "lost-response", grant.clone())
+        .await
+        .unwrap();
+    assert_eq!(recovered.grant.id, grant.id);
+    assert!(!recovered.invalidated);
+    let approvals: i64 = database
+        .query_one(
+            "SELECT count(*) FROM casework_review_task_grants
+             WHERE task_id=$1 AND idempotency_key='lost-response'",
+            &[&f.review_task],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(approvals, 1, "the retry must not create a second grant");
+
+    // A replay whose grant holder differs is an idempotency conflict, never
+    // the stored response.
+    let mut different_holder = grant.clone();
+    different_holder.holder = IssuerPrincipal {
+        issuer: ISSUER.into(),
+        subject: "someone-else".into(),
+    };
+    assert!(matches!(
+        f.store
+            .approve_review_task_grant(&actor, "lost-response", different_holder)
+            .await,
+        Err(StoreError::IdempotencyConflict)
+    ));
+
+    // A retry after the task was released is still refused, so resolving
+    // idempotency earlier does not loosen the authority check.
+    database
+        .execute(
+            "UPDATE casework_review_tasks
+             SET state='open',holder_issuer=NULL,holder_subject=NULL,
+                 assignment_kind=NULL,assignment_owner_issuer=NULL,
+                 assignment_owner_subject=NULL,revision=revision+1,updated_at=now()
+             WHERE task_id=$1",
+            &[&f.review_task],
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        f.store
+            .approve_review_task_grant(&actor, "lost-response", grant)
+            .await,
+        Err(StoreError::Forbidden)
+    ));
+
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn review_task_grants_do_not_survive_an_approver_profile_role_change() {
     let mut f = fixture(900).await;
     let human = token("human", "human-client", "human", "casework:staff");
