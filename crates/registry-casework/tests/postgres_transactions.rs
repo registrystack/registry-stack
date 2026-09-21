@@ -972,7 +972,7 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
     let (store, client, schema) = isolated_schema("migrate").await;
     store.migrate().await.expect("first migration");
     let applied = applied_versions(&client).await;
-    assert_eq!(applied, (1..=14).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=15).collect::<Vec<i64>>());
     let index = occurrence_index(&client, &schema).await;
     assert!(index.1, "the occurrence identity index is unique");
 
@@ -1005,7 +1005,7 @@ async fn migration_13_adds_sync_claim_indexes_to_an_existing_schema() {
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=14).collect::<Vec<_>>()
+        (1..=15).collect::<Vec<_>>()
     );
     let indexes: Vec<String> = client
         .query(
@@ -1051,7 +1051,7 @@ async fn readiness_rejects_an_unmigrated_schema() {
 }
 
 #[tokio::test]
-async fn readiness_rejects_a_partial_schema_missing_hosted_tables() {
+async fn readiness_rejects_a_partial_schema_missing_review_tables() {
     let (store, client, _schema) = isolated_schema("ready_partial").await;
     store
         .migrate()
@@ -1059,11 +1059,11 @@ async fn readiness_rejects_a_partial_schema_missing_hosted_tables() {
         .expect("migrate before simulating drift");
     client
         .batch_execute(
-            "DROP TABLE casework_hosted_notes; \
-             DELETE FROM casework_schema_migrations WHERE version = 2;",
+            "DROP TABLE casework_review_task_drafts; \
+             DELETE FROM casework_schema_migrations WHERE version = 15;",
         )
         .await
-        .expect("simulate a partial schema without the hosted migration");
+        .expect("simulate a partial schema without the unified review migration");
 
     assert!(
         matches!(store.ready().await, Err(StoreError::Corrupt)),

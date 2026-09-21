@@ -31,7 +31,7 @@ const PYTHON_STUB: &str = include_str!(
 );
 
 /// The source that declares the closed validation reasons the service answers.
-const CORE_HOSTED: &str = include_str!("../../../crates/registry-casework-core/src/hosted.rs");
+const CORE_REVIEW: &str = include_str!("../../../crates/registry-casework-core/src/review.rs");
 
 /// One rendered table. Unknown members are refused, so a change to the shape of
 /// the reference fails here rather than matching nothing.
@@ -156,11 +156,11 @@ fn quoted_members(body: &str, quote: char) -> Vec<String> {
 /// declaration rather than a copy of it.
 fn core_enum_members(name: &str) -> Vec<String> {
     let declaration = format!("pub enum {name} {{");
-    let start = CORE_HOSTED
+    let start = CORE_REVIEW
         .find(&declaration)
         .unwrap_or_else(|| panic!("registry-casework-core declares no {name}"))
         + declaration.len();
-    let body = &CORE_HOSTED[start..];
+    let body = &CORE_REVIEW[start..];
     let end = body
         .find('}')
         .unwrap_or_else(|| panic!("the {name} declaration is never closed"));
@@ -315,8 +315,8 @@ fn the_python_stub_names_the_codes_the_service_registers() {
 
 #[test]
 fn the_python_stub_names_the_validation_reasons_the_service_answers() {
-    let registered = core_enum_members("HostedValidationReason");
-    let published = python_literal(PYTHON_STUB, "HostedValidationReason");
+    let registered = core_enum_members("ReviewValidationReason");
+    let published = python_literal(PYTHON_STUB, "ReviewValidationReason");
     assert!(
         !registered.is_empty(),
         "registry-casework-core declares no validation reason, so this test proves nothing"

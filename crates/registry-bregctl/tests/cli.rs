@@ -3054,15 +3054,22 @@ fn explain_change_requests_reports_compiled_effects_actions_and_controlled_write
         request["effects"][0]["fields"][0]["value"]["field"]["field"],
         "proposed-site"
     );
-    assert_eq!(request["stages"][1]["id"], "final-approval");
-    let approve = request["actions"]
+    assert_eq!(
+        request["review"],
+        json!({
+            "authority": "casework",
+            "policyId": "asset-placement-correction"
+        })
+    );
+    assert_eq!(request["onApproved"], json!({"mode": "manual"}));
+    let apply = request["actions"]
         .as_array()
         .expect("actions are listed")
         .iter()
-        .find(|action| action["operation"] == "approve_request" && action["stage"] == "review")
-        .expect("review approve action is explained");
+        .find(|action| action["operation"] == "apply_request")
+        .expect("source-owned apply action is explained");
     assert_eq!(
-        approve["preconditions"],
+        apply["preconditions"],
         json!([
             "Idempotency-Key",
             "If-Match",

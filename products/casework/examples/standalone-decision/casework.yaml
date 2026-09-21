@@ -20,15 +20,19 @@ accessProfiles:
     principalClaim: sub
     requiredScopes: [casework:request]
     role: requester
-    kinds: [decision]
 queues:
   - id: decisions
     label: Decisions awaiting review
-hostedKinds:
+reviewKinds:
   - id: decision
     version: "1"
-    queue: decisions
-    decidingProfiles: [staff]
+    purpose: answer
+    contextStrategy: submitted
+    stages:
+      - id: answer
+        queue: decisions
+        decidingProfiles: [staff]
+        requiredApprovals: 1
     retention:
       terminalDays: 90
       accountabilityDays: 365
@@ -42,7 +46,17 @@ hostedKinds:
     outcomes:
       - id: confirmed
         label: Confirm
+        settlement: answered
         reasonRequired: false
       - id: rejected
         label: Return for correction
+        settlement: answered
         reasonRequired: true
+reviewProducers:
+  - id: requester
+    profile: requester
+    issuer: http://127.0.0.1:8091
+    subject: requester
+    sourceNamespaces: [standalone]
+    kinds: [decision]
+    recoveryDays: 30

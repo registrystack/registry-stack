@@ -131,7 +131,6 @@ fn profile(id: &str, role: CaseworkRole) -> AccessProfile {
         principal_claim: "sub".to_owned(),
         required_scopes: vec![format!("casework:{id}")],
         role,
-        kinds: Vec::new(),
     }
 }
 
@@ -176,6 +175,7 @@ fn routing_project() -> CaseworkProject {
                 entity: SOURCE_KIND.to_owned(),
                 queue: "triage".to_owned(),
                 projection: vec!["region".to_owned()],
+                context_projection: Vec::new(),
                 routing: vec![
                     RoutingRule {
                         id: "legal-first".to_owned(),
@@ -207,7 +207,8 @@ fn routing_project() -> CaseworkProject {
                 target: None,
             }],
         }],
-        hosted_kinds: Vec::new(),
+        review_kinds: Vec::new(),
+        review_producers: Vec::new(),
         calendars: Vec::new(),
         clocks: Vec::new(),
         inbox: InboxPolicy::default(),

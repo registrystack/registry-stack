@@ -846,9 +846,9 @@ class GateInventoryTest(unittest.TestCase):
                 "Casework caller visibility suite",
             ),
             (
-                "cargo test --locked --profile ci -p registry-casework --features postgres-test --test hosted_postgres --test assignment_postgres --test routing_postgres",
-                "true # Casework hosted suites disabled",
-                "Casework hosted, assignment, and routing suites",
+                "cargo test --locked --profile ci -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres",
+                "true # Casework assignment and routing suites disabled",
+                "Casework assignment and source routing suites",
             ),
             (
                 "-- --exact clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget",
@@ -866,14 +866,19 @@ class GateInventoryTest(unittest.TestCase):
                 "Casework inbox ordering suite",
             ),
             (
-                "cargo test --locked --profile ci -p registry-casework --features postgres-test --test hosted_standalone",
-                "true # Casework standalone acceptance disabled",
-                "Casework standalone hosted acceptance suite",
-            ),
-            (
                 "cargo test --locked --profile ci -p registry-casework --features postgres-test --test source_retention_postgres",
                 "true # Casework source retention disabled",
                 "Casework source retention suite",
+            ),
+            (
+                "cargo test --locked --profile ci -p registry-casework --features postgres-test\n          --test review_postgres\n          --test review_http\n          --test review_payment_fixture_postgres\n          --test breg_review_journey",
+                "true # Casework governed review suites disabled",
+                "Casework governed review persistence, HTTP, payment, and BReg suites",
+            ),
+            (
+                "cargo test --locked --profile ci -p registry-casework --features postgres-test --test review_migration_postgres",
+                "true # Casework governed review schema upgrades disabled",
+                "Casework governed review schema upgrade suite",
             ),
             (
                 "registry-breg-client-py registry-casework-client-py",
@@ -882,7 +887,10 @@ class GateInventoryTest(unittest.TestCase):
             ),
         ):
             with self.subTest(gate=gate):
-                text = self.workflow.replace(snippet, replacement, 1)
+                # Replace every occurrence: the PostgreSQL 17 digest is pinned
+                # by both casework-postgres and casework-tutorial, and the gate
+                # is missing only when no pin survives.
+                text = self.workflow.replace(snippet, replacement)
                 self.assertIn(gate, self.module.missing_gates(text))
 
     def test_missing_casework_checkpoint_wrapper_steps_are_reported(self) -> None:

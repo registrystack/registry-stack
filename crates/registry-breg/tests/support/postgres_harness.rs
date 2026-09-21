@@ -17,8 +17,10 @@ pub struct TestDatabase {
     admin_root: Config,
     pub admin: Client,
     admin_task: JoinHandle<()>,
+    #[allow(dead_code)] // Individual integration targets use different fixture identities.
     pub migration_config: ConnectionConfig,
     pub runtime_config: ConnectionConfig,
+    #[allow(dead_code)] // Only the TLS-specific integration target uses this configuration.
     pub tls_runtime_config: ConnectionConfig,
     pub migration_role: SqlIdentifier,
     pub runtime_role: SqlIdentifier,
@@ -112,8 +114,16 @@ impl TestDatabase {
         }
     }
 
+    #[allow(dead_code)] // Not every integration target needs a migration-role session.
     pub async fn connect_migration(&self) -> (Client, JoinHandle<()>) {
         connect(self.migration_raw.clone()).await
+    }
+
+    #[allow(dead_code)]
+    pub async fn connect_admin(&self) -> (Client, JoinHandle<()>) {
+        let mut config = self.admin_root.clone();
+        config.dbname(self.database.as_str());
+        connect(config).await
     }
 
     /// Reuse the exact fixture migration credentials against another disposable

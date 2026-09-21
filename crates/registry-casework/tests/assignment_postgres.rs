@@ -11,8 +11,7 @@ use registry_casework_core::{
     CaseloadItemOutcome, CaseloadItemSelection, CaseloadMoveRequest, CaseworkIdentity,
     CaseworkProject, CaseworkRole, DelegateRequest, DirectoryMember, DirectoryTargetPurpose,
     DirectoryTeamUpdateRequest, DiscoveryCursor, EphemeralCredential, EventRequest,
-    ExecutePreparedRequest, HistoryKind, HostedCreateRequest, HostedHistoryKind, HostedKindPolicy,
-    HostedOutcomePolicy, HostedRetentionPolicy, InboxPolicy, IssuerPrincipal, OccurrenceKind,
+    ExecutePreparedRequest, HistoryKind, InboxPolicy, IssuerPrincipal, OccurrenceKind,
     OccurrenceState, OperationName, PageStatus, PrepareActionRequest, PreparedSourceAttempt,
     QueuePolicy, RecoveryEvidence, SourceAdapter, SourceAdapterError, SourceBinding, SourcePolicy,
     SourceReceipt, SourceRequestPolicy, StaffingDiagnostic, SubjectRef, TransitionHint,
@@ -91,7 +90,13 @@ impl SourceAdapter for TestSource {
             }),
             Some(ReadMode::Concealed) => Err(SourceAdapterError::Concealed),
             Some(ReadMode::Unavailable) => Err(SourceAdapterError::Unavailable),
-            None => Err(SourceAdapterError::Invalid),
+            None => Ok(CallerSubjectView {
+                display_reference: None,
+                subject: subject.clone(),
+                binding: binding(),
+                disclosed: BTreeMap::from([("summary".to_owned(), json!("visible"))]),
+                permitted_operations: Vec::new(),
+            }),
         }
     }
 
@@ -149,13 +154,12 @@ fn actor(subject: &str, role: CaseworkRole, profile_id: &str) -> ActorContext {
     }
 }
 
-fn profile(id: &str, role: CaseworkRole, kinds: &[&str]) -> AccessProfile {
+fn profile(id: &str, role: CaseworkRole) -> AccessProfile {
     AccessProfile {
         id: id.to_owned(),
         principal_claim: "sub".to_owned(),
         required_scopes: vec![format!("casework:{id}")],
         role,
-        kinds: kinds.iter().map(|value| (*value).to_owned()).collect(),
     }
 }
 
@@ -169,10 +173,10 @@ fn project() -> CaseworkProject {
             version: "1".to_owned(),
         },
         access_profiles: vec![
-            profile("staff", CaseworkRole::Staff, &[]),
-            profile("supervisor", CaseworkRole::Supervisor, &[]),
-            profile("administrator", CaseworkRole::Administrator, &[]),
-            profile("requester", CaseworkRole::Requester, &["task"]),
+            profile("staff", CaseworkRole::Staff),
+            profile("supervisor", CaseworkRole::Supervisor),
+            profile("administrator", CaseworkRole::Administrator),
+            profile("requester", CaseworkRole::Requester),
         ],
         queues: vec![QueuePolicy {
             id: QUEUE.to_owned(),
@@ -187,32 +191,14 @@ fn project() -> CaseworkProject {
                 entity: SOURCE_KIND.to_owned(),
                 queue: QUEUE.to_owned(),
                 projection: Vec::new(),
+                context_projection: Vec::new(),
                 routing: Vec::new(),
                 clock: None,
                 target: None,
             }],
         }],
-        hosted_kinds: vec![HostedKindPolicy {
-            id: "task".to_owned(),
-            version: "1".to_owned(),
-            queue: QUEUE.to_owned(),
-            deciding_profiles: vec!["staff".to_owned()],
-            retention: HostedRetentionPolicy {
-                terminal_days: 30,
-                accountability_days: 90,
-            },
-            display_schema: json!({
-                "type":"object",
-                "additionalProperties":false,
-                "required":["summary"],
-                "properties":{"summary":{"type":"string","maxLength":80}}
-            }),
-            outcomes: vec![HostedOutcomePolicy {
-                id: "done".to_owned(),
-                label: "Done".to_owned(),
-                reason_required: false,
-            }],
-        }],
+        review_kinds: Vec::new(),
+        review_producers: Vec::new(),
         calendars: Vec::new(),
         clocks: Vec::new(),
         inbox: InboxPolicy::default(),
@@ -651,29 +637,17 @@ async fn add_source_item(fixture: &Fixture, subject_id: Uuid) -> registry_casewo
         .expect("source observation opens an item")
 }
 
-async fn add_hosted_item(
+async fn add_assignment_item(
     fixture: &Fixture,
-    reference: &str,
-) -> registry_casework_core::RequesterHostedItem {
-    fixture
-        .service
-        .hosted_create(
-            &fixture.requester,
-            &HostedCreateRequest {
-                kind: "task".to_owned(),
-                requester_reference: reference.to_owned(),
-                display: json!({"summary":reference}),
-            },
-            &format!("create-{reference}"),
-        )
-        .await
-        .expect("create hosted assignment item")
+    _reference: &str,
+) -> registry_casework_core::WorkItem {
+    add_source_item(fixture, Uuid::new_v4()).await
 }
 
 #[tokio::test]
 async fn active_absence_routes_assignment_to_eligible_cover_and_records_opaque_history() {
     let fixture = fixture([]).await;
-    let item = add_hosted_item(&fixture, "covered").await;
+    let item = add_assignment_item(&fixture, "covered").await;
     let absence = fixture
         .service
         .create_absence(
@@ -693,8 +667,8 @@ async fn active_absence_routes_assignment_to_eligible_cover_and_records_opaque_h
         .service
         .assign_item(
             &fixture.supervisor,
-            None,
-            "unused",
+            Some("source-profile"),
+            "token",
             item.item_id,
             item.revision,
             &AssignmentRequest {
@@ -715,8 +689,8 @@ async fn active_absence_routes_assignment_to_eligible_cover_and_records_opaque_h
         .service
         .assign_item(
             &fixture.supervisor,
-            None,
-            "unused",
+            Some("source-profile"),
+            "token",
             item.item_id,
             item.revision,
             &AssignmentRequest {
@@ -728,37 +702,7 @@ async fn active_absence_routes_assignment_to_eligible_cover_and_records_opaque_h
         .await
         .expect("exact assignment retry");
     assert_eq!(retry.revision, assigned.revision);
-    let history = fixture
-        .service
-        .hosted_staff_history(&fixture.supervisor, item.item_id, 100, None)
-        .await
-        .expect("supervisor hosted history");
-    let assignment_event = history
-        .items
-        .iter()
-        .find(|event| event.kind == HostedHistoryKind::Assigned)
-        .expect("assignment history event");
-    assert!(assignment_event.actor_ref.is_some());
-    assert_eq!(
-        assignment_event
-            .assignment
-            .as_ref()
-            .expect("assignment projection")
-            .assigned_by,
-        None
-    );
-    let event_count: i64 = fixture
-        .database
-        .query_one(
-            "SELECT count(*) FROM casework_hosted_history WHERE item_id=$1 AND kind='assigned'",
-            &[&item.item_id],
-        )
-        .await
-        .expect("count assignment events")
-        .get(0);
-    assert_eq!(event_count, 1);
-
-    let uncovered_item = add_hosted_item(&fixture, "uncovered").await;
+    let uncovered_item = add_assignment_item(&fixture, "uncovered").await;
     let uncovered_absence = fixture
         .service
         .create_absence(
@@ -782,8 +726,8 @@ async fn active_absence_routes_assignment_to_eligible_cover_and_records_opaque_h
         .service
         .assign_item(
             &fixture.supervisor,
-            None,
-            "unused",
+            Some("source-profile"),
+            "token",
             uncovered_item.item_id,
             uncovered_item.revision,
             &AssignmentRequest {
@@ -809,7 +753,7 @@ async fn active_absence_routes_assignment_to_eligible_cover_and_records_opaque_h
         Some(StaffingDiagnostic::NoCoverAvailable)
     );
 
-    let removed_target_item = add_hosted_item(&fixture, "removed-target").await;
+    let removed_target_item = add_assignment_item(&fixture, "removed-target").await;
     fixture
         .database
         .execute(
@@ -826,8 +770,8 @@ async fn active_absence_routes_assignment_to_eligible_cover_and_records_opaque_h
             .service
             .assign_item(
                 &fixture.supervisor,
-                None,
-                "unused",
+                Some("source-profile"),
+                "token",
                 removed_target_item.item_id,
                 removed_target_item.revision,
                 &AssignmentRequest {
@@ -845,8 +789,8 @@ async fn active_absence_routes_assignment_to_eligible_cover_and_records_opaque_h
             .service
             .assign_item(
                 &fixture.supervisor,
-                None,
-                "unused",
+                Some("source-profile"),
+                "token",
                 removed_target_item.item_id,
                 removed_target_item.revision,
                 &AssignmentRequest {
@@ -1486,18 +1430,18 @@ async fn caseload_preview_filters_concealed_source_items_and_propagates_source_o
 async fn caseload_apply_is_per_item_and_source_live_attempt_blocks_assignment() {
     let visible_id = Uuid::new_v4();
     let fixture = fixture([(visible_id, ReadMode::Visible)]).await;
-    let hosted = add_hosted_item(&fixture, "move-hosted").await;
-    let hosted = fixture
-        .service
-        .hosted_claim(
+    let local = add_assignment_item(&fixture, "move-source").await;
+    let local = fixture
+        .store
+        .claim(
             &fixture.staff_a,
-            hosted.item_id,
-            hosted.revision,
-            "claim-hosted",
+            local.item_id,
+            local.revision,
+            "claim-source-for-move",
         )
         .await
-        .expect("claim hosted item");
-    let claimed_at = hosted.held_since.expect("claim establishes heldSince");
+        .expect("claim source item");
+    let claimed_at = local.held_since.expect("claim establishes heldSince");
     let source = add_source_item(&fixture, visible_id).await;
     let source = fixture
         .store
@@ -1571,8 +1515,8 @@ async fn caseload_apply_is_per_item_and_source_live_attempt_blocks_assignment() 
                 },
                 items: vec![
                     CaseloadItemSelection {
-                        item_id: hosted.item_id,
-                        expected_revision: hosted.revision,
+                        item_id: local.item_id,
+                        expected_revision: local.revision,
                     },
                     CaseloadItemSelection {
                         item_id: source.item_id,
@@ -1593,9 +1537,15 @@ async fn caseload_apply_is_per_item_and_source_live_attempt_blocks_assignment() 
     assert_eq!(results[2].result, CaseloadItemOutcome::NotVisible);
     let moved = fixture
         .service
-        .hosted_work_item(&fixture.supervisor, hosted.item_id)
+        .caller_item(
+            &fixture.supervisor,
+            local.item_id,
+            "source-profile",
+            "token",
+        )
         .await
-        .expect("moved hosted item");
+        .expect("moved source item")
+        .0;
     assert_eq!(moved.holder, Some(fixture.staff_c.principal.clone()));
     assert!(moved
         .held_since
@@ -1765,28 +1715,28 @@ async fn absence_update_preserves_owner_and_delete_replay_rechecks_current_autho
 #[tokio::test]
 async fn caseload_outer_idempotency_key_binds_the_complete_selection() {
     let fixture = fixture([]).await;
-    let first = add_hosted_item(&fixture, "outer-first").await;
+    let first = add_assignment_item(&fixture, "outer-first").await;
     let first = fixture
-        .service
-        .hosted_claim(
+        .store
+        .claim(
             &fixture.staff_a,
             first.item_id,
             first.revision,
             "claim-outer-first",
         )
         .await
-        .expect("claim first hosted item");
-    let second = add_hosted_item(&fixture, "outer-second").await;
+        .expect("claim first source item");
+    let second = add_assignment_item(&fixture, "outer-second").await;
     let second = fixture
-        .service
-        .hosted_claim(
+        .store
+        .claim(
             &fixture.staff_a,
             second.item_id,
             second.revision,
             "claim-outer-second",
         )
         .await
-        .expect("claim second hosted item");
+        .expect("claim second source item");
     let movement = CaseloadMoveRequest {
         from: fixture.staff_a.principal.clone(),
         to: fixture.staff_b.principal.clone(),
@@ -1804,8 +1754,8 @@ async fn caseload_outer_idempotency_key_binds_the_complete_selection() {
         .service
         .apply_caseload_move(
             &fixture.supervisor,
-            None,
-            "unused",
+            Some("source-profile"),
+            "token",
             &original,
             "outer-selection",
         )
@@ -1816,8 +1766,8 @@ async fn caseload_outer_idempotency_key_binds_the_complete_selection() {
         .service
         .apply_caseload_move(
             &fixture.supervisor,
-            None,
-            "unused",
+            Some("source-profile"),
+            "token",
             &original,
             "outer-selection",
         )
@@ -1840,8 +1790,8 @@ async fn caseload_outer_idempotency_key_binds_the_complete_selection() {
             .service
             .apply_caseload_move(
                 &fixture.supervisor,
-                None,
-                "unused",
+                Some("source-profile"),
+                "token",
                 &expanded,
                 "outer-selection",
             )
@@ -1849,20 +1799,20 @@ async fn caseload_outer_idempotency_key_binds_the_complete_selection() {
         Err(ServiceError::Store(StoreError::IdempotencyConflict))
     ));
     let untouched = fixture
-        .service
-        .hosted_work_item(&fixture.supervisor, second.item_id)
+        .store
+        .item(second.item_id)
         .await
-        .expect("read second hosted item");
+        .expect("read second source item");
     assert_eq!(untouched.holder, Some(fixture.staff_a.principal));
 }
 
 #[tokio::test]
 async fn assignment_replay_rechecks_current_control_and_queue_authority() {
     let fixture = fixture([]).await;
-    let item = add_hosted_item(&fixture, "replay-authority").await;
+    let item = add_assignment_item(&fixture, "replay-authority").await;
     let claimed = fixture
-        .service
-        .hosted_claim(
+        .store
+        .claim(
             &fixture.staff_a,
             item.item_id,
             item.revision,
@@ -1878,8 +1828,8 @@ async fn assignment_replay_rechecks_current_control_and_queue_authority() {
         .service
         .delegate_item(
             &fixture.staff_a,
-            None,
-            "unused",
+            Some("source-profile"),
+            "token",
             item.item_id,
             claimed.revision,
             &request,
@@ -1891,8 +1841,8 @@ async fn assignment_replay_rechecks_current_control_and_queue_authority() {
         .service
         .assign_item(
             &fixture.supervisor,
-            None,
-            "unused",
+            Some("source-profile"),
+            "token",
             item.item_id,
             delegated.revision,
             &AssignmentRequest {
@@ -1908,8 +1858,8 @@ async fn assignment_replay_rechecks_current_control_and_queue_authority() {
             .service
             .delegate_item(
                 &fixture.staff_a,
-                None,
-                "unused",
+                Some("source-profile"),
+                "token",
                 item.item_id,
                 claimed.revision,
                 &request,
@@ -2404,17 +2354,17 @@ async fn insert_absences(fixture: &Fixture, person: &IssuerPrincipal, count: i32
 async fn team_reorganization_revokes_immediately_and_reconciliation_defers_live_source_attempts() {
     let source_id = Uuid::new_v4();
     let fixture = fixture([(source_id, ReadMode::Visible)]).await;
-    let hosted = add_hosted_item(&fixture, "reorganization-hosted").await;
-    let hosted = fixture
-        .service
-        .hosted_claim(
+    let local = add_assignment_item(&fixture, "reorganization-source").await;
+    let local = fixture
+        .store
+        .claim(
             &fixture.staff_a,
-            hosted.item_id,
-            hosted.revision,
-            "claim-reorganization-hosted",
+            local.item_id,
+            local.revision,
+            "claim-reorganization-source-a",
         )
         .await
-        .expect("claim hosted item before reorganization");
+        .expect("claim source item before reorganization");
     let source = add_source_item(&fixture, source_id).await;
     let source = fixture
         .store
@@ -2473,9 +2423,9 @@ async fn team_reorganization_revokes_immediately_and_reconciliation_defers_live_
     assert!(matches!(
         fixture
             .service
-            .hosted_work_item(&fixture.staff_a, hosted.item_id)
+            .caller_item(&fixture.staff_a, local.item_id, "source-profile", "token")
             .await,
-        Err(ServiceError::Store(StoreError::NotFound))
+        Err(ServiceError::NotFound)
     ));
     assert!(matches!(
         fixture
@@ -2523,17 +2473,17 @@ async fn team_reorganization_revokes_immediately_and_reconciliation_defers_live_
             .expect("first eligibility reconciliation"),
         1
     );
-    let hosted_row = fixture
+    let local_row = fixture
         .database
         .query_one(
-            "SELECT state,holder_issuer,revision FROM casework_hosted_items WHERE item_id=$1",
-            &[&hosted.item_id],
+            "SELECT state,holder_issuer,revision FROM casework_items WHERE item_id=$1",
+            &[&local.item_id],
         )
         .await
-        .expect("read reconciled hosted item");
-    assert_eq!(hosted_row.get::<_, String>(0), "open");
-    assert_eq!(hosted_row.get::<_, Option<String>>(1), None);
-    assert_eq!(hosted_row.get::<_, i64>(2), hosted.revision + 1);
+        .expect("read reconciled source item");
+    assert_eq!(local_row.get::<_, String>(0), "open");
+    assert_eq!(local_row.get::<_, Option<String>>(1), None);
+    assert_eq!(local_row.get::<_, i64>(2), local.revision + 1);
     let source_row = fixture
         .database
         .query_one(
@@ -2575,11 +2525,11 @@ async fn team_reorganization_revokes_immediately_and_reconciliation_defers_live_
     assert_eq!(source_row.get::<_, String>(0), "open");
     assert_eq!(source_row.get::<_, Option<String>>(1), None);
     assert_eq!(source_row.get::<_, i64>(2), source.revision + 1);
-    for item_id in [hosted.item_id, source.item_id] {
+    for item_id in [local.item_id, source.item_id] {
         let releases: i64 = fixture
             .database
             .query_one(
-                "SELECT (SELECT count(*) FROM casework_history WHERE item_id=$1 AND kind='released') + (SELECT count(*) FROM casework_hosted_history WHERE item_id=$1 AND kind='released')",
+                "SELECT count(*) FROM casework_history WHERE item_id=$1 AND kind='released'",
                 &[&item_id],
             )
             .await

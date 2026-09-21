@@ -70,8 +70,9 @@ fn project() -> Value {
             ],
             "changeRequest":{
                 "effects":[{"id":"release", "target":{"fromField":"lot"}, "operation":"patch", "set":{"release-state":{"fromField":"release-state"}}}],
-                "review":{"stages":[{"id":"review", "approvals":1}]},
-                "application":{"mode":"manual", "preconditions":{
+                "review":{"authority":"casework-main", "policyId":"lot-release"},
+                "onApproved":{"mode":"manual"},
+                "application":{"preconditions":{
                     "request":[
                         {"field":"valid-from", "currentDate":"on_or_before"},
                         {"field":"valid-through", "currentDate":"on_or_after"}
@@ -97,9 +98,8 @@ fn project() -> Value {
         }],
         "accessProfiles":[{"id":"reviewer", "default":true, "principalClaim":"principal", "permissions":[{
             "entity":"release-request",
-            "operations":["get","submit_request","approve_request","reject_request","request_revision","apply_request"],
+            "operations":["get","submit_request","apply_request"],
             "readableFields":["lot","owner-reference","report-reference","release-state","valid-from","valid-through"],
-            "reviewStages":[{"stage":"review", "targets":[{"entity":"lot", "readableFields":["release-state"], "rowBoundaries":[]}]}],
             "applyTargets":[{"entity":"lot", "rowBoundaries":[]}], "rowBoundaries":[]
         }]}]
     })
@@ -400,10 +400,8 @@ fn reviewed_manual_application_compiles_closed_digest_bound_preconditions() {
 }
 
 #[test]
-fn preconditions_refuse_automatic_apply_incomplete_profiles_and_wrong_types() {
+fn preconditions_refuse_incomplete_profiles_and_wrong_types() {
     for change in [
-        "automatic",
-        "planner",
         "missing-selector",
         "wrong-output-type",
         "wrong-date",
@@ -411,21 +409,6 @@ fn preconditions_refuse_automatic_apply_incomplete_profiles_and_wrong_types() {
     ] {
         let mut source = project();
         match change {
-            "automatic" => {
-                source["entities"][1]["changeRequest"]["application"]["mode"] = json!("automatic")
-            }
-            "planner" => {
-                source["entities"][1]["changeRequest"]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("effects");
-                source["entities"][1]["changeRequest"]["planner"] = json!({
-                    "kind":"rhai", "script":"planner.rhai",
-                    "abi":"registry.change-request-plan/v1",
-                    "requestFields":["lot", "release-state"],
-                    "writes":[{"target":{"fromField":"lot"}, "operation":"patch", "fields":["release-state"]}]
-                });
-            }
             "missing-selector" => {
                 source["entities"][1]["changeRequest"]["application"]["preconditions"]["evidence"]
                     [0]["subjects"]["subject"]["selectors"]
@@ -451,8 +434,6 @@ fn preconditions_refuse_automatic_apply_incomplete_profiles_and_wrong_types() {
         let report = format!("{failure:?}");
         assert!(
             report.contains(match change {
-                "automatic" => "change_request.application.preconditions_manual_only",
-                "planner" => "change_request.application.preconditions_manual_only",
                 "missing-selector" => "change_request.preconditions.selector_fields_invalid",
                 "wrong-output-type" => "change_request.preconditions.evidence_requirement_invalid",
                 "wrong-date" => "change_request.preconditions.predicate_current_date_invalid",

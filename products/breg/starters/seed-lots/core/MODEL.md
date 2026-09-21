@@ -66,7 +66,7 @@ is manufactured by registration.
 | --- | --- | --- | --- |
 | Reader | Get and list | Get and list | No access |
 | Editor | Create, get, list and inspect history; no direct PATCH | Create, get, list, PATCH and inspect history | Create/edit own drafts; submit, revise and cancel own requests |
-| Reviewer | Get, list and inspect history | Get, list and inspect history | Read proposals and target fields; approve, reject, request revision and apply |
+| Maintainer | Get, list and inspect history | Get, list and inspect history | Read proposals and external review status; apply an exactly approved proposal |
 
 All records are restricted to authenticated callers. Grants cover this local
 registry, with no hidden jurisdiction/ownership filter. Every omitted operation
@@ -78,8 +78,8 @@ and grants no runtime record access.
 The complete SeedLot PATCH operation requires review. The teaching request
 corrects a transcribed lot number while preserving UUID, local identifier,
 quantity, dates and references. A reviewer distinct from the submitting
-principal approves or rejects it. Approval alone changes no lot. The reviewer
-also has the explicit application grant and applies the native frozen effect
+principal decides it in Registry Casework. External approval alone changes no lot. The maintainer
+has the explicit source application grant and applies the native frozen effect
 against the captured target revision. Stale state requires the native
 revise/rebase and review path, never an implicit overwrite.
 

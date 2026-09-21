@@ -2,6 +2,7 @@ use std::fmt;
 
 use registry_platform_httputil::client::BearerToken;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// Authentication and explicit profile selection for exactly one call.
 ///
@@ -46,4 +47,58 @@ impl fmt::Debug for CaseworkAuth<'_> {
 pub struct CaseworkComplete<T> {
     pub value: T,
     pub trace_id: String,
+}
+
+impl<T> From<registry_review_client::ReviewComplete<T>> for CaseworkComplete<T> {
+    fn from(value: registry_review_client::ReviewComplete<T>) -> Self {
+        Self {
+            value: value.value,
+            trace_id: value.trace_id,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewPageQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+/// Pagination for source work-item history, whose cursor is an opaque source
+/// continuation rather than a unified review event identifier.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkItemHistoryQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewTaskQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewTaskDecisionRequest {
+    pub decision: registry_casework_core::ReviewerDecisionKind,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ReviewResultResponse {
+    Available(Box<CaseworkComplete<registry_casework_core::ReviewResult>>),
+    Pending { trace_id: String },
+    ConcealedOrUnknown { trace_id: String },
+    Expired { trace_id: String },
 }

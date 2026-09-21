@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use registry_casework::{AuthenticationError, CaseworkAuthenticator, HumanIdentityConfig};
 use registry_casework_core::{
-    standalone_decision_starter_kind, AccessProfile, CaseworkIdentity, CaseworkProject,
-    CaseworkRole, InboxPolicy, QueuePolicy, CASEWORK_API_VERSION, CASEWORK_KIND,
+    AccessProfile, CaseworkIdentity, CaseworkProject, CaseworkRole, InboxPolicy, QueuePolicy,
+    SourcePolicy, SourceRequestPolicy, CASEWORK_API_VERSION, CASEWORK_KIND,
 };
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
@@ -240,9 +240,6 @@ async fn same_role_profiles_with_distinct_principals_require_distinct_scopes() {
     let mut alternate = profile("staff-by-employee", "casework:staff", CaseworkRole::Staff);
     alternate.principal_claim = "employee_id".to_owned();
     overlapping.access_profiles.push(alternate);
-    overlapping.hosted_kinds[0]
-        .deciding_profiles
-        .push("staff-by-employee".to_owned());
     assert_eq!(
         overlapping.check(),
         Err(registry_casework_core::ConfigError::AccessProfileScopes)
@@ -256,9 +253,6 @@ async fn same_role_profiles_with_distinct_principals_require_distinct_scopes() {
     );
     alternate.principal_claim = "employee_id".to_owned();
     separated.access_profiles.push(alternate);
-    separated.hosted_kinds[0]
-        .deciding_profiles
-        .push("staff-by-employee".to_owned());
     assert_eq!(separated.check(), Ok(()));
     let authenticator = authenticator_for_project(&idp, &separated);
 
@@ -366,15 +360,29 @@ fn project() -> CaseworkProject {
                 principal_claim: "registry_principal".to_owned(),
                 required_scopes: vec!["casework:request".to_owned()],
                 role: CaseworkRole::Requester,
-                kinds: vec!["decision".to_owned()],
             },
         ],
         queues: vec![QueuePolicy {
             id: "decisions".to_owned(),
             label: "Decisions".to_owned(),
         }],
-        sources: Vec::new(),
-        hosted_kinds: vec![standalone_decision_starter_kind()],
+        sources: vec![SourcePolicy {
+            id: "source".to_owned(),
+            adapter: "test".to_owned(),
+            description: "source.json".to_owned(),
+            requests: vec![SourceRequestPolicy {
+                entity: "request".to_owned(),
+                queue: "decisions".to_owned(),
+                display_reference: None,
+                projection: Vec::new(),
+                context_projection: Vec::new(),
+                routing: Vec::new(),
+                clock: None,
+                target: None,
+            }],
+        }],
+        review_kinds: Vec::new(),
+        review_producers: Vec::new(),
         calendars: Vec::new(),
         clocks: Vec::new(),
         inbox: InboxPolicy::default(),
@@ -387,6 +395,5 @@ fn profile(id: &str, scope: &str, role: CaseworkRole) -> AccessProfile {
         principal_claim: "registry_principal".to_owned(),
         required_scopes: vec![scope.to_owned()],
         role,
-        kinds: Vec::new(),
     }
 }

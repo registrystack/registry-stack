@@ -3,19 +3,32 @@
 export declare class CaseworkClient {
   constructor(config: CaseworkClientConfig)
   description(token: string, profile: string): Promise<CaseworkOutcome>
-  createHostedItem(token: string, profile: string, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
-  getHostedItem(token: string, profile: string, itemId: string): Promise<CaseworkOutcome>
-  addHostedNote(token: string, profile: string, itemId: string, expectedRevision: number, idempotencyKey: string, note: any): Promise<CaseworkOutcome>
-  requesterHostedNotes(token: string, profile: string, itemId: string, query?: any | undefined | null): Promise<CaseworkOutcome>
-  cancelHostedItem(token: string, profile: string, itemId: string, expectedRevision: number, idempotencyKey: string, cancellation: any): Promise<CaseworkOutcome>
-  hostedTerminalItems(token: string, profile: string, query?: any | undefined | null): Promise<CaseworkOutcome>
-  listHostedWorkItems(token: string, profile: string, query: any): Promise<CaseworkOutcome>
-  getHostedWorkItem(token: string, profile: string, itemId: string): Promise<CaseworkOutcome>
-  hostedWorkItemHistory(token: string, profile: string, itemId: string, query?: any | undefined | null): Promise<CaseworkOutcome>
-  hostedAccountabilityRecord(token: string, profile: string, eventId: string): Promise<CaseworkOutcome>
-  claimHostedWorkItem(token: string, profile: string, action: any, idempotencyKey: string): Promise<CaseworkOutcome>
-  releaseHostedWorkItem(token: string, profile: string, action: any, idempotencyKey: string): Promise<CaseworkOutcome>
-  decideHostedWorkItem(token: string, profile: string, action: any, idempotencyKey: string, decision: any): Promise<CaseworkOutcome>
+  createOrRecoverReviewRequest(token: string, profile: string, idempotencyKey: string, request: any, expectedSubmissionDigest: string): Promise<CaseworkOutcome>
+  reviewRequest(token: string, profile: string, requestId: string): Promise<CaseworkOutcome>
+  reviewResult(token: string, profile: string, accepted: any): Promise<CaseworkOutcome>
+  reviewResults(token: string, profile: string, query?: any | undefined | null): Promise<CaseworkOutcome>
+  cancelReviewRequest(token: string, profile: string, accepted: any, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
+  reviewKinds(token: string, profile: string): Promise<CaseworkOutcome>
+  reviewKind(token: string, profile: string, kindId: string): Promise<CaseworkOutcome>
+  reviewTasks(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  reviewTask(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  reviewTaskContext(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  previewReviewTaskTemplates(token: string, profile: string, sourceProfile: string, taskId: string): Promise<CaseworkOutcome>
+  listReviewTaskGrants(token: string, profile: string, sourceProfile: string, taskId: string): Promise<CaseworkOutcome>
+  approveReviewTaskGrant(token: string, profile: string, sourceProfile: string, taskId: string, expectedRevision: number, idempotencyKey: string, approval: any): Promise<CaseworkOutcome>
+  revokeReviewTaskGrant(token: string, profile: string, taskId: string, grantId: string): Promise<CaseworkOutcome>
+  claimReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  releaseReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string): Promise<CaseworkOutcome>
+  assignReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, request: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  delegateReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, request: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  reviewTaskDraft(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  saveReviewTaskDraft(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, draft: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  deleteReviewTaskDraft(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  decideReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, decision: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  reviewHistory(token: string, profile: string, requestId: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  addReviewNote(token: string, profile: string, requestId: string, idempotencyKey: string, note: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  reviewClocks(token: string, profile: string, requestId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  reviewAccountability(token: string, profile: string, eventId: string): Promise<CaseworkOutcome>
   listWorkItems(token: string, profile: string, sourceProfile: string, query: any): Promise<CaseworkOutcome>
   nextWorkItem(token: string, profile: string, sourceProfile: string, query?: any | undefined | null): Promise<CaseworkOutcome>
   getWorkItem(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome>

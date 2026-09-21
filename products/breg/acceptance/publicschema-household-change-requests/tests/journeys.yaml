@@ -37,8 +37,7 @@ journeys:
         request:
           operation: create
           data:
-            household:
-              recordRef: household
+            household: {recordRef: household}
             person-code: person-001
             legal-name: Ana Ortega
             family-name: Ortega
@@ -74,13 +73,6 @@ journeys:
           outcome: success
           status: 200
           fields:
-            person-code: person-001
-            legal-name: Ana Ortega
-            family-name: Ortega
-            person-sex: female
-            residency-status: usual-resident
-            relationship: head
-            valid-from: "2026-01-01"
             reason: registration packet and field visit verified
         capture: edited-contact-request
       - id: get-before-submit
@@ -91,15 +83,7 @@ journeys:
         expect:
           outcome: success
           status: 200
-          fields:
-            person-code: person-001
-            legal-name: Ana Ortega
-            family-name: Ortega
-            person-sex: female
-            residency-status: usual-resident
-            relationship: head
-            valid-from: "2026-01-01"
-            reason: registration packet and field visit verified
+          fields: {reason: registration packet and field visit verified}
         capture: contact-before-submit
       - id: submit-contact-request
         entity: register-household-contact-request
@@ -107,10 +91,10 @@ journeys:
         claims: *submitter_claims
         request: {operation: submit_request, recordRef: contact-before-submit, etagRef: contact-before-submit}
         expect: {outcome: success, status: 200}
-      - id: get-before-review
+      - id: external-review-reader-sees-submission
         entity: register-household-contact-request
         accessProfile: household-contact-reviewer
-        claims: &reviewer_claims
+        claims:
           principal: household-contact-reviewer
           scopes: [registry:household-contact:review]
           purpose: household-contact-review
@@ -118,134 +102,17 @@ journeys:
         expect:
           outcome: success
           status: 200
-          fields:
-            person-code: person-001
-            legal-name: Ana Ortega
-            family-name: Ortega
-            person-sex: female
-            residency-status: usual-resident
-            relationship: head
-            valid-from: "2026-01-01"
-            reason: registration packet and field visit verified
-        capture: contact-before-review
-      - id: approve-review-stage
+          fields: {reason: registration packet and field visit verified}
+      - id: submitter-reads-submitted-request
         entity: register-household-contact-request
-        accessProfile: household-contact-reviewer
-        claims: *reviewer_claims
-        request:
-          operation: approve_request
-          stage: review
-          recordRef: contact-before-review
-          etagRef: contact-before-review
-          proposalVersionRef: contact-before-review
-          effectDigestRef: contact-before-review
-        expect: {outcome: success, status: 200}
-      - id: get-before-final-approval
-        entity: register-household-contact-request
-        accessProfile: household-contact-supervisor
-        claims: &supervisor_claims
-          principal: household-contact-supervisor
-          scopes: [registry:household-contact:supervise]
-          purpose: household-contact-review
+        accessProfile: household-contact-submitter
+        claims: *submitter_claims
         request: {operation: get, recordRef: contact-request}
-        expect:
-          outcome: success
-          status: 200
-          fields:
-            person-code: person-001
-            legal-name: Ana Ortega
-            family-name: Ortega
-            person-sex: female
-            residency-status: usual-resident
-            relationship: head
-            valid-from: "2026-01-01"
-            reason: registration packet and field visit verified
-        capture: contact-before-final-approval
-      - id: approve-final-stage
-        entity: register-household-contact-request
-        accessProfile: household-contact-supervisor
-        claims: *supervisor_claims
-        request:
-          operation: approve_request
-          stage: final-approval
-          recordRef: contact-before-final-approval
-          etagRef: contact-before-final-approval
-          proposalVersionRef: contact-before-final-approval
-          effectDigestRef: contact-before-final-approval
         expect: {outcome: success, status: 200}
-      - id: get-before-apply
+        capture: submitted-contact-request
+      - id: submitter-cancels-external-review
         entity: register-household-contact-request
-        accessProfile: household-contact-applier
-        claims: &applier_claims
-          principal: household-contact-applier
-          scopes: [registry:household-contact:apply]
-          purpose: household-contact-apply
-        request: {operation: get, recordRef: contact-request}
-        expect:
-          outcome: success
-          status: 200
-          fields:
-            person-code: person-001
-            legal-name: Ana Ortega
-            family-name: Ortega
-            person-sex: female
-            residency-status: usual-resident
-            relationship: head
-            valid-from: "2026-01-01"
-            reason: registration packet and field visit verified
-        capture: contact-before-apply
-      - id: apply-contact-request
-        entity: register-household-contact-request
-        accessProfile: household-contact-applier
-        claims: *applier_claims
-        request:
-          operation: apply_request
-          recordRef: contact-before-apply
-          etagRef: contact-before-apply
-          proposalVersionRef: contact-before-apply
-          effectDigestRef: contact-before-apply
+        accessProfile: household-contact-submitter
+        claims: *submitter_claims
+        request: {operation: cancel_request, recordRef: submitted-contact-request, etagRef: submitted-contact-request}
         expect: {outcome: success, status: 200}
-        captureResults:
-          person: contact-person
-          membership: contact-membership
-      - id: get-created-contact
-        entity: person
-        accessProfile: household-operator
-        claims: *operator_claims
-        request: {operation: get, recordRef: contact-person}
-        expect:
-          outcome: success
-          status: 200
-          fields:
-            person-code: person-001
-            legal-name: Ana Ortega
-            family-name: Ortega
-            person-sex: female
-            residency-status: usual-resident
-        capture: contact-person-current
-      - id: get-created-membership
-        entity: group-membership
-        accessProfile: household-operator
-        claims: *operator_claims
-        request: {operation: get, recordRef: contact-membership}
-        expect:
-          outcome: success
-          status: 200
-          fields:
-            relationship: head
-            valid-from: "2026-01-01"
-      - id: update-created-contact
-        entity: person
-        accessProfile: household-operator
-        claims: *operator_claims
-        request:
-          operation: patch
-          recordRef: contact-person
-          etagRef: contact-person-current
-          changes:
-            - {field: legal-name, value: Ana Maria Ortega}
-        expect:
-          outcome: success
-          status: 200
-          fields:
-            legal-name: Ana Maria Ortega

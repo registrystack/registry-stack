@@ -213,12 +213,9 @@ export type IngestionPrefixDigest = BRegIngestionPrefixDigest
 export declare class BRegLifecycleAction {
   withReason(reason: string): BRegLifecycleAction
   get bodyJson(): string
-  get reviewJson(): string | null
   get operation(): string
-  get stage(): string | null
   get href(): string
   get body(): any
-  get review(): any | null
 }
 export type LifecycleAction = BRegLifecycleAction
 

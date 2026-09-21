@@ -591,6 +591,7 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::Oidc => "the Registry OIDC key source was refused",
         StartupError::Authentication => "the Registry authentication profile was refused",
         StartupError::EventDestinations => "the Registry event destination bindings were refused",
+        StartupError::ReviewBindings => "the Registry retained review bindings were refused",
         StartupError::AttachmentStorage => {
             "the Registry attachment storage or verification binding was refused"
         }

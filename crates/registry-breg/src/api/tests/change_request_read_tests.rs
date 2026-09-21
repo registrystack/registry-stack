@@ -37,7 +37,7 @@ fn request_history_continuation_refuses_unbound_or_noncanonical_values() {
 }
 
 #[test]
-fn request_get_omits_optional_review_action_when_target_claim_is_absent() {
+fn request_get_advertises_only_source_owned_lifecycle_actions() {
     let registry = compiled_registry();
     let service = service_for(registry.clone());
     let route = route(&registry, "records.placement-correction-request.get");
@@ -52,48 +52,19 @@ fn request_get_omits_optional_review_action_when_target_claim_is_absent() {
 
     let surface = authorize_route(&service, route, &missing_claims, &QueryOptions::default())
         .expect("request GET itself is authorized");
-    assert!(
-        surface.context.request_actions().is_empty(),
-        "missing optional target authority omits action discovery instead of failing request GET"
-    );
-
-    let claims = super::VerifiedRequestClaims::authenticated(
-        "principal",
-        "reviewer",
-        BTreeSet::new(),
-        None,
-        BTreeMap::from([(
-            "site_claim".to_owned(),
-            super::VerifiedClaimValue::direct_string("00000000-0000-4000-8000-000000000010")
-                .expect("claim value is valid"),
-        )]),
-    )
-    .expect("verified claims are valid");
-    let surface = authorize_route(&service, route, &claims, &QueryOptions::default())
-        .expect("request GET is authorized with target claims");
-    assert_eq!(surface.context.request_actions().len(), 6);
-    let approve = surface
+    let operations = surface
         .context
         .request_actions()
         .iter()
-        .find(|action| {
-            action.operation() == Operation::ApproveRequest
-                && action.review_stage() == Some("review")
-        })
-        .expect("approve action is discoverable");
+        .map(|action| action.operation())
+        .collect::<BTreeSet<_>>();
     assert_eq!(
-        approve.route_id(),
-        "records.placement-correction-request.request.stages.review.approve"
-    );
-    assert_eq!(approve.review_stage(), Some("review"));
-    assert_eq!(approve.target_authority().len(), 1);
-    assert_eq!(
-        approve.target_authority()[0].target_entity_id(),
-        "placement"
-    );
-    assert_eq!(
-        approve.target_authority()[0].readable_fields(),
-        &BTreeSet::from(["site".to_owned()])
+        operations,
+        BTreeSet::from([
+            Operation::SubmitRequest,
+            Operation::ReviseRequest,
+            Operation::CancelRequest,
+        ])
     );
 }
 
@@ -165,17 +136,16 @@ fn metadata_advertises_controlled_operations_separately_from_crud() {
 }
 
 #[test]
-fn request_description_declares_ordered_review_stages() {
+fn request_description_declares_external_review_authority() {
     let registry = compiled_registry();
     let request = registry.entities()["placement-correction-request"]
         .change_request
         .as_ref()
         .expect("request capability");
     let metadata = crate::artifacts::request_capability_metadata(request, &BTreeSet::new());
-    assert_eq!(metadata["stages"].as_array().unwrap().len(), 2);
-    assert_eq!(metadata["stages"][0]["id"], "review");
-    assert_eq!(metadata["stages"][1]["id"], "final-approval");
-    assert_eq!(metadata["stages"][1]["excludePreviousReviewers"], true);
+    assert_eq!(metadata["review"]["authority"], "casework");
+    assert_eq!(metadata["review"]["policyId"], "placement-correction");
+    assert!(metadata.get("stages").is_none());
 }
 
 #[test]
@@ -236,32 +206,15 @@ fn compiled_registry() -> Arc<CompiledRegistry> {
                 "operation":"patch",
                 "set":{"site":{"fromField":"proposed-site"}}
               }],
-              "review":{"stages":[
-                {"id":"review","approvals":1,"excludeSubmitter":true},
-                {"id":"final-approval","approvals":1,"excludeSubmitter":true,"excludePreviousReviewers":true}
-              ]}
+              "review":{"authority":"casework","policyId":"placement-correction"},
+              "onApproved":{"mode":"manual"}
             }
           }],
           "accessProfiles":[{
             "id":"request-reviewer","default":true,"principalClaim":"principal","permissions":[{
               "entity":"placement-correction-request",
-              "operations":["get","approve_request","reject_request","request_revision"],
+              "operations":["get","submit_request","revise_request","cancel_request"],
               "readableFields":["placement","proposed-site"],
-              "reviewStages":[{
-                "stage":"review",
-                "targets":[{
-                  "entity":"placement",
-                  "readableFields":["site"],
-                  "rowBoundaries":[{"field":"site","claim":"site_claim","operator":"equals"}]
-                }]
-              },{
-                "stage":"final-approval",
-                "targets":[{
-                  "entity":"placement",
-                  "readableFields":["site"],
-                  "rowBoundaries":[{"field":"site","claim":"site_claim","operator":"equals"}]
-                }]
-              }],
               "rowBoundaries": []
             }]
           },{

@@ -399,22 +399,6 @@ fn row_reach(
                     );
                 }
             }
-            for stage in &profile.review_stages {
-                for target in &stage.targets {
-                    add(
-                        &target.entity,
-                        &profile.id,
-                        format!(
-                            "{path}.reviewStages[stage={}].targets[entity={}].rowBoundaries",
-                            stage.stage, target.entity
-                        ),
-                        "review_target",
-                        &target.row_boundaries,
-                        &[],
-                        false,
-                    );
-                }
-            }
             for target in &profile.apply_targets {
                 add(
                     &target.entity,

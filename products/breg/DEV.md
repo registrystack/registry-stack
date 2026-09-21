@@ -121,6 +121,57 @@ compiled action requirements, and the runtime still resolves and validates
 every configured trust input before serving. Obtain the token after the shared
 issuer is ready, then start the action-bearing BREG borrower with this binding.
 
+For a change request whose `review.authority` names Casework, add one logical
+authority binding and one dedicated machine client before the first start:
+
+```yaml
+clients:
+  - id: casework-producer
+    accessProfiles: []
+    scopes: [casework:reviews:request]
+    claims: {}
+reviewAuthorities:
+  casework-a:
+    endpoint: http://127.0.0.1:8096/
+    profile: integration-requester
+    producerId: registry-producer
+    recoveryDays: 7
+    client: casework-producer
+```
+
+The authority ID must exactly match the compiled requirement. `profile`
+selects the Casework requester access profile on every authority exchange.
+`producerId`
+must match the Casework producer connection, whose admitted source namespaces
+include this Registry ID and whose admitted kinds include the authored review
+policy ID. The client has no BReg profile. Its scope and token identity must
+instead match Casework's requester profile and producer subject.
+
+The dev issuer generates the client's assertion key. `bregctl` copies its
+client ID and key into owner-only runtime secret files and emits a
+`privateKeyJwt` authority credential with the dev issuer token endpoint,
+assertion audience, resource, and declared scopes. BReg acquires and refreshes
+short-lived Casework tokens for each outbound exchange. No token or private key
+appears in `dev-clients.yaml`, runtime YAML, reports, or logs. An unmapped client
+uses the session's generated default BReg audience, which supports an App Kit
+composition where Casework and BReg deliberately share that resource audience.
+If `issuer.clientResources` maps the client, the generated credential uses that
+declared resource instead.
+
+Polling needs no callback credential. To test authenticated completion delivery,
+add both optional fields; declaring only one is refused:
+
+```yaml
+    completionTokenFile: /absolute/owner-only/casework-completion-token
+    completionRecipient: registry-breg
+```
+
+The completion token is an independent sender credential copied into private
+state. It is never used for review requests or source application. Operated
+runtime configuration also supports an explicit static `tokenRef` for an
+opaque renewable credential supplied by the deployment, but `bregctl dev`
+always generates the refreshing `privateKeyJwt` branch.
+
 After a seed, example scenario, or API write triggers an event, inspect receipts:
 
 ```sh

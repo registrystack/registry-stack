@@ -1824,15 +1824,14 @@ fn project_planner_build_request() -> PackageBuildRequest {
             ],
             "changeRequest":{{
               "planner":{{"kind":"rhai","script":"planners/request.rhai","abi":"registry.change-request-plan/v1","requestFields":["target","label"],"writes":[{{"target":{{"fromField":"target"}},"operation":"patch","fields":["label"]}}]}},
-              "review":{{"stages":[{{"id":"review","approvals":1}}]}},
-              "application":{{"mode":"planner","allowedDispositions":["apply"]}}
+              "review":{{"authority":"casework-main","policyId":"request-review"}},
+              "onApproved":{{"mode":"manual"}}
             }}
           }}],
           "accessProfiles":[{{
             "id":"operator","default":true,"principalClaim":"principal","permissions":[
               {{"rowBoundaries": [], "entity":"target","operations":["get","list"],"readableFields":["label"]}},
-              {{"rowBoundaries": [], "entity":"request","operations":["create","patch","get","list","submit_request","revise_request","cancel_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["target","label"],"writableFields":["target","label"],
-                "reviewStages":[{{"stage":"review","targets":[{{"rowBoundaries": [], "entity":"target","readableFields":["label"]}}]}}],
+              {{"rowBoundaries": [], "entity":"request","operations":["create","patch","get","list","submit_request","revise_request","cancel_request","apply_request"],"readableFields":["target","label"],"writableFields":["target","label"],
                 "applyTargets":[{{"rowBoundaries": [], "entity":"target"}}]
               }}
             ]
@@ -1882,11 +1881,10 @@ fn module_planner_build_request() -> PackageBuildRequest {
         ],
         "changeRequest":{
           "planner":{"kind":"rhai","script":"planners/request.rhai","abi":"registry.change-request-plan/v1","requestFields":["target","label"],"writes":[{"target":{"fromField":"target"},"operation":"patch","fields":["label"]}]},
-          "review":{"stages":[{"id":"review","approvals":1}]},
-          "application":{"mode":"planner","allowedDispositions":["apply"]}
+          "review":{"authority":"casework-main","policyId":"request-review"},
+          "onApproved":{"mode":"manual"}
         },
-        "accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["create","patch","get","list","submit_request","revise_request","cancel_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["target","label"],"writableFields":["target","label"],
-          "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"], "rowBoundaries": []}]}],
+        "accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["create","patch","get","list","submit_request","revise_request","cancel_request","apply_request"],"readableFields":["target","label"],"writableFields":["target","label"],
           "applyTargets":[{"entity":"target", "rowBoundaries": []}],
           "rowBoundaries": []
         }]

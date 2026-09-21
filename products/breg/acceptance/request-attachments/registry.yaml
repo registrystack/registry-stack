@@ -83,12 +83,11 @@
           }
         ],
         "review": {
-          "stages": [
-            {
-              "id": "review",
-              "approvals": 1
-            }
-          ]
+          "authority": "casework",
+          "policyId": "attachment-correction"
+        },
+        "onApproved": {
+          "mode": "manual"
         },
         "retention": {
           "mode": "operator_erase"
@@ -146,6 +145,10 @@
             "label",
             "supporting-file"
           ],
+          "readableRequestFields": [
+            "reason",
+            "review_state"
+          ],
           "writableFields": [
             "record",
             "label",
@@ -181,6 +184,10 @@
             "label",
             "supporting-file"
           ],
+          "readableRequestFields": [
+            "reason",
+            "review_state"
+          ],
           "writableFields": [
             "record",
             "label",
@@ -204,39 +211,19 @@
         {
           "entity": "correction-request",
           "operations": [
-            "get",
-            "approve_request",
-            "reject_request",
-            "request_revision"
+            "get"
           ],
           "readableFields": [
             "record",
             "label",
             "supporting-file"
           ],
+          "readableRequestFields": [
+            "reason",
+            "review_state"
+          ],
           "writableFields": [],
-          "rowBoundaries": [],
-          "reviewStages": [
-            {
-              "stage": "review",
-              "targets": [
-                {
-                  "entity": "record",
-                  "readableFields": [
-                    "label"
-                  ],
-                  "rowBoundaries": []
-                },
-                {
-                  "entity": "correction-request",
-                  "readableFields": [
-                    "supporting-file"
-                  ],
-                  "rowBoundaries": []
-                }
-              ]
-            }
-          ]
+          "rowBoundaries": []
         }
       ],
       "requiredPurposes": [
@@ -260,6 +247,10 @@
             "record",
             "label",
             "supporting-file"
+          ],
+          "readableRequestFields": [
+            "reason",
+            "review_state"
           ],
           "writableFields": [],
           "rowBoundaries": [],

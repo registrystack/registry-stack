@@ -70,7 +70,7 @@ fn documented_access_grants_compile_with_their_declared_default_and_relationship
 }
 
 #[test]
-fn documented_correction_has_complete_grants_for_independent_review_stages() {
+fn documented_correction_binds_external_review_authority_and_policy() {
     let mut entities = fragment(WORKFLOW_PAGE, "- id: placement-correction-request")["entities"]
         .as_array()
         .unwrap()
@@ -84,8 +84,12 @@ fn documented_correction_has_complete_grants_for_independent_review_stages() {
     let request = &compiled.entities()["placement-correction-request"];
     assert!(request.access_profiles["correction-submitter"].default);
     let review = request.change_request.as_ref().unwrap();
-    assert_eq!(review.stages.len(), 2);
-    assert!(review.stages[1].exclude_previous_reviewers);
+    assert!(matches!(
+        &review.review,
+        registry_breg::model::CompiledChangeRequestReview::Required(requirement)
+            if requirement.authority == "casework"
+                && requirement.policy_id == "asset-placement-correction"
+    ));
 }
 
 #[test]

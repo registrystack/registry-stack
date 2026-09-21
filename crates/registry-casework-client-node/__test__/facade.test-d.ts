@@ -2,12 +2,17 @@ import {
   CaseworkClient,
   CaseworkClientError,
   type ClockNextEffect,
+  type ContentDigest,
   type CaseworkProblemCode,
   type DecideRequest,
   type DirectoryMember,
-  type HostedCreateRequest,
-  type HostedDecisionRequest,
   type HistoryEntry,
+  type ReviewCreateRequest,
+  type ReviewRequestAccepted,
+  type ReviewerTask,
+  type ReviewResultOutcome,
+  type ReviewTaskContext,
+  type ReviewTaskDecisionRequest,
   type WorkItem,
 } from '../client'
 
@@ -69,19 +74,84 @@ client.absences(token, profile, { cursor: 'opaque-absence-cursor', limit: 1000 }
   void nextCursor
 })
 
-const hostedCreate: HostedCreateRequest = {
-  kind: 'decision',
-  requesterReference: 'batch-42',
-  display: { summary: 'Review the prepared batch' },
+const digest = `sha256:${'a'.repeat(64)}` as ContentDigest
+const reviewCreate: ReviewCreateRequest = {
+  kind: 'batch-validation',
+  subject: { source: 'breg', type: 'batch', id: 'batch-43', version: '1', digest },
+  requesterReference: 'batch-43',
+  context: { strategy: 'submitted', snapshot: { summary: 'Review the prepared batch' } },
+  resultConstraints: { acceptedCount: { minimum: 0, maximum: 412 } },
 }
-const hostedDecision: HostedDecisionRequest = { outcome: 'confirmed' }
-void client.createHostedItem(token, 'requester', 'create-42', hostedCreate)
-void client.requesterHostedNotes(token, 'requester', item.itemId, { limit: 25 })
-void client.hostedTerminalItems(token, 'requester', { limit: 25 })
-void client.listHostedWorkItems(token, profile, { view: 'my_teams', limit: 25 })
-void client.hostedWorkItemHistory(token, profile, item.itemId, { limit: 25 })
-void client.hostedAccountabilityRecord(token, 'supervisor', '00000000-0000-0000-0000-000000000000')
-void client.decideHostedWorkItem(token, profile, item.actions[0], 'decide-42', hostedDecision)
+const reviewCreateWithNullConstraints: ReviewCreateRequest = {
+  ...reviewCreate,
+  resultConstraints: null,
+}
+const reviewCreateWithoutConstraints: ReviewCreateRequest = {
+  kind: reviewCreate.kind,
+  subject: reviewCreate.subject,
+  requesterReference: reviewCreate.requesterReference,
+  context: reviewCreate.context,
+}
+// @ts-expect-error result constraints are JSON objects, never arrays
+const reviewCreateWithArrayConstraints: ReviewCreateRequest = { ...reviewCreate, resultConstraints: [] }
+void reviewCreateWithNullConstraints
+void reviewCreateWithoutConstraints
+void reviewCreateWithArrayConstraints
+const accepted: ReviewRequestAccepted = {
+  requestId: item.itemId,
+  subject: reviewCreate.subject,
+  policy: { id: 'batch-validation', version: '1', digest },
+  submissionDigest: digest,
+}
+void client.createOrRecoverReviewRequest(token, 'requester', 'create-43', reviewCreate, digest)
+void client.reviewRequest(token, 'requester', item.itemId)
+void client.reviewResult(token, 'requester', accepted)
+void client.reviewResults(token, 'requester', { limit: 25 })
+void client.cancelReviewRequest(token, 'requester', accepted, 'cancel-43', {
+  subject: accepted.subject,
+  reason: 'No longer needed',
+})
+void client.reviewTasks(token, profile, { queue: 'review', limit: 25 }, sourceProfile)
+client.reviewTaskContext(token, profile, item.itemId, sourceProfile).then((response) => {
+  const context: ReviewTaskContext = response.value
+  if (context.context.strategy === 'source' && context.context.bindingStatus === 'current') {
+    const sourceRevision: string | undefined = context.context.projection?.binding.sourceRevision
+    void sourceRevision
+  }
+})
+void client.reviewHistory(token, profile, item.itemId, { limit: 25 })
+void client.reviewHistory(token, profile, item.itemId, { limit: 25 }, sourceProfile)
+void client.addReviewNote(token, profile, item.itemId, 'note-1', { audience: 'reviewers', note: 'Review note' }, sourceProfile)
+void client.reviewClocks(token, profile, item.itemId, sourceProfile)
+void client.reviewAccountability(token, 'supervisor', '00000000-0000-0000-0000-000000000000')
+  .then((record) => {
+    const resultDigest: string | undefined = record.value.resultDigest
+    void resultDigest
+  })
+const reviewDecision: ReviewTaskDecisionRequest = { decision: { type: 'approve' } }
+void client.decideReviewTask(token, profile, item.itemId, item.revision, 'decide-43', reviewDecision, sourceProfile)
+
+function taskHolder(task: ReviewerTask): string | undefined {
+  if (task.state === 'open' || task.state === 'decided') return undefined
+  return task.state.held.holder.subject
+}
+void taskHolder
+
+function resultTrace(outcome: ReviewResultOutcome): string {
+  switch (outcome.kind) {
+    case 'available':
+      return `${outcome.value.requestId}:${outcome.traceId}`
+    case 'pending':
+    case 'concealed_or_unknown':
+    case 'expired':
+      return outcome.traceId
+    default: {
+      const unreachable: never = outcome
+      return unreachable
+    }
+  }
+}
+void resultTrace
 
 const officer = { issuer: 'https://idp.example', subject: 'officer' }
 const cover = { issuer: 'https://idp.example', subject: 'cover' }
@@ -96,10 +166,6 @@ void client.applyCaseloadMove(token, 'supervisor', 'move-1', {
   movement, items: [{ itemId: item.itemId, expectedRevision: item.revision }],
 }, sourceProfile)
 
-if (item.occurrenceKind === 'hosted') {
-  const requesterReference: string | undefined = item.hosted?.requesterReference
-  void requesterReference
-}
 const routedBy: string | undefined = item.routing?.ruleId
 const nextClockEffect = item.clockOccurrences?.[0]?.nextEffect
 const upcomingClockEffect: ClockNextEffect | undefined = item.clockOccurrences?.[0]?.upcomingEffects?.[0]

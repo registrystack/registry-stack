@@ -27,9 +27,6 @@ const MAX_PATH_BYTES: usize = 2_048;
 const MAX_SUPPORTED_ACTION_TARGETS: u64 = 16;
 const MAX_SUPPORTED_ACTION_FIELD_MUTATIONS: u64 = 128;
 const MAX_SUPPORTED_ACTION_SNAPSHOT_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_CHANGE_REQUEST_STAGES: usize = 32;
-const MAX_CHANGE_REQUEST_STAGE_ID_BYTES: usize = 64;
-const MAX_CHANGE_REQUEST_STAGE_APPROVALS: u64 = 32;
 
 /// A coarse, response-value-free reason that runtime metadata was refused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -96,9 +93,6 @@ pub enum BRegOperationKind {
     Revisions,
     Snapshot,
     SubmitRequest,
-    ApproveRequest,
-    RejectRequest,
-    RequestRevision,
     ReviseRequest,
     CancelRequest,
     ApplyRequest,
@@ -122,9 +116,6 @@ impl BRegOperationKind {
             Self::Revisions => "revisions",
             Self::Snapshot => "snapshot",
             Self::SubmitRequest => "submit_request",
-            Self::ApproveRequest => "approve_request",
-            Self::RejectRequest => "reject_request",
-            Self::RequestRevision => "request_revision",
             Self::ReviseRequest => "revise_request",
             Self::CancelRequest => "cancel_request",
             Self::ApplyRequest => "apply_request",
@@ -145,9 +136,6 @@ impl BRegOperationKind {
             "revisions" => Self::Revisions,
             "snapshot" => Self::Snapshot,
             "submit_request" => Self::SubmitRequest,
-            "approve_request" => Self::ApproveRequest,
-            "reject_request" => Self::RejectRequest,
-            "request_revision" => Self::RequestRevision,
             "revise_request" => Self::ReviseRequest,
             "cancel_request" => Self::CancelRequest,
             "apply_request" => Self::ApplyRequest,
@@ -284,79 +272,103 @@ impl BRegChangeRequestPlannerCapability {
     }
 }
 
-/// Static review policy for one visible request type.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BRegChangeRequestReviewMode {
+/// External review requirement compiled into one request type.
+#[derive(Clone, Eq, PartialEq)]
+pub enum BRegChangeRequestReviewRequirement {
     None,
-    Staged,
+    External(BRegChangeRequestExternalReviewRequirement),
 }
 
-/// Application policy selected by the governed request type.
+impl fmt::Debug for BRegChangeRequestReviewRequirement {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => formatter.write_str("BRegChangeRequestReviewRequirement::None"),
+            Self::External(_) => {
+                formatter.write_str("BRegChangeRequestReviewRequirement::External(<redacted>)")
+            }
+        }
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct BRegChangeRequestExternalReviewRequirement {
+    authority: String,
+    policy_id: String,
+}
+
+impl BRegChangeRequestExternalReviewRequirement {
+    #[must_use]
+    pub fn authority(&self) -> &str {
+        &self.authority
+    }
+
+    #[must_use]
+    pub fn policy_id(&self) -> &str {
+        &self.policy_id
+    }
+}
+
+impl fmt::Debug for BRegChangeRequestExternalReviewRequirement {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegChangeRequestExternalReviewRequirement(<redacted>)")
+    }
+}
+
+/// Source-owned application behavior after an approved external result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BRegChangeRequestApplicationMode {
+pub enum BRegChangeRequestOnApprovedMode {
     Manual,
     Automatic,
-    Planner,
 }
 
-/// An application result permitted by the governed application policy.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum BRegChangeRequestDisposition {
-    Apply,
-    Queue,
-}
-
-/// One finite package-authored reason for a planner-selected queue outcome.
+/// Descriptive post-approval application policy.
 #[derive(Clone, Eq, PartialEq)]
-pub struct BRegChangeRequestQueueReason {
-    code: String,
-    label: String,
+pub struct BRegChangeRequestOnApprovedCapability {
+    mode: BRegChangeRequestOnApprovedMode,
+    executor: Option<String>,
 }
 
-impl BRegChangeRequestQueueReason {
+impl BRegChangeRequestOnApprovedCapability {
     #[must_use]
-    pub fn code(&self) -> &str {
-        &self.code
+    pub const fn mode(&self) -> BRegChangeRequestOnApprovedMode {
+        self.mode
     }
-
     #[must_use]
-    pub fn label(&self) -> &str {
-        &self.label
+    pub fn executor(&self) -> Option<&str> {
+        self.executor.as_deref()
     }
 }
 
-impl fmt::Debug for BRegChangeRequestQueueReason {
+impl fmt::Debug for BRegChangeRequestOnApprovedCapability {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("BRegChangeRequestQueueReason")
-            .field("code", &self.code)
-            .field("label", &"<redacted>")
+            .debug_struct("BRegChangeRequestOnApprovedCapability")
+            .field("mode", &self.mode)
+            .field("has_executor", &self.executor.is_some())
             .finish()
     }
 }
 
-/// Source-free application capability for one visible request type.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Bounded, descriptive application preconditions. The value cannot grant
+/// lifecycle authority and remains bound by the metadata response ceiling.
+#[derive(Clone, Eq, PartialEq)]
 pub struct BRegChangeRequestApplicationCapability {
-    mode: BRegChangeRequestApplicationMode,
-    allowed_dispositions: Vec<BRegChangeRequestDisposition>,
-    queue_reasons: Vec<BRegChangeRequestQueueReason>,
+    preconditions: Option<Value>,
 }
 
 impl BRegChangeRequestApplicationCapability {
     #[must_use]
-    pub const fn mode(&self) -> BRegChangeRequestApplicationMode {
-        self.mode
+    pub const fn preconditions(&self) -> Option<&Value> {
+        self.preconditions.as_ref()
     }
+}
 
-    #[must_use]
-    pub fn allowed_dispositions(&self) -> &[BRegChangeRequestDisposition] {
-        &self.allowed_dispositions
-    }
-
-    #[must_use]
-    pub fn queue_reasons(&self) -> &[BRegChangeRequestQueueReason] {
-        &self.queue_reasons
+impl fmt::Debug for BRegChangeRequestApplicationCapability {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegChangeRequestApplicationCapability")
+            .field("has_preconditions", &self.preconditions.is_some())
+            .finish()
     }
 }
 
@@ -364,55 +376,9 @@ impl BRegChangeRequestApplicationCapability {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BRegChangeRequestCapability {
     planner: BRegChangeRequestPlannerCapability,
-    review_mode: BRegChangeRequestReviewMode,
-    stages: Option<Vec<BRegChangeRequestStage>>,
+    review: BRegChangeRequestReviewRequirement,
+    on_approved: BRegChangeRequestOnApprovedCapability,
     application: BRegChangeRequestApplicationCapability,
-}
-
-/// One authored review stage advertised for a change-request kind.
-#[derive(Clone, Eq, PartialEq)]
-pub struct BRegChangeRequestStage {
-    id: String,
-    approvals: u64,
-    exclude_submitter: bool,
-    exclude_previous_reviewers: bool,
-}
-
-impl fmt::Debug for BRegChangeRequestStage {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BRegChangeRequestStage")
-            .field("identifier", &"<redacted>")
-            .field("approvals", &self.approvals)
-            .field("exclude_submitter", &self.exclude_submitter)
-            .field(
-                "exclude_previous_reviewers",
-                &self.exclude_previous_reviewers,
-            )
-            .finish()
-    }
-}
-
-impl BRegChangeRequestStage {
-    #[must_use]
-    pub fn identifier(&self) -> &str {
-        &self.id
-    }
-
-    #[must_use]
-    pub const fn approvals(&self) -> u64 {
-        self.approvals
-    }
-
-    #[must_use]
-    pub const fn exclude_submitter(&self) -> bool {
-        self.exclude_submitter
-    }
-
-    #[must_use]
-    pub const fn exclude_previous_reviewers(&self) -> bool {
-        self.exclude_previous_reviewers
-    }
 }
 
 impl BRegChangeRequestCapability {
@@ -420,24 +386,19 @@ impl BRegChangeRequestCapability {
     pub const fn planner(&self) -> &BRegChangeRequestPlannerCapability {
         &self.planner
     }
-
     #[must_use]
-    pub const fn review_mode(&self) -> BRegChangeRequestReviewMode {
-        self.review_mode
+    pub const fn review(&self) -> &BRegChangeRequestReviewRequirement {
+        &self.review
     }
-
-    /// Returns authored stages when the server supports this additive metadata field.
     #[must_use]
-    pub fn stages(&self) -> Option<&[BRegChangeRequestStage]> {
-        self.stages.as_deref()
+    pub const fn on_approved(&self) -> &BRegChangeRequestOnApprovedCapability {
+        &self.on_approved
     }
-
     #[must_use]
     pub const fn application(&self) -> &BRegChangeRequestApplicationCapability {
         &self.application
     }
 }
-
 /// One caller-visible field on an authoritative runtime operation.
 #[derive(Clone, PartialEq)]
 pub struct BRegMetadataField {
@@ -1739,11 +1700,10 @@ impl BRegMetadata {
                     BRegMetadataSelectionErrorKind::ContractMismatch,
                 ));
             }
-            let stage = lifecycle_route_stage(operation, kind, &base_path, &entity.id)?;
+            lifecycle_route_is_exact(operation, kind, &base_path, &entity.id)?;
             bindings.push(crate::BRegLifecycleOperationBinding::new(
                 kind,
                 operation.path.clone(),
-                stage,
             ));
         }
 
@@ -2671,9 +2631,6 @@ fn lifecycle_operation(operation: &BRegOperationKind) -> Option<crate::BRegLifec
     use crate::BRegLifecycleOperation as Lifecycle;
     Some(match operation {
         BRegOperationKind::SubmitRequest => Lifecycle::SubmitRequest,
-        BRegOperationKind::ApproveRequest => Lifecycle::ApproveRequest,
-        BRegOperationKind::RejectRequest => Lifecycle::RejectRequest,
-        BRegOperationKind::RequestRevision => Lifecycle::RequestRevision,
         BRegOperationKind::ReviseRequest => Lifecycle::ReviseRequest,
         BRegOperationKind::CancelRequest => Lifecycle::CancelRequest,
         BRegOperationKind::ApplyRequest => Lifecycle::ApplyRequest,
@@ -2706,10 +2663,7 @@ fn lifecycle_request_is_exact(
 fn expected_lifecycle_schema(kind: crate::BRegLifecycleOperation) -> Value {
     use crate::BRegLifecycleOperation as Lifecycle;
     let mut schema = match kind {
-        Lifecycle::ApproveRequest
-        | Lifecycle::RejectRequest
-        | Lifecycle::RequestRevision
-        | Lifecycle::ApplyRequest => serde_json::json!({
+        Lifecycle::ApplyRequest => serde_json::json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
             "additionalProperties": false,
@@ -2740,58 +2694,32 @@ fn expected_lifecycle_schema(kind: crate::BRegLifecycleOperation) -> Value {
             "properties": {}
         }),
     };
-    if matches!(
-        kind,
-        Lifecycle::ApproveRequest
-            | Lifecycle::RejectRequest
-            | Lifecycle::RequestRevision
-            | Lifecycle::ApplyRequest
-    ) {
-        schema["properties"]["reason"] = serde_json::json!({"type": "string", "maxLength": 4096, "pattern": r"^[^\u0000]*$", "description": "Optional reviewer explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."});
+    if kind == Lifecycle::ApplyRequest {
+        schema["properties"]["reason"] = serde_json::json!({"type": "string", "maxLength": 4096, "pattern": r"^[^\u0000]*$", "description": "Optional application explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."});
     }
     schema
 }
 
-fn lifecycle_route_stage(
+fn lifecycle_route_is_exact(
     operation: &BRegMetadataOperation,
     kind: crate::BRegLifecycleOperation,
     base_path: &str,
     entity_identifier: &str,
-) -> Result<Option<String>, BRegMetadataSelectionError> {
+) -> Result<(), BRegMetadataSelectionError> {
     use crate::BRegLifecycleOperation as Lifecycle;
     let mismatch = || selection_error(BRegMetadataSelectionErrorKind::ContractMismatch);
     let (id_suffix, path_suffix) = match kind {
         Lifecycle::SubmitRequest => ("submit", "submit"),
-        Lifecycle::ApproveRequest => ("approve", "approve"),
-        Lifecycle::RejectRequest => ("reject", "reject"),
-        Lifecycle::RequestRevision => ("request_revision", "request-revision"),
         Lifecycle::ReviseRequest => ("revise", "revise"),
         Lifecycle::CancelRequest => ("cancel", "cancel"),
         Lifecycle::ApplyRequest => ("apply", "apply"),
     };
-    if matches!(
-        kind,
-        Lifecycle::ApproveRequest | Lifecycle::RejectRequest | Lifecycle::RequestRevision
-    ) {
-        let id_prefix = format!("records.{entity_identifier}.request.stages.");
-        let remainder = operation.id.strip_prefix(&id_prefix).ok_or_else(mismatch)?;
-        let (stage, suffix) = remainder.split_once('.').ok_or_else(mismatch)?;
-        if suffix != id_suffix || stage.contains('.') {
-            return Err(mismatch());
-        }
-        identifier(Value::String(stage.to_owned())).map_err(|_| mismatch())?;
-        if operation.path != format!("{base_path}/stages/{stage}/{path_suffix}") {
-            return Err(mismatch());
-        }
-        return Ok(Some(stage.to_owned()));
-    }
-
     if operation.id != format!("records.{entity_identifier}.request.{id_suffix}")
         || operation.path != format!("{base_path}/{path_suffix}")
     {
         return Err(mismatch());
     }
-    Ok(None)
+    Ok(())
 }
 
 fn parse_metadata(value: Value) -> Result<BRegMetadata, BRegMetadataError> {
@@ -2892,70 +2820,70 @@ fn parse_change_request_capability(
 ) -> Result<BRegChangeRequestCapability, BRegMetadataError> {
     let mut capability = object(value)?;
     let planner = parse_change_request_planner(required(&mut capability, "planner")?)?;
-    let review_mode = match identifier(required(&mut capability, "reviewMode")?)?.as_str() {
-        "none" => BRegChangeRequestReviewMode::None,
-        "staged" => BRegChangeRequestReviewMode::Staged,
-        _ => return Err(metadata_error(BRegMetadataErrorKind::Shape)),
-    };
-    let stages = capability
-        .remove("stages")
-        .map(parse_change_request_stages)
-        .transpose()?;
-    if review_mode == BRegChangeRequestReviewMode::None
-        && stages.as_ref().is_some_and(|stages| !stages.is_empty())
-    {
-        return Err(metadata_error(BRegMetadataErrorKind::Shape));
-    }
+    let review = parse_change_request_review(required(&mut capability, "review")?)?;
+    let on_approved = parse_change_request_on_approved(required(&mut capability, "onApproved")?)?;
     let application = parse_change_request_application(required(&mut capability, "application")?)?;
     finish(capability)?;
     Ok(BRegChangeRequestCapability {
         planner,
-        review_mode,
-        stages,
+        review,
+        on_approved,
         application,
     })
 }
 
-fn parse_change_request_stages(
+fn parse_change_request_review(
     value: Value,
-) -> Result<Vec<BRegChangeRequestStage>, BRegMetadataError> {
-    let values = array(value)?;
-    if values.len() > MAX_CHANGE_REQUEST_STAGES {
-        return Err(metadata_error(BRegMetadataErrorKind::Bound));
+) -> Result<BRegChangeRequestReviewRequirement, BRegMetadataError> {
+    let mut review = object(value)?;
+    if review.len() == 1 && review.remove("mode") == Some(Value::String("none".to_owned())) {
+        return Ok(BRegChangeRequestReviewRequirement::None);
     }
-    let mut ids = BTreeSet::new();
-    values
-        .into_iter()
-        .map(|value| {
-            let mut stage = object(value)?;
-            let id = identifier(required(&mut stage, "id")?)?;
-            if id.len() > MAX_CHANGE_REQUEST_STAGE_ID_BYTES || id.contains('.') {
-                return Err(metadata_error(BRegMetadataErrorKind::Identifier));
-            }
-            if !ids.insert(id.clone()) {
-                return Err(metadata_error(BRegMetadataErrorKind::DuplicateIdentifier));
-            }
-            let approvals = positive_integer(required(&mut stage, "approvals")?)?;
-            if approvals > MAX_CHANGE_REQUEST_STAGE_APPROVALS {
-                return Err(metadata_error(BRegMetadataErrorKind::Bound));
-            }
-            let exclude_submitter = boolean(required(&mut stage, "excludeSubmitter")?)?;
-            let exclude_previous_reviewers = stage
-                .remove("excludePreviousReviewers")
-                .map(boolean)
-                .transpose()?
-                .unwrap_or(false);
-            finish(stage)?;
-            Ok(BRegChangeRequestStage {
-                id,
-                approvals,
-                exclude_submitter,
-                exclude_previous_reviewers,
-            })
-        })
-        .collect()
+    if review.len() != 2 {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    }
+    let authority = identifier(required(&mut review, "authority")?)?;
+    let policy_id = identifier(required(&mut review, "policyId")?)?;
+    finish(review)?;
+    Ok(BRegChangeRequestReviewRequirement::External(
+        BRegChangeRequestExternalReviewRequirement {
+            authority,
+            policy_id,
+        },
+    ))
 }
 
+fn parse_change_request_on_approved(
+    value: Value,
+) -> Result<BRegChangeRequestOnApprovedCapability, BRegMetadataError> {
+    let mut policy = object(value)?;
+    let mode = match identifier(required(&mut policy, "mode")?)?.as_str() {
+        "manual" => BRegChangeRequestOnApprovedMode::Manual,
+        "automatic" => BRegChangeRequestOnApprovedMode::Automatic,
+        _ => return Err(metadata_error(BRegMetadataErrorKind::Shape)),
+    };
+    let executor = policy.remove("executor").map(identifier).transpose()?;
+    if (mode == BRegChangeRequestOnApprovedMode::Automatic) != executor.is_some() {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    }
+    finish(policy)?;
+    Ok(BRegChangeRequestOnApprovedCapability { mode, executor })
+}
+
+fn parse_change_request_application(
+    value: Value,
+) -> Result<BRegChangeRequestApplicationCapability, BRegMetadataError> {
+    let mut application = object(value)?;
+    let preconditions = application.remove("preconditions");
+    if preconditions
+        .as_ref()
+        .is_some_and(|value| !value.is_object())
+    {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    }
+    finish(application)?;
+    Ok(BRegChangeRequestApplicationCapability { preconditions })
+}
 fn parse_change_request_planner(
     value: Value,
 ) -> Result<BRegChangeRequestPlannerCapability, BRegMetadataError> {
@@ -3037,72 +2965,6 @@ fn parse_change_request_planner_limits(
     };
     finish(limits)?;
     Ok(parsed)
-}
-
-fn parse_change_request_application(
-    value: Value,
-) -> Result<BRegChangeRequestApplicationCapability, BRegMetadataError> {
-    let mut application = object(value)?;
-    let mode = match identifier(required(&mut application, "mode")?)?.as_str() {
-        "manual" => BRegChangeRequestApplicationMode::Manual,
-        "automatic" => BRegChangeRequestApplicationMode::Automatic,
-        "planner" => BRegChangeRequestApplicationMode::Planner,
-        _ => return Err(metadata_error(BRegMetadataErrorKind::Shape)),
-    };
-    let allowed_dispositions =
-        identifier_array(required(&mut application, "allowedDispositions")?)?
-            .into_iter()
-            .map(|disposition| match disposition.as_str() {
-                "apply" => Ok(BRegChangeRequestDisposition::Apply),
-                "queue" => Ok(BRegChangeRequestDisposition::Queue),
-                _ => Err(metadata_error(BRegMetadataErrorKind::Shape)),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-    let unique_dispositions = allowed_dispositions
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>();
-    if allowed_dispositions.is_empty() || unique_dispositions.len() != allowed_dispositions.len() {
-        return Err(metadata_error(BRegMetadataErrorKind::DuplicateIdentifier));
-    }
-    let static_dispositions_are_exact = match mode {
-        BRegChangeRequestApplicationMode::Manual => {
-            allowed_dispositions == [BRegChangeRequestDisposition::Queue]
-        }
-        BRegChangeRequestApplicationMode::Automatic => {
-            allowed_dispositions == [BRegChangeRequestDisposition::Apply]
-        }
-        BRegChangeRequestApplicationMode::Planner => true,
-    };
-    if !static_dispositions_are_exact {
-        return Err(metadata_error(BRegMetadataErrorKind::Shape));
-    }
-    let queue_reasons = array(required(&mut application, "queueReasons")?)?
-        .into_iter()
-        .map(|reason| {
-            let mut reason = object(reason)?;
-            let code = identifier(required(&mut reason, "code")?)?;
-            let label = bounded_short_text(required(&mut reason, "label")?)?;
-            if label.is_empty() {
-                return Err(metadata_error(BRegMetadataErrorKind::Shape));
-            }
-            finish(reason)?;
-            Ok(BRegChangeRequestQueueReason { code, label })
-        })
-        .collect::<Result<Vec<_>, BRegMetadataError>>()?;
-    ensure_unique(queue_reasons.iter().map(|reason| reason.code.as_str()))?;
-    if (mode != BRegChangeRequestApplicationMode::Planner && !queue_reasons.is_empty())
-        || (!queue_reasons.is_empty()
-            && !unique_dispositions.contains(&BRegChangeRequestDisposition::Queue))
-    {
-        return Err(metadata_error(BRegMetadataErrorKind::Shape));
-    }
-    finish(application)?;
-    Ok(BRegChangeRequestApplicationCapability {
-        mode,
-        allowed_dispositions,
-        queue_reasons,
-    })
 }
 
 fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataError> {

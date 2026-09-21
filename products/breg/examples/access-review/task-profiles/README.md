@@ -4,7 +4,7 @@ This small registry demonstrates one policy in several tasks: a clerk reads
 records in assigned districts and edits labels on records they own; a supervisor
 can edit labels across the registry; an auditor reads assigned history. An
 action-only registrar creates records. A separate reviewed-record entity
-requires independent review stages before a label can be patched.
+requires an external Casework approval before a label can be patched.
 
 The example uses synthetic identities. It is an offline configuration example,
 not a login application or evidence of live identity-provider interoperability.
@@ -35,7 +35,7 @@ assignment. No direct patch may change an existing record's district or owner.
 | Supervise the registry | `supervisor`, `record:supervise` | All districts; edit record labels, create and read reviewed records. |
 | Inspect history | `auditor`, `record:audit` | Assigned districts, selected fields, no writes. |
 | Register a record | `registrar`, `record:register` | Invoke `register-record`; assigned district and owner equals principal; no direct entity operations. |
-| Review a correction | Four `correction-*` profiles with separate permissions | Submitter owns the request; assigned request and target districts; reviewer and final approver differ from submitter and each other. |
+| Review a correction | `correction-reviewer` provides source-context read access | BReg freezes the proposal and submits it to the configured Casework authority; Casework owns reviewer separation and stage policy. |
 
 The example deliberately uses two entities with different write policies.
 `record` permits direct label edits. `reviewed-record` declares
@@ -49,8 +49,9 @@ Every boundary in a grant must hold. Profiles are not merged. The clerk therefor
 uses `clerk-reader` to read colleagues' records and `clerk-editor` to edit their
 own. `clerk-reader` is the default on record get/list routes, while `correction-submitter`
 is the default on shared request reads. Direct record patches have several possible profiles with no default, so the
-application must name its intended profile. Each stage-specific review route
-has one eligible profile here and selects it automatically. Neither default is a fallback after refusal.
+application must name its intended profile. Casework uses the dedicated
+`correction-reviewer` source profile to read the frozen request context; that
+profile cannot decide or apply the request. Neither default is a fallback after refusal.
 
 ## Preview admission
 
@@ -67,12 +68,12 @@ Both commands exit successfully because an explanation was produced; for
 automation inspect `explanation.admitted` in `--format json` output.
 
 Other scenario files cover owned editing, a supervisor, history, an auditor's
-refused edit, and reviewer admission. No scenario contains a real token or
+refused edit, and Casework source-context read admission. No scenario contains a real token or
 record. An admitted preview has not checked a row, verified a credential,
 applied a mutation, or checked a workflow's current stage or actor exclusions.
 The action-only grant appears under `actions` in `explain access --format json`
 output, not in the plain-text report; the entity admission preview does not
-simulate invoking it.
+simulate invoking it or evaluating Casework policy.
 
 ## Bind real identities and verify records
 
@@ -90,9 +91,8 @@ the auditor can read history without editing. For the action, prove both a valid
 registration and refusal for another owner or an unassigned district.
 
 For a correction against a reviewed record, prove that a direct patch is
-refused, that the submitter cannot approve, that the first
-reviewer cannot approve the final stage even with its permission, and that a
-different final approver can complete review. Changing profile names must not
-change those decisions. Manual application requires its own permission and
-checks the target's district again; it does not require a fourth independent
-actor.
+refused, submission creates the exact configured external review, BReg cannot
+apply before the correlated approval is retained, and Casework enforces its
+independent reviewer policy. Changing BReg profile names must not change those
+Casework decisions. Manual application requires its own BReg permission and
+checks the target's district again.

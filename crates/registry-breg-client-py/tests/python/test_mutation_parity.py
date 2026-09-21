@@ -218,27 +218,15 @@ def metadata() -> dict:
                         "possibleWriteCount": 1,
                         "possibleWriteOperations": ["patch"],
                     },
-                    "reviewMode": "staged",
-                    "stages": [
-                        {
-                            "id": "legal-review",
-                            "approvals": 2,
-                            "excludeSubmitter": True,
-                            "excludePreviousReviewers": True,
-                        },
-                        {
-                            "id": "operations",
-                            "approvals": 1,
-                            "excludeSubmitter": False,
-                        },
-                    ],
-                    "application": {
-                        "mode": "planner",
-                        "allowedDispositions": ["apply", "queue"],
-                        "queueReasons": [
-                            {"code": "manual-check", "label": "Manual check"}
-                        ],
+                    "review": {
+                        "authority": "casework",
+                        "policyId": "address-review",
                     },
+                    "onApproved": {
+                        "mode": "automatic",
+                        "executor": "breg-worker",
+                    },
+                    "application": {"preconditions": {"request": []}},
                 },
             }
         ],
@@ -432,25 +420,15 @@ class MutationParityTests(unittest.TestCase):
         self.assertEqual(capability["planner"]["kind"], "rhai")
         self.assertEqual(capability["planner"]["limits"]["maximum_modules"], 0)
         self.assertEqual(
-            capability["stages"],
-            [
-                {
-                    "id": "legal-review",
-                    "approvals": 2,
-                    "exclude_submitter": True,
-                    "exclude_previous_reviewers": True,
-                },
-                {
-                    "id": "operations",
-                    "approvals": 1,
-                    "exclude_submitter": False,
-                    "exclude_previous_reviewers": False,
-                },
-            ],
+            capability["review"],
+            {"authority": "casework", "policy_id": "address-review"},
         )
         self.assertEqual(
-            capability["application"]["queue_reasons"],
-            [{"code": "manual-check", "label": "Manual check"}],
+            capability["on_approved"],
+            {"mode": "automatic", "executor": "breg-worker"},
+        )
+        self.assertEqual(
+            capability["application"], {"preconditions": {"request": []}}
         )
         self.assertEqual(self.contract.immediate_actions[0]["input_mode"], "fixed")
         batch_operation = next(

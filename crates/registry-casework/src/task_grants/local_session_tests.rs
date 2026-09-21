@@ -160,6 +160,24 @@ async fn http(
     (status, response.json().await.unwrap())
 }
 
+async fn create_review(url: &str, token: &str, body: Value) -> (StatusCode, Value) {
+    let response = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap()
+        .post(format!("{url}/v1/review-requests"))
+        .bearer_auth(token)
+        .header("registry-casework-profile", "producer")
+        .header("idempotency-key", uuid::Uuid::new_v4().to_string())
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, response.json().await.unwrap())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker, built casework/caseworkctl and disposable BREG_TEST_DATABASE_URL"]
 async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
@@ -218,9 +236,11 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
         .push(source_creator);
     project["accessProfiles"][2]["permissions"][0]["readableRequestFields"] =
         json!(["reason", "review_state"]);
+    project["accessProfiles"][2]["id"] = json!("reviewer");
     project["accessProfiles"][2]["actorKind"] = json!("human");
     project["accessProfiles"][2]["requesterClients"] = json!(["staff"]);
     project["accessProfiles"][2]["requiredScopes"] = json!(["records:get"]);
+    project["accessProfiles"][2]["requiredPurposes"] = json!(["review"]);
     let mut reader = project["accessProfiles"][2].clone();
     reader["id"] = json!("reader");
     reader["actorKind"] = json!("service");
@@ -230,6 +250,10 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
         .as_object_mut()
         .unwrap()
         .remove("reviewStages");
+    reader["permissions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("applyTargets");
     project["accessProfiles"]
         .as_array_mut()
         .unwrap()
@@ -252,7 +276,7 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
             .bytes,
     )
     .unwrap();
-    let description = json!({"apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1","kind":"BRegCaseworkSourceDescription","origin":"bregctl explain change-requests","authority":"none","sourceId":"source","sourceRevision":registry.revision(),"request":{"requestEntity":"correction-request","requestRoute":"correction-requests","reviewMode":"staged","stages":[{"id":"review","approvals":1,"excludeSubmitter":true,"excludePreviousReviewers":false}],"application":{"mode":"manual"},"contractFingerprint":contract.contract_fingerprint,"fields":entity.stored_fields.iter().map(|field|json!({"field":field.logical.id,"apiName":field.logical.api_name,"schema":schema["properties"][&field.logical.api_name]})).collect::<Vec<_>>()}});
+    let description = json!({"apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1","kind":"BRegCaseworkSourceDescription","origin":"bregctl explain change-requests","authority":"none","sourceId":"source","sourceRevision":registry.revision(),"request":{"requestEntity":"correction-request","requestRoute":"correction-requests","review":contract.review,"onApproved":contract.on_approved,"application":contract.application,"contractFingerprint":contract.contract_fingerprint,"fields":entity.stored_fields.iter().map(|field|json!({"field":field.logical.id,"apiName":field.logical.api_name,"schema":schema["properties"][&field.logical.api_name]})).collect::<Vec<_>>()}});
     fs::write(
         session.project.join("sources/source.json"),
         serde_json::to_vec(&description).unwrap(),
@@ -261,7 +285,25 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
     let identity = session
         .success(vec!["dev".into(), "identity".into(), "task-agent".into()])
         .await;
-    let policy = json!({"apiVersion":"registry.registrystack.org/casework/v1alpha1","kind":"CaseworkProject","casework":{"id":"source-local","version":"1"},"accessProfiles":[{"id":"supervisor","principalClaim":"sub","requiredScopes":["casework:supervisor"],"role":"supervisor"},{"id":"staff","principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"},{"id":"administrator","principalClaim":"sub","requiredScopes":["casework:admin"],"role":"administrator"}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"breg","description":"sources/source.json","requests":[{"entity":"correction-request","queue":"review","projection":["tenant"]}]}],"taskTemplates":[{"id":"draft","version":"1","label":"Prepare correction","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","itemKinds":["correction-request"],"itemStates":["claimed"],"agent":{"issuer":session.issuer(),"subject":identity["subject"]},"client":"task-agent","resource":AUDIENCE,"scopes":["records:get"],"purpose":"review","bounds":{"type":"breg","permissions":[{"collection":"correction-requests","operations":["create","get","patch","submit_request"]}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900}]});
+    let producer = session
+        .success(vec!["dev".into(), "identity".into(), "producer".into()])
+        .await;
+    let policy = json!({
+        "apiVersion":"registry.registrystack.org/casework/v1alpha1",
+        "kind":"CaseworkProject",
+        "casework":{"id":"source-local","version":"1"},
+        "accessProfiles":[
+            {"id":"supervisor","principalClaim":"sub","requiredScopes":["casework:supervisor"],"role":"supervisor"},
+            {"id":"staff","principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"},
+            {"id":"administrator","principalClaim":"sub","requiredScopes":["casework:admin"],"role":"administrator"},
+            {"id":"producer","principalClaim":"sub","requiredScopes":["casework:reviews:request"],"role":"requester"}
+        ],
+        "queues":[{"id":"review","label":"Review"}],
+        "sources":[{"id":"source","adapter":"breg","description":"sources/source.json","requests":[{"entity":"correction-request","queue":"review","projection":["tenant"]}]}],
+        "reviewKinds":[{"id":"external-review","version":"1","purpose":"approval","contextStrategy":"source","stages":[{"id":"review","queue":"review","decidingProfiles":["staff"],"requiredApprovals":1}],"retention":{"terminalDays":30,"accountabilityDays":90},"displaySchema":{"type":"object","additionalProperties":false,"properties":{}}}],
+        "reviewProducers":[{"id":"breg","profile":"producer","issuer":session.issuer(),"subject":producer["subject"],"sourceNamespaces":["source"],"kinds":["external-review"],"recoveryDays":7}],
+        "taskTemplates":[{"id":"draft","version":"1","label":"Prepare correction","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","reviewKinds":["external-review"],"agent":{"issuer":session.issuer(),"subject":identity["subject"]},"client":"task-agent","resource":AUDIENCE,"scopes":["records:get"],"purpose":"review","bounds":{"type":"breg","permissions":[{"collection":"correction-requests","operations":["create","get","patch","submit_request"]}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900}]
+    });
     fs::write(
         session.project.join("casework.yaml"),
         serde_norway::to_string(&policy).unwrap(),
@@ -269,7 +311,7 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
     .unwrap();
     let webhook = workspace.path().join("webhook");
     private(&webhook, b"synthetic-source-webhook-key-32-bytes");
-    let clients = json!({"version":1,"clients":[{"id":"supervisor","accessProfile":"supervisor","scopes":["casework:supervisor"],"claims":{"registry_actor_kind":"human"}},{"id":"administrator","accessProfile":"administrator","scopes":["casework:admin"],"claims":{"registry_actor_kind":"human"}},{"id":"staff","accessProfile":"staff","scopes":["casework:staff","records:get"],"claims":{"registry_actor_kind":"human","tenant_claim":"tenant-a","registry_purpose":"review"}}],"directory":[{"team":"team","queue":"review","staff":["staff"],"supervisors":["supervisor"]}],"integrations":{"resource":AUDIENCE,"sources":{"source":{"baseUrl":source_url,"readerProfile":"reader","tokenEndpoint":format!("{}/oauth2/token",session.issuer()),"clientAssertionAudience":session.issuer(),"resource":AUDIENCE,"scopes":["records:get"],"clientIdRef":"secret:file/service-source-reader-id","clientAssertionKeyRef":"secret:file/service-source-reader-key","webhookSecretRef":"secret:file/source-webhook","eventSource":"urn:registrystack:registry:task-authority-http:instance:task-instance"}},"secretFiles":{"source-webhook":webhook},"serviceClients":[{"id":"source-reader","scopes":["records:get"],"claims":{"tenant_claim":"tenant-a","registry_purpose":"review"}},{"id":"seed-client","scopes":["records:get"],"claims":{"tenant_claim":"tenant-a","registry_purpose":"review"}},{"id":"task-agent","scopes":["casework:grants:assert"],"taskExchange":true},{"id":"status-client","scopes":["casework:grants:status"]}],"taskAuthority":{"issuer":AUTHORITY,"jwksPort":session.ports[3],"statusClients":{"status-client":AUDIENCE}}}});
+    let clients = json!({"version":1,"clients":[{"id":"supervisor","accessProfile":"supervisor","scopes":["casework:supervisor"],"claims":{"registry_actor_kind":"human"}},{"id":"administrator","accessProfile":"administrator","scopes":["casework:admin"],"claims":{"registry_actor_kind":"human"}},{"id":"staff","accessProfile":"staff","scopes":["casework:staff","records:get"],"claims":{"registry_actor_kind":"human","tenant_claim":"tenant-a","registry_purpose":"review"}},{"id":"producer","accessProfile":"producer","scopes":["casework:reviews:request"]}],"directory":[{"team":"team","queue":"review","staff":["staff"],"supervisors":["supervisor"]}],"integrations":{"resource":AUDIENCE,"sources":{"source":{"baseUrl":source_url,"readerProfile":"reader","tokenEndpoint":format!("{}/oauth2/token",session.issuer()),"clientAssertionAudience":session.issuer(),"resource":AUDIENCE,"scopes":["records:get"],"clientIdRef":"secret:file/service-source-reader-id","clientAssertionKeyRef":"secret:file/service-source-reader-key","webhookSecretRef":"secret:file/source-webhook","eventSource":"urn:registrystack:registry:task-authority-http:instance:task-instance"}},"secretFiles":{"source-webhook":webhook},"serviceClients":[{"id":"source-reader","scopes":["records:get"],"claims":{"tenant_claim":"tenant-a","registry_purpose":"review"}},{"id":"seed-client","scopes":["records:get"],"claims":{"tenant_claim":"tenant-a","registry_purpose":"review"}},{"id":"task-agent","scopes":["casework:grants:assert"],"taskExchange":true},{"id":"status-client","scopes":["casework:grants:status"]}],"taskAuthority":{"issuer":AUTHORITY,"jwksPort":session.ports[3],"statusClients":{"status-client":AUDIENCE}}}});
     fs::write(
         session.project.join("dev-clients.yaml"),
         serde_norway::to_string(&clients).unwrap(),
@@ -375,6 +417,27 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
     )
     .await;
     assert_eq!(submitted.status, StatusCode::OK);
+    let submitted_record =
+        resource::get(&app, &resource::id(&draft), "source-creator", &seed).await;
+    let producer_token = session.token("producer").await;
+    let (status, accepted) = create_review(
+        &session.url(),
+        &producer_token,
+        json!({
+            "kind":"external-review",
+            "subject":{
+                "source":"source",
+                "type":"correction-request",
+                "id":resource::id(&draft),
+                "version":submitted_record.body["data"]["request"]["proposalVersion"].to_string(),
+                "digest":submitted_record.body["data"]["request"]["effectDigest"]
+            },
+            "requesterReference":"local-source",
+            "context":{"strategy":"source","binding":{"reference":"local-source"}}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{accepted}");
     use registry_casework_core::SourceAdapter;
     let runtime = crate::RuntimeConfig::load(session.root().join("operator.yaml")).unwrap();
     let secrets = crate::secret_resolver(&runtime).unwrap();
@@ -396,14 +459,12 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
     session.stop().await;
     session.start().await; // Immediate source reconciliation uses the retained issuer and real submitted source.
     let human = session.token("staff").await;
-    let mut items = Value::Null;
+    let mut item = Value::Null;
+    let mut last_page = Value::Null;
     for _ in 0..100 {
         let (status, body) = http(
             "GET",
-            &format!(
-                "{}/v1/work-items?view=my_teams&queue=review&limit=25",
-                session.url()
-            ),
+            &format!("{}/v1/review-tasks?queue=review&limit=25", session.url()),
             &human,
             true,
             None,
@@ -411,38 +472,36 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        if body["items"]
+        last_page = body.clone();
+        if let Some(claimable) = body["items"]
             .as_array()
-            .is_some_and(|items| !items.is_empty())
+            .and_then(|items| items.iter().find(|item| item["state"] == "open"))
         {
-            items = body;
+            item = claimable.clone();
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(
-        items["items"].is_array(),
-        "source item should reconcile into Casework"
+        item.is_object(),
+        "source review should create a claimable Casework review task: {last_page}"
     );
-    let item = &items["items"][0];
-    let id = item["itemId"]
-        .as_str()
-        .or_else(|| item["id"].as_str())
-        .unwrap();
+    let item = &item;
+    let id = item["taskId"].as_str().unwrap();
     let (status, claimed) = http(
         "POST",
-        &format!("{}/v1/work-items/{id}/claim", session.url()),
+        &format!("{}/v1/review-tasks/{id}/claim", session.url()),
         &human,
         true,
         Some(item["revision"].as_i64().unwrap()),
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
-    let revision = claimed["item"]["revision"].as_i64().unwrap();
+    assert_eq!(status, StatusCode::OK, "{claimed}; item={item}");
+    let revision = claimed["revision"].as_i64().unwrap();
     let (status, preview) = http(
         "GET",
-        &format!("{}/v1/work-items/{id}/task-templates", session.url()),
+        &format!("{}/v1/review-tasks/{id}/task-templates", session.url()),
         &human,
         true,
         None,
@@ -456,7 +515,7 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
     );
     let (status, grant) = http(
         "POST",
-        &format!("{}/v1/work-items/{id}/task-grants", session.url()),
+        &format!("{}/v1/review-tasks/{id}/task-grants", session.url()),
         &human,
         true,
         Some(revision),
@@ -532,7 +591,7 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
     let (status, _) = http(
         "POST",
         &format!(
-            "{}/v1/work-items/{id}/task-grants/{grant_id}/revoke",
+            "{}/v1/review-tasks/{id}/task-grants/{grant_id}/revoke",
             session.url()
         ),
         &human,

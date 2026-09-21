@@ -44,7 +44,12 @@ def violations(metadata: dict) -> list[str]:
         ids_by_name.setdefault(name, []).append(package_id)
 
     failures: list[str] = []
-    for neutral_name in ("registry-casework-core", "registry-casework-client"):
+    for neutral_name in (
+        "registry-review-protocol",
+        "registry-review-client",
+        "registry-casework-core",
+        "registry-casework-client",
+    ):
         for package_id in ids_by_name.get(neutral_name, []):
             forbidden = sorted(
                 {names[item] for item in closure(package_id, edges) if names[item].startswith("registry-breg")}
@@ -52,6 +57,21 @@ def violations(metadata: dict) -> list[str]:
             if forbidden:
                 failures.append(
                     f"{neutral_name} transitively depends on BReg package(s): {', '.join(forbidden)}"
+                )
+
+    for protocol_name in ("registry-review-protocol", "registry-review-client"):
+        for package_id in ids_by_name.get(protocol_name, []):
+            forbidden = sorted(
+                {
+                    names[item]
+                    for item in closure(package_id, edges)
+                    if names[item].startswith("registry-casework")
+                }
+            )
+            if forbidden:
+                failures.append(
+                    f"{protocol_name} transitively depends on Casework package(s): "
+                    f"{', '.join(forbidden)}"
                 )
 
     for breg_id, breg_name in sorted(names.items(), key=lambda item: item[1]):

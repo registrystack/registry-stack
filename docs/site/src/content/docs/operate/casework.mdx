@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-11"
+last_reviewed: "2026-09-20"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -50,7 +50,7 @@ the package directory and ends at a serving deployment.
 
 ### What it does not need
 
-A hosted deployment that declares no source needs no Base Registry Engine (BReg): the work items
+A submitted-context review deployment that declares no source needs no Base Registry Engine (BReg): the review requests
 its callers create live in Casework's own database, and the source bindings in the runtime file
 exist only for the sources a package declares. Work, claims, drafts, attempts, accountability
 records, and the idempotency ledger all live in PostgreSQL, so no message broker and no cache take
@@ -137,7 +137,7 @@ audit:
   hashKeyRef: secret:file/casework-audit-key
 sources:
   # One entry per source the package declares, keyed by its exact source id.
-  professional-register:
+  professional-licences:
     baseUrl: https://registry.example.org
     readerProfile: casework-reader
     tokenEndpoint: https://identity.example.org/realms/registry/token
@@ -304,6 +304,14 @@ lock, and applies every unapplied migration in order under its ledger, so a seco
 same database waits rather than racing it. Run it before the first `serve` and before rolling out a
 release that adds migrations.
 
+The unified review schema arrives in a single migration that drops the experimental hosted-item
+tables from the earlier Casework release. No data is carried over, and this release has
+no in-place legacy conversion command. Do not delete rows, edit the migration ledger, or run
+migration SQL by hand. For a disposable local session, use `caseworkctl dev stop PROJECT --remove`
+and start it again. For an operated database, retain the old deployment long enough to export
+required work, take the normal backup, and provision a fresh Casework database for the unified
+review package.
+
 :::caution[Keep the migration credential off the serving host]
 The migration credential owns the schema, and the serving process never needs it. Supply it only
 for the duration of a migration, and keep the runtime credential as the one the service manager
@@ -315,6 +323,11 @@ Then run the service:
 ```sh
 casework --runtime-config /etc/registry-casework/runtime.yaml serve
 ```
+
+A restart of this same version against the same package, runtime file, and database is the normal
+recovery path after process or host interruption. It reloads the verified package and resumes the
+durable review, clock, result-delivery, and reconciliation state. Run `migrate` again only when the
+release procedure calls for it; never use a restart as a legacy-state conversion.
 
 Run `serve` under your service manager and let it restart the process. `serve` refuses to start on
 an unverified production package, a listener the declared boundary does not allow, source bindings
@@ -424,6 +437,14 @@ anything, and a reference that cannot resolve is reported by name with the rule 
 readiness requires a team serving every queue the package declares, and a gap is reported as an
 instruction to complete the queue assignments as an Administrator. A run that reaches the end
 prints a report naming each check and each source it contacted.
+
+`doctor` answers whether the deployment is ready to do work. It does not summarize an individual
+review. Inspect the Casework request, task, context, result, and result-feed resources for review
+progress, and the BReg request's `data.request.review` projection for submission, delivery,
+application, and recovery state. A durable submission reports its fixed `recoveryDeadline`.
+Automatic application jobs report bounded `attempts` and expose `nextAttemptAt` only while queued
+or applying. Use `application.state` with `recovery.code` for recovery decisions. Do not query
+either product's database directly.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, doctor(), load_runtime(),
     and check_source_descriptions();

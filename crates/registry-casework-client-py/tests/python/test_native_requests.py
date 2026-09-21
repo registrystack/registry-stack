@@ -15,8 +15,13 @@ from registry_casework_client import CaseworkClient, CaseworkClientError  # noqa
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 TRACEPARENT = f"00-{TRACE_ID}-00f067aa0ba902b7-01"
 ITEM_ID = "00000000-0000-4000-8000-000000000001"
+OTHER_ITEM_ID = "00000000-0000-4000-8000-000000000005"
 CLOCK_OCCURRENCE_ID = "00000000-0000-4000-8000-000000000002"
 PREVIEW_ID = "00000000-0000-4000-8000-000000000003"
+EXPIRED_CURSOR = "00000000-0000-4000-8000-000000000004"
+POLICY_DIGEST = (
+    "sha256:38ea436942f78766fc2db332c18e3ed545ec4e907d3386ec41b0c2eeb60e7f6c"
+)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -29,12 +34,103 @@ class _Handler(BaseHTTPRequestHandler):
             "profile": self.headers.get("registry-casework-profile", ""),
             "source_profile": self.headers.get("registry-source-profile", ""),
         })
-        if "cursor=expired" in self.path:
+        if f"cursor={EXPIRED_CURSOR}" in self.path:
             self.respond_problem(
                 "cursor.expired",
                 "Cursor expired",
                 "This cursor has expired. Start again without a cursor and deduplicate entries by eventId.",
             )
+            return
+        if self.path == f"/tenant/v1/review-requests/{ITEM_ID}/result":
+            self.respond({
+                "resultId": "00000000-0000-4000-8000-000000000099",
+                "requestId": ITEM_ID,
+                "subject": {
+                    "source": "source-one",
+                    "type": "case",
+                    "id": "case-one",
+                    "version": "1",
+                    "digest": f"sha256:{'a' * 64}",
+                },
+                "policy": {
+                    "id": "registry-correction",
+                    "version": "1",
+                    "digest": f"sha256:{'b' * 64}",
+                },
+                "submissionDigest": f"sha256:{'c' * 64}",
+                "status": "changes_requested",
+                "outcome": "needs-correction",
+                "result": ["not", "an", "object"],
+                "completedAt": "2026-09-19T00:00:00Z",
+                "availableUntil": "2026-10-19T00:00:00Z",
+            })
+            return
+        if self.path == f"/tenant/v1/review-tasks/{ITEM_ID}":
+            self.respond({
+                "taskId": OTHER_ITEM_ID,
+                "requestId": ITEM_ID,
+                "stageIndex": 0,
+                "stageId": "review",
+                "queue": "review",
+                "revision": 1,
+                "eligibleProfiles": ["staff"],
+                "state": "open",
+            })
+            return
+        if self.path == f"/tenant/v1/review-tasks/{ITEM_ID}/context":
+            self.respond({
+                "taskId": ITEM_ID,
+                "requestId": "10000000-0000-4000-8000-000000000001",
+                "subject": {
+                    "source": "professional-licences",
+                    "type": "change-request",
+                    "id": "correction-42",
+                    "version": "1",
+                    "digest": f"sha256:{'a' * 64}",
+                },
+                "requesterReference": "correction-42",
+                "policy": {
+                    "id": "registry-correction",
+                    "version": "1",
+                    "digest": POLICY_DIGEST,
+                },
+                "policySnapshot": {
+                    "identity": {
+                        "id": "registry-correction",
+                        "version": "1",
+                        "digest": POLICY_DIGEST,
+                    },
+                    "purpose": "approval",
+                    "contextStrategy": "source",
+                    "stages": [{
+                        "id": "review", "queue": "review",
+                        "decidingProfiles": ["staff"], "requiredApprovals": 1,
+                        "excludeInitiator": False,
+                        "excludePreviousStageReviewers": False,
+                    }],
+                    "retention": {"terminalDays": 30, "accountabilityDays": 30},
+                    "displaySchema": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {},
+                    },
+                },
+                "context": {
+                    "strategy": "source",
+                    "reference": "correction-42",
+                    "bindingStatus": "current",
+                    "projection": {
+                        "binding": {
+                            "sourceRevision": "revision-42",
+                            "version": "1",
+                            "generation": "generation-42",
+                            "integrity": f"sha256:{'a' * 64}",
+                        },
+                        "displayReference": "Correction 42",
+                        "display": {},
+                    },
+                },
+            })
             return
         if self.path == f"/tenant/v1/work-items/{ITEM_ID}":
             self.respond({
@@ -100,6 +196,21 @@ class _Handler(BaseHTTPRequestHandler):
             })
         elif self.path.startswith(f"/tenant/v1/work-items/{ITEM_ID}/history?"):
             self.respond({"items": [], "nextCursor": "next-cursor", "status": "complete"})
+        elif self.path.startswith(f"/tenant/v1/review-requests/{ITEM_ID}/history?"):
+            # Review history pages bind a present cursor to the final
+            # returned event, so the fixture serves the entry it names.
+            self.respond({
+                "items": [{
+                    "eventId": EXPIRED_CURSOR,
+                    "requestId": ITEM_ID,
+                    "kind": "note",
+                    "detail": {},
+                    "occurredAt": "2026-09-20T00:00:00Z",
+                }],
+                "nextCursor": EXPIRED_CURSOR,
+            })
+        elif self.path == f"/tenant/v1/review-requests/{ITEM_ID}/clocks":
+            self.respond([])
         elif self.path.startswith("/tenant/v1/holdings?"):
             self.respond({"items": [], "nextCursor": "next-holdings", "status": "complete"})
         elif self.path.startswith("/tenant/v1/work-items/next?"):
@@ -137,7 +248,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "policyVersion": "v1",
                 "queues": [],
                 "sources": [],
-                "hostedKinds": [],
+                "calendars": [],
+                "clocks": [],
             })
 
     def do_POST(self) -> None:  # noqa: N802
@@ -185,6 +297,15 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/tenant/v1/directory/caseload/preview"):
             self.respond({"items": [], "status": "complete"})
+            return
+        if self.path == f"/tenant/v1/review-requests/{ITEM_ID}/notes":
+            self.respond({
+                "eventId": EXPIRED_CURSOR,
+                "requestId": ITEM_ID,
+                "kind": "note",
+                "detail": body,
+                "occurredAt": "2026-09-20T00:00:00Z",
+            })
             return
         self.respond({
             "itemId": ITEM_ID,
@@ -268,17 +389,7 @@ class NativeRequestTests(unittest.TestCase):
         self.thread.join()
         self.server.server_close()
 
-    def test_requester_and_staff_calls_preserve_explicit_authority(self) -> None:
-        created = self.client.create_hosted_item(
-            "requester-token", "requester", "exact-create-key", {
-                "kind": "decision",
-                "requesterReference": "python-smoke",
-                "display": {"summary": "Review"},
-            }
-        )
-        self.assertEqual(created["kind"], "complete")
-        self.assertEqual(created["trace_id"], TRACE_ID)
-        self.assertEqual(created["value"]["itemId"], ITEM_ID)
+    def test_staff_calls_preserve_explicit_authority(self) -> None:
         page = self.client.list_work_items(
             "staff-token",
             "staff",
@@ -309,11 +420,7 @@ class NativeRequestTests(unittest.TestCase):
         )
         self.assertEqual(preview["value"], {"items": [], "status": "complete"})
 
-        requester, staff, supervisor = _Handler.observations
-        self.assertEqual(requester["authorization"], "Bearer requester-token")
-        self.assertEqual(requester["profile"], "requester")
-        self.assertEqual(requester["idempotency_key"], "exact-create-key")
-        self.assertEqual(requester["source_profile"], "")
+        staff, supervisor = _Handler.observations
         self.assertEqual(staff["authorization"], "Bearer staff-token")
         self.assertEqual(staff["profile"], "staff")
         self.assertEqual(staff["source_profile"], "source-one")
@@ -333,25 +440,152 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(supervisor["source_profile"], "source-one")
         self.assertIn('"reason": "Coverage transfer"', supervisor["body"])
 
+    def test_review_task_context_uses_exact_route_and_source_profile(self) -> None:
+        context = self.client.review_task_context(
+            "staff-token", "staff", ITEM_ID, "source-one"
+        )
+
+        self.assertEqual(
+            context["value"]["context"]["projection"]["displayReference"],
+            "Correction 42",
+        )
+        observation = _Handler.observations[0]
+        self.assertEqual(
+            observation["path"], f"/tenant/v1/review-tasks/{ITEM_ID}/context"
+        )
+        self.assertEqual(observation["authorization"], "Bearer staff-token")
+        self.assertEqual(observation["profile"], "staff")
+        self.assertEqual(observation["source_profile"], "source-one")
+
+    def test_review_optional_arguments_may_be_omitted(self) -> None:
+        calls = (
+            lambda: self.client.review_results("", "requester"),
+            lambda: self.client.review_tasks("", "staff"),
+            lambda: self.client.review_task("", "staff", ITEM_ID),
+            lambda: self.client.review_task_context("", "staff", ITEM_ID),
+            lambda: self.client.claim_review_task("", "staff", ITEM_ID, 1, "claim-key"),
+            lambda: self.client.assign_review_task(
+                "", "staff", ITEM_ID, 1, "assign-key", {"assignee": "officer"}
+            ),
+            lambda: self.client.delegate_review_task(
+                "", "staff", ITEM_ID, 1, "delegate-key", {"templateId": "delegate"}
+            ),
+            lambda: self.client.review_task_draft("", "staff", ITEM_ID),
+            lambda: self.client.save_review_task_draft(
+                "", "staff", ITEM_ID, 1, "draft-key", {"body": {}}
+            ),
+            lambda: self.client.delete_review_task_draft(
+                "", "staff", ITEM_ID, 1, "delete-key"
+            ),
+            lambda: self.client.decide_review_task(
+                "", "staff", ITEM_ID, 1, "decision-key", {"type": "approve"}
+            ),
+            lambda: self.client.review_history("", "staff", ITEM_ID),
+            lambda: self.client.add_review_note(
+                "", "staff", ITEM_ID, "note-key", {"audience": "requester", "note": "Note"}
+            ),
+            lambda: self.client.review_clocks("", "staff", ITEM_ID),
+        )
+
+        for call in calls:
+            with self.subTest(call=call):
+                with self.assertRaises(CaseworkClientError) as error:
+                    call()
+                self.assertEqual(error.exception.kind, "invalid_request")
+        self.assertEqual(_Handler.observations, [])
+
+    def test_review_responses_enforce_object_results_and_exact_tasks(self) -> None:
+        accepted = {
+            "requestId": ITEM_ID,
+            "subject": {
+                "source": "source-one",
+                "type": "case",
+                "id": "case-one",
+                "version": "1",
+                "digest": f"sha256:{'a' * 64}",
+            },
+            "policy": {
+                "id": "registry-correction",
+                "version": "1",
+                "digest": f"sha256:{'b' * 64}",
+            },
+            "submissionDigest": f"sha256:{'c' * 64}",
+        }
+
+        with self.assertRaises(CaseworkClientError) as result_error:
+            self.client.review_result("requester-token", "requester", accepted)
+        self.assertEqual(result_error.exception.kind, "protocol")
+        self.assertEqual(result_error.exception.protocol_failure, "body")
+
+        with self.assertRaises(CaseworkClientError) as task_error:
+            self.client.review_task("staff-token", "staff", ITEM_ID, None)
+        self.assertEqual(task_error.exception.kind, "protocol")
+        self.assertEqual(task_error.exception.protocol_failure, "body")
+
+    def test_review_create_refuses_non_object_and_unsafe_constraints_before_http(self) -> None:
+        digest = f"sha256:{'a' * 64}"
+        request = {
+            "kind": "decision",
+            "subject": {
+                "source": "standalone",
+                "type": "batch",
+                "id": "batch-1",
+                "version": "1",
+                "digest": digest,
+            },
+            "requesterReference": "batch-1",
+            "context": {"strategy": "submitted", "snapshot": {"count": 1}},
+            "resultConstraints": [],
+        }
+        with self.assertRaises(CaseworkClientError) as shape_error:
+            self.client.create_or_recover_review_request(
+                "requester-token", "requester", "review-array", request, digest
+            )
+        self.assertEqual(shape_error.exception.kind, "invalid_request")
+
+        request["resultConstraints"] = {"maximum": 9_007_199_254_740_992}
+        with self.assertRaises(CaseworkClientError) as range_error:
+            self.client.create_or_recover_review_request(
+                "requester-token", "requester", "review-unsafe", request, digest
+            )
+        self.assertEqual(range_error.exception.kind, "invalid_request")
+        self.assertEqual(_Handler.observations, [])
+
     def test_expiry_is_typed_and_never_retried(self) -> None:
         with self.assertRaises(CaseworkClientError) as cursor_error:
-            self.client.hosted_terminal_items(
-                "requester-token", "requester", {"cursor": "expired"}
+            self.client.review_results(
+                "requester-token", "requester", {"cursor": EXPIRED_CURSOR}
             )
         self.assertEqual(cursor_error.exception.kind, "problem")
         self.assertEqual(cursor_error.exception.code, "cursor.expired")
         self.assertEqual(cursor_error.exception.status, 410)
         self.assertEqual(cursor_error.exception.trace_id, TRACE_ID)
 
+        accepted = {
+            "requestId": ITEM_ID,
+            "subject": {
+                "source": "source-one",
+                "type": "case",
+                "id": "case-one",
+                "version": "1",
+                "digest": f"sha256:{'a' * 64}",
+            },
+            "policy": {
+                "id": "registry-correction",
+                "version": "1",
+                "digest": f"sha256:{'b' * 64}",
+            },
+            "submissionDigest": f"sha256:{'c' * 64}",
+        }
         with self.assertRaises(CaseworkClientError) as key_error:
-            self.client.create_hosted_item(
+            self.client.cancel_review_request(
                 "requester-token",
                 "requester",
+                accepted,
                 "expired-create-key",
                 {
-                    "kind": "decision",
-                    "requesterReference": "python-smoke",
-                    "display": {"summary": "Review"},
+                    "subject": accepted["subject"],
+                    "reason": "No longer needed",
                 },
             )
         self.assertEqual(key_error.exception.kind, "problem")
@@ -373,6 +607,49 @@ class NativeRequestTests(unittest.TestCase):
             f"/tenant/v1/work-items/{ITEM_ID}/history?cursor=opaque-cursor&limit=25",
         )
         self.assertEqual(_Handler.observations[0]["source_profile"], "source-one")
+
+        review_page = self.client.review_history(
+            "staff-token",
+            "staff",
+            ITEM_ID,
+            {"limit": 25},
+            "source-one",
+        )
+        self.assertEqual(review_page["value"]["nextCursor"], EXPIRED_CURSOR)
+        self.assertEqual(
+            _Handler.observations[1]["path"],
+            f"/tenant/v1/review-requests/{ITEM_ID}/history?limit=25",
+        )
+        self.assertEqual(_Handler.observations[1]["source_profile"], "source-one")
+
+        note = self.client.add_review_note(
+            "staff-token",
+            "staff",
+            ITEM_ID,
+            "note-1",
+            {"audience": "reviewers", "note": "Review note"},
+            "source-one",
+        )
+        self.assertEqual(note["value"]["kind"], "note")
+        self.assertEqual(
+            _Handler.observations[2]["path"],
+            f"/tenant/v1/review-requests/{ITEM_ID}/notes",
+        )
+        self.assertEqual(_Handler.observations[2]["source_profile"], "source-one")
+        self.assertEqual(_Handler.observations[2]["idempotency_key"], "note-1")
+
+        clocks = self.client.review_clocks(
+            "staff-token",
+            "staff",
+            ITEM_ID,
+            "source-one",
+        )
+        self.assertEqual(clocks["value"], [])
+        self.assertEqual(
+            _Handler.observations[3]["path"],
+            f"/tenant/v1/review-requests/{ITEM_ID}/clocks",
+        )
+        self.assertEqual(_Handler.observations[3]["source_profile"], "source-one")
 
     def test_holdings_forwards_page_query_and_returns_continuation(self) -> None:
         page = self.client.holdings(

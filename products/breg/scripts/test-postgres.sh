@@ -73,12 +73,12 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_ingestion_receipts \
     --test postgres_change_requests \
     --test postgres_task_grants \
-    --test postgres_request_authority \
     --test postgres_request_receipts \
     --test postgres_request_upgrade_retention \
     --test postgres_request_events \
     --test postgres_request_queries \
     --test postgres_request_read_retention \
+    --test postgres_review_executor \
     --test postgres_pilot_acceptance \
     --test postgres_rhai_planner \
     --test postgres_tombstone_revision \

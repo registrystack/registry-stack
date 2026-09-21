@@ -482,6 +482,8 @@ pub struct ChangeRequestSource {
     pub planner: Option<ChangeRequestPlannerSource>,
     pub review: ChangeRequestReviewSource,
     #[serde(default)]
+    pub on_approved: ChangeRequestOnApprovedSource,
+    #[serde(default)]
     pub application: ChangeRequestApplicationSource,
     #[serde(default)]
     pub retention: ChangeRequestRetentionSource,
@@ -552,12 +554,6 @@ pub struct ChangeRequestPlannerTargetSource {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ChangeRequestApplicationSource {
-    #[serde(default)]
-    pub mode: ChangeRequestApplicationModeSource,
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub allowed_dispositions: BTreeSet<ChangeRequestDispositionSource>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub queue_reasons: BTreeMap<String, String>,
     #[serde(
         default,
         skip_serializing_if = "ChangeRequestPreconditionsSource::is_empty"
@@ -674,24 +670,6 @@ pub struct ChangeRequestEvidenceRequirementSource {
     pub at_least: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at_most: Option<i64>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChangeRequestApplicationModeSource {
-    #[default]
-    Manual,
-    Automatic,
-    Planner,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChangeRequestDispositionSource {
-    Apply,
-    Queue,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1068,32 +1046,51 @@ pub struct ActionValueSource {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestReviewSource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<ChangeRequestReviewModeSource>,
-    #[serde(default)]
-    pub stages: Vec<ChangeRequestReviewStageSource>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChangeRequestReviewModeSource {
-    None,
+#[serde(untagged)]
+pub enum ChangeRequestReviewSource {
+    Required(ChangeRequestReviewRequirementSource),
+    None(ChangeRequestNoReviewSource),
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestReviewStageSource {
-    pub id: String,
-    pub approvals: u16,
+pub struct ChangeRequestReviewRequirementSource {
+    pub authority: String,
+    pub policy_id: String,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestNoReviewSource {
+    pub mode: ChangeRequestNoReviewModeSource,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeRequestNoReviewModeSource {
+    None,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangeRequestOnApprovedSource {
     #[serde(default)]
-    pub exclude_submitter: bool,
-    /// Refuse an actor who already decided another stage of this proposal version.
-    #[serde(default)]
-    pub exclude_previous_reviewers: bool,
+    pub mode: ChangeRequestOnApprovedModeSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executor: Option<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeRequestOnApprovedModeSource {
+    #[default]
+    Manual,
+    Automatic,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -2422,8 +2419,6 @@ pub struct AccessProfileSource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_paths: Vec<ReadPathPermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub review_stages: Vec<ReviewStagePermissionSource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub apply_targets: Vec<ApplyTargetPermissionSource>,
     /// Native-reference targets requiring current same-profile GET authority at intake and preparation.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
@@ -2474,9 +2469,6 @@ pub enum Operation {
     Revisions,
     Snapshot,
     SubmitRequest,
-    ApproveRequest,
-    RejectRequest,
-    RequestRevision,
     ReviseRequest,
     CancelRequest,
     ApplyRequest,
@@ -2616,8 +2608,6 @@ pub enum EventConditionSource {
         transitions: BTreeSet<String>,
         #[serde(default)]
         to_states: BTreeSet<String>,
-        #[serde(default)]
-        stages: BTreeSet<String>,
     },
 }
 
@@ -2736,8 +2726,6 @@ pub struct AccessPermissionSource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_paths: Vec<ReadPathPermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub review_stages: Vec<ReviewStagePermissionSource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub apply_targets: Vec<ApplyTargetPermissionSource>,
     /// Native-reference targets requiring current same-profile GET authority at intake and preparation.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
@@ -2794,8 +2782,6 @@ struct RawAccessPermissionSource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     read_paths: Vec<ReadPathPermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    review_stages: Vec<ReviewStagePermissionSource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     apply_targets: Vec<ApplyTargetPermissionSource>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     submitter_targets: BTreeSet<String>,
@@ -2843,7 +2829,6 @@ impl<'de> Deserialize<'de> for AccessPermissionSource {
             request_visibility: raw.request_visibility,
             lookups: raw.lookups,
             read_paths: raw.read_paths,
-            review_stages: raw.review_stages,
             apply_targets: raw.apply_targets,
             submitter_targets: raw.submitter_targets,
             request_presence: raw.request_presence,
@@ -2914,8 +2899,6 @@ struct EntityAccessPermissionSourceSchema {
     lookups: Vec<LookupPermissionSource>,
     #[serde(default)]
     read_paths: Vec<ReadPathPermissionSource>,
-    #[serde(default)]
-    review_stages: Vec<ReviewStagePermissionSource>,
     #[serde(default)]
     apply_targets: Vec<ApplyTargetPermissionSource>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
@@ -2990,26 +2973,6 @@ pub struct ReadPathPermissionSource {
     pub sortable_fields: BTreeSet<String>,
     #[serde(default)]
     pub allow_count: bool,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ReviewStagePermissionSource {
-    pub stage: String,
-    #[serde(default)]
-    pub targets: Vec<ReviewStageTargetPermissionSource>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ReviewStageTargetPermissionSource {
-    pub entity: String,
-    #[serde(default)]
-    pub readable_fields: BTreeSet<String>,
-    /// Explicit row reach; an empty array intentionally permits all rows.
-    pub row_boundaries: Vec<RowBoundarySource>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

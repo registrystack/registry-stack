@@ -16,16 +16,70 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [casework:admin]
     role: administrator
+  - id: integration-requester
+    principalClaim: registry_principal
+    requiredScopes: [casework:reviews:request]
+    role: requester
 sources:
-  - id: professional-register
+  - id: professional-licences
     adapter: breg
-    description: sources/professional-register.json
+    description: sources/professional-licences.json
     requests:
       - entity: scope-correction
         queue: corrections
+        # Only these current caller-authorized values may be released through
+        # the unified review-task context endpoint. The applicant's reason is
+        # intentionally excluded.
+        contextProjection:
+          - record
+          - licensed-activities
+          - authorization-conditions
+          - supporting-reference
         target:
           id: first-review-response
           after: {elapsed: PT48H}
 queues:
   - id: corrections
     label: Licence corrections
+reviewKinds:
+  - id: scope-correction
+    version: "1"
+    purpose: approval
+    contextStrategy: source
+    stages:
+      - id: review
+        queue: corrections
+        decidingProfiles: [staff]
+        requiredApprovals: 1
+    retention:
+      terminalDays: 30
+      accountabilityDays: 365
+    displaySchema:
+      # The projected source fields a caller-filtered read may disclose,
+      # under their API names. All are optional: the source omits any field
+      # the reading caller cannot see.
+      type: object
+      additionalProperties: false
+      properties:
+        record:
+          type: object
+          additionalProperties: false
+          required: [recordRef]
+          properties:
+            recordRef: {type: string, maxLength: 128}
+        licensedActivities:
+          type: array
+          items: {type: string}
+          minItems: 1
+          maxItems: 3
+          uniqueItems: true
+        authorizationConditions: {type: string, maxLength: 500}
+        supportingReference: {type: string, minLength: 1, maxLength: 500}
+reviewProducers:
+  - id: registry-breg
+    profile: integration-requester
+    issuer: https://identity.example.test/realms/registry
+    subject: professional-review-breg
+    sourceNamespaces: [professional-licences]
+    kinds: [scope-correction]
+    recoveryDays: 7

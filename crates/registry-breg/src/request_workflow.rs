@@ -10,13 +10,11 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use crate::contract::Operation;
-use crate::model::CompiledChangeRequestStage;
+/// Maximum Unicode characters in a source-supplied application reason.
+pub const MAX_APPLICATION_REASON_CHARS: usize = 4096;
 
-/// Maximum Unicode characters in a reviewer-supplied reason.
-pub const MAX_REVIEW_REASON_CHARS: usize = 4096;
-
-pub fn valid_review_reason(reason: &str) -> bool {
-    !reason.contains('\0') && reason.chars().count() <= MAX_REVIEW_REASON_CHARS
+pub fn valid_application_reason(reason: &str) -> bool {
+    !reason.contains('\0') && reason.chars().count() <= MAX_APPLICATION_REASON_CHARS
 }
 
 pub const MAX_REQUEST_TARGETS: usize = 16;
@@ -27,8 +25,6 @@ pub const MAX_REQUEST_FIELD_MUTATIONS: usize = 128;
 /// headroom as revision snapshots.
 pub const MAX_REQUEST_SNAPSHOT_BYTES: usize = crate::history_schema::MAX_HISTORY_SNAPSHOT_BYTES;
 
-const MAX_STAGES: usize = 32;
-const MAX_APPROVALS_PER_STAGE: u16 = 32;
 const MAX_IDENTIFIER_BYTES: usize = 512;
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -40,7 +36,6 @@ pub struct RequestWorkflow {
     current_version: ProposalVersion,
     workflow_revision: StateRevision,
     proposals: BTreeMap<ProposalVersion, ProposalSnapshot>,
-    decisions: Vec<ReviewDecision>,
     application: Option<ApplicationReceipt>,
 }
 
@@ -57,7 +52,6 @@ impl RequestWorkflow {
             current_version: ProposalVersion::first(),
             workflow_revision,
             proposals: BTreeMap::new(),
-            decisions: Vec::new(),
             application: None,
         }
     }
@@ -90,10 +84,6 @@ impl RequestWorkflow {
         self.proposal(self.current_version)
     }
 
-    pub fn decisions(&self) -> &[ReviewDecision] {
-        &self.decisions
-    }
-
     pub fn application(&self) -> Option<&ApplicationReceipt> {
         self.application.as_ref()
     }
@@ -112,7 +102,6 @@ impl RequestWorkflow {
         current_version: ProposalVersion,
         workflow_revision: StateRevision,
         proposals: BTreeMap<ProposalVersion, ProposalSnapshot>,
-        decisions: Vec<ReviewDecision>,
         application: Option<ApplicationReceipt>,
     ) -> Result<Self, WorkflowError> {
         Self {
@@ -122,7 +111,6 @@ impl RequestWorkflow {
             current_version,
             workflow_revision,
             proposals,
-            decisions,
             application,
         }
         .validate_restored()
@@ -142,145 +130,17 @@ impl RequestWorkflow {
         let version = self.current_version;
         let proposal = proposal.freeze(&self.request, version, context)?;
         let effect_digest = proposal.effect_digest.clone();
-        let review_policy = proposal.review_policy();
+        let review_requirement = proposal.review_requirement().clone();
         self.proposals.insert(version, proposal);
-        self.state = if review_policy == FrozenReviewPolicy::None {
-            RequestState::Approved
-        } else {
-            RequestState::Submitted
-        };
+        self.state = RequestState::Submitted;
         self.workflow_revision = self.workflow_revision.next()?;
         Ok(WorkflowTransition {
             workflow: self,
             effect: TransitionEffect::Submitted {
                 version,
                 effect_digest,
-                review_policy,
+                review_requirement,
             },
-        })
-    }
-
-    pub fn decide(
-        self,
-        context: TrustedTransitionContext,
-        stage_id: impl Into<String>,
-        version: ProposalVersion,
-        displayed_digest: &ProposalDigest,
-        decision: ReviewDecisionKind,
-    ) -> Result<WorkflowTransition, WorkflowError> {
-        self.decide_with_reason(context, stage_id, version, displayed_digest, decision, None)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn decide_with_reason(
-        mut self,
-        context: TrustedTransitionContext,
-        stage_id: impl Into<String>,
-        version: ProposalVersion,
-        displayed_digest: &ProposalDigest,
-        decision: ReviewDecisionKind,
-        reason: Option<String>,
-    ) -> Result<WorkflowTransition, WorkflowError> {
-        if reason
-            .as_deref()
-            .is_some_and(|reason| !valid_review_reason(reason))
-        {
-            return Err(WorkflowError::InvalidReviewReason);
-        }
-        if self.state != RequestState::Submitted {
-            return Err(WorkflowError::InvalidTransition);
-        }
-        if version != self.current_version {
-            return Err(WorkflowError::StaleProposalVersion);
-        }
-        let stage_id = ValidatedToken::new(stage_id, TokenKind::Stage)?;
-        let (proposal_digest, submitted_by, pending_stage, is_last_stage) = {
-            let proposal = self
-                .proposals
-                .get(&version)
-                .ok_or(WorkflowError::ProposalUnavailable)?;
-            proposal.verify_digest(&self.request)?;
-            if !proposal.effect_digest.matches(displayed_digest) {
-                return Err(WorkflowError::DigestMismatch);
-            }
-            let pending_stage = self
-                .pending_review_stage()
-                .ok_or(WorkflowError::InvalidTransition)?
-                .clone();
-            let is_last_stage = proposal
-                .stages
-                .last()
-                .is_some_and(|stage| stage.id == pending_stage.id);
-            (
-                proposal.effect_digest.clone(),
-                proposal.submitted_by.clone(),
-                pending_stage,
-                is_last_stage,
-            )
-        };
-        if pending_stage.id != stage_id.0 {
-            return Err(WorkflowError::StageOutOfOrder);
-        }
-        if pending_stage.exclude_submitter && context.actor == submitted_by {
-            return Err(WorkflowError::SubmitterExcluded);
-        }
-        if pending_stage.exclude_previous_reviewers
-            && self.decisions.iter().any(|existing| {
-                existing.version == version
-                    && existing.stage_id != stage_id.0
-                    && existing.actor == context.actor
-            })
-        {
-            return Err(WorkflowError::PreviousReviewerExcluded);
-        }
-        if self.decisions.iter().any(|existing| {
-            existing.version == version
-                && existing.stage_id == stage_id.0
-                && existing.actor == context.actor
-        }) {
-            return Err(WorkflowError::DuplicateDecision);
-        }
-
-        let review = ReviewDecision {
-            version,
-            stage_id: stage_id.0,
-            kind: decision,
-            actor: context.actor,
-            decided_at: context.now,
-            effect_digest: proposal_digest,
-            reason_present: reason.is_some(),
-            reason,
-        };
-        self.decisions.push(review.clone());
-
-        match decision {
-            ReviewDecisionKind::Approve => {
-                let approvals = self
-                    .decisions
-                    .iter()
-                    .filter(|decision| {
-                        decision.version == version
-                            && decision.stage_id == review.stage_id
-                            && decision.kind == ReviewDecisionKind::Approve
-                    })
-                    .map(|decision| &decision.actor)
-                    .collect::<BTreeSet<_>>()
-                    .len();
-                if approvals >= usize::from(pending_stage.approvals) && is_last_stage {
-                    self.state = RequestState::Approved;
-                }
-            }
-            ReviewDecisionKind::Reject => {
-                self.state = RequestState::Rejected;
-            }
-            ReviewDecisionKind::RequestRevision => {
-                self.state = RequestState::NeedsChanges;
-            }
-        }
-        self.workflow_revision = self.workflow_revision.next()?;
-        Ok(WorkflowTransition {
-            workflow: self,
-            effect: TransitionEffect::DecisionRecorded(review),
         })
     }
 
@@ -288,10 +148,7 @@ impl RequestWorkflow {
         mut self,
         _context: TrustedTransitionContext,
     ) -> Result<WorkflowTransition, WorkflowError> {
-        if !matches!(
-            self.state,
-            RequestState::NeedsChanges | RequestState::Rejected
-        ) {
+        if self.state != RequestState::Submitted {
             return Err(WorkflowError::InvalidTransition);
         }
         self.state = RequestState::Draft;
@@ -311,13 +168,7 @@ impl RequestWorkflow {
         mut self,
         _context: TrustedTransitionContext,
     ) -> Result<WorkflowTransition, WorkflowError> {
-        if !matches!(
-            self.state,
-            RequestState::Submitted
-                | RequestState::Approved
-                | RequestState::NeedsChanges
-                | RequestState::Rejected
-        ) {
+        if self.state != RequestState::Submitted {
             return Err(WorkflowError::InvalidTransition);
         }
         self.state = RequestState::Draft;
@@ -340,14 +191,14 @@ impl RequestWorkflow {
         if context.actor != self.owner {
             return Err(WorkflowError::NotOwner);
         }
-        if matches!(self.state, RequestState::Applied | RequestState::Canceled) {
+        if matches!(self.state, RequestState::Applied | RequestState::Cancelled) {
             return Err(WorkflowError::InvalidTransition);
         }
-        self.state = RequestState::Canceled;
+        self.state = RequestState::Cancelled;
         self.workflow_revision = self.workflow_revision.next()?;
         Ok(WorkflowTransition {
             workflow: self,
-            effect: TransitionEffect::Canceled,
+            effect: TransitionEffect::Cancelled,
         })
     }
 
@@ -358,17 +209,18 @@ impl RequestWorkflow {
         version: ProposalVersion,
         displayed_digest: &ProposalDigest,
         contract_fingerprint: &ContractFingerprint,
+        review_evidence: Option<&crate::review_integration::AcceptedReviewEvidence>,
         observed_targets: Vec<ObservedTarget>,
         application: PreparedApplication,
         reason: Option<String>,
     ) -> Result<WorkflowTransition, WorkflowError> {
         if reason
             .as_deref()
-            .is_some_and(|reason| !valid_review_reason(reason))
+            .is_some_and(|reason| !valid_application_reason(reason))
         {
-            return Err(WorkflowError::InvalidReviewReason);
+            return Err(WorkflowError::InvalidApplicationReason);
         }
-        if self.state != RequestState::Approved {
+        if self.state != RequestState::Submitted {
             return Err(WorkflowError::InvalidTransition);
         }
         if version != self.current_version {
@@ -387,6 +239,20 @@ impl RequestWorkflow {
         }
         if &proposal.contract_fingerprint != contract_fingerprint {
             return Err(WorkflowError::ContractFingerprintMismatch);
+        }
+        match proposal.review_requirement() {
+            crate::model::CompiledChangeRequestReview::None(_) if review_evidence.is_none() => {}
+            crate::model::CompiledChangeRequestReview::Required(requirement)
+                if review_evidence.is_some_and(|evidence| {
+                    evidence.matches_proposal(
+                        &requirement.authority,
+                        &requirement.policy_id,
+                        self.request.record_id().as_str(),
+                        version.get(),
+                        proposal.effect_digest().as_str(),
+                    )
+                }) => {}
+            _ => return Err(WorkflowError::ReviewEvidenceMismatch),
         }
         proposal.verify_observed_targets(&observed_targets)?;
         proposal.verify_application_links(&application.result_links)?;
@@ -410,62 +276,6 @@ impl RequestWorkflow {
         })
     }
 
-    /// Returns the next stage from the current proposal's frozen review policy.
-    /// A stage is pending only while the request is submitted.
-    pub fn pending_review_stage(&self) -> Option<&CompiledChangeRequestStage> {
-        if self.state != RequestState::Submitted {
-            return None;
-        }
-        let proposal = self.current_proposal()?;
-        proposal
-            .stages
-            .iter()
-            .find(|stage| !self.stage_is_satisfied(proposal, &stage.id))
-    }
-
-    /// Returns the authoritative entry time of the current pending stage.
-    /// The first stage begins at submission. A later stage begins when the
-    /// approval that satisfied the preceding stage was recorded.
-    pub fn pending_review_stage_entered_at(&self) -> Option<&TrustedTimestamp> {
-        let proposal = self.current_proposal()?;
-        let pending = self.pending_review_stage()?;
-        let pending_index = proposal
-            .stages
-            .iter()
-            .position(|stage| stage.id == pending.id)?;
-        let Some(previous_index) = pending_index.checked_sub(1) else {
-            return Some(proposal.submitted_at());
-        };
-        let previous = &proposal.stages[previous_index];
-        self.decisions
-            .iter()
-            .filter(|decision| {
-                decision.version == proposal.version
-                    && decision.stage_id == previous.id
-                    && decision.kind == ReviewDecisionKind::Approve
-            })
-            .nth(usize::from(previous.approvals) - 1)
-            .map(ReviewDecision::decided_at)
-    }
-
-    fn stage_is_satisfied(&self, proposal: &ProposalSnapshot, stage_id: &str) -> bool {
-        let Some(stage) = proposal.stages.iter().find(|stage| stage.id == stage_id) else {
-            return false;
-        };
-        let approvals = self
-            .decisions
-            .iter()
-            .filter(|decision| {
-                decision.version == proposal.version
-                    && decision.stage_id == stage_id
-                    && decision.kind == ReviewDecisionKind::Approve
-            })
-            .map(|decision| &decision.actor)
-            .collect::<BTreeSet<_>>()
-            .len();
-        approvals >= usize::from(stage.approvals)
-    }
-
     fn validate_restored_invariants(&self) -> Result<(), WorkflowError> {
         self.request.validate()?;
         self.owner.validate()?;
@@ -483,93 +293,8 @@ impl RequestWorkflow {
             proposal.validate_restored(&self.request)?;
         }
 
-        self.validate_restored_decisions()?;
         self.validate_restored_application()?;
         self.validate_restored_state()
-    }
-
-    fn validate_restored_decisions(&self) -> Result<(), WorkflowError> {
-        let mut seen = BTreeSet::new();
-        let mut terminal_by_version: BTreeMap<ProposalVersion, ReviewDecisionKind> =
-            BTreeMap::new();
-        for decision in &self.decisions {
-            decision.validate()?;
-            if !seen.insert((
-                decision.version,
-                decision.stage_id.as_str(),
-                decision.actor.as_str(),
-            )) {
-                return Err(WorkflowError::DuplicateDecision);
-            }
-            let proposal = self
-                .proposals
-                .get(&decision.version)
-                .ok_or(WorkflowError::InvalidRestoredState)?;
-            if !proposal.effect_digest.matches(&decision.effect_digest) {
-                return Err(WorkflowError::DigestMismatch);
-            }
-            let Some(stage_index) = proposal
-                .stages
-                .iter()
-                .position(|stage| stage.id == decision.stage_id)
-            else {
-                return Err(WorkflowError::InvalidRestoredState);
-            };
-            if proposal.stages[stage_index].exclude_previous_reviewers
-                && self.decisions.iter().any(|prior| {
-                    prior.version == decision.version
-                        && prior.actor == decision.actor
-                        && proposal.stages[..stage_index]
-                            .iter()
-                            .any(|stage| stage.id == prior.stage_id)
-                })
-            {
-                return Err(WorkflowError::PreviousReviewerExcluded);
-            }
-            for prior_stage in &proposal.stages[..stage_index] {
-                if !self.stage_is_satisfied(proposal, &prior_stage.id) {
-                    return Err(WorkflowError::StageOutOfOrder);
-                }
-            }
-            if matches!(
-                decision.kind,
-                ReviewDecisionKind::Reject | ReviewDecisionKind::RequestRevision
-            ) && terminal_by_version
-                .insert(decision.version, decision.kind)
-                .is_some()
-            {
-                return Err(WorkflowError::InvalidRestoredState);
-            }
-        }
-        for (version, terminal) in terminal_by_version {
-            let proposal = self
-                .proposals
-                .get(&version)
-                .ok_or(WorkflowError::InvalidRestoredState)?;
-            let terminal_stage = self
-                .decisions
-                .iter()
-                .find(|decision| decision.version == version && decision.kind == terminal)
-                .ok_or(WorkflowError::InvalidRestoredState)?
-                .stage_id
-                .as_str();
-            let terminal_index = proposal
-                .stages
-                .iter()
-                .position(|stage| stage.id == terminal_stage)
-                .ok_or(WorkflowError::InvalidRestoredState)?;
-            if self.decisions.iter().any(|decision| {
-                decision.version == version
-                    && proposal
-                        .stages
-                        .iter()
-                        .position(|stage| stage.id == decision.stage_id)
-                        .is_some_and(|index| index > terminal_index)
-            }) {
-                return Err(WorkflowError::InvalidRestoredState);
-            }
-        }
-        Ok(())
     }
 
     fn validate_restored_application(&self) -> Result<(), WorkflowError> {
@@ -592,151 +317,40 @@ impl RequestWorkflow {
 
     fn validate_restored_state(&self) -> Result<(), WorkflowError> {
         let current_proposal = self.proposals.get(&self.current_version);
-        let current_terminal = self.decisions.iter().find(|decision| {
-            decision.version == self.current_version
-                && matches!(
-                    decision.kind,
-                    ReviewDecisionKind::Reject | ReviewDecisionKind::RequestRevision
-                )
-        });
-        let current_satisfied =
-            current_proposal.is_some_and(|proposal| self.all_stages_satisfied(proposal));
         match self.state {
             RequestState::Draft => {
-                if current_proposal.is_some()
-                    || self.application.is_some()
-                    || self
-                        .decisions
-                        .iter()
-                        .any(|decision| decision.version == self.current_version)
-                {
+                if current_proposal.is_some() || self.application.is_some() {
                     return Err(WorkflowError::InvalidRestoredState);
                 }
             }
             RequestState::Submitted => {
-                if current_proposal.is_none()
-                    || current_terminal.is_some()
-                    || current_satisfied
-                    || self.application.is_some()
-                {
+                if current_proposal.is_none() || self.application.is_some() {
                     return Err(WorkflowError::InvalidRestoredState);
                 }
             }
-            RequestState::Approved => {
-                if current_proposal.is_none()
-                    || current_terminal.is_some()
-                    || !current_satisfied
-                    || self.application.is_some()
-                {
-                    return Err(WorkflowError::InvalidRestoredState);
-                }
-            }
-            RequestState::NeedsChanges => {
-                if current_proposal.is_none()
-                    || !current_terminal.is_some_and(|decision| {
-                        decision.kind == ReviewDecisionKind::RequestRevision
-                    })
-                    || self.application.is_some()
-                {
-                    return Err(WorkflowError::InvalidRestoredState);
-                }
-            }
-            RequestState::Rejected => {
-                if current_proposal.is_none()
-                    || !current_terminal
-                        .is_some_and(|decision| decision.kind == ReviewDecisionKind::Reject)
-                    || self.application.is_some()
-                {
-                    return Err(WorkflowError::InvalidRestoredState);
-                }
-            }
-            RequestState::Canceled => {
+            RequestState::Cancelled | RequestState::Superseded => {
                 if self.application.is_some() {
-                    return Err(WorkflowError::InvalidRestoredState);
-                }
-                if current_proposal.is_none()
-                    && (self
-                        .decisions
-                        .iter()
-                        .any(|decision| decision.version == self.current_version))
-                {
                     return Err(WorkflowError::InvalidRestoredState);
                 }
             }
             RequestState::Applied => {
-                let Some(proposal) = current_proposal else {
-                    return Err(WorkflowError::InvalidRestoredState);
-                };
-                if current_terminal.is_some()
-                    || !self.all_stages_satisfied(proposal)
-                    || self.application.is_none()
-                {
+                if current_proposal.is_none() || self.application.is_none() {
                     return Err(WorkflowError::InvalidRestoredState);
                 }
             }
         }
         Ok(())
     }
-
-    fn all_stages_satisfied(&self, proposal: &ProposalSnapshot) -> bool {
-        proposal
-            .stages
-            .iter()
-            .all(|stage| self.stage_is_satisfied(proposal, &stage.id))
-    }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FrozenReviewPolicy {
-    None,
-    Stages,
-}
+/// Exact review binding copied into the immutable proposal snapshot.
+pub type FrozenReviewRequirement = crate::model::CompiledChangeRequestReview;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FrozenPlannerKind {
     Declarative,
     Rhai,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FrozenPlannerDisposition {
-    Apply,
-    Queue,
-}
-
-#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct FrozenQueueReason {
-    code: String,
-    label: String,
-}
-
-impl FrozenQueueReason {
-    pub fn new(code: impl Into<String>, label: impl Into<String>) -> Result<Self, WorkflowError> {
-        let reason = Self {
-            code: code.into(),
-            label: label.into(),
-        };
-        reason.validate()?;
-        Ok(reason)
-    }
-
-    pub fn code(&self) -> &str {
-        &self.code
-    }
-
-    pub fn label(&self) -> &str {
-        &self.label
-    }
-
-    fn validate(&self) -> Result<(), WorkflowError> {
-        ValidatedToken::new(self.code.clone(), TokenKind::Planner)?;
-        ValidatedToken::new(self.label.clone(), TokenKind::Planner)?;
-        Ok(())
-    }
 }
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -746,9 +360,6 @@ pub struct FrozenPlanningBinding {
     abi_identifier: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     script_digest: Option<ProposalDigest>,
-    disposition: FrozenPlannerDisposition,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    queue_reason: Option<FrozenQueueReason>,
 }
 
 impl FrozenPlanningBinding {
@@ -756,15 +367,11 @@ impl FrozenPlanningBinding {
         kind: FrozenPlannerKind,
         abi_identifier: impl Into<String>,
         script_digest: Option<ProposalDigest>,
-        disposition: FrozenPlannerDisposition,
-        queue_reason: Option<FrozenQueueReason>,
     ) -> Result<Self, WorkflowError> {
         let binding = Self {
             kind,
             abi_identifier: abi_identifier.into(),
             script_digest,
-            disposition,
-            queue_reason,
         };
         binding.validate()?;
         Ok(binding)
@@ -782,28 +389,14 @@ impl FrozenPlanningBinding {
         self.script_digest.as_ref()
     }
 
-    pub fn disposition(&self) -> FrozenPlannerDisposition {
-        self.disposition
-    }
-
-    pub fn queue_reason(&self) -> Option<&FrozenQueueReason> {
-        self.queue_reason.as_ref()
-    }
-
     fn validate(&self) -> Result<(), WorkflowError> {
         if self.abi_identifier != "registry.change-request-plan/v1"
             || matches!(self.kind, FrozenPlannerKind::Rhai) != self.script_digest.is_some()
-            || (matches!(self.kind, FrozenPlannerKind::Declarative) && self.queue_reason.is_some())
-            || (matches!(self.disposition, FrozenPlannerDisposition::Apply)
-                && self.queue_reason.is_some())
         {
             return Err(WorkflowError::InvalidPlanningBinding);
         }
         if let Some(digest) = &self.script_digest {
             digest.validate()?;
-        }
-        if let Some(reason) = &self.queue_reason {
-            reason.validate()?;
         }
         Ok(())
     }
@@ -1009,69 +602,38 @@ pub struct PreparedProposal {
     request_record_revision: RecordRevision,
     contract_fingerprint: ContractFingerprint,
     originating_package: PackageFingerprint,
-    stages: Vec<CompiledChangeRequestStage>,
     effects: Vec<PreparedEffect>,
     combined_snapshot_bytes: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     planning_binding: Option<FrozenPlanningBinding>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    review_policy: Option<FrozenReviewPolicy>,
+    review_requirement: FrozenReviewRequirement,
+    #[serde(default)]
+    on_approved: crate::model::CompiledChangeRequestOnApproved,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     application_preconditions: Option<FrozenApplicationPreconditions>,
 }
 
 impl PreparedProposal {
-    pub fn new(
-        request_record_revision: RecordRevision,
-        contract_fingerprint: ContractFingerprint,
-        originating_package: PackageFingerprint,
-        stages: Vec<CompiledChangeRequestStage>,
-        effects: Vec<PreparedEffect>,
-        combined_snapshot_bytes: usize,
-    ) -> Result<Self, WorkflowError> {
-        validate_stages(&stages)?;
-        validate_effects(&effects, combined_snapshot_bytes)?;
-        Ok(Self {
-            request_record_revision,
-            contract_fingerprint,
-            originating_package,
-            stages,
-            effects,
-            combined_snapshot_bytes,
-            planning_binding: None,
-            review_policy: None,
-            attachments: BTreeMap::new(),
-            application_preconditions: None,
-        })
-    }
-
-    /// Constructs the canonical Version 2 proposal used by every newly
-    /// prepared declarative or scripted candidate. The legacy constructor is
-    /// retained only so persisted Version 1 proposals can be restored and
-    /// verified under their original digest schema.
-    #[allow(clippy::too_many_arguments)]
     pub fn new_with_binding(
         request_record_revision: RecordRevision,
         contract_fingerprint: ContractFingerprint,
         originating_package: PackageFingerprint,
-        review_policy: FrozenReviewPolicy,
+        review_requirement: FrozenReviewRequirement,
         planning_binding: FrozenPlanningBinding,
-        stages: Vec<CompiledChangeRequestStage>,
         effects: Vec<PreparedEffect>,
         combined_snapshot_bytes: usize,
     ) -> Result<Self, WorkflowError> {
-        validate_review_policy(review_policy, &stages)?;
         planning_binding.validate()?;
         validate_effects(&effects, combined_snapshot_bytes)?;
         Ok(Self {
             request_record_revision,
             contract_fingerprint,
             originating_package,
-            stages,
             effects,
             combined_snapshot_bytes,
             planning_binding: Some(planning_binding),
-            review_policy: Some(review_policy),
+            review_requirement,
+            on_approved: crate::model::CompiledChangeRequestOnApproved::default(),
             attachments: BTreeMap::new(),
             application_preconditions: None,
         })
@@ -1092,6 +654,19 @@ impl PreparedProposal {
             .filter(|bytes| *bytes <= MAX_REQUEST_SNAPSHOT_BYTES)
             .ok_or(WorkflowError::SnapshotTooLarge)?;
         self.application_preconditions = Some(preconditions);
+        Ok(self)
+    }
+
+    pub fn with_on_approved(
+        mut self,
+        on_approved: crate::model::CompiledChangeRequestOnApproved,
+    ) -> Result<Self, WorkflowError> {
+        crate::review_integration::validate_application_binding(
+            on_approved.mode,
+            on_approved.executor.as_deref(),
+        )
+        .map_err(|_| WorkflowError::InvalidRestoredState)?;
+        self.on_approved = on_approved;
         Ok(self)
     }
 
@@ -1117,10 +692,6 @@ impl PreparedProposal {
         &self.originating_package
     }
 
-    pub fn stages(&self) -> &[CompiledChangeRequestStage] {
-        &self.stages
-    }
-
     pub fn effects(&self) -> &[PreparedEffect] {
         &self.effects
     }
@@ -1133,8 +704,12 @@ impl PreparedProposal {
         self.planning_binding.as_ref()
     }
 
-    pub fn review_policy(&self) -> FrozenReviewPolicy {
-        self.review_policy.unwrap_or(FrozenReviewPolicy::Stages)
+    pub fn review_requirement(&self) -> &FrozenReviewRequirement {
+        &self.review_requirement
+    }
+
+    pub fn on_approved(&self) -> &crate::model::CompiledChangeRequestOnApproved {
+        &self.on_approved
     }
 
     pub fn application_preconditions(&self) -> Option<&FrozenApplicationPreconditions> {
@@ -1154,10 +729,10 @@ impl PreparedProposal {
             request_record_revision: self.request_record_revision,
             contract_fingerprint: &self.contract_fingerprint,
             originating_package: &self.originating_package,
-            stages: &self.stages,
             effects: &self.effects,
             planning_binding: self.planning_binding.as_ref(),
-            review_policy: self.review_policy,
+            review_requirement: &self.review_requirement,
+            on_approved: &self.on_approved,
             attachments: &self.attachments,
             application_preconditions: self.application_preconditions.as_ref(),
         })?;
@@ -1166,11 +741,11 @@ impl PreparedProposal {
             request_record_revision: self.request_record_revision,
             contract_fingerprint: self.contract_fingerprint,
             originating_package: self.originating_package,
-            stages: self.stages,
             effects: self.effects,
             combined_snapshot_bytes: self.combined_snapshot_bytes,
             planning_binding: self.planning_binding,
-            review_policy: self.review_policy,
+            review_requirement: self.review_requirement,
+            on_approved: self.on_approved,
             application_preconditions: self.application_preconditions,
             effect_digest,
             attachments: self.attachments,
@@ -1189,13 +764,13 @@ pub struct ProposalSnapshot {
     request_record_revision: RecordRevision,
     contract_fingerprint: ContractFingerprint,
     originating_package: PackageFingerprint,
-    stages: Vec<CompiledChangeRequestStage>,
     effects: Vec<PreparedEffect>,
     combined_snapshot_bytes: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     planning_binding: Option<FrozenPlanningBinding>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    review_policy: Option<FrozenReviewPolicy>,
+    review_requirement: FrozenReviewRequirement,
+    #[serde(default)]
+    on_approved: crate::model::CompiledChangeRequestOnApproved,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     application_preconditions: Option<FrozenApplicationPreconditions>,
     effect_digest: ProposalDigest,
@@ -1220,10 +795,6 @@ impl ProposalSnapshot {
         &self.effect_digest
     }
 
-    pub fn stages(&self) -> &[CompiledChangeRequestStage] {
-        &self.stages
-    }
-
     pub fn effects(&self) -> &[PreparedEffect] {
         &self.effects
     }
@@ -1244,8 +815,12 @@ impl ProposalSnapshot {
         self.planning_binding.as_ref()
     }
 
-    pub fn review_policy(&self) -> FrozenReviewPolicy {
-        self.review_policy.unwrap_or(FrozenReviewPolicy::Stages)
+    pub fn review_requirement(&self) -> &FrozenReviewRequirement {
+        &self.review_requirement
+    }
+
+    pub fn on_approved(&self) -> &crate::model::CompiledChangeRequestOnApproved {
+        &self.on_approved
     }
 
     pub fn application_preconditions(&self) -> Option<&FrozenApplicationPreconditions> {
@@ -1267,10 +842,10 @@ impl ProposalSnapshot {
             request_record_revision: self.request_record_revision,
             contract_fingerprint: &self.contract_fingerprint,
             originating_package: &self.originating_package,
-            stages: &self.stages,
             effects: &self.effects,
             planning_binding: self.planning_binding.as_ref(),
-            review_policy: self.review_policy,
+            review_requirement: &self.review_requirement,
+            on_approved: &self.on_approved,
             attachments: &self.attachments,
             application_preconditions: self.application_preconditions.as_ref(),
         })?;
@@ -1287,16 +862,12 @@ impl ProposalSnapshot {
         self.request_record_revision.validate()?;
         self.contract_fingerprint.validate()?;
         self.originating_package.validate()?;
-        match (self.planning_binding.as_ref(), self.review_policy) {
-            (None, None) => validate_stages(&self.stages)?,
-            (Some(binding), Some(review_policy)) => {
-                binding.validate()?;
-                validate_review_policy(review_policy, &self.stages)?;
-            }
-            _ => return Err(WorkflowError::InvalidRestoredState),
-        }
+        self.planning_binding
+            .as_ref()
+            .ok_or(WorkflowError::InvalidRestoredState)?
+            .validate()?;
         if let Some(preconditions) = &self.application_preconditions {
-            if self.planning_binding.is_none() || self.review_policy.is_none() {
+            if self.planning_binding.is_none() {
                 return Err(WorkflowError::InvalidRestoredState);
             }
             preconditions.validate()?;
@@ -1851,10 +1422,10 @@ impl ApplicationReceipt {
         if self
             .reason
             .as_deref()
-            .is_some_and(|reason| !valid_review_reason(reason))
+            .is_some_and(|reason| !valid_application_reason(reason))
             || (self.reason.is_some() && !self.reason_present)
         {
-            return Err(WorkflowError::InvalidReviewReason);
+            return Err(WorkflowError::InvalidApplicationReason);
         }
         self.application_id.validate()?;
         self.version.validate()?;
@@ -1936,14 +1507,13 @@ pub enum TransitionEffect {
     Submitted {
         version: ProposalVersion,
         effect_digest: ProposalDigest,
-        review_policy: FrozenReviewPolicy,
+        review_requirement: FrozenReviewRequirement,
     },
-    DecisionRecorded(ReviewDecision),
     DraftVersionStarted {
         version: ProposalVersion,
         reason: DraftStartReason,
     },
-    Canceled,
+    Cancelled,
     Applied(ApplicationReceipt),
 }
 
@@ -1953,135 +1523,14 @@ pub enum DraftStartReason {
     Rebase,
 }
 
-#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ReviewDecision {
-    version: ProposalVersion,
-    stage_id: String,
-    kind: ReviewDecisionKind,
-    actor: TrustedActorRef,
-    decided_at: TrustedTimestamp,
-    effect_digest: ProposalDigest,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    reason: Option<String>,
-    #[serde(default)]
-    reason_present: bool,
-}
-
-impl ReviewDecision {
-    #[cfg(feature = "runtime")]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn restore(
-        version: ProposalVersion,
-        stage_id: String,
-        kind: ReviewDecisionKind,
-        actor: TrustedActorRef,
-        decided_at: TrustedTimestamp,
-        effect_digest: ProposalDigest,
-        reason: Option<String>,
-        reason_present: bool,
-    ) -> Result<Self, WorkflowError> {
-        let decision = Self {
-            version,
-            stage_id,
-            kind,
-            actor,
-            decided_at,
-            effect_digest,
-            reason,
-            reason_present,
-        };
-        decision.validate()?;
-        Ok(decision)
-    }
-
-    pub fn version(&self) -> ProposalVersion {
-        self.version
-    }
-
-    pub fn stage_id(&self) -> &str {
-        &self.stage_id
-    }
-
-    pub fn kind(&self) -> ReviewDecisionKind {
-        self.kind
-    }
-
-    pub fn actor(&self) -> &TrustedActorRef {
-        &self.actor
-    }
-
-    pub fn decided_at(&self) -> &TrustedTimestamp {
-        &self.decided_at
-    }
-
-    pub fn effect_digest(&self) -> &ProposalDigest {
-        &self.effect_digest
-    }
-
-    pub fn reason(&self) -> Option<&str> {
-        self.reason.as_deref()
-    }
-
-    pub fn reason_present(&self) -> bool {
-        self.reason_present
-    }
-
-    fn validate(&self) -> Result<(), WorkflowError> {
-        if self
-            .reason
-            .as_deref()
-            .is_some_and(|reason| !valid_review_reason(reason))
-            || (self.reason.is_some() && !self.reason_present)
-        {
-            return Err(WorkflowError::InvalidReviewReason);
-        }
-        self.version.validate()?;
-        ValidatedToken::new(self.stage_id.clone(), TokenKind::Stage)?;
-        self.actor.validate()?;
-        self.decided_at.validate()?;
-        self.effect_digest.validate()
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReviewDecisionKind {
-    Approve,
-    Reject,
-    RequestRevision,
-}
-
-#[cfg(feature = "runtime")]
-impl ReviewDecisionKind {
-    pub(crate) fn from_storage(value: &str) -> Result<Self, WorkflowError> {
-        match value {
-            "approve" => Ok(Self::Approve),
-            "reject" => Ok(Self::Reject),
-            "request_revision" => Ok(Self::RequestRevision),
-            _ => Err(WorkflowError::InvalidRestoredState),
-        }
-    }
-
-    pub(crate) fn as_storage(self) -> &'static str {
-        match self {
-            Self::Approve => "approve",
-            Self::Reject => "reject",
-            Self::RequestRevision => "request_revision",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestState {
     Draft,
     Submitted,
-    Approved,
-    NeedsChanges,
-    Rejected,
-    Canceled,
+    Cancelled,
     Applied,
+    Superseded,
 }
 
 #[cfg(feature = "runtime")]
@@ -2090,11 +1539,12 @@ impl RequestState {
         match value {
             "draft" => Ok(Self::Draft),
             "submitted" => Ok(Self::Submitted),
-            "approved" => Ok(Self::Approved),
-            "needs_changes" => Ok(Self::NeedsChanges),
-            "rejected" => Ok(Self::Rejected),
-            "canceled" => Ok(Self::Canceled),
+            "cancelled" => Ok(Self::Cancelled),
             "applied" => Ok(Self::Applied),
+            "superseded" => Ok(Self::Superseded),
+            "approved" | "needs_changes" | "rejected" | "canceled" => {
+                Err(WorkflowError::OccupiedLegacyApprovalState)
+            }
             _ => Err(WorkflowError::InvalidRestoredState),
         }
     }
@@ -2103,11 +1553,9 @@ impl RequestState {
         match self {
             Self::Draft => "draft",
             Self::Submitted => "submitted",
-            Self::Approved => "approved",
-            Self::NeedsChanges => "needs_changes",
-            Self::Rejected => "rejected",
-            Self::Canceled => "canceled",
+            Self::Cancelled => "cancelled",
             Self::Applied => "applied",
+            Self::Superseded => "superseded",
         }
     }
 }
@@ -2445,9 +1893,7 @@ enum TokenKind {
     Effect,
     Entity,
     Field,
-    Planner,
     Record,
-    Stage,
     Timestamp,
 }
 
@@ -2503,7 +1949,6 @@ impl fmt::Debug for RequestWorkflow {
             .field("current_version", &self.current_version)
             .field("workflow_revision", &self.workflow_revision)
             .field("proposal_count", &self.proposals.len())
-            .field("decision_count", &self.decisions.len())
             .field("has_application", &self.application.is_some())
             .finish()
     }
@@ -2516,7 +1961,6 @@ impl fmt::Debug for PreparedProposal {
             .field("request_record_revision", &Redacted)
             .field("contract_fingerprint", &Redacted)
             .field("originating_package", &Redacted)
-            .field("stage_count", &self.stages.len())
             .field("effect_count", &self.effects.len())
             .field("combined_snapshot_bytes", &self.combined_snapshot_bytes)
             .finish()
@@ -2531,7 +1975,6 @@ impl fmt::Debug for ProposalSnapshot {
             .field("request_record_revision", &Redacted)
             .field("contract_fingerprint", &Redacted)
             .field("originating_package", &Redacted)
-            .field("stage_count", &self.stages.len())
             .field("effect_count", &self.effects.len())
             .field("combined_snapshot_bytes", &self.combined_snapshot_bytes)
             .field("effect_digest", &Redacted)
@@ -2675,34 +2118,14 @@ impl fmt::Debug for TransitionEffect {
                 .field("version", version)
                 .field("effect_digest", &Redacted)
                 .finish(),
-            Self::DecisionRecorded(decision) => formatter
-                .debug_tuple("DecisionRecorded")
-                .field(decision)
-                .finish(),
             Self::DraftVersionStarted { version, reason } => formatter
                 .debug_struct("DraftVersionStarted")
                 .field("version", version)
                 .field("reason", reason)
                 .finish(),
-            Self::Canceled => formatter.write_str("Canceled"),
+            Self::Cancelled => formatter.write_str("Cancelled"),
             Self::Applied(receipt) => formatter.debug_tuple("Applied").field(receipt).finish(),
         }
-    }
-}
-
-impl fmt::Debug for ReviewDecision {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ReviewDecision")
-            .field("version", &self.version)
-            .field("stage_id", &self.stage_id)
-            .field("kind", &self.kind)
-            .field("actor", &Redacted)
-            .field("decided_at", &Redacted)
-            .field("effect_digest", &Redacted)
-            .field("reason_present", &self.reason_present)
-            .field("reason", &Redacted)
-            .finish()
     }
 }
 
@@ -2762,24 +2185,16 @@ impl fmt::Debug for ApplicationId {
 pub enum WorkflowError {
     #[error("request workflow transition is not valid from the current state")]
     InvalidTransition,
-    #[error("review reason is invalid for this decision or exceeds its bounds")]
-    InvalidReviewReason,
+    #[error("application reason is invalid or exceeds its bounds")]
+    InvalidApplicationReason,
     #[error("proposal version is stale")]
     StaleProposalVersion,
     #[error("proposal digest does not match the frozen version")]
     DigestMismatch,
     #[error("proposal is unavailable")]
     ProposalUnavailable,
-    #[error("review stage is not the next pending stage")]
-    StageOutOfOrder,
-    #[error("submitter cannot approve this stage")]
-    SubmitterExcluded,
-    #[error("a reviewer from an earlier stage cannot decide this stage")]
-    PreviousReviewerExcluded,
     #[error("only the request owner can take this transition")]
     NotOwner,
-    #[error("actor already decided this stage for this proposal")]
-    DuplicateDecision,
     #[error("proposal version overflow")]
     VersionOverflow,
     #[error("request workflow revision overflow")]
@@ -2788,12 +2203,6 @@ pub enum WorkflowError {
     InvalidIdentifier,
     #[error("digest is invalid")]
     InvalidDigest,
-    #[error("proposal has no review stages")]
-    NoReviewStages,
-    #[error("review stage approval count is invalid")]
-    InvalidApprovalCount,
-    #[error("proposal has too many review stages")]
-    TooManyStages,
     #[error("proposal has no effects")]
     EmptyProposal,
     #[error("effect has no field changes")]
@@ -2822,43 +2231,16 @@ pub enum WorkflowError {
     StaleTargetRevision,
     #[error("contract fingerprint differs from the frozen proposal")]
     ContractFingerprintMismatch,
+    #[error("accepted review evidence does not match the frozen proposal")]
+    ReviewEvidenceMismatch,
     #[error("application receipt does not match the frozen proposal targets")]
     ApplicationReceiptMismatch,
     #[error("request has already been applied")]
     AlreadyApplied,
     #[error("restored request workflow state is inconsistent")]
     InvalidRestoredState,
-}
-
-fn validate_stages(stages: &[CompiledChangeRequestStage]) -> Result<(), WorkflowError> {
-    if stages.is_empty() {
-        return Err(WorkflowError::NoReviewStages);
-    }
-    if stages.len() > MAX_STAGES {
-        return Err(WorkflowError::TooManyStages);
-    }
-    let mut ids = BTreeSet::new();
-    for stage in stages {
-        ValidatedToken::new(stage.id.clone(), TokenKind::Stage)?;
-        if !ids.insert(stage.id.as_str()) {
-            return Err(WorkflowError::InvalidIdentifier);
-        }
-        if stage.approvals == 0 || stage.approvals > MAX_APPROVALS_PER_STAGE {
-            return Err(WorkflowError::InvalidApprovalCount);
-        }
-    }
-    Ok(())
-}
-
-fn validate_review_policy(
-    review_policy: FrozenReviewPolicy,
-    stages: &[CompiledChangeRequestStage],
-) -> Result<(), WorkflowError> {
-    match review_policy {
-        FrozenReviewPolicy::None if stages.is_empty() => Ok(()),
-        FrozenReviewPolicy::Stages => validate_stages(stages),
-        FrozenReviewPolicy::None => Err(WorkflowError::InvalidRestoredState),
-    }
+    #[error("request occupies an obsolete local approval state and requires explicit migration")]
+    OccupiedLegacyApprovalState,
 }
 
 fn validate_effects(
@@ -2912,10 +2294,10 @@ struct ProposalDigestInput<'a> {
     request_record_revision: RecordRevision,
     contract_fingerprint: &'a ContractFingerprint,
     originating_package: &'a PackageFingerprint,
-    stages: &'a [CompiledChangeRequestStage],
     effects: &'a [PreparedEffect],
     planning_binding: Option<&'a FrozenPlanningBinding>,
-    review_policy: Option<FrozenReviewPolicy>,
+    review_requirement: &'a FrozenReviewRequirement,
+    on_approved: &'a crate::model::CompiledChangeRequestOnApproved,
     application_preconditions: Option<&'a FrozenApplicationPreconditions>,
 }
 
@@ -2927,49 +2309,39 @@ fn proposal_digest(input: ProposalDigestInput<'_>) -> Result<ProposalDigest, Wor
         request_record_revision,
         contract_fingerprint,
         originating_package,
-        stages,
         effects,
         planning_binding,
-        review_policy,
+        review_requirement,
+        on_approved,
         application_preconditions,
     } = input;
-    let mut value = match (planning_binding, review_policy, application_preconditions) {
-        (None, None, None) => json!({
-            "schema": "breg.change-request.proposal.v1",
+    let planning_binding = planning_binding.ok_or(WorkflowError::InvalidPlanningBinding)?;
+    let mut value = match application_preconditions {
+        None => json!({
+            "schema": "breg.change-request.proposal.v5",
             "request": request,
             "version": version,
             "requestRecordRevision": request_record_revision,
             "contractFingerprint": contract_fingerprint,
             "originatingPackage": originating_package,
-            "stages": stages,
+            "review": review_requirement,
+            "onApproved": on_approved,
+            "planningBinding": planning_binding,
             "effects": effects,
         }),
-        (Some(planning_binding), Some(review_policy), None) => json!({
-            "schema": "breg.change-request.proposal.v2",
+        Some(application_preconditions) => json!({
+            "schema": "breg.change-request.proposal.v5",
             "request": request,
             "version": version,
             "requestRecordRevision": request_record_revision,
             "contractFingerprint": contract_fingerprint,
             "originatingPackage": originating_package,
-            "reviewPolicy": review_policy,
+            "review": review_requirement,
+            "onApproved": on_approved,
             "planningBinding": planning_binding,
-            "stages": stages,
-            "effects": effects,
-        }),
-        (Some(planning_binding), Some(review_policy), Some(application_preconditions)) => json!({
-            "schema": "breg.change-request.proposal.v3",
-            "request": request,
-            "version": version,
-            "requestRecordRevision": request_record_revision,
-            "contractFingerprint": contract_fingerprint,
-            "originatingPackage": originating_package,
-            "reviewPolicy": review_policy,
-            "planningBinding": planning_binding,
-            "stages": stages,
             "effects": effects,
             "applicationPreconditions": application_preconditions,
         }),
-        _ => return Err(WorkflowError::InvalidPlanningBinding),
     };
     if !attachments.is_empty() {
         value["attachments"] =
@@ -2990,228 +2362,265 @@ fn hex_lower(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+mod source_owned_review_tests {
     use super::*;
-
-    fn id(value: &str) -> RecordId {
-        RecordId::new(value).expect("record id")
-    }
+    use crate::model::{
+        CompiledChangeRequestNoReview, CompiledChangeRequestNoReviewMode,
+        CompiledChangeRequestReviewRequirement,
+    };
+    use crate::review_integration::{
+        AcceptedReviewBinding, AcceptedReviewEvidence, ReviewPolicyBinding, ReviewResultEnvelope,
+        ReviewSubjectBinding, TerminalReviewStatus,
+    };
+    use uuid::Uuid;
 
     fn entity(value: &str) -> EntityId {
         EntityId::new(value).expect("entity id")
     }
 
-    fn field(value: &str) -> FieldId {
-        FieldId::new(value).expect("field id")
-    }
-
-    fn effect_id(value: &str) -> EffectId {
-        EffectId::new(value).expect("effect id")
-    }
-
-    fn actor(value: &str) -> TrustedActorRef {
-        TrustedActorRef::from_verified_context(value).expect("actor")
-    }
-
-    fn at(second: u8) -> TrustedTimestamp {
-        TrustedTimestamp::from_server_clock(format!("2026-08-31T00:00:{second:02}Z"))
-            .expect("timestamp")
-    }
-
-    fn context(actor_ref: &str, second: u8) -> TrustedTransitionContext {
-        TrustedTransitionContext::from_verified_context(actor(actor_ref), at(second))
+    fn record(value: &str) -> RecordId {
+        RecordId::new(value).expect("record id")
     }
 
     fn revision(value: i64) -> RecordRevision {
         RecordRevision::new(value).expect("record revision")
     }
 
-    fn state_revision(value: u64) -> StateRevision {
-        StateRevision::new(value).expect("state revision")
-    }
-
-    fn stages() -> Vec<CompiledChangeRequestStage> {
-        vec![
-            CompiledChangeRequestStage {
-                id: "review".to_owned(),
-                approvals: 2,
-                exclude_submitter: true,
-                exclude_previous_reviewers: false,
-            },
-            CompiledChangeRequestStage {
-                id: "quality".to_owned(),
-                approvals: 1,
-                exclude_submitter: false,
-                exclude_previous_reviewers: false,
-            },
-        ]
-    }
-
-    fn one_stage() -> Vec<CompiledChangeRequestStage> {
-        vec![CompiledChangeRequestStage {
-            id: "review".to_owned(),
-            approvals: 1,
-            exclude_submitter: true,
-            exclude_previous_reviewers: false,
-        }]
+    fn context(actor: &str, timestamp: &str) -> TrustedTransitionContext {
+        TrustedTransitionContext::from_verified_context(
+            TrustedActorRef::from_verified_context(actor).expect("actor"),
+            TrustedTimestamp::from_server_clock(timestamp).expect("timestamp"),
+        )
     }
 
     fn workflow() -> RequestWorkflow {
         RequestWorkflow::new_draft(
-            RequestKey::new(entity("placement-correction-request"), id("request-1")),
-            actor("submitter"),
-            state_revision(1),
+            RequestKey::new(entity("placement-correction-request"), record("request-1")),
+            TrustedActorRef::from_verified_context("submitter").expect("owner"),
+            StateRevision::new(1).expect("state revision"),
         )
     }
 
-    fn patch_effect(after: &str, base_revision: i64) -> PreparedEffect {
-        PreparedEffect::new(
-            effect_id("patch-placement"),
+    fn proposal(review: FrozenReviewRequirement) -> PreparedProposal {
+        let effect = PreparedEffect::new(
+            EffectId::new("patch-placement").expect("effect id"),
             Operation::Patch,
             PreparedTarget::existing(
                 entity("asset-placement"),
-                id("placement-1"),
-                revision(base_revision),
+                record("placement-1"),
+                revision(3),
             ),
             vec![PreparedFieldChange::set(
-                field("site"),
+                FieldId::new("site").expect("field id"),
                 FieldValue::present(json!("site-a")),
-                json!(after),
+                json!("site-b"),
             )
-            .expect("field set")],
+            .expect("field change")],
         )
-        .expect("effect")
-    }
-
-    fn create_effect(effect: &str, target: &str, record: &str) -> PreparedEffect {
-        PreparedEffect::new(
-            effect_id(effect),
-            Operation::Create,
-            PreparedTarget::reserved_create(entity(target), id(record)),
-            vec![PreparedFieldChange::set(
-                field("display-name"),
-                FieldValue::Missing,
-                json!("Ada"),
-            )
-            .expect("field set")],
+        .expect("effect");
+        let snapshot_bytes = canonicalize_json(
+            &serde_json::to_value(std::slice::from_ref(&effect)).expect("effect serializes"),
         )
-        .expect("create effect")
-    }
-
-    fn proposal(
-        effects: Vec<PreparedEffect>,
-        stages: Vec<CompiledChangeRequestStage>,
-    ) -> PreparedProposal {
-        let canonical_len =
-            canonicalize_json(&serde_json::to_value(&effects).expect("effects serialize"))
-                .expect("effects canonicalize")
-                .len();
-        PreparedProposal::new(
-            revision(7),
-            ContractFingerprint::new("sha256:contract").expect("contract fingerprint"),
-            PackageFingerprint::new("sha256:package").expect("package fingerprint"),
-            stages,
-            effects,
-            canonical_len,
-        )
-        .expect("proposal")
-    }
-
-    fn v2_proposal(
-        effects: Vec<PreparedEffect>,
-        review_policy: FrozenReviewPolicy,
-        stages: Vec<CompiledChangeRequestStage>,
-        script_digest: &str,
-    ) -> PreparedProposal {
-        let canonical_len =
-            canonicalize_json(&serde_json::to_value(&effects).expect("effects serialize"))
-                .expect("effects canonicalize")
-                .len();
+        .expect("effect canonicalizes")
+        .len();
         PreparedProposal::new_with_binding(
             revision(7),
             ContractFingerprint::new("sha256:contract").expect("contract fingerprint"),
             PackageFingerprint::new("sha256:package").expect("package fingerprint"),
-            review_policy,
+            review,
             FrozenPlanningBinding::new(
-                FrozenPlannerKind::Rhai,
+                FrozenPlannerKind::Declarative,
                 "registry.change-request-plan/v1",
-                Some(ProposalDigest::new(script_digest).expect("script digest")),
-                FrozenPlannerDisposition::Queue,
-                Some(FrozenQueueReason::new("manual-check", "Manual check").expect("reason")),
+                None,
             )
             .expect("planning binding"),
-            stages,
-            effects,
-            canonical_len,
+            vec![effect],
+            snapshot_bytes,
         )
-        .expect("v2 proposal")
+        .expect("proposal")
     }
 
-    fn submitted_one_stage() -> RequestWorkflow {
-        workflow()
-            .submit(
-                context("submitter", 1),
-                proposal(vec![patch_effect("site-b", 3)], one_stage()),
-            )
-            .expect("submit")
-            .into_workflow()
+    fn no_review() -> FrozenReviewRequirement {
+        FrozenReviewRequirement::None(CompiledChangeRequestNoReview {
+            mode: CompiledChangeRequestNoReviewMode::None,
+        })
+    }
+
+    fn required_review() -> FrozenReviewRequirement {
+        FrozenReviewRequirement::Required(CompiledChangeRequestReviewRequirement {
+            authority: "casework-main".to_owned(),
+            policy_id: "request-review".to_owned(),
+        })
+    }
+
+    fn application() -> PreparedApplication {
+        PreparedApplication::new(
+            ApplicationId::new("application-1").expect("application id"),
+            vec![ApplicationResultLink::new(
+                entity("asset-placement"),
+                record("placement-1"),
+                revision(4),
+            )],
+        )
+        .expect("application")
+    }
+
+    fn observed_targets() -> Vec<ObservedTarget> {
+        vec![ObservedTarget::existing(
+            entity("asset-placement"),
+            record("placement-1"),
+            revision(3),
+        )]
+    }
+
+    fn accepted_evidence(proposal: &ProposalSnapshot) -> AcceptedReviewEvidence {
+        let subject = ReviewSubjectBinding {
+            source: "breg".to_owned(),
+            subject_type: "change_request".to_owned(),
+            id: "request-1".to_owned(),
+            version: proposal.version().get().to_string(),
+            digest: proposal.effect_digest().as_str().to_owned(),
+        };
+        let policy = ReviewPolicyBinding {
+            id: "request-review".to_owned(),
+            version: "7".to_owned(),
+            digest: format!("sha256:{}", "b".repeat(64)),
+        };
+        let accepted = AcceptedReviewBinding {
+            authority: "casework-main".to_owned(),
+            request_id: Uuid::from_u128(1),
+            subject: subject.clone(),
+            policy: policy.clone(),
+            submission_digest: format!("sha256:{}", "c".repeat(64)),
+        };
+        let result = ReviewResultEnvelope {
+            result_id: Uuid::from_u128(2),
+            request_id: accepted.request_id,
+            subject,
+            policy,
+            submission_digest: accepted.submission_digest.clone(),
+            status: TerminalReviewStatus::Approved,
+            completed_at: "2026-09-19T00:01:00Z".to_owned(),
+            available_until: "2026-09-20T00:01:00Z".to_owned(),
+        };
+        AcceptedReviewEvidence::from_approved("casework-main", &accepted, &result)
+            .expect("accepted evidence")
     }
 
     #[test]
-    fn proposal_digest_binds_attachment_hash_type_size_and_slot() {
-        let manifest = BTreeMap::from([(
-            "evidence".to_owned(),
-            AttachmentManifestEntry {
-                verification_policy: None,
-                sha256: "a".repeat(64),
-                content_type: "application/pdf".to_owned(),
-                byte_size: 10,
-            },
-        )]);
-        let prepared = proposal(vec![patch_effect("site-b", 3)], one_stage());
-        let frozen = workflow()
+    fn explicit_no_review_applies_directly_and_refuses_unsolicited_evidence() {
+        let submitted = workflow()
             .submit(
-                context("submitter", 1),
-                prepared.clone().with_attachments(manifest.clone()).unwrap(),
+                context("submitter", "2026-09-19T00:00:00Z"),
+                proposal(no_review()),
             )
-            .unwrap()
+            .expect("submit")
             .into_workflow();
-        let snapshot = frozen.current_proposal().unwrap();
-        snapshot.verify_digest(frozen.request()).unwrap();
-        assert_eq!(snapshot.attachments(), &manifest);
-        let original = snapshot.effect_digest().clone();
-        for mutation in 0..5 {
-            let mut changed = manifest.clone();
-            match mutation {
-                0 => changed.get_mut("evidence").unwrap().sha256 = "b".repeat(64),
-                1 => changed.get_mut("evidence").unwrap().content_type = "image/png".to_owned(),
-                2 => changed.get_mut("evidence").unwrap().byte_size = 11,
-                3 => {
-                    changed.get_mut("evidence").unwrap().verification_policy =
-                        Some("policy-a".to_owned())
-                }
-                _ => {
-                    let entry = changed.remove("evidence").unwrap();
-                    changed.insert("other".to_owned(), entry);
-                }
-            }
-            let result = workflow()
-                .submit(
-                    context("submitter", 1),
-                    prepared.clone().with_attachments(changed).unwrap(),
-                )
-                .unwrap()
-                .into_workflow();
-            assert_ne!(
-                result.current_proposal().unwrap().effect_digest(),
-                &original
-            );
-        }
-        let mut tampered = snapshot.clone();
-        tampered.attachments.get_mut("evidence").unwrap().sha256 = "c".repeat(64);
+        let frozen = submitted.current_proposal().expect("frozen proposal");
+        let digest = frozen.effect_digest().clone();
+        let contract = frozen.contract_fingerprint().clone();
+
+        let evidence = accepted_evidence(frozen);
+        let refused = submitted.clone().apply(
+            context("applier", "2026-09-19T00:02:00Z"),
+            ProposalVersion::first(),
+            &digest,
+            &contract,
+            Some(&evidence),
+            observed_targets(),
+            application(),
+            None,
+        );
         assert_eq!(
-            tampered.verify_digest(frozen.request()),
-            Err(WorkflowError::DigestMismatch)
+            refused.expect_err("unsolicited review evidence must be refused"),
+            WorkflowError::ReviewEvidenceMismatch
+        );
+
+        let applied = submitted
+            .apply(
+                context("applier", "2026-09-19T00:02:00Z"),
+                ProposalVersion::first(),
+                &digest,
+                &contract,
+                None,
+                observed_targets(),
+                application(),
+                None,
+            )
+            .expect("direct application")
+            .into_workflow();
+        assert_eq!(applied.state(), RequestState::Applied);
+    }
+
+    #[test]
+    fn required_review_applies_only_with_exact_approved_result_binding() {
+        let submitted = workflow()
+            .submit(
+                context("submitter", "2026-09-19T00:00:00Z"),
+                proposal(required_review()),
+            )
+            .expect("submit")
+            .into_workflow();
+        let frozen = submitted.current_proposal().expect("frozen proposal");
+        let digest = frozen.effect_digest().clone();
+        let contract = frozen.contract_fingerprint().clone();
+
+        let refused = submitted.clone().apply(
+            context("applier", "2026-09-19T00:02:00Z"),
+            ProposalVersion::first(),
+            &digest,
+            &contract,
+            None,
+            observed_targets(),
+            application(),
+            None,
+        );
+        assert_eq!(
+            refused.expect_err("missing review evidence must be refused"),
+            WorkflowError::ReviewEvidenceMismatch
+        );
+
+        let evidence = accepted_evidence(frozen);
+        let applied = submitted
+            .apply(
+                context("applier", "2026-09-19T00:02:00Z"),
+                ProposalVersion::first(),
+                &digest,
+                &contract,
+                Some(&evidence),
+                observed_targets(),
+                application(),
+                Some("casework approval received".to_owned()),
+            )
+            .expect("review-backed application")
+            .into_workflow();
+        assert_eq!(applied.state(), RequestState::Applied);
+    }
+
+    #[test]
+    fn proposal_digest_binds_exact_review_authority_and_policy() {
+        let first = workflow()
+            .submit(
+                context("submitter", "2026-09-19T00:00:00Z"),
+                proposal(required_review()),
+            )
+            .expect("submit")
+            .into_workflow();
+        let second = workflow()
+            .submit(
+                context("submitter", "2026-09-19T00:00:00Z"),
+                proposal(FrozenReviewRequirement::Required(
+                    CompiledChangeRequestReviewRequirement {
+                        authority: "casework-secondary".to_owned(),
+                        policy_id: "request-review-v2".to_owned(),
+                    },
+                )),
+            )
+            .expect("submit")
+            .into_workflow();
+        assert_ne!(
+            first.current_proposal().expect("proposal").effect_digest(),
+            second.current_proposal().expect("proposal").effect_digest()
         );
     }
 
@@ -3233,25 +2642,22 @@ mod tests {
         };
         let submitted = workflow()
             .submit(
-                context("submitter", 1),
-                v2_proposal(
-                    vec![patch_effect("site-b", 3)],
-                    FrozenReviewPolicy::Stages,
-                    one_stage(),
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                )
-                .with_application_preconditions(preconditions)
-                .unwrap(),
+                context("submitter", "2026-09-19T00:00:00Z"),
+                proposal(required_review())
+                    .with_application_preconditions(preconditions)
+                    .expect("preconditions freeze"),
             )
-            .unwrap()
+            .expect("submit")
             .into_workflow();
-        let snapshot = submitted.current_proposal().unwrap();
-        snapshot.verify_digest(submitted.request()).unwrap();
+        let snapshot = submitted.current_proposal().expect("proposal");
+        snapshot
+            .verify_digest(submitted.request())
+            .expect("digest verifies");
         let mut tampered = snapshot.clone();
         tampered
             .application_preconditions
             .as_mut()
-            .unwrap()
+            .expect("preconditions")
             .request_values
             .insert("valid-through".to_owned(), json!("2099-01-01"));
         assert_eq!(
@@ -3260,922 +2666,89 @@ mod tests {
         );
     }
 
-    fn approve_current(workflow: RequestWorkflow, actor_ref: &str, second: u8) -> RequestWorkflow {
-        let digest = workflow
-            .current_proposal()
-            .expect("proposal")
-            .effect_digest()
-            .clone();
-        let version = workflow.current_version();
-        workflow
-            .decide(
-                context(actor_ref, second),
-                "review",
-                version,
-                &digest,
-                ReviewDecisionKind::Approve,
-            )
-            .expect("approve")
-            .into_workflow()
-    }
-
     #[test]
-    fn submission_freezes_digest_and_rejects_digest_tampering() {
-        let submitted = submitted_one_stage();
-        let digest = submitted
-            .current_proposal()
-            .expect("proposal")
-            .effect_digest()
-            .clone();
-        assert_eq!(submitted.pending_review_stage().unwrap().id, "review");
-        assert_eq!(
-            submitted
-                .pending_review_stage_entered_at()
-                .unwrap()
-                .as_str(),
-            "2026-08-31T00:00:01Z"
-        );
-        assert_eq!(submitted.state(), RequestState::Submitted);
-
-        let tampered = proposal(vec![patch_effect("site-c", 3)], one_stage())
-            .freeze(
-                &RequestKey::new(entity("placement-correction-request"), id("request-1")),
-                submitted.current_version(),
-                context("submitter", 2),
-            )
-            .expect("tampered proposal")
-            .effect_digest()
-            .clone();
-        assert_ne!(digest, tampered);
-
-        let refused = submitted.decide(
-            context("reviewer-a", 3),
-            "review",
-            ProposalVersion::first(),
-            &tampered,
-            ReviewDecisionKind::Approve,
-        );
-        assert_eq!(
-            refused.expect_err("digest mismatch"),
-            WorkflowError::DigestMismatch
-        );
-    }
-
-    #[test]
-    fn rhai_planner_review_policy_cannot_be_forged_or_bypassed() {
-        let effect = patch_effect("site-b", 3);
-        assert_eq!(
-            PreparedProposal::new_with_binding(
-                revision(7),
-                ContractFingerprint::new("sha256:contract").unwrap(),
-                PackageFingerprint::new("sha256:package").unwrap(),
-                FrozenReviewPolicy::None,
-                FrozenPlanningBinding::new(
-                    FrozenPlannerKind::Declarative,
-                    "registry.change-request-plan/v1",
-                    None,
-                    FrozenPlannerDisposition::Queue,
-                    None,
-                )
-                .unwrap(),
-                one_stage(),
-                vec![effect.clone()],
-                MAX_REQUEST_SNAPSHOT_BYTES,
-            )
-            .expect_err("review.none cannot retain review stages"),
-            WorkflowError::InvalidRestoredState
-        );
-        assert_eq!(
-            PreparedProposal::new_with_binding(
-                revision(7),
-                ContractFingerprint::new("sha256:contract").unwrap(),
-                PackageFingerprint::new("sha256:package").unwrap(),
-                FrozenReviewPolicy::Stages,
-                FrozenPlanningBinding::new(
-                    FrozenPlannerKind::Declarative,
-                    "registry.change-request-plan/v1",
-                    None,
-                    FrozenPlannerDisposition::Queue,
-                    None,
-                )
-                .unwrap(),
-                Vec::new(),
-                vec![effect.clone()],
-                MAX_REQUEST_SNAPSHOT_BYTES,
-            )
-            .expect_err("staged review cannot omit stages"),
-            WorkflowError::NoReviewStages
-        );
-
-        let approved = workflow()
+    fn proposal_digest_binds_attachment_hash_type_size_and_slot() {
+        let manifest = BTreeMap::from([(
+            "evidence".to_owned(),
+            AttachmentManifestEntry {
+                verification_policy: None,
+                sha256: "a".repeat(64),
+                content_type: "application/pdf".to_owned(),
+                byte_size: 10,
+            },
+        )]);
+        let prepared = proposal(required_review());
+        let frozen = workflow()
             .submit(
-                context("submitter", 1),
-                v2_proposal(
-                    vec![effect],
-                    FrozenReviewPolicy::None,
-                    Vec::new(),
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                ),
-            )
-            .expect("explicit no-review submission")
-            .into_workflow();
-        assert_eq!(approved.state(), RequestState::Approved);
-        assert!(approved.decisions().is_empty());
-        let proposal = approved.current_proposal().expect("proposal");
-        assert_eq!(proposal.review_policy(), FrozenReviewPolicy::None);
-        assert_eq!(
-            approved
-                .clone()
-                .decide(
-                    context("reviewer", 2),
-                    "review",
-                    proposal.version(),
-                    proposal.effect_digest(),
-                    ReviewDecisionKind::Approve,
-                )
-                .expect_err("no-review proposal has no decision transition"),
-            WorkflowError::InvalidTransition
-        );
-        approved
-            .validate_restored_invariants()
-            .expect("no-review approved workflow restores without a synthetic decision");
-    }
-
-    #[test]
-    fn rhai_planner_package_and_frozen_proposal_bind_exact_script() {
-        let first = workflow()
-            .submit(
-                context("submitter", 1),
-                v2_proposal(
-                    vec![patch_effect("site-b", 3)],
-                    FrozenReviewPolicy::Stages,
-                    one_stage(),
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                ),
-            )
-            .expect("first submit")
-            .into_workflow();
-        let second = workflow()
-            .submit(
-                context("submitter", 1),
-                v2_proposal(
-                    vec![patch_effect("site-b", 3)],
-                    FrozenReviewPolicy::Stages,
-                    one_stage(),
-                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                ),
-            )
-            .expect("second submit")
-            .into_workflow();
-        assert_ne!(
-            first.current_proposal().unwrap().effect_digest(),
-            second.current_proposal().unwrap().effect_digest()
-        );
-
-        let mut encoded = serde_json::to_value(&first).expect("workflow serializes");
-        let proposal = encoded["proposals"]
-            .as_object_mut()
-            .unwrap()
-            .values_mut()
-            .next()
-            .unwrap();
-        proposal["planningBinding"]["scriptDigest"] =
-            json!("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-        let restored = serde_json::from_value::<RequestWorkflow>(encoded)
-            .expect("tampered shape deserializes")
-            .validate_restored();
-        assert_eq!(
-            restored.expect_err("script digest tampering is refused"),
-            WorkflowError::DigestMismatch
-        );
-    }
-
-    #[test]
-    fn each_stage_requires_distinct_approvals_and_optional_submitter_exclusion() {
-        let submitted = workflow()
-            .submit(
-                context("submitter", 1),
-                proposal(vec![patch_effect("site-b", 3)], stages()),
+                context("submitter", "2026-09-19T00:00:00Z"),
+                prepared
+                    .clone()
+                    .with_attachments(manifest.clone())
+                    .expect("attachments freeze"),
             )
             .expect("submit")
             .into_workflow();
-        let digest = submitted
-            .current_proposal()
-            .expect("proposal")
-            .effect_digest()
-            .clone();
-
-        let self_approval = submitted.clone().decide(
-            context("submitter", 2),
-            "review",
-            ProposalVersion::first(),
-            &digest,
-            ReviewDecisionKind::Approve,
-        );
-        assert_eq!(
-            self_approval.expect_err("self approval refused"),
-            WorkflowError::SubmitterExcluded
-        );
-
-        let stage_skip = submitted.clone().decide(
-            context("reviewer-a", 3),
-            "quality",
-            ProposalVersion::first(),
-            &digest,
-            ReviewDecisionKind::Approve,
-        );
-        assert_eq!(
-            stage_skip.expect_err("stage order refused"),
-            WorkflowError::StageOutOfOrder
-        );
-
-        let after_first = submitted
-            .decide(
-                context("reviewer-a", 4),
-                "review",
-                ProposalVersion::first(),
-                &digest,
-                ReviewDecisionKind::Approve,
-            )
-            .expect("first approval")
-            .into_workflow();
-        assert_eq!(after_first.state(), RequestState::Submitted);
-        assert_eq!(after_first.pending_review_stage().unwrap().id, "review");
-        assert_eq!(
-            after_first
-                .pending_review_stage_entered_at()
-                .unwrap()
-                .as_str(),
-            "2026-08-31T00:00:01Z"
-        );
-
-        let duplicate = after_first.clone().decide(
-            context("reviewer-a", 5),
-            "review",
-            ProposalVersion::first(),
-            &digest,
-            ReviewDecisionKind::Approve,
-        );
-        assert_eq!(
-            duplicate.expect_err("duplicate refused"),
-            WorkflowError::DuplicateDecision
-        );
-
-        let after_second = after_first
-            .decide(
-                context("reviewer-b", 6),
-                "review",
-                ProposalVersion::first(),
-                &digest,
-                ReviewDecisionKind::Approve,
-            )
-            .expect("second approval")
-            .into_workflow();
-        assert_eq!(after_second.state(), RequestState::Submitted);
-        assert_eq!(after_second.pending_review_stage().unwrap().id, "quality");
-        assert_eq!(
-            after_second
-                .pending_review_stage_entered_at()
-                .unwrap()
-                .as_str(),
-            "2026-08-31T00:00:06Z"
-        );
-
-        let approved = after_second
-            .decide(
-                context("submitter", 7),
-                "quality",
-                ProposalVersion::first(),
-                &digest,
-                ReviewDecisionKind::Approve,
-            )
-            .expect("quality approval")
-            .into_workflow();
-        assert_eq!(approved.state(), RequestState::Approved);
-        assert!(approved.pending_review_stage().is_none());
-        assert!(approved.pending_review_stage_entered_at().is_none());
-    }
-
-    #[test]
-    fn stages_without_cross_stage_exclusion_preserve_frozen_serialization() {
-        let legacy = json!({"id":"review", "approvals":1, "excludeSubmitter":true});
-        let mut stage: CompiledChangeRequestStage =
-            serde_json::from_value(legacy.clone()).expect("stored stage predates the new rule");
-        assert!(!stage.exclude_previous_reviewers);
-        assert_eq!(
-            serde_json::to_value(&stage).expect("canonical stage"),
-            legacy
-        );
-        stage.exclude_previous_reviewers = true;
-        assert_eq!(
-            serde_json::to_value(&stage).expect("independent stage")["excludePreviousReviewers"],
-            json!(true)
-        );
-    }
-
-    #[test]
-    fn prior_stage_actor_is_excluded_only_when_the_stage_requires_independence() {
-        for independent in [false, true] {
-            let mut review_stages = stages();
-            review_stages[0].approvals = 1;
-            review_stages[1].exclude_previous_reviewers = independent;
-            let submitted = workflow()
+        let snapshot = frozen.current_proposal().expect("proposal");
+        snapshot
+            .verify_digest(frozen.request())
+            .expect("digest verifies");
+        assert_eq!(snapshot.attachments(), &manifest);
+        let original = snapshot.effect_digest().clone();
+        for mutation in 0..5 {
+            let mut changed = manifest.clone();
+            match mutation {
+                0 => changed.get_mut("evidence").expect("slot").sha256 = "b".repeat(64),
+                1 => {
+                    changed.get_mut("evidence").expect("slot").content_type =
+                        "image/png".to_owned();
+                }
+                2 => changed.get_mut("evidence").expect("slot").byte_size = 11,
+                3 => {
+                    changed
+                        .get_mut("evidence")
+                        .expect("slot")
+                        .verification_policy = Some("policy-a".to_owned());
+                }
+                _ => {
+                    let entry = changed.remove("evidence").expect("slot");
+                    changed.insert("other".to_owned(), entry);
+                }
+            }
+            let result = workflow()
                 .submit(
-                    context("submitter", 1),
-                    proposal(vec![patch_effect("site-b", 3)], review_stages),
+                    context("submitter", "2026-09-19T00:00:00Z"),
+                    prepared
+                        .clone()
+                        .with_attachments(changed)
+                        .expect("attachments freeze"),
                 )
                 .expect("submit")
                 .into_workflow();
-            let digest = submitted
-                .current_proposal()
-                .unwrap()
-                .effect_digest()
-                .clone();
-            let reviewed = submitted
-                .decide(
-                    context("reviewer", 2),
-                    "review",
-                    ProposalVersion::first(),
-                    &digest,
-                    ReviewDecisionKind::Approve,
-                )
-                .expect("first stage")
-                .into_workflow();
-            // The constraint belongs to the frozen proposal and survives storage.
-            let restored = serde_json::from_value::<RequestWorkflow>(
-                serde_json::to_value(&reviewed).expect("serialize"),
-            )
-            .expect("deserialize")
-            .validate_restored()
-            .expect("restore");
-            let repeated = restored.clone().decide(
-                context("reviewer", 3),
-                "quality",
-                ProposalVersion::first(),
-                &digest,
-                ReviewDecisionKind::Approve,
-            );
-            if independent {
-                assert_eq!(
-                    repeated.expect_err("the same actor holds both grants"),
-                    WorkflowError::PreviousReviewerExcluded
-                );
-            } else {
-                assert_eq!(
-                    repeated
-                        .expect("explicitly shared reviewers")
-                        .into_workflow()
-                        .state(),
-                    RequestState::Approved
-                );
-            }
-            let approved = restored
-                .decide(
-                    context("second-reviewer", 4),
-                    "quality",
-                    ProposalVersion::first(),
-                    &digest,
-                    ReviewDecisionKind::Approve,
-                )
-                .expect("independent reviewer")
-                .into_workflow();
-            assert_eq!(approved.state(), RequestState::Approved);
-            let mut altered = approved;
-            altered.decisions.last_mut().expect("final approval").actor =
-                context("reviewer", 4).actor;
-            let validation = altered.validate_restored();
-            if independent {
-                assert_eq!(
-                    validation.expect_err("stored decisions preserve independence"),
-                    WorkflowError::PreviousReviewerExcluded
-                );
-            } else {
-                validation.expect("shared reviewers remain valid after storage");
-            }
-        }
-    }
-
-    #[test]
-    fn reviewer_reason_is_bounded_decision_payload_and_debug_is_value_free() {
-        let submitted = submitted_one_stage();
-        let digest = submitted
-            .current_proposal()
-            .unwrap()
-            .effect_digest()
-            .clone();
-        for kind in [
-            ReviewDecisionKind::Approve,
-            ReviewDecisionKind::Reject,
-            ReviewDecisionKind::RequestRevision,
-        ] {
-            let reason = "แก้ไข資料".repeat(512);
-            let decided = submitted
-                .clone()
-                .decide_with_reason(
-                    context("reviewer-a", 2),
-                    "review",
-                    ProposalVersion::first(),
-                    &digest,
-                    kind,
-                    Some(reason.clone()),
-                )
-                .expect("bounded Unicode reason")
-                .into_workflow();
-            assert_eq!(decided.decisions()[0].reason(), Some(reason.as_str()));
-            assert!(decided.decisions()[0].reason_present());
-            assert!(!format!("{:?}", decided.decisions()[0]).contains(&reason));
-            let restored: RequestWorkflow =
-                serde_json::from_value(serde_json::to_value(&decided).unwrap()).unwrap();
-            assert_eq!(restored.validate_restored().unwrap(), decided);
-            let mut invalid = decided;
-            invalid.decisions[0].reason_present = false;
-            assert_eq!(
-                invalid.validate_restored().unwrap_err(),
-                WorkflowError::InvalidReviewReason
+            assert_ne!(
+                result.current_proposal().expect("proposal").effect_digest(),
+                &original
             );
         }
-        for (kind, reason) in [
-            (
-                ReviewDecisionKind::Reject,
-                "x".repeat(MAX_REVIEW_REASON_CHARS + 1),
-            ),
-            (
-                ReviewDecisionKind::RequestRevision,
-                "invalid\0text".to_owned(),
-            ),
-        ] {
-            assert_eq!(
-                submitted
-                    .clone()
-                    .decide_with_reason(
-                        context("reviewer-a", 2),
-                        "review",
-                        ProposalVersion::first(),
-                        &digest,
-                        kind,
-                        Some(reason),
-                    )
-                    .unwrap_err(),
-                WorkflowError::InvalidReviewReason
-            );
-        }
-    }
-
-    #[test]
-    fn revision_starts_a_new_version_and_old_decisions_cannot_apply() {
-        let submitted = submitted_one_stage();
-        let digest = submitted
-            .current_proposal()
-            .expect("proposal")
-            .effect_digest()
-            .clone();
-        let needs_changes = submitted
-            .decide(
-                context("reviewer-a", 2),
-                "review",
-                ProposalVersion::first(),
-                &digest,
-                ReviewDecisionKind::RequestRevision,
-            )
-            .expect("request revision")
-            .into_workflow();
-        assert_eq!(needs_changes.state(), RequestState::NeedsChanges);
-        assert!(needs_changes.pending_review_stage().is_none());
-        assert!(needs_changes.pending_review_stage_entered_at().is_none());
-
-        let draft = needs_changes
-            .revise(context("submitter", 3))
-            .expect("revise")
-            .into_workflow();
-        assert_eq!(draft.state(), RequestState::Draft);
-        assert_eq!(draft.current_version().get(), 2);
-
-        let resubmitted = draft
-            .submit(
-                context("submitter", 4),
-                proposal(vec![patch_effect("site-c", 4)], one_stage()),
-            )
-            .expect("resubmit")
-            .into_workflow();
-        assert_eq!(
-            resubmitted
-                .pending_review_stage_entered_at()
-                .unwrap()
-                .as_str(),
-            "2026-08-31T00:00:04Z"
-        );
-        let stale = resubmitted.decide(
-            context("reviewer-b", 5),
-            "review",
-            ProposalVersion::first(),
-            &digest,
-            ReviewDecisionKind::Approve,
-        );
-        assert_eq!(
-            stale.expect_err("old version refused"),
-            WorkflowError::StaleProposalVersion
-        );
-    }
-
-    #[test]
-    fn apply_requires_approved_digest_contract_and_current_target_revisions() {
-        let approved = approve_current(submitted_one_stage(), "reviewer-a", 2);
-        assert_eq!(approved.state(), RequestState::Approved);
-        let proposal = approved.current_proposal().expect("proposal");
-        let digest = proposal.effect_digest().clone();
-        let contract = proposal.contract_fingerprint().clone();
-
-        let stale = approved.clone().apply(
-            context("applier", 3),
-            ProposalVersion::first(),
-            &digest,
-            &contract,
-            vec![ObservedTarget::existing(
-                entity("asset-placement"),
-                id("placement-1"),
-                revision(4),
-            )],
-            PreparedApplication::new(
-                ApplicationId::new("application-1").expect("application id"),
-                vec![ApplicationResultLink::new(
-                    entity("asset-placement"),
-                    id("placement-1"),
-                    revision(5),
-                )],
-            )
-            .expect("application"),
-            None,
-        );
-        assert_eq!(
-            stale.expect_err("stale target refused"),
-            WorkflowError::StaleTargetRevision
-        );
-
-        let wrong_contract = approved.clone().apply(
-            context("applier", 4),
-            ProposalVersion::first(),
-            &digest,
-            &ContractFingerprint::new("sha256:changed").expect("contract fingerprint"),
-            vec![ObservedTarget::existing(
-                entity("asset-placement"),
-                id("placement-1"),
-                revision(3),
-            )],
-            PreparedApplication::new(
-                ApplicationId::new("application-1").expect("application id"),
-                vec![ApplicationResultLink::new(
-                    entity("asset-placement"),
-                    id("placement-1"),
-                    revision(5),
-                )],
-            )
-            .expect("application"),
-            None,
-        );
-        assert_eq!(
-            wrong_contract.expect_err("contract mismatch refused"),
-            WorkflowError::ContractFingerprintMismatch
-        );
-
-        let mut tampered = approved.clone();
+        let mut tampered = snapshot.clone();
         tampered
-            .proposals
-            .get_mut(&ProposalVersion::first())
-            .expect("proposal")
-            .effects[0]
-            .field_changes[0]
-            .after = FieldValue::present(json!("site-tampered"));
-        let tampered_apply = tampered.apply(
-            context("applier", 5),
-            ProposalVersion::first(),
-            &digest,
-            &contract,
-            vec![ObservedTarget::existing(
-                entity("asset-placement"),
-                id("placement-1"),
-                revision(3),
-            )],
-            PreparedApplication::new(
-                ApplicationId::new("application-1").expect("application id"),
-                vec![ApplicationResultLink::new(
-                    entity("asset-placement"),
-                    id("placement-1"),
-                    revision(5),
-                )],
-            )
-            .expect("application"),
-            None,
-        );
+            .attachments
+            .get_mut("evidence")
+            .expect("slot")
+            .sha256 = "c".repeat(64);
         assert_eq!(
-            tampered_apply.expect_err("tampered effects refused"),
-            WorkflowError::DigestMismatch
-        );
-
-        let applied = approved
-            .apply(
-                context("applier", 6),
-                ProposalVersion::first(),
-                &digest,
-                &contract,
-                vec![ObservedTarget::existing(
-                    entity("asset-placement"),
-                    id("placement-1"),
-                    revision(3),
-                )],
-                PreparedApplication::new(
-                    ApplicationId::new("application-1").expect("application id"),
-                    vec![ApplicationResultLink::new(
-                        entity("asset-placement"),
-                        id("placement-1"),
-                        revision(5),
-                    )],
-                )
-                .expect("application"),
-                Some("approved at site visit".to_owned()),
-            )
-            .expect("apply")
-            .into_workflow();
-        assert_eq!(applied.state(), RequestState::Applied);
-        let receipt = applied.application().expect("application receipt");
-        assert_eq!(receipt.reason(), Some("approved at site visit"));
-        assert!(receipt.reason_present());
-        assert_eq!(
-            applied
-                .cancel(context("submitter", 7))
-                .expect_err("applied cannot cancel"),
-            WorkflowError::InvalidTransition
+            tampered.verify_digest(frozen.request()),
+            Err(WorkflowError::DigestMismatch)
         );
     }
 
+    #[cfg(feature = "runtime")]
     #[test]
-    fn only_the_request_owner_can_cancel() {
-        let draft = workflow();
-        assert_eq!(
-            draft
-                .clone()
-                .cancel(context("reviewer-a", 2))
-                .expect_err("non-owner cannot cancel a draft"),
-            WorkflowError::NotOwner
-        );
-
-        let submitted = submitted_one_stage();
-        assert_eq!(
-            submitted
-                .clone()
-                .cancel(context("reviewer-a", 3))
-                .expect_err("non-owner cannot cancel a submitted request"),
-            WorkflowError::NotOwner
-        );
-
-        let canceled = submitted
-            .cancel(context("submitter", 4))
-            .expect("owner cancels")
-            .into_workflow();
-        assert_eq!(canceled.state(), RequestState::Canceled);
-    }
-
-    #[test]
-    fn bounds_and_overlapping_field_writes_are_refused_before_submission() {
-        let duplicate_field = PreparedEffect::new(
-            effect_id("patch-placement"),
-            Operation::Patch,
-            PreparedTarget::existing(entity("asset-placement"), id("placement-1"), revision(3)),
-            vec![
-                PreparedFieldChange::set(
-                    field("site"),
-                    FieldValue::present(json!("a")),
-                    json!("b"),
-                )
-                .expect("field set"),
-                PreparedFieldChange::clear(field("site"), FieldValue::present(json!("a"))),
-            ],
-        );
-        assert_eq!(
-            duplicate_field.expect_err("duplicate field refused"),
-            WorkflowError::OverlappingFieldWrite
-        );
-
-        let too_many_targets = (0..=MAX_REQUEST_TARGETS)
-            .map(|index| {
-                create_effect(
-                    &format!("person-{index}"),
-                    "person",
-                    &format!("person-{index}"),
-                )
-            })
-            .collect::<Vec<_>>();
-        let refused = PreparedProposal::new(
-            revision(7),
-            ContractFingerprint::new("sha256:contract").expect("contract fingerprint"),
-            PackageFingerprint::new("sha256:package").expect("package fingerprint"),
-            one_stage(),
-            too_many_targets,
-            MAX_REQUEST_SNAPSHOT_BYTES,
-        );
-        assert_eq!(
-            refused.expect_err("target bound refused"),
-            WorkflowError::TooManyTargets
-        );
-
-        let null_set = PreparedFieldChange::set(field("site"), FieldValue::Missing, Value::Null);
-        assert_eq!(
-            null_set.expect_err("null set refused"),
-            WorkflowError::NullSetValue
-        );
-    }
-
-    #[test]
-    fn disjoint_writes_to_one_target_must_share_one_base_revision() {
-        let first = PreparedEffect::new(
-            effect_id("patch-site"),
-            Operation::Patch,
-            PreparedTarget::existing(entity("asset-placement"), id("placement-1"), revision(3)),
-            vec![PreparedFieldChange::set(
-                field("site"),
-                FieldValue::present(json!("a")),
-                json!("b"),
-            )
-            .expect("field set")],
-        )
-        .expect("first effect");
-        let second = PreparedEffect::new(
-            effect_id("patch-label"),
-            Operation::Patch,
-            PreparedTarget::existing(entity("asset-placement"), id("placement-1"), revision(4)),
-            vec![PreparedFieldChange::set(
-                field("label"),
-                FieldValue::present(json!("old")),
-                json!("new"),
-            )
-            .expect("field set")],
-        )
-        .expect("second effect");
-
-        let refused = PreparedProposal::new(
-            revision(7),
-            ContractFingerprint::new("sha256:contract").expect("contract fingerprint"),
-            PackageFingerprint::new("sha256:package").expect("package fingerprint"),
-            one_stage(),
-            vec![first, second],
-            MAX_REQUEST_SNAPSHOT_BYTES,
-        );
-        assert_eq!(
-            refused.expect_err("base mismatch refused"),
-            WorkflowError::TargetBindingMismatch
-        );
-    }
-
-    #[test]
-    fn debug_output_redacts_values_principals_and_record_ids() {
-        let submitted = submitted_one_stage();
-        let debug = format!("{submitted:?}");
-
-        assert!(!debug.contains("submitter"));
-        assert!(!debug.contains("request-1"));
-        assert!(!debug.contains("placement-1"));
-        assert!(!debug.contains("site-a"));
-        assert!(!debug.contains("site-b"));
-        assert!(debug.contains("<redacted>"));
-    }
-
-    #[test]
-    fn restored_workflow_revalidates_versions_state_and_digests() {
-        let submitted = submitted_one_stage();
-        let encoded = serde_json::to_value(&submitted).expect("workflow serializes");
-        let restored = serde_json::from_value::<RequestWorkflow>(encoded.clone())
-            .expect("workflow deserializes")
-            .validate_restored()
-            .expect("valid workflow restores");
-        assert_eq!(restored.state(), RequestState::Submitted);
-
-        let mut zero_version = encoded.clone();
-        zero_version["currentVersion"] = json!(0);
-        let refused = serde_json::from_value::<RequestWorkflow>(zero_version)
-            .expect("serde accepts raw zero version")
-            .validate_restored();
-        assert_eq!(
-            refused.expect_err("zero version refused"),
-            WorkflowError::InvalidIdentifier
-        );
-
-        let mut bad_digest = encoded.clone();
-        let proposal = bad_digest["proposals"]
-            .as_object_mut()
-            .expect("proposal map")
-            .values_mut()
-            .next()
-            .expect("proposal");
-        proposal["effectDigest"] = json!("sha256:bad");
-        let refused = serde_json::from_value::<RequestWorkflow>(bad_digest)
-            .expect("serde accepts raw digest")
-            .validate_restored();
-        assert_eq!(
-            refused.expect_err("digest revalidation refused"),
-            WorkflowError::DigestMismatch
-        );
-
-        let mut unsupported_operation = encoded;
-        let proposal = unsupported_operation["proposals"]
-            .as_object_mut()
-            .expect("proposal map")
-            .values_mut()
-            .next()
-            .expect("proposal");
-        proposal["effects"][0]["operation"] = json!("list");
-        let refused = serde_json::from_value::<RequestWorkflow>(unsupported_operation)
-            .expect("serde accepts raw unsupported operation")
-            .validate_restored();
-        assert_eq!(
-            refused.expect_err("unsupported restored operation refused"),
-            WorkflowError::UnsupportedOperation
-        );
-    }
-
-    #[test]
-    fn restored_terminal_state_must_match_application_and_review_facts() {
-        let approved = approve_current(submitted_one_stage(), "reviewer-a", 2);
-        let mut encoded = serde_json::to_value(&approved).expect("workflow serializes");
-        encoded["state"] = json!("applied");
-        let refused = serde_json::from_value::<RequestWorkflow>(encoded)
-            .expect("serde accepts inconsistent applied state")
-            .validate_restored();
-        assert_eq!(
-            refused.expect_err("missing application refused"),
-            WorkflowError::InvalidRestoredState
-        );
-
-        let proposal = approved.current_proposal().expect("proposal");
-        let digest = proposal.effect_digest().clone();
-        let contract = proposal.contract_fingerprint().clone();
-        let applied = approved
-            .apply(
-                context("applier", 3),
-                ProposalVersion::new(1).expect("version"),
-                &digest,
-                &contract,
-                vec![ObservedTarget::existing(
-                    entity("asset-placement"),
-                    id("placement-1"),
-                    revision(3),
-                )],
-                PreparedApplication::new(
-                    ApplicationId::new("application-1").expect("application id"),
-                    vec![ApplicationResultLink::new(
-                        entity("asset-placement"),
-                        id("placement-1"),
-                        revision(5),
-                    )],
-                )
-                .expect("application"),
-                None,
-            )
-            .expect("apply")
-            .into_workflow();
-        let restored = serde_json::from_value::<RequestWorkflow>(
-            serde_json::to_value(&applied).expect("workflow serializes"),
-        )
-        .expect("workflow deserializes")
-        .validate_restored()
-        .expect("applied workflow restores");
-        assert_eq!(restored.state(), RequestState::Applied);
-        assert_eq!(
-            restored.application().expect("application").result_links()[0]
-                .record_revision()
-                .get(),
-            5
-        );
-    }
-
-    #[test]
-    fn restored_draft_after_revision_may_omit_historical_proposals() {
-        let submitted = submitted_one_stage();
-        let digest = submitted
-            .current_proposal()
-            .expect("proposal")
-            .effect_digest()
-            .clone();
-        let draft = submitted
-            .decide(
-                context("reviewer-a", 2),
-                "review",
-                ProposalVersion::first(),
-                &digest,
-                ReviewDecisionKind::RequestRevision,
-            )
-            .expect("request revision")
-            .into_workflow()
-            .revise(context("submitter", 3))
-            .expect("revise")
-            .into_workflow();
-        let mut encoded = serde_json::to_value(&draft).expect("workflow serializes");
-        encoded["proposals"] = json!({});
-        encoded["decisions"] = json!([]);
-
-        let restored = serde_json::from_value::<RequestWorkflow>(encoded)
-            .expect("workflow deserializes")
-            .validate_restored()
-            .expect("current draft restores without historical snapshots");
-        assert_eq!(restored.state(), RequestState::Draft);
-        assert_eq!(restored.current_version().get(), 2);
+    fn occupied_local_approval_states_require_explicit_migration() {
+        for state in ["approved", "needs_changes", "rejected", "canceled"] {
+            assert_eq!(
+                RequestState::from_storage(state),
+                Err(WorkflowError::OccupiedLegacyApprovalState)
+            );
+        }
     }
 }

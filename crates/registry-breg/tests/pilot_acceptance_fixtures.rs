@@ -11,7 +11,7 @@ use registry_breg::contract::{
 };
 use registry_breg::fixtures::validate_fixture_journeys;
 use registry_breg::generated_ddl::DdlStatementKind;
-use registry_breg::model::{CompiledEntity, CompiledRegistry};
+use registry_breg::model::{CompiledChangeRequestReview, CompiledEntity, CompiledRegistry};
 
 fn fixture_root(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -155,7 +155,11 @@ fn asset_placement_change_request_fixture_compiles_site_correction_plan() {
         .as_ref()
         .expect("asset placement correction request compiles to a request plan");
     assert_eq!(request_plan.effects.len(), 1);
-    assert_eq!(request_plan.stages.len(), 2);
+    let CompiledChangeRequestReview::Required(review) = &request_plan.review else {
+        panic!("asset placement correction requires external review");
+    };
+    assert_eq!(review.authority, "casework");
+    assert_eq!(review.policy_id, "asset-placement-correction");
     assert_eq!(
         request_plan.target_entities,
         ["asset-placement"].into_iter().map(str::to_owned).collect()
@@ -222,7 +226,11 @@ fn household_change_request_fixture_compiles_contact_registration_plan() {
         .as_ref()
         .expect("household contact request compiles to a request plan");
     assert_eq!(request_plan.effects.len(), 3);
-    assert_eq!(request_plan.stages.len(), 2);
+    let CompiledChangeRequestReview::Required(review) = &request_plan.review else {
+        panic!("household contact registration requires external review");
+    };
+    assert_eq!(review.authority, "casework");
+    assert_eq!(review.policy_id, "household-contact-registration");
     assert_eq!(
         request_plan.target_entities,
         ["group-membership", "household", "person"]

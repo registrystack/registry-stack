@@ -71,7 +71,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         )
         extension_rows = matrix["invariants"][24:]
         self.assertEqual(
-            [f"BREG-NEG-{index:02d}" for index in range(25, 83)],
+            [f"BREG-NEG-{index:02d}" for index in range(25, 86)],
             [invariant["negativeId"] for invariant in extension_rows],
         )
         for invariant in extension_rows:
@@ -129,6 +129,7 @@ class BRegProductCatalogTests(unittest.TestCase):
                 "dep:registry-platform-httpsec",
                 "dep:registry-platform-httputil",
                 "dep:registry-platform-oidc",
+                "dep:registry-review-client",
                 "dep:rustls",
                 "dep:rustix",
                 "dep:tokio",
@@ -162,6 +163,7 @@ class BRegProductCatalogTests(unittest.TestCase):
             "registry-platform-httpsec",
             "registry-platform-httputil",
             "registry-platform-oidc",
+            "registry-review-client",
             "rustls",
             "rustix",
             "tokio",

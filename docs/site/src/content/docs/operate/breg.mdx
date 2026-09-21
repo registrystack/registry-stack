@@ -666,10 +666,47 @@ dependency it checked:
 Start the process and check
 `GET /ready` before admitting traffic; `GET /health` reports liveness only.
 
+Restarting this same version with the same runtime file, active package, and database resumes the
+durable review submission, result reconciliation, and automatic application jobs. A restart does
+not recreate a Casework review and does not bypass current Base Registry Engine application
+authority.
+
+`doctor` and readiness report setup and dependency health. They are not a change-request workflow
+console. To trace one review, read the request under a profile granted
+`readableRequestFields: [review_state]` and inspect `data.request.review`. Its closed sections are
+`submission`, `result`, `delivery`, `application`, and `recovery`; identifiers and timestamps are
+omitted until known. Correlate its Casework request id with Casework's request, task, result, and
+result-feed resources. After durable submission, `submission.recoveryDeadline` reports the fixed
+recovery deadline. Automatic application jobs report `application.attempts` from 0 through 1000;
+`application.nextAttemptAt` is present only while the job is queued or applying and is omitted once
+it is blocked or applied. An applied job includes `application.receiptRecovered: true` when the
+Base Registry Engine reconstructed the receipt by discovering the source request in its
+already-applied state. Omission means the Base Registry Engine completed through the apply
+response; an idempotent retry may have replayed that response, so omission does not prove that the
+source applied the request for the first time. Use
+`application.state` with `recovery.code` to choose the supported operator action, and do not query
+the database directly.
+
+| `recovery.code` | Operator action |
+| --- | --- |
+| `remote-uncertain`, `cancellation-uncertain`, `result-lookup-uncertain`, `source-precondition-changed` | Wait through `application.nextAttemptAt` where present and re-read the request. The durable worker retries automatically. |
+| `token-unavailable` | Restore the configured review-authority credential provider, then let the durable worker retry. |
+| `submission-recovery-expired` | Reconcile the Casework request by the recorded idempotency and digest bindings before starting a new proposal. |
+| `remote-refused` | Correct the producer, policy, or submitted contract reported by the review authority before submitting a new proposal. |
+| `cancellation-recovery-expired`, `cancellation-attempts-exhausted` | Reconcile the exact Casework request and cancellation idempotency key. If cancellation did not complete, correct the binding before starting a fresh proposal. |
+| `result-expired` | Start a new review; the authority no longer promises the result payload. |
+| `result-recovery-expired`, `result-poll-attempts-exhausted` | Reconcile the accepted Casework request by its retained binding. If the authority still holds a result, repair the result endpoint and start a new proposal; the retained binding identifies the review to close. |
+| `executor-unconfigured` | Restore the named executor in runtime configuration, then use the advertised authorized manual apply action for the same approved proposal. |
+| `executor-denied` | Restore the executor's current application grant, then use the advertised authorized manual apply action for the same approved proposal. |
+| `source-action-unavailable` | Restore the compiled source apply action and its access profile, then use the advertised authorized manual apply action for the same approved proposal. |
+| `source-response-invalid` | Repair the source deployment so its read and apply responses match the compiled contract, then use the advertised authorized manual apply action. |
+| `application-attempts-exhausted` | Inspect the source and executor logs using the request and application ids, then apply manually or create a new proposal. |
+
 Retain the project sources, module locks, generated files, test receipt, signature documents, and
 runtime file for each activation. Store secrets separately.
 
 {/* Evidence: crates/registry-bregctl/src/apply_lifecycle.rs;
+    crates/registry-breg/src/review_store.rs, read_projection();
     crates/registry-bregctl/src/doctor.rs, startup_diagnostic();
     crates/registry-bregctl/src/lib.rs, VerifyArgs, verify(), write_doctor_success(), and
     doctor_success_output_is_stable_in_human_and_machine_formats();

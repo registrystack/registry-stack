@@ -613,8 +613,9 @@ entities:
           set:
             site: {fromField: proposed-site}
       review:
-        stages:
-          - {id: review, approvals: 1, excludeSubmitter: false}
+        authority: casework-main
+        policyId: placement-correction
+      onApproved: {mode: manual}
 accessProfiles:
   - id: public
     default: true
@@ -632,13 +633,9 @@ accessProfiles:
         readableFields: [site]
       - entity: placement-correction
         rowBoundaries: []
-        operations: [create, get, list, patch, submit_request, approve_request, reject_request, request_revision, apply_request]
+        operations: [create, get, list, patch, submit_request, apply_request]
         readableFields: [target, proposed-site]
         writableFields: [target, proposed-site]
-        reviewStages:
-          - stage: review
-            targets:
-              - {entity: placement, readableFields: [site], rowBoundaries: []}
         applyTargets:
           - {entity: placement, rowBoundaries: []}
   - id: checkpoint-reader
@@ -3387,9 +3384,6 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
         Operation::SubmitRequest => "submit_request",
-        Operation::ApproveRequest => "approve_request",
-        Operation::RejectRequest => "reject_request",
-        Operation::RequestRevision => "request_revision",
         Operation::ReviseRequest => "revise_request",
         Operation::CancelRequest => "cancel_request",
         Operation::ApplyRequest => "apply_request",

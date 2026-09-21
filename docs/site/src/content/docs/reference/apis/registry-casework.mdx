@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-11"
+last_reviewed: "2026-09-20"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -14,9 +14,9 @@ standards_referenced:
 
 import ApiReferenceTable from '../../../../components/ApiReferenceTable.astro';
 
-Registry Casework serves one HTTP surface for source-backed work and for the hosted work it owns. Every
-call presents a bearer token and the Casework profile selected for that call, and the presence of a
-source profile decides which kind of work a shared route addresses. The contract is current and carries
+Registry Casework serves source-backed work items and source-neutral review requests. Every
+call presents a bearer token and the Casework profile selected for that call. Source-backed reads also
+present the caller's current source authority. The contract is current and carries
 no frozen compatibility promise.
 
 [Open the Registry Casework API operations](../casework/) for every route, parameter, schema, and
@@ -33,14 +33,13 @@ the configured webhook signature and timestamp headers instead.
 {/* Evidence: crates/registry-casework-core/src/http.rs, CASEWORK_PROFILE_HEADER and
     MAXIMUM_CASEWORK_PROFILE_BYTES; crates/registry-casework/src/http.rs, router(). */}
 
-`Registry-Source-Profile` names the separate source authority the caller selected. On a work-item route
-that serves both kinds of work, presenting the source profile addresses source-backed work under that
-authority, and omitting it addresses hosted work. A route that reads or acts on source-owned state
-requires the source profile, and a hosted-only or directory-only route refuses a request that carries
-one. The two paths stay separate even when one client instance drives both.
+`Registry-Source-Profile` names the separate source authority the caller selected. Source work-item
+routes require it. A unified review task whose context strategy is `source` also requires the exact
+human caller's source profile and token for current reads. Submitted-context review tasks require no
+source profile. The two authorities remain separate even when one client instance drives both.
 
 {/* Evidence: crates/registry-casework-core/src/http.rs, SOURCE_PROFILE_HEADER;
-    crates/registry-casework/src/http.rs, source_profile_optional() and reject_source_profile();
+    crates/registry-casework/src/http.rs, source_profile_optional();
     products/casework/generated/registry-casework.openapi.json. */}
 
 A revisioned mutation carries the item or directory revision the caller displayed in `If-Match`. A
@@ -55,9 +54,9 @@ reaching the caller.
 A refusal answers `application/problem+json` with `type`, `title`, `status`, `detail`, `code`, and
 `traceId`. The `type` is the code with each dot replaced by a slash under
 `https://id.registrystack.org/problems/registry-casework/`, and `detail` is the fixed sentence that
-belongs to the code. No field repeats a submitted value. A refused hosted submission adds
+belongs to the code. No field repeats a submitted value. A refused review submission adds
 `Registry-Casework-Validation-Path`, a bounded JSON path, and `Registry-Casework-Validation-Reason`, one
-value from a closed set, so a caller can point at the offending field without the service echoing it. A
+value from a closed set, so a caller can point at an invalid review field without the service echoing it. A
 refusal that holds a durable attempt adds `Registry-Casework-Attempt`.
 
 {/* Evidence: crates/registry-casework/src/http.rs, problem_response() and ProblemBody;
@@ -96,8 +95,9 @@ in a family grants nothing on its own.
 | --- | --- | --- |
 | Service description | `/v1/casework` | Any authenticated profile |
 | Work items and holdings | `/v1/work-items`, `/v1/holdings` | Staff and Supervisor |
-| Hosted items | `/v1/hosted-items` | Requester |
-| Hosted accountability | `/v1/hosted-accountability/{eventId}` | Supervisor |
+| Review requests and results | `/v1/review-requests`, `/v1/review-results` | Admitted producer |
+| Review tasks and context | `/v1/review-tasks` | Staff and Supervisor |
+| Review kinds and accountability | `/v1/review-kinds`, `/v1/review-accountability/{eventId}` | Authenticated profiles; accountability remains Supervisor-only |
 | Directory and absences | `/v1/directory`, `/v1/directory/absences` | Administrator, with own or supervised absences for Staff and Supervisor |
 | Caseload movement | `/v1/directory/caseload` | Supervisor |
 | Clocks and holidays | `/v1/directory/clocks`, `/v1/directory/holidays` | Administrator |
@@ -106,36 +106,33 @@ in a family grants nothing on its own.
 
 {/* Evidence: crates/registry-casework/src/http.rs, router(). */}
 
-### Work item history
+### Review history and disclosure
 
-Two history reads sit under the same work item and answer different questions.
-`GET /v1/work-items/{itemId}/hosted-history` is the staff read of hosted lifecycle history, open to a
-human Staff or Supervisor profile under current deciding-profile and served-queue authority, and it
-returns `source-profile.not-applicable` when a request carries `Registry-Source-Profile`.
-`GET /v1/work-items/{itemId}/history` is the source-scoped variant and requires
-`Registry-Source-Profile`, returning `source-profile.required` when it is absent and entries under
-the caller's current source visibility when it is present. Both order entries by `occurredAt` and
-`eventId` and page with an opaque cursor.
+`GET /v1/review-requests/{requestId}/history` pages minimized classified events. Human reviewers see
+reviewer-audience events under current task authority. The bound producer sees only requester-audience
+events and never sees private reasons, drafts, or raw reviewer identities. Source-context task lists,
+reads, context, and history remain concealed when the human caller's current source read is revoked or
+unavailable.
 
-{/* Evidence: crates/registry-casework/src/http.rs, hosted_staff_history() and reject_source_profile();
+{/* Evidence: crates/registry-casework/src/{http,review}.rs;
     products/casework/generated/registry-casework.openapi.json. */}
 
 ## Profiles and disclosure
 
 - Staff works eligible items and may delegate an item it holds.
 - Supervisor controls assignment and caseload for currently led teams, reads holdings, and resolves
-  retained hosted accountability for served queues.
+  retained review accountability for served queues.
 - Administrator manages directory teams, holiday revisions, and clock recomputation without gaining
   item payload access.
-- Requester creates and follows only hosted items bound to the same service principal and selected
-  Requester profile, and cannot claim or decide work.
+- Requester is admitted as a producer only through an exact `reviewProducers` identity binding. It
+  creates and follows only requests inside that binding and cannot claim or decide work.
 
-Hosted terminal feeds expose stable event identifiers and opaque actor references. The separate
-accountability read returns raw issuer-qualified actor identity and staff reason only to an authorized
-Supervisor, records that read in the audit journal, and stops returning the record after accountability
-expiry.
+Review result feeds expose stable event identifiers and terminal results without reviewer identity or
+private reasons. The separate accountability read returns raw issuer-qualified actor identity and
+private reason only to an authorized Supervisor, records that read in the audit journal, and stops
+returning the record after accountability expiry.
 
-{/* Evidence: crates/registry-casework/src/{auth,assignment,hosted}.rs;
+{/* Evidence: crates/registry-casework/src/{auth,assignment,review}.rs;
     products/casework/README.md. */}
 
 ## Source of truth

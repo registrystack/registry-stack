@@ -3,6 +3,10 @@ from typing import Generic, Literal, TypeAlias, TypedDict, TypeVar
 JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
+# Integers crossing the review wire are validated against this exact portable domain.
+SafeInteger: TypeAlias = int
+# UUID strings are parsed by the native binding before any request is sent.
+Uuid: TypeAlias = str
 
 InboxView: TypeAlias = Literal["mine", "my_teams", "team_holdings", "overdue", "completed_by_me"]
 InboxSort: TypeAlias = Literal["due", "age", "type"]
@@ -195,19 +199,6 @@ class CorrectionRoutingCopy(_CorrectionRoutingCopyOptional):
     sourceBinding: SourceBinding
     flaggedFields: list[str]
 
-class HostedOutcomePolicy(TypedDict):
-    id: str
-    label: str
-    reasonRequired: bool
-
-class HostedWorkItemContext(TypedDict):
-    requesterReference: str
-    kind: str
-    version: str
-    display: JsonValue
-    kindPolicyDigest: str
-    outcomes: list[HostedOutcomePolicy]
-
 class _AssignmentContextOptional(TypedDict, total=False):
     owner: IssuerPrincipal
     assignedBy: IssuerPrincipal
@@ -232,7 +223,6 @@ class _WorkItemOptional(TypedDict, total=False):
     assignment: AssignmentContext
     passiveDueAt: str
     routingCopy: CorrectionRoutingCopy
-    hosted: HostedWorkItemContext
     routing: WorkItemRouting
     clockOccurrences: list[ClockOccurrenceView]
     liveAttempt: "AttemptStatus"
@@ -240,7 +230,7 @@ class _WorkItemOptional(TypedDict, total=False):
 class WorkItem(_WorkItemOptional):
     itemId: str
     subject: SubjectRef
-    occurrenceKind: Literal["review", "application", "hosted"]
+    occurrenceKind: Literal["review", "application"]
     binding: SourceBinding
     bindingReference: str
     state: OccurrenceState
@@ -258,30 +248,6 @@ class WorkItemPage(_WorkItemPageOptional):
     servedQueues: list[str]
     status: PageStatus
 
-class HostedCreateRequest(TypedDict):
-    kind: str
-    requesterReference: str
-    display: JsonValue
-
-class HostedNoteRequest(TypedDict):
-    note: str
-
-class HostedCancelRequest(TypedDict):
-    reason: str
-
-class _HostedDecisionRequestOptional(TypedDict, total=False):
-    reason: str
-
-class HostedDecisionRequest(_HostedDecisionRequestOptional):
-    outcome: str
-
-class HostedPageQuery(TypedDict, total=False):
-    cursor: str
-    limit: int
-
-class HostedTerminalQuery(TypedDict, total=False):
-    cursor: str
-    limit: int
 
 DirectoryTargetPurpose: TypeAlias = Literal["assignment", "absence_person", "absence_cover"]
 
@@ -430,79 +396,6 @@ class CaseloadItemResult(_CaseloadItemResultOptional):
     itemId: str
     result: Literal["moved", "not_visible", "not_eligible", "attempt_in_progress", "conflict"]
 
-class RequesterHostedItem(TypedDict):
-    itemId: str
-    requesterReference: str
-    kind: str
-    version: str
-    display: JsonValue
-    state: OccurrenceState
-    revision: int
-    kindPolicyDigest: str
-    createdAt: str
-    updatedAt: str
-
-class HostedNote(TypedDict):
-    noteId: str
-    itemId: str
-    note: str
-    itemRevision: int
-    recordedAt: str
-
-class HostedCompletedTerminalResult(TypedDict):
-    itemId: str
-    eventId: str
-    requesterReference: str
-    kindPolicyDigest: str
-    terminalAt: str
-    state: Literal["completed"]
-    outcome: str
-    actorRef: str
-
-class HostedCancelledTerminalResult(TypedDict):
-    itemId: str
-    eventId: str
-    requesterReference: str
-    kindPolicyDigest: str
-    terminalAt: str
-    state: Literal["cancelled"]
-    cancellationReason: str
-
-HostedTerminalResult: TypeAlias = (
-    HostedCompletedTerminalResult | HostedCancelledTerminalResult
-)
-
-class _HostedHistoryEntryOptional(TypedDict, total=False):
-    actorRef: str
-    assignment: AssignmentContext
-    note: str
-    outcome: str
-    reason: str
-    cancellationReason: str
-
-class HostedHistoryEntry(_HostedHistoryEntryOptional):
-    eventId: str
-    itemId: str
-    itemRevision: int
-    kind: Literal[
-        "created", "claimed", "assigned", "delegated", "caseload_moved",
-        "released", "note_added", "completed", "cancelled",
-    ]
-    occurredAt: str
-
-class _HostedAccountabilityRecordOptional(TypedDict, total=False):
-    reason: str
-
-class HostedAccountabilityRecord(_HostedAccountabilityRecordOptional):
-    itemId: str
-    eventId: str
-    actorRef: str
-    actor: IssuerPrincipal
-    profileId: str
-    outcome: str
-    recordedAt: str
-    retainedUntil: str
-
 class _SourceReceiptOptional(TypedDict, total=False):
     actorReference: str
 
@@ -610,19 +503,6 @@ class SourcePolicy(TypedDict):
     description: str
     requests: list[SourceRequestPolicy]
 
-class HostedRetentionPolicy(TypedDict):
-    terminalDays: int
-    accountabilityDays: int
-
-class HostedKindPolicy(TypedDict):
-    id: str
-    version: str
-    queue: str
-    decidingProfiles: list[str]
-    retention: HostedRetentionPolicy
-    displaySchema: JsonValue
-    outcomes: list[HostedOutcomePolicy]
-
 WorkingWeekday: TypeAlias = Literal[
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
 ]
@@ -685,7 +565,6 @@ class Description(TypedDict):
     sources: list[SourcePolicy]
     calendars: list[CalendarPolicy]
     clocks: list[ClockPolicy]
-    hostedKinds: list[HostedKindPolicy]
 
 class _HistoryEntryOptional(TypedDict, total=False):
     actor: IssuerPrincipal
@@ -742,6 +621,9 @@ KnownCaseworkProblemCode: TypeAlias = Literal[
     "request.source-rejected",
     "request.unprocessable",
     "request.unsupported-media-type",
+    "review.result-expired",
+    "review.submission-conflict",
+    "review.task-not-held",
     "runtime.failure",
     "service.unavailable",
     "source-profile.not-applicable",
@@ -763,7 +645,10 @@ KnownCaseworkProblemCode: TypeAlias = Literal[
 # A newer Casework service can answer a code this release does not name, so the
 # attribute widens the closed catalogue the way the Node typings do.
 CaseworkProblemCode: TypeAlias = KnownCaseworkProblemCode | str
-HostedValidationReason: TypeAlias = Literal[
+CaseworkProtocolFailure: TypeAlias = Literal[
+    "header_bounds", "trace_context", "media_type", "body", "problem", "status", "protocol",
+]
+ReviewValidationReason: TypeAlias = Literal[
     "kind_not_allowed",
     "reference_invalid",
     "object_required",
@@ -773,39 +658,269 @@ HostedValidationReason: TypeAlias = Literal[
     "outcome_not_declared",
     "reason_required",
     "text_invalid",
+    "result_not_declared",
+    "result_required",
+    "field_not_declared",
+    "constraint_invalid",
+    "constraint_violated",
 ]
 
 class ValidationDetail(TypedDict):
     path: str
-    reason: HostedValidationReason
+    reason: ReviewValidationReason
 
 class CaseworkClientError(Exception):
     kind: CaseworkErrorKind
     code: CaseworkProblemCode | None
     detail: str | None
-    status: int | None
+    status: SafeInteger | None
     trace_id: str | None
     original_attempt_id: str | None
     validation: ValidationDetail | None
     transport_kind: str | None
-    protocol_failure: str | None
+    protocol_failure: CaseworkProtocolFailure | None
+
+ContentDigest: TypeAlias = str
+ReviewRequestLifecycle: TypeAlias = Literal["reviewing", "approved", "rejected", "changes_requested", "answered", "cancelled", "superseded"]
+ReviewResultStatus: TypeAlias = Literal["approved", "rejected", "changes_requested", "answered", "cancelled", "superseded"]
+ReviewHistoryAudience: TypeAlias = Literal["reviewers", "requester"]
+
+class ReviewSubjectBinding(TypedDict):
+    source: str
+    type: str
+    id: str
+    version: str
+    digest: ContentDigest
+class ReviewPolicyBinding(TypedDict):
+    id: str
+    version: str
+    digest: ContentDigest
+class HumanIdentity(TypedDict):
+    issuer: str
+    subject: str
+class SourceContextBinding(TypedDict):
+    reference: str
+class ReviewSubmittedCreateContext(TypedDict):
+    strategy: Literal["submitted"]
+    snapshot: JsonObject
+class ReviewSourceCreateContext(TypedDict):
+    strategy: Literal["source"]
+    binding: SourceContextBinding
+ReviewContext: TypeAlias = ReviewSubmittedCreateContext | ReviewSourceCreateContext
+class _ReviewCreateRequestOptional(TypedDict, total=False):
+    initiator: HumanIdentity
+    resultConstraints: JsonObject | None
+
+class ReviewCreateRequest(_ReviewCreateRequestOptional):
+    kind: str
+    subject: ReviewSubjectBinding
+    requesterReference: str
+    context: ReviewContext
+class ReviewRequestAccepted(TypedDict):
+    requestId: Uuid
+    subject: ReviewSubjectBinding
+    policy: ReviewPolicyBinding
+    submissionDigest: ContentDigest
+class _ReviewRequestViewOptional(TypedDict, total=False):
+    activeStage: str
+class ReviewRequestView(ReviewRequestAccepted, _ReviewRequestViewOptional):
+    requesterReference: str
+    lifecycle: ReviewRequestLifecycle
+    createdAt: str
+    updatedAt: str
+class _ReviewResultOptional(TypedDict, total=False):
+    outcome: str
+    result: JsonObject
+
+class ReviewResult(ReviewRequestAccepted, _ReviewResultOptional):
+    resultId: Uuid
+    status: ReviewResultStatus
+    completedAt: str
+    availableUntil: str
+class ReviewResultAvailable(TypedDict):
+    kind: Literal["available"]
+    value: ReviewResult
+    trace_id: str
+class ReviewResultPending(TypedDict):
+    kind: Literal["pending"]
+    value: None
+    trace_id: str
+class ReviewResultConcealedOrUnknown(TypedDict):
+    kind: Literal["concealed_or_unknown"]
+    value: None
+    trace_id: str
+class ReviewResultExpired(TypedDict):
+    kind: Literal["expired"]
+    value: None
+    trace_id: str
+ReviewResultOutcome: TypeAlias = ReviewResultAvailable | ReviewResultPending | ReviewResultConcealedOrUnknown | ReviewResultExpired
+class ReviewPageQuery(TypedDict, total=False):
+    cursor: Uuid
+    limit: SafeInteger
+class ReviewTaskQuery(ReviewPageQuery, total=False):
+    queue: str
+
+class WorkItemHistoryQuery(TypedDict, total=False):
+    cursor: str
+    limit: int
+class ReviewResultFeedEntry(TypedDict):
+    eventId: Uuid
+    requestId: Uuid
+    resultId: Uuid
+    completedAt: str
+class _ReviewResultFeedPageOptional(TypedDict, total=False):
+    nextCursor: Uuid
+class ReviewResultFeedPage(_ReviewResultFeedPageOptional):
+    items: list[ReviewResultFeedEntry]
+class ReviewCancelRequest(TypedDict):
+    subject: ReviewSubjectBinding
+    reason: str
+class ReviewCancelledResponse(TypedDict):
+    outcome: Literal["cancelled"]
+    result: ReviewResult
+class ReviewAlreadyTerminalResponse(TypedDict):
+    outcome: Literal["already_terminal"]
+    result: ReviewResult
+ReviewCancelResponse: TypeAlias = ReviewCancelledResponse | ReviewAlreadyTerminalResponse
+class ReviewHeldTaskStateValue(TypedDict):
+    holder: IssuerPrincipal
+class ReviewHeldTaskState(TypedDict):
+    held: ReviewHeldTaskStateValue
+ReviewerTaskState: TypeAlias = Literal["open", "decided"] | ReviewHeldTaskState
+class ReviewerTask(TypedDict):
+    taskId: Uuid
+    requestId: Uuid
+    stageIndex: SafeInteger
+    stageId: str
+    queue: str
+    revision: SafeInteger
+    eligibleProfiles: list[str]
+    state: ReviewerTaskState
+class _ReviewTaskPageOptional(TypedDict, total=False):
+    nextCursor: Uuid
+class ReviewTaskPage(_ReviewTaskPageOptional):
+    items: list[ReviewerTask]
+ReviewSourceBindingStatus: TypeAlias = Literal["current", "binding_changed"]
+class _ReviewSourceProjectionOptional(TypedDict, total=False):
+    displayReference: str
+class ReviewSourceProjection(_ReviewSourceProjectionOptional):
+    binding: SourceBinding
+    display: dict[str, JsonValue]
+class ReviewSubmittedContext(TypedDict):
+    strategy: Literal["submitted"]
+    snapshot: JsonObject
+class _ReviewSourceContextOptional(TypedDict, total=False):
+    projection: ReviewSourceProjection
+class ReviewSourceContext(_ReviewSourceContextOptional):
+    strategy: Literal["source"]
+    reference: str
+    bindingStatus: ReviewSourceBindingStatus
+ReviewTaskContextData: TypeAlias = ReviewSubmittedContext | ReviewSourceContext
+class _ReviewTaskContextOptional(TypedDict, total=False):
+    resultConstraints: JsonObject
+class ReviewTaskContext(_ReviewTaskContextOptional):
+    taskId: Uuid
+    requestId: Uuid
+    subject: ReviewSubjectBinding
+    requesterReference: str
+    policy: ReviewPolicyBinding
+    policySnapshot: ReviewKindPolicySnapshot
+    context: ReviewTaskContextData
+class ReviewSubjectClockCorrelation(TypedDict):
+    scope: Literal["subject"]
+    source: str
+    subjectType: str
+    id: str
+class ReviewActivityClockCorrelation(TypedDict):
+    scope: Literal["activity"]
+    taskId: Uuid
+    stageId: str
+ReviewClockCorrelation: TypeAlias = ReviewSubjectClockCorrelation | ReviewActivityClockCorrelation
+class _ReviewClockOccurrenceOptional(TypedDict, total=False):
+    dueAt: str
+    atRiskAt: str
+    completedAt: str
+class ReviewClockOccurrence(_ReviewClockOccurrenceOptional):
+    clockOccurrenceId: Uuid
+    clockId: str
+    requestId: Uuid
+    correlation: ReviewClockCorrelation
+    state: Literal["running", "paused", "completed", "cancelled", "source_facts_missing"]
+    policyDigest: ContentDigest
+    anchorAt: str
+class ReviewTaskDraftInput(TypedDict):
+    body: JsonValue
+class ReviewTaskDraft(TypedDict):
+    taskId: Uuid
+    author: IssuerPrincipal
+    body: JsonValue
+    revision: SafeInteger
+    updatedAt: str
+class ReviewApproveDecision(TypedDict):
+    type: Literal["approve"]
+class _ReviewOutcomeDecisionOptional(TypedDict, total=False):
+    reason: str | None
+    result: JsonObject | None
+class ReviewRejectDecision(_ReviewOutcomeDecisionOptional):
+    type: Literal["reject"]
+    outcome: str
+class ReviewChangesRequestedDecision(_ReviewOutcomeDecisionOptional):
+    type: Literal["changes_requested"]
+    outcome: str
+class ReviewAnswerDecision(_ReviewOutcomeDecisionOptional):
+    type: Literal["answer"]
+    outcome: str
+ReviewDecision: TypeAlias = ReviewApproveDecision | ReviewRejectDecision | ReviewChangesRequestedDecision | ReviewAnswerDecision
+class ReviewTaskDecisionRequest(TypedDict):
+    decision: ReviewDecision
+class ReviewNoteRequest(TypedDict):
+    audience: ReviewHistoryAudience
+    note: str
+class _ReviewHistoryEntryOptional(TypedDict, total=False):
+    taskId: Uuid
+    actorRef: str
+class ReviewHistoryEntry(_ReviewHistoryEntryOptional):
+    eventId: Uuid
+    requestId: Uuid
+    kind: str
+    detail: JsonValue
+    occurredAt: str
+class _ReviewHistoryPageOptional(TypedDict, total=False):
+    nextCursor: Uuid
+class ReviewHistoryPage(_ReviewHistoryPageOptional):
+    items: list[ReviewHistoryEntry]
+ReviewAccountabilityRecord: TypeAlias = JsonObject
+ReviewKindPolicySnapshot: TypeAlias = JsonObject
 
 class CaseworkClient:
     def __init__(self, base_url: str, request_timeout_seconds: float | None = None, connect_timeout_seconds: float | None = None, max_response_bytes: int | None = None, user_agent: str | None = None, trusted_root_certificates: bytes | None = None) -> None: ...
     def description(self, token: str, profile: str) -> Complete[Description]: ...
-    def create_hosted_item(self, token: str, profile: str, idempotency_key: str, request: HostedCreateRequest) -> Complete[RequesterHostedItem]: ...
-    def get_hosted_item(self, token: str, profile: str, item_id: str) -> Complete[RequesterHostedItem]: ...
-    def add_hosted_note(self, token: str, profile: str, item_id: str, expected_revision: int, idempotency_key: str, note: HostedNoteRequest) -> Complete[RequesterHostedItem]: ...
-    def requester_hosted_notes(self, token: str, profile: str, item_id: str, query: HostedPageQuery | None = None) -> Complete[Page[HostedNote]]: ...
-    def cancel_hosted_item(self, token: str, profile: str, item_id: str, expected_revision: int, idempotency_key: str, cancellation: HostedCancelRequest) -> Complete[HostedTerminalResult]: ...
-    def hosted_terminal_items(self, token: str, profile: str, query: HostedTerminalQuery | None = None) -> Complete[Page[HostedTerminalResult]]: ...
-    def list_hosted_work_items(self, token: str, profile: str, query: ListWorkItemsQuery) -> Complete[WorkItemPage]: ...
-    def get_hosted_work_item(self, token: str, profile: str, item_id: str) -> Complete[WorkItem]: ...
-    def hosted_work_item_history(self, token: str, profile: str, item_id: str, query: HostedPageQuery | None = None) -> Complete[Page[HostedHistoryEntry]]: ...
-    def hosted_accountability_record(self, token: str, profile: str, event_id: str) -> Complete[HostedAccountabilityRecord]: ...
-    def claim_hosted_work_item(self, token: str, profile: str, action: CaseworkAction, idempotency_key: str) -> Complete[MutationResponse]: ...
-    def release_hosted_work_item(self, token: str, profile: str, action: CaseworkAction, idempotency_key: str) -> Complete[MutationResponse]: ...
-    def decide_hosted_work_item(self, token: str, profile: str, action: CaseworkAction, idempotency_key: str, decision: HostedDecisionRequest) -> Complete[HostedTerminalResult]: ...
+    def create_or_recover_review_request(self, token: str, profile: str, idempotency_key: str, request: ReviewCreateRequest, expected_submission_digest: ContentDigest) -> Complete[ReviewRequestAccepted]: ...
+    def review_request(self, token: str, profile: str, request_id: Uuid) -> Complete[ReviewRequestView]: ...
+    def review_result(self, token: str, profile: str, accepted: ReviewRequestAccepted) -> ReviewResultOutcome: ...
+    def review_results(self, token: str, profile: str, query: ReviewPageQuery | None = None) -> Complete[ReviewResultFeedPage]: ...
+    def cancel_review_request(self, token: str, profile: str, accepted: ReviewRequestAccepted, idempotency_key: str, request: ReviewCancelRequest) -> Complete[ReviewCancelResponse]: ...
+    def review_kinds(self, token: str, profile: str) -> Complete[list[ReviewKindPolicySnapshot]]: ...
+    def review_kind(self, token: str, profile: str, kind_id: str) -> Complete[ReviewKindPolicySnapshot]: ...
+    def review_tasks(self, token: str, profile: str, query: ReviewTaskQuery | None = None, source_profile: str | None = None) -> Complete[ReviewTaskPage]: ...
+    def review_task(self, token: str, profile: str, task_id: Uuid, source_profile: str | None = None) -> Complete[ReviewerTask]: ...
+    def review_task_context(self, token: str, profile: str, task_id: Uuid, source_profile: str | None = None) -> Complete[ReviewTaskContext]: ...
+    def preview_review_task_templates(self, token: str, profile: str, source_profile: str, task_id: Uuid) -> Complete[TaskTemplatePreviews]: ...
+    def list_review_task_grants(self, token: str, profile: str, source_profile: str, task_id: Uuid) -> Complete[TaskGrantList]: ...
+    def approve_review_task_grant(self, token: str, profile: str, source_profile: str, task_id: Uuid, expected_revision: SafeInteger, idempotency_key: str, approval: TaskApprovalRequest) -> Complete[TaskGrantView]: ...
+    def revoke_review_task_grant(self, token: str, profile: str, task_id: Uuid, grant_id: str) -> Complete[TaskGrantRevocation]: ...
+    def claim_review_task(self, token: str, profile: str, task_id: Uuid, expected_revision: SafeInteger, idempotency_key: str, source_profile: str | None = None) -> Complete[ReviewerTask]: ...
+    def release_review_task(self, token: str, profile: str, task_id: Uuid, expected_revision: SafeInteger, idempotency_key: str) -> Complete[ReviewerTask]: ...
+    def assign_review_task(self, token: str, profile: str, task_id: Uuid, expected_revision: SafeInteger, idempotency_key: str, request: AssignmentRequest, source_profile: str | None = None) -> Complete[ReviewerTask]: ...
+    def delegate_review_task(self, token: str, profile: str, task_id: Uuid, expected_revision: SafeInteger, idempotency_key: str, request: DelegateRequest, source_profile: str | None = None) -> Complete[ReviewerTask]: ...
+    def review_task_draft(self, token: str, profile: str, task_id: Uuid, source_profile: str | None = None) -> Complete[ReviewTaskDraft | None]: ...
+    def save_review_task_draft(self, token: str, profile: str, task_id: Uuid, expected_revision: SafeInteger, idempotency_key: str, draft: ReviewTaskDraftInput, source_profile: str | None = None) -> Complete[ReviewTaskDraft]: ...
+    def delete_review_task_draft(self, token: str, profile: str, task_id: Uuid, expected_revision: SafeInteger, idempotency_key: str, source_profile: str | None = None) -> Complete[None]: ...
+    def decide_review_task(self, token: str, profile: str, task_id: Uuid, expected_revision: SafeInteger, idempotency_key: str, decision: ReviewTaskDecisionRequest, source_profile: str | None = None) -> Complete[None]: ...
+    def review_history(self, token: str, profile: str, request_id: Uuid, query: ReviewPageQuery | None = None, source_profile: str | None = None) -> Complete[ReviewHistoryPage]: ...
+    def add_review_note(self, token: str, profile: str, request_id: Uuid, idempotency_key: str, note: ReviewNoteRequest, source_profile: str | None = None) -> Complete[ReviewHistoryEntry]: ...
+    def review_clocks(self, token: str, profile: str, request_id: Uuid, source_profile: str | None = None) -> Complete[list[ReviewClockOccurrence]]: ...
+    def review_accountability(self, token: str, profile: str, event_id: Uuid) -> Complete[ReviewAccountabilityRecord]: ...
     def list_work_items(self, token: str, profile: str, source_profile: str, query: ListWorkItemsQuery) -> Complete[WorkItemPage]: ...
     def next_work_item(self, token: str, profile: str, source_profile: str, query: NextWorkItemQuery | None = None) -> Complete[WorkItemPage]: ...
     def get_work_item(self, token: str, profile: str, source_profile: str, item_id: str) -> Complete[WorkItem]: ...
@@ -824,7 +939,7 @@ class CaseworkClient:
     def decide_work_item(self, token: str, profile: str, source_profile: str, action: CaseworkAction, idempotency_key: str, decision: DecideRequest) -> Complete[MutationResponse]: ...
     def recover_decision(self, token: str, profile: str, source_profile: str, item_id: str, attempt_id: str, recovery: RecoverAttemptRequest) -> Complete[MutationResponse]: ...
     def recover_decision_by_key(self, token: str, profile: str, source_profile: str, item_id: str, idempotency_key: str, recovery: RecoverAttemptRequest) -> Complete[MutationResponse]: ...
-    def work_item_history(self, token: str, profile: str, source_profile: str, item_id: str, query: HostedPageQuery | None = None) -> Complete[Page[HistoryEntry]]: ...
+    def work_item_history(self, token: str, profile: str, source_profile: str, item_id: str, query: WorkItemHistoryQuery | None = None) -> Complete[Page[HistoryEntry]]: ...
     def holdings(self, token: str, profile: str, source_profile: str, query: HoldingsQuery | None = None) -> Complete[Page[HoldingSummary]]: ...
     def directory(self, token: str, profile: str) -> Complete[DirectoryResponse]: ...
     def directory_targets(self, token: str, profile: str, query: DirectoryTargetsQuery) -> Complete[DirectoryTargetPage]: ...

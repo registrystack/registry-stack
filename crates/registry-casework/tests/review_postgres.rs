@@ -1,0 +1,6652 @@
+#![cfg(feature = "postgres-test")]
+
+use std::{
+    collections::BTreeMap,
+    env,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+};
+
+use async_trait::async_trait;
+use axum::{extract::State, http::StatusCode, routing::post, Router};
+use chrono::{TimeDelta, Utc};
+use registry_casework::{
+    dispatch_review_completions_once_for_test, validate_retained_completion_destinations_for_test,
+    CaseworkService, DatabaseConfig, PostgresStore, ReviewResultRead, ReviewRuntimeError,
+    ReviewTaskDecisionRequest, RuntimeError,
+};
+use registry_casework_core::{
+    AccessProfile, ActiveSubjectsPage, ActivityClockAnchor, ActorContext, AssignmentRequest,
+    AuthoritativeObservation, CalendarPolicy, CallerSubjectView, CaseworkIdentity, CaseworkProject,
+    CaseworkRole, ClockPolicy, ClockReassignment, ClockReminder, ClockStep, ClockStepAction,
+    ClockStepInstant, ContentDigest, DelegateRequest, DiscoveryCursor, ElapsedDuration,
+    EphemeralCredential, EventRequest, ExecutePreparedRequest, HolidaySetDocument, HumanIdentity,
+    InboxPolicy, IssuerPrincipal, OccurrenceKind, OccurrenceState, PrepareActionRequest,
+    PreparedSourceAttempt, QueuePolicy, ReviewCancelRequest, ReviewClockState,
+    ReviewCompletionDestinationPolicy, ReviewContext, ReviewContextStrategy, ReviewCreateRequest,
+    ReviewHistoryAudience, ReviewKindPolicy, ReviewKindPurpose, ReviewNoteRequest,
+    ReviewOutcomePolicy, ReviewOutcomeSettlement, ReviewProducerPolicy, ReviewRequestLifecycle,
+    ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskDraftInput,
+    ReviewTransition, ReviewValidationReason, ReviewerDecisionKind, ReviewerTaskState,
+    SourceAdapter, SourceAdapterError, SourceBinding, SourceContextBinding, SourceReceipt,
+    SubjectBinding, SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause, SubjectRef,
+    TransitionHint, WorkingDaysAfter, WorkingWeekday, MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES,
+};
+use registry_platform_config::{SecretProvider, SecretResolver};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use tokio::sync::Notify;
+use tokio_postgres::NoTls;
+use uuid::Uuid;
+
+struct Fixture {
+    service_v1: CaseworkService,
+    service_v2: CaseworkService,
+    store: PostgresStore,
+    database: tokio_postgres::Client,
+    producer: ActorContext,
+    reviewer_a: ActorContext,
+    reviewer_b: ActorContext,
+    supervisor: ActorContext,
+    source_revoked: Arc<AtomicBool>,
+    source_state: Arc<Mutex<OccurrenceState>>,
+    source_read_blocked: Arc<AtomicBool>,
+    source_read_started: Arc<Notify>,
+    source_read_continue: Arc<Notify>,
+    source_advanced: Arc<AtomicBool>,
+    application_name: String,
+}
+
+#[derive(Clone)]
+struct ReviewSource {
+    revoked: Arc<AtomicBool>,
+    state: Arc<Mutex<OccurrenceState>>,
+    read_blocked: Arc<AtomicBool>,
+    read_started: Arc<Notify>,
+    read_continue: Arc<Notify>,
+    advanced: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl SourceAdapter for ReviewSource {
+    fn source_id(&self) -> &str {
+        "registry"
+    }
+
+    fn binding_generation(&self) -> &str {
+        "review-source-generation"
+    }
+
+    async fn verify_transition(
+        &self,
+        _request: EventRequest,
+    ) -> Result<TransitionHint, SourceAdapterError> {
+        Err(SourceAdapterError::Invalid)
+    }
+
+    async fn read_authoritative(
+        &self,
+        subject: &SubjectRef,
+    ) -> Result<AuthoritativeObservation, SourceAdapterError> {
+        if self.revoked.load(Ordering::SeqCst) {
+            return Err(SourceAdapterError::Concealed);
+        }
+        // The advanced mode models a source that moved to a new occurrence
+        // after the caller-scoped read: the authoritative observation reports
+        // the newer representation while read_for_caller still serves the
+        // pinned one.
+        let advanced = self.advanced.load(Ordering::SeqCst);
+        Ok(AuthoritativeObservation {
+            subject: subject.clone(),
+            occurrence_key: format!("review:{}", subject.id),
+            ordered_revision: i64::from(advanced) + 1,
+            representation_etag: if advanced {
+                "\"advanced\"".to_owned()
+            } else {
+                format!("\"{}\"", subject.id)
+            },
+            binding: if advanced {
+                SourceBinding {
+                    source_revision: "source-revision-2".to_owned(),
+                    version: "2".to_owned(),
+                    integrity: Some(
+                        ContentDigest::for_bytes(format!("{}-advanced", subject.id).as_bytes())
+                            .to_string(),
+                    ),
+                    generation: self.binding_generation().to_owned(),
+                }
+            } else {
+                SourceBinding {
+                    source_revision: "source-revision-1".to_owned(),
+                    version: "1".to_owned(),
+                    integrity: Some(ContentDigest::for_bytes(subject.id.as_bytes()).to_string()),
+                    generation: self.binding_generation().to_owned(),
+                }
+            },
+            display_reference: None,
+            occurrence_kind: OccurrenceKind::Review,
+            stage: Some("review".to_owned()),
+            submitted_at: None,
+            stage_entered_at: None,
+            review_timing: None,
+            routing_context: None,
+            state: *self.state.lock().expect("source state lock"),
+            remaining_actions: Vec::new(),
+        })
+    }
+
+    async fn discover_active(
+        &self,
+        _cursor: Option<&DiscoveryCursor>,
+        _limit: usize,
+    ) -> Result<ActiveSubjectsPage, SourceAdapterError> {
+        Ok(ActiveSubjectsPage {
+            subjects: Vec::new(),
+            next_cursor: None,
+        })
+    }
+
+    async fn read_for_caller(
+        &self,
+        subject: &SubjectRef,
+        source_profile_id: &str,
+        _credential: EphemeralCredential<'_>,
+    ) -> Result<CallerSubjectView, SourceAdapterError> {
+        if self.read_blocked.swap(false, Ordering::SeqCst) {
+            self.read_started.notify_one();
+            self.read_continue.notified().await;
+        }
+        if self.revoked.load(Ordering::SeqCst) || source_profile_id != "staff" {
+            return Err(SourceAdapterError::Concealed);
+        }
+        Ok(CallerSubjectView {
+            subject: subject.clone(),
+            binding: SourceBinding {
+                source_revision: "source-revision-1".to_owned(),
+                version: "1".to_owned(),
+                integrity: Some(ContentDigest::for_bytes(subject.id.as_bytes()).to_string()),
+                generation: self.binding_generation().to_owned(),
+            },
+            display_reference: None,
+            disclosed: BTreeMap::from([(
+                "summary".to_owned(),
+                json!(format!("Review {}", subject.id)),
+            )]),
+            permitted_operations: Vec::new(),
+        })
+    }
+
+    async fn prepare_action(
+        &self,
+        _request: PrepareActionRequest<'_>,
+    ) -> Result<PreparedSourceAttempt, SourceAdapterError> {
+        Err(SourceAdapterError::Invalid)
+    }
+
+    async fn execute_prepared(
+        &self,
+        _request: ExecutePreparedRequest<'_>,
+    ) -> Result<SourceReceipt, SourceAdapterError> {
+        Err(SourceAdapterError::Invalid)
+    }
+}
+
+fn actor(subject: &str, role: CaseworkRole, profile_id: &str) -> ActorContext {
+    ActorContext {
+        principal: IssuerPrincipal {
+            issuer: "https://issuer.test".to_owned(),
+            subject: subject.to_owned(),
+        },
+        profile_id: profile_id.to_owned(),
+        role,
+    }
+}
+
+fn profile(id: &str, role: CaseworkRole) -> AccessProfile {
+    AccessProfile {
+        id: id.to_owned(),
+        principal_claim: "sub".to_owned(),
+        required_scopes: vec![format!("casework:{id}")],
+        role,
+    }
+}
+
+/// Mirrors the runtime's versioned producer tombstone from `review.rs`. A test
+/// that marks a result erased outside the erase job must also pseudonymize the
+/// producer identity, because the runtime writes both in one transaction and
+/// its producer access check requires the tombstone once the marker is set.
+fn producer_tombstone(request_id: Uuid, producer_id: &str, issuer: &str, subject: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"registry-casework-review-producer-tombstone/v1\0");
+    hash.update(request_id.as_bytes());
+    for value in [producer_id, issuer, subject] {
+        hash.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
+        hash.update(value.as_bytes());
+    }
+    let digest = hash.finalize();
+    format!(
+        "sha256:{}",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
+}
+
+fn project(version: &str) -> CaseworkProject {
+    CaseworkProject {
+        api_version: registry_casework_core::CASEWORK_API_VERSION.to_owned(),
+        kind: registry_casework_core::CASEWORK_KIND.to_owned(),
+        casework: CaseworkIdentity {
+            id: "review-test".to_owned(),
+            version: version.to_owned(),
+        },
+        access_profiles: vec![
+            profile("staff", CaseworkRole::Staff),
+            profile("supervisor", CaseworkRole::Supervisor),
+            profile("administrator", CaseworkRole::Administrator),
+            profile("producer", CaseworkRole::Requester),
+        ],
+        queues: vec![QueuePolicy {
+            id: "review".to_owned(),
+            label: "Review".to_owned(),
+        }],
+        sources: Vec::new(),
+        review_kinds: vec![ReviewKindPolicy {
+            id: "registry-correction".to_owned(),
+            version: version.to_owned(),
+            purpose: ReviewKindPurpose::Approval,
+            context_strategy: ReviewContextStrategy::Submitted,
+            stages: vec![
+                ReviewStagePolicy {
+                    id: "primary".to_owned(),
+                    queue: "review".to_owned(),
+                    deciding_profiles: vec!["staff".to_owned()],
+                    required_approvals: 1,
+                    exclude_initiator: true,
+                    exclude_previous_stage_reviewers: false,
+                },
+                ReviewStagePolicy {
+                    id: "secondary".to_owned(),
+                    queue: "review".to_owned(),
+                    deciding_profiles: vec!["staff".to_owned()],
+                    required_approvals: 1,
+                    exclude_initiator: true,
+                    exclude_previous_stage_reviewers: true,
+                },
+            ],
+            clocks: vec!["review-deadline".to_owned()],
+            retention: ReviewRetentionPolicy {
+                terminal_days: 90,
+                accountability_days: 365,
+            },
+            display_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["summary"],
+                "properties": {"summary": {"type": "string", "maxLength": 160}}
+            }),
+            result_schema: Some(json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["correction"],
+                "properties": {"correction": {"type": "string", "maxLength": 160}}
+            })),
+            outcomes: vec![
+                ReviewOutcomePolicy {
+                    id: "incorrect".to_owned(),
+                    label: "Incorrect".to_owned(),
+                    settlement: ReviewOutcomeSettlement::Rejected,
+                    reason_required: true,
+                    result_required: true,
+                },
+                ReviewOutcomePolicy {
+                    id: "needs-correction".to_owned(),
+                    label: "Needs correction".to_owned(),
+                    settlement: ReviewOutcomeSettlement::ChangesRequested,
+                    reason_required: true,
+                    result_required: true,
+                },
+            ],
+        }],
+        review_producers: vec![ReviewProducerPolicy {
+            id: "registry".to_owned(),
+            profile: "producer".to_owned(),
+            issuer: "https://issuer.test".to_owned(),
+            subject: "registry-service".to_owned(),
+            trusted_initiator_issuer: Some("https://issuer.test".to_owned()),
+            source_namespaces: vec!["registry".to_owned()],
+            kinds: vec!["registry-correction".to_owned()],
+            recovery_days: 30,
+            completion: Some(ReviewCompletionDestinationPolicy {
+                destination_id: "registry-completion".to_owned(),
+                recipient_binding: "registry-service".to_owned(),
+            }),
+        }],
+        calendars: Vec::new(),
+        clocks: vec![ClockPolicy::Subject {
+            id: "review-deadline".to_owned(),
+            anchor: SubjectClockAnchor::FirstSubmittedAt,
+            complete_on: SubjectClockCompletion::ReviewCompleted,
+            after: ElapsedDuration {
+                elapsed: "PT1H".to_owned(),
+            },
+            pause_while: vec![SubjectClockPause::AwaitingApplicant],
+        }],
+        inbox: InboxPolicy::default(),
+        task_templates: Vec::new(),
+    }
+}
+
+fn answer_project(completion: bool) -> CaseworkProject {
+    let mut project = project("answer-1");
+    let kind = &mut project.review_kinds[0];
+    kind.id = "registry-answer".to_owned();
+    kind.purpose = ReviewKindPurpose::Answer;
+    kind.stages.truncate(1);
+    kind.outcomes = vec![ReviewOutcomePolicy {
+        id: "found".to_owned(),
+        label: "Found".to_owned(),
+        settlement: ReviewOutcomeSettlement::Answered,
+        reason_required: false,
+        result_required: true,
+    }];
+    project.review_producers[0].kinds = vec!["registry-answer".to_owned()];
+    if !completion {
+        project.review_producers[0].completion = None;
+    }
+    project
+}
+
+fn activity_clock_project() -> CaseworkProject {
+    let mut project = project("activity-clock-1");
+    project.queues.push(QueuePolicy {
+        id: "overdue-review".to_owned(),
+        label: "Overdue review".to_owned(),
+    });
+    project.review_kinds[0].stages.truncate(1);
+    project.review_kinds[0].clocks = vec!["review-deadline".to_owned()];
+    project.calendars = vec![CalendarPolicy {
+        id: "office".to_owned(),
+        timezone: "UTC".to_owned(),
+        working_weekdays: vec![
+            WorkingWeekday::Monday,
+            WorkingWeekday::Tuesday,
+            WorkingWeekday::Wednesday,
+            WorkingWeekday::Thursday,
+            WorkingWeekday::Friday,
+            WorkingWeekday::Saturday,
+            WorkingWeekday::Sunday,
+        ],
+        holiday_set: "office-holidays".to_owned(),
+    }];
+    project.clocks = vec![ClockPolicy::Activity {
+        id: "review-deadline".to_owned(),
+        anchor: ActivityClockAnchor::StageEnteredAt,
+        calendar: "office".to_owned(),
+        after: WorkingDaysAfter { working_days: 1 },
+        due_time: "17:00".to_owned(),
+        at_risk: None,
+        reminders: vec![ClockReminder {
+            id: "due-soon".to_owned(),
+            working_days_before: 1,
+        }],
+        steps: vec![ClockStep {
+            id: "overdue".to_owned(),
+            because: "The review deadline passed".to_owned(),
+            at: ClockStepInstant::Due,
+            action: ClockStepAction {
+                reassign: ClockReassignment {
+                    queue: "overdue-review".to_owned(),
+                },
+            },
+        }],
+    }];
+    project
+}
+
+fn request(subject_id: &str, requester_reference: &str) -> ReviewCreateRequest {
+    ReviewCreateRequest {
+        kind: "registry-correction".to_owned(),
+        subject: SubjectBinding {
+            source: "registry".to_owned(),
+            subject_type: "record".to_owned(),
+            id: subject_id.to_owned(),
+            version: "1".to_owned(),
+            digest: ContentDigest::for_bytes(subject_id.as_bytes()),
+        },
+        requester_reference: requester_reference.to_owned(),
+        initiator: Some(HumanIdentity {
+            issuer: "https://issuer.test".to_owned(),
+            subject: "initiator".to_owned(),
+        }),
+        context: ReviewContext::Submitted {
+            snapshot: json!({"summary": format!("Review {subject_id}")}),
+        },
+        result_constraints: None,
+    }
+}
+
+async fn fixture() -> Fixture {
+    let base = env::var("CASEWORK_REVIEW_TEST_DATABASE_URL")
+        .expect("CASEWORK_REVIEW_TEST_DATABASE_URL is required for review PostgreSQL tests");
+    let schema = format!("review_{}", Uuid::new_v4().simple());
+    let application_name = format!("casework-review-{}", Uuid::new_v4().simple());
+    let separator = if base.contains('?') { '&' } else { '?' };
+    let scoped_url = format!(
+        "{base}{separator}options=-csearch_path%3D{schema}&application_name={application_name}"
+    );
+    let (admin, admin_connection) = tokio_postgres::connect(&base, NoTls)
+        .await
+        .expect("connect dedicated review test database");
+    tokio::spawn(async move { admin_connection.await.expect("admin connection") });
+    admin
+        .batch_execute(&format!("CREATE SCHEMA {schema}"))
+        .await
+        .expect("create isolated review test schema");
+
+    let secret_name =
+        format!("CASEWORK_REVIEW_SCHEMA_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
+    env::set_var(&secret_name, &scoped_url);
+    let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
+        .expect("test secret resolver");
+    let database_config = DatabaseConfig {
+        runtime_url_ref: format!("secret:env/{secret_name}"),
+        migration_url_ref: format!("secret:env/{secret_name}"),
+        trusted_root_certificate_ref: None,
+        test_only_plaintext: true,
+    };
+    let migration =
+        PostgresStore::connect_migration(&database_config, &secrets).expect("migration store");
+    migration.migrate().await.expect("review migrations");
+    let store = PostgresStore::connect_runtime(&database_config, &secrets).expect("runtime store");
+    let database = connect_scoped(&scoped_url).await;
+    database
+        .batch_execute(
+            "INSERT INTO casework_teams(team_id,revision) VALUES('review-team',1);
+             INSERT INTO casework_queue_service(queue_id,team_id,revision)
+             VALUES('review','review-team',1);
+             INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES
+               ('review-team','https://issuer.test','reviewer-a','staff'),
+               ('review-team','https://issuer.test','reviewer-b','staff'),
+               ('review-team','https://issuer.test','supervisor','supervisor');",
+        )
+        .await
+        .expect("seed review directory");
+    let project_v1 = project("1");
+    let mut project_v2 = project("2");
+    project_v2.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    project_v1.check().expect("version one project");
+    project_v2.check().expect("version two project");
+    let source_revoked = Arc::new(AtomicBool::new(false));
+    let source_state = Arc::new(Mutex::new(OccurrenceState::Open));
+    let source_read_blocked = Arc::new(AtomicBool::new(false));
+    let source_read_started = Arc::new(Notify::new());
+    let source_read_continue = Arc::new(Notify::new());
+    let source_advanced = Arc::new(AtomicBool::new(false));
+    Fixture {
+        service_v1: CaseworkService::new(
+            store.clone(),
+            project_v1,
+            Vec::<Arc<dyn registry_casework_core::SourceAdapter>>::new(),
+        )
+        .expect("version one service"),
+        service_v2: CaseworkService::new(
+            store.clone(),
+            project_v2,
+            [Arc::new(ReviewSource {
+                revoked: Arc::clone(&source_revoked),
+                state: Arc::clone(&source_state),
+                read_blocked: Arc::clone(&source_read_blocked),
+                read_started: Arc::clone(&source_read_started),
+                read_continue: Arc::clone(&source_read_continue),
+                advanced: Arc::clone(&source_advanced),
+            }) as Arc<dyn SourceAdapter>],
+        )
+        .expect("version two service"),
+        store,
+        database,
+        producer: actor("registry-service", CaseworkRole::Requester, "producer"),
+        reviewer_a: actor("reviewer-a", CaseworkRole::Staff, "staff"),
+        reviewer_b: actor("reviewer-b", CaseworkRole::Staff, "staff"),
+        supervisor: actor("supervisor", CaseworkRole::Supervisor, "supervisor"),
+        source_revoked,
+        source_state,
+        source_read_blocked,
+        source_read_started,
+        source_read_continue,
+        source_advanced,
+        application_name,
+    }
+}
+
+async fn connect_scoped(url: &str) -> tokio_postgres::Client {
+    let (client, connection) = tokio_postgres::connect(url, NoTls)
+        .await
+        .expect("schema connection");
+    tokio::spawn(async move { connection.await.expect("schema connection task") });
+    client
+}
+
+async fn task_id(fixture: &Fixture, request_id: Uuid, stage_index: i32) -> Uuid {
+    fixture
+        .database
+        .query_one(
+            "SELECT task_id FROM casework_review_tasks
+             WHERE request_id=$1 AND stage_index=$2 ORDER BY slot LIMIT 1",
+            &[&request_id, &stage_index],
+        )
+        .await
+        .expect("review task")
+        .get(0)
+}
+
+async fn count_for_request(fixture: &Fixture, table: &str, request_id: Uuid) -> i64 {
+    let query = format!("SELECT count(*) FROM {table} WHERE request_id=$1");
+    fixture
+        .database
+        .query_one(&query, &[&request_id])
+        .await
+        .expect("count review rows")
+        .get(0)
+}
+
+async fn set_review_membership(
+    fixture: &Fixture,
+    actor: &ActorContext,
+    membership_kind: &str,
+    present: bool,
+) {
+    if present {
+        fixture
+            .database
+            .execute(
+                "INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
+                 VALUES('review-team',$1,$2,$3) ON CONFLICT DO NOTHING",
+                &[
+                    &actor.principal.issuer,
+                    &actor.principal.subject,
+                    &membership_kind,
+                ],
+            )
+            .await
+            .expect("restore review membership");
+    } else {
+        fixture
+            .database
+            .execute(
+                "DELETE FROM casework_memberships
+                 WHERE team_id='review-team' AND issuer=$1 AND subject=$2
+                   AND membership_kind=$3",
+                &[
+                    &actor.principal.issuer,
+                    &actor.principal.subject,
+                    &membership_kind,
+                ],
+            )
+            .await
+            .expect("remove review membership");
+    }
+}
+
+async fn assert_terminal_atomic(fixture: &Fixture, request_id: Uuid, completion_events: i64) {
+    assert_eq!(
+        count_for_request(fixture, "casework_review_results", request_id).await,
+        1
+    );
+    assert_eq!(
+        count_for_request(fixture, "casework_review_terminal_events", request_id).await,
+        1
+    );
+    assert_eq!(
+        count_for_request(fixture, "casework_review_completion_outbox", request_id).await,
+        completion_events
+    );
+}
+
+async fn assert_store_sessions_hold_no_transaction_or_row_lock(fixture: &Fixture) {
+    let sessions = fixture
+        .database
+        .query_one(
+            "SELECT count(*),
+                    count(*) FILTER (WHERE xact_start IS NOT NULL),
+                    count(*) FILTER (WHERE state <> 'idle')
+             FROM pg_stat_activity
+             WHERE datname=current_database() AND application_name=$1
+               AND pid<>pg_backend_pid()",
+            &[&fixture.application_name],
+        )
+        .await
+        .expect("inspect completion dispatcher database sessions");
+    assert!(sessions.get::<_, i64>(0) > 0, "observe the dispatcher pool");
+    assert_eq!(
+        sessions.get::<_, i64>(1),
+        0,
+        "completion delivery must not retain an open database transaction"
+    );
+    assert_eq!(
+        sessions.get::<_, i64>(2),
+        0,
+        "completion delivery must leave its database sessions idle"
+    );
+
+    let row_locks: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*)
+             FROM pg_locks l
+             JOIN pg_stat_activity a ON a.pid=l.pid
+             WHERE a.datname=current_database() AND a.application_name=$1
+               AND a.pid<>pg_backend_pid() AND l.granted
+               AND l.locktype IN ('tuple','transactionid')",
+            &[&fixture.application_name],
+        )
+        .await
+        .expect("inspect completion dispatcher row locks")
+        .get(0);
+    assert_eq!(
+        row_locks, 0,
+        "completion delivery must not retain a row or transaction-id lock"
+    );
+}
+
+#[derive(Default)]
+struct CompletionDeliveryRace {
+    calls: AtomicUsize,
+    first_received: Notify,
+    second_received: Notify,
+    release_first: Notify,
+    release_second: Notify,
+}
+
+async fn race_completion_responses(State(race): State<Arc<CompletionDeliveryRace>>) -> StatusCode {
+    match race.calls.fetch_add(1, Ordering::SeqCst) {
+        0 => {
+            race.first_received.notify_one();
+            race.release_first.notified().await;
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+        1 => {
+            race.second_received.notify_one();
+            race.release_second.notified().await;
+            StatusCode::NO_CONTENT
+        }
+        2 => StatusCode::NO_CONTENT,
+        call => panic!("unexpected completion delivery call {call}"),
+    }
+}
+
+async fn settle_review_for_completion(fixture: &Fixture, subject: &str) -> Uuid {
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request(subject, subject),
+            &format!("create-{subject}"),
+        )
+        .await
+        .expect("create HA completion review");
+    let primary = task_id(fixture, created.accepted.request_id, 0).await;
+    fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            primary,
+            None,
+            "",
+            1,
+            &format!("claim-{subject}-primary"),
+        )
+        .await
+        .expect("claim primary HA completion task");
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_a,
+            primary,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Approve,
+            },
+            None,
+            "",
+            2,
+            &format!("approve-{subject}-primary"),
+        )
+        .await
+        .expect("approve primary HA completion task");
+    let secondary = task_id(fixture, created.accepted.request_id, 1).await;
+    fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_b,
+            secondary,
+            None,
+            "",
+            1,
+            &format!("claim-{subject}-secondary"),
+        )
+        .await
+        .expect("claim secondary HA completion task");
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_b,
+            secondary,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Approve,
+            },
+            None,
+            "",
+            2,
+            &format!("approve-{subject}-secondary"),
+        )
+        .await
+        .expect("approve secondary HA completion task");
+    created.accepted.request_id
+}
+
+#[tokio::test]
+async fn completion_dispatcher_leases_one_at_a_time_and_fences_a_stale_owner() {
+    let fixture = fixture().await;
+    let request_id = settle_review_for_completion(&fixture, "ha-completion-first").await;
+    let later_request_id = settle_review_for_completion(&fixture, "ha-completion-second").await;
+    assert_eq!(
+        fixture
+            .database
+            .query_one(
+                "SELECT count(*) FROM casework_review_completion_outbox
+                 WHERE request_id IN ($1,$2)",
+                &[&request_id, &later_request_id],
+            )
+            .await
+            .expect("two completion deliveries")
+            .get::<_, i64>(0),
+        2
+    );
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET next_attempt_at=transaction_timestamp()-
+                 CASE WHEN request_id=$1 THEN interval '2 minutes' ELSE interval '1 minute' END
+             WHERE request_id IN ($1,$2)",
+            &[&request_id, &later_request_id],
+        )
+        .await
+        .expect("order the completion deliveries");
+
+    let race = Arc::new(CompletionDeliveryRace::default());
+    let completion_receiver = Router::new()
+        .route("/completion", post(race_completion_responses))
+        .with_state(Arc::clone(&race));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind completion receiver");
+    let completion_url = format!(
+        "http://{}/completion",
+        listener.local_addr().expect("completion receiver address")
+    );
+    let receiver = tokio::spawn(async move {
+        axum::serve(listener, completion_receiver)
+            .await
+            .expect("serve completion receiver");
+    });
+    let first_dispatcher = tokio::spawn(dispatch_review_completions_once_for_test(
+        fixture.store.clone(),
+        "registry-completion",
+        completion_url.clone(),
+        "completion-secret",
+    ));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        race.first_received.notified(),
+    )
+    .await
+    .expect("completion receiver observes the first leased delivery");
+    assert_store_sessions_hold_no_transaction_or_row_lock(&fixture).await;
+    let first_pass_states = fixture
+        .database
+        .query(
+            "SELECT request_id,state,attempt_count
+             FROM casework_review_completion_outbox WHERE request_id IN ($1,$2)",
+            &[&request_id, &later_request_id],
+        )
+        .await
+        .expect("completion states during the first remote call");
+    assert!(first_pass_states.iter().any(|row| {
+        row.get::<_, Uuid>(0) == request_id
+            && row.get::<_, String>(1) == "leased"
+            && row.get::<_, i32>(2) == 1
+    }));
+    assert!(first_pass_states.iter().any(|row| {
+        row.get::<_, Uuid>(0) == later_request_id
+            && row.get::<_, String>(1) == "pending"
+            && row.get::<_, i32>(2) == 0
+    }));
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET lease_until=transaction_timestamp()-interval '1 second'
+             WHERE request_id=$1 AND state='leased'",
+            &[&request_id],
+        )
+        .await
+        .expect("expire the first dispatcher's lease");
+
+    let second_dispatcher = tokio::spawn(dispatch_review_completions_once_for_test(
+        fixture.store.clone(),
+        "registry-completion",
+        completion_url,
+        "completion-secret",
+    ));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        race.second_received.notified(),
+    )
+    .await
+    .expect("completion receiver observes the replacement leased delivery");
+    let replacement_lease = fixture
+        .database
+        .query_one(
+            "SELECT state,attempt_count,lease_until
+             FROM casework_review_completion_outbox WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("replacement completion lease");
+    assert_eq!(replacement_lease.get::<_, String>(0), "leased");
+    assert_eq!(replacement_lease.get::<_, i32>(1), 2);
+    let replacement_lease_until = replacement_lease.get::<_, chrono::DateTime<Utc>>(2);
+
+    race.release_first.notify_one();
+    first_dispatcher
+        .await
+        .expect("first completion dispatcher task")
+        .expect("first completion dispatcher pass");
+    let still_owned = fixture
+        .database
+        .query_one(
+            "SELECT state,attempt_count,lease_until
+             FROM casework_review_completion_outbox WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("replacement lease after stale completion failure");
+    assert_eq!(still_owned.get::<_, String>(0), "leased");
+    assert_eq!(still_owned.get::<_, i32>(1), 2);
+    assert_eq!(
+        still_owned.get::<_, chrono::DateTime<Utc>>(2),
+        replacement_lease_until
+    );
+
+    race.release_second.notify_one();
+    second_dispatcher
+        .await
+        .expect("second completion dispatcher task")
+        .expect("second completion dispatcher pass");
+    receiver.abort();
+    let delivered = fixture
+        .database
+        .query(
+            "SELECT request_id,state,attempt_count,lease_until
+             FROM casework_review_completion_outbox WHERE request_id IN ($1,$2)",
+            &[&request_id, &later_request_id],
+        )
+        .await
+        .expect("delivered completion rows");
+    assert!(delivered.iter().any(|row| {
+        row.get::<_, Uuid>(0) == request_id
+            && row.get::<_, String>(1) == "delivered"
+            && row.get::<_, i32>(2) == 2
+            && row.get::<_, Option<chrono::DateTime<Utc>>>(3).is_none()
+    }));
+    assert!(delivered.iter().any(|row| {
+        row.get::<_, Uuid>(0) == later_request_id
+            && row.get::<_, String>(1) == "delivered"
+            && row.get::<_, i32>(2) == 1
+            && row.get::<_, Option<chrono::DateTime<Utc>>>(3).is_none()
+    }));
+}
+
+#[tokio::test]
+async fn retained_completion_work_requires_its_runtime_destination_until_drain() {
+    let fixture = fixture().await;
+    let request_id =
+        settle_review_for_completion(&fixture, "retained-completion-destination").await;
+    assert!(matches!(
+        validate_retained_completion_destinations_for_test(&fixture.store, &[]).await,
+        Err(RuntimeError::CompletionConfiguration)
+    ));
+    validate_retained_completion_destinations_for_test(&fixture.store, &["registry-completion"])
+        .await
+        .expect("the retained destination permits startup");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+                SET state='delivered',delivered_at=transaction_timestamp()
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("drain retained completion work");
+    validate_retained_completion_destinations_for_test(&fixture.store, &[])
+        .await
+        .expect("a drained destination may be removed");
+}
+
+#[tokio::test]
+async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
+    let fixture = fixture().await;
+    let create = request("record-1", "producer-ref-1");
+    let first = fixture
+        .service_v1
+        .create_review_request(&fixture.producer, create.clone(), "create-record-1")
+        .await
+        .expect("create review");
+    assert!(!first.recovered);
+    assert_eq!(first.accepted.policy.version, "1");
+
+    let recovered = fixture
+        .service_v2
+        .create_review_request(&fixture.producer, create.clone(), "create-record-1")
+        .await
+        .expect("recover review through changed active config");
+    assert!(recovered.recovered);
+    assert_eq!(recovered.accepted.request_id, first.accepted.request_id);
+    assert_eq!(recovered.accepted.policy, first.accepted.policy);
+
+    let changed = fixture
+        .service_v2
+        .create_review_request(
+            &fixture.producer,
+            request("record-1", "changed-body"),
+            "changed-record-1",
+        )
+        .await;
+    assert!(matches!(
+        changed,
+        Err(ReviewRuntimeError::SubmissionConflict)
+    ));
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_result(&fixture.producer, first.accepted.request_id)
+            .await,
+        Ok(ReviewResultRead::Pending)
+    ));
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_submission_reservations
+                SET recovery_deadline=now()-interval '2 seconds',
+                    retained_until=now()-interval '1 second'
+              WHERE request_id=$1",
+            &[&first.accepted.request_id],
+        )
+        .await
+        .expect("age the active review reservation past its creation-based retention");
+    fixture
+        .service_v1
+        .erase_expired_reviews()
+        .await
+        .expect("run retention while the review remains active");
+    let active_reservations: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_submission_reservations WHERE request_id=$1",
+            &[&first.accepted.request_id],
+        )
+        .await
+        .expect("active review reservation remains")
+        .get(0);
+    assert_eq!(active_reservations, 1);
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_submission_reservations
+             SET recovery_deadline=now()+interval '1 day',
+                 retained_until=now()+interval '1 day'
+             WHERE request_id=$1",
+            &[&first.accepted.request_id],
+        )
+        .await
+        .expect("keep the later result-expiry recovery assertion inside its recovery window");
+
+    let primary = task_id(&fixture, first.accepted.request_id, 0).await;
+    assert!(matches!(
+        fixture
+            .service_v1
+            .decide_review_task(
+                &fixture.reviewer_a,
+                primary,
+                ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Approve,
+                },
+                None,
+                "",
+                1,
+                "unheld-decision",
+            )
+            .await,
+        Err(ReviewRuntimeError::TaskNotHeld)
+    ));
+    fixture
+        .service_v1
+        .claim_review_task(&fixture.reviewer_a, primary, None, "", 1, "claim-primary")
+        .await
+        .expect("claim primary review");
+    assert!(matches!(
+        fixture
+            .service_v1
+            .decide_review_task(
+                &fixture.reviewer_a,
+                primary,
+                ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Approve,
+                },
+                None,
+                "",
+                2,
+                "decide-primary",
+            )
+            .await,
+        Ok(ReviewTransition::StageAdvanced { .. })
+    ));
+
+    let secondary = task_id(&fixture, first.accepted.request_id, 1).await;
+    fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_b,
+            secondary,
+            None,
+            "",
+            1,
+            "claim-secondary",
+        )
+        .await
+        .expect("claim secondary review");
+    assert!(matches!(
+        fixture
+            .service_v1
+            .decide_review_task(
+                &fixture.reviewer_b,
+                secondary,
+                ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Approve,
+                },
+                None,
+                "",
+                2,
+                "decide-secondary",
+            )
+            .await,
+        Ok(ReviewTransition::Settled { .. })
+    ));
+    let accountability_event: Uuid = fixture
+        .database
+        .query_one(
+            "SELECT event_id FROM casework_review_accountability WHERE task_id=$1",
+            &[&secondary],
+        )
+        .await
+        .expect("protected accountability event")
+        .get(0);
+    let accountability = fixture
+        .service_v1
+        .review_accountability(&fixture.supervisor, accountability_event)
+        .await
+        .expect("supervisor accountability read");
+    assert_eq!(accountability.actor, fixture.reviewer_b.principal);
+    assert_eq!(accountability.request_id, first.accepted.request_id);
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_accountability(&fixture.reviewer_b, accountability_event)
+            .await,
+        Err(ReviewRuntimeError::Forbidden)
+    ));
+
+    let result = fixture
+        .service_v1
+        .review_result(&fixture.producer, first.accepted.request_id)
+        .await
+        .expect("read terminal result");
+    assert!(matches!(
+        result,
+        ReviewResultRead::Available(result) if result.status == ReviewResultStatus::Approved
+    ));
+    let request_view = fixture
+        .service_v1
+        .review_request(&fixture.producer, first.accepted.request_id)
+        .await
+        .expect("read terminal request");
+    assert_eq!(request_view.lifecycle, ReviewRequestLifecycle::Approved);
+    let feed = fixture
+        .service_v1
+        .review_result_feed(&fixture.producer, None, 10)
+        .await
+        .expect("read result feed");
+    assert_eq!(feed.items.len(), 1);
+    assert_eq!(feed.items[0].request_id, first.accepted.request_id);
+    assert_eq!(
+        count_for_request(
+            &fixture,
+            "casework_review_terminal_events",
+            first.accepted.request_id,
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        count_for_request(
+            &fixture,
+            "casework_review_completion_outbox",
+            first.accepted.request_id,
+        )
+        .await,
+        1
+    );
+
+    let first_lease = fixture
+        .store
+        .lease_review_completions_for_test(10, Utc::now() + TimeDelta::minutes(5))
+        .await
+        .expect("lease completion delivery");
+    assert_eq!(first_lease.len(), 1);
+    let event_id = first_lease[0].event_id;
+    assert!(fixture
+        .store
+        .lease_review_completions_for_test(10, Utc::now() + TimeDelta::minutes(5))
+        .await
+        .expect("do not lease active delivery twice")
+        .is_empty());
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET lease_until=now() - interval '1 second' WHERE event_id=$1",
+            &[&event_id],
+        )
+        .await
+        .expect("expire completion lease after simulated lost acknowledgement");
+    let recovered_lease = fixture
+        .store
+        .lease_review_completions_for_test(10, Utc::now() + TimeDelta::minutes(5))
+        .await
+        .expect("recover expired completion lease");
+    assert_eq!(recovered_lease.len(), 1);
+    assert_eq!(recovered_lease[0].event_id, event_id);
+    assert_eq!(recovered_lease[0], first_lease[0]);
+    fixture
+        .store
+        .finish_review_completion_for_test(event_id, false, 3, Utc::now() + TimeDelta::seconds(30))
+        .await
+        .expect("schedule bounded completion retry");
+    let pending = fixture
+        .database
+        .query_one(
+            "SELECT state,attempt_count FROM casework_review_completion_outbox WHERE event_id=$1",
+            &[&event_id],
+        )
+        .await
+        .expect("pending completion retry");
+    assert_eq!(pending.get::<_, String>(0), "pending");
+    assert_eq!(pending.get::<_, i32>(1), 2);
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox SET next_attempt_at=now() WHERE event_id=$1",
+            &[&event_id],
+        )
+        .await
+        .expect("make final completion attempt due");
+    let final_lease = fixture
+        .store
+        .lease_review_completions_for_test(10, Utc::now() + TimeDelta::minutes(5))
+        .await
+        .expect("lease final completion attempt");
+    assert_eq!(final_lease.len(), 1);
+    assert_eq!(final_lease[0].event_id, event_id);
+    fixture
+        .store
+        .finish_review_completion_for_test(event_id, false, 3, Utc::now())
+        .await
+        .expect("exhaust bounded completion delivery");
+    let exhausted = fixture
+        .database
+        .query_one(
+            "SELECT state,attempt_count,lease_until FROM casework_review_completion_outbox
+             WHERE event_id=$1",
+            &[&event_id],
+        )
+        .await
+        .expect("exhausted completion delivery");
+    assert_eq!(exhausted.get::<_, String>(0), "exhausted");
+    assert_eq!(exhausted.get::<_, i32>(1), 3);
+    assert!(exhausted
+        .get::<_, Option<chrono::DateTime<Utc>>>(2)
+        .is_none());
+
+    let now = Utc::now();
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_results
+             SET completed_at=$2,available_until=$3 WHERE request_id=$1",
+            &[
+                &first.accepted.request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire result");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_terminal_events
+             SET completed_at=$2,retained_until=$3 WHERE request_id=$1",
+            &[
+                &first.accepted.request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire terminal event");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET next_attempt_at=$2,retained_until=$3 WHERE request_id=$1",
+            &[
+                &first.accepted.request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire completion outbox");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests
+             SET terminal_at=$2,result_available_until=$3,
+                 context_strategy='source',
+                 context=jsonb_build_object('reference','breg:registry:record:expired:1')
+             WHERE request_id=$1",
+            &[
+                &first.accepted.request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire request result");
+    let exponent_values = vec![1e100_f64; 400];
+    assert!(serde_json::to_vec(&exponent_values).unwrap().len() < 32_768);
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_results
+                SET status='changes_requested',outcome='needs-correction',
+                    result=jsonb_build_object('numericExpansionProbe',$2::jsonb)
+              WHERE request_id=$1",
+            &[&first.accepted.request_id, &json!(exponent_values)],
+        )
+        .await
+        .expect("store bounded result whose PostgreSQL numeric rendering exceeds 32 KiB");
+    let stored_result_bytes: i32 = fixture
+        .database
+        .query_one(
+            "SELECT octet_length(result::text) FROM casework_review_results WHERE request_id=$1",
+            &[&first.accepted.request_id],
+        )
+        .await
+        .expect("measure PostgreSQL result representation")
+        .get(0);
+    assert!(stored_result_bytes > 32_768);
+    fixture
+        .service_v1
+        .erase_expired_reviews()
+        .await
+        .expect("erase expired review payloads");
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_result(&fixture.producer, first.accepted.request_id)
+            .await,
+        Ok(ReviewResultRead::Expired)
+    ));
+    assert!(matches!(
+        fixture
+            .service_v1
+            .create_review_request(
+                &fixture.producer,
+                create.clone(),
+                "recover-after-result-expiry",
+            )
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_submission_reservations
+             SET recovery_deadline=$2 WHERE request_id=$1",
+            &[&first.accepted.request_id, &(now - TimeDelta::seconds(1))],
+        )
+        .await
+        .expect("expire only the creation recovery window");
+    assert!(matches!(
+        fixture
+            .service_v1
+            .create_review_request(&fixture.producer, create.clone(), "recover-after-deadline",)
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    assert_eq!(
+        count_for_request(
+            &fixture,
+            "casework_review_terminal_events",
+            first.accepted.request_id,
+        )
+        .await,
+        0
+    );
+    let redacted_context: serde_json::Value = fixture
+        .database
+        .query_one(
+            "SELECT context FROM casework_review_requests WHERE request_id=$1",
+            &[&first.accepted.request_id],
+        )
+        .await
+        .expect("retained accountability tombstone")
+        .get(0);
+    assert_eq!(redacted_context, json!({}));
+    let scrubbed = fixture
+        .database
+        .query_one(
+            "SELECT submission_digest,producer_issuer,producer_subject,source_namespace,
+                    subject_source,subject_type,subject_id,subject_version,subject_digest,
+                    requester_reference,initiator_issuer,initiator_subject,
+                    completion_destination,completion_recipient_binding
+             FROM casework_review_requests WHERE request_id=$1",
+            &[&first.accepted.request_id],
+        )
+        .await
+        .expect("inspect payload-free request tombstone");
+    let tombstone: String = scrubbed.get(0);
+    let producer_tombstone = scrubbed.get::<_, String>(1);
+    assert!(producer_tombstone.starts_with("sha256:"));
+    assert_eq!(scrubbed.get::<_, String>(2), producer_tombstone);
+    assert_ne!(producer_tombstone, fixture.producer.principal.issuer);
+    assert_ne!(producer_tombstone, fixture.producer.principal.subject);
+    for column in 3..=9 {
+        assert_eq!(scrubbed.get::<_, String>(column), tombstone);
+    }
+    for column in 10..=13 {
+        assert!(scrubbed.get::<_, Option<String>>(column).is_none());
+    }
+    let reservation = fixture
+        .database
+        .query_one(
+            "SELECT binding_digest,submission_digest,source_namespace,subject_source,
+                    subject_type,subject_id,subject_version
+             FROM casework_review_submission_reservations WHERE request_id=$1",
+            &[&first.accepted.request_id],
+        )
+        .await
+        .expect("inspect payload-free submission tombstone");
+    assert!(reservation.get::<_, String>(0).starts_with("sha256:"));
+    let reservation_tombstone: String = reservation.get(1);
+    for column in 2..=6 {
+        assert_eq!(reservation.get::<_, String>(column), reservation_tombstone);
+    }
+    assert!(
+        count_for_request(
+            &fixture,
+            "casework_review_accountability",
+            first.accepted.request_id,
+        )
+        .await
+            > 0
+    );
+
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests
+             SET accountability_retained_until=$2 WHERE request_id=$1",
+            &[&first.accepted.request_id, &(now - TimeDelta::seconds(1))],
+        )
+        .await
+        .expect("expire accountability tombstone");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_accountability
+             SET occurred_at=$2,retained_until=$3 WHERE request_id=$1",
+            &[
+                &first.accepted.request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire protected accountability");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_submission_reservations
+             SET retained_until=$2,recovery_deadline=$2 WHERE request_id=$1",
+            &[&first.accepted.request_id, &(now - TimeDelta::seconds(1))],
+        )
+        .await
+        .expect("expire submission tombstone");
+    fixture
+        .service_v1
+        .erase_expired_reviews()
+        .await
+        .expect("erase expired accountability state");
+    assert_eq!(
+        count_for_request(
+            &fixture,
+            "casework_review_clock_occurrences",
+            first.accepted.request_id,
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count_for_request(
+            &fixture,
+            "casework_review_requests",
+            first.accepted.request_id,
+        )
+        .await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn retained_reviews_remain_bound_to_the_admitted_producer_identity() {
+    let fixture = fixture().await;
+    let request = request("record-producer-rebind", "producer-ref-rebind");
+    let created = fixture
+        .service_v1
+        .create_review_request(&fixture.producer, request.clone(), "create-producer-rebind")
+        .await
+        .expect("create retained review");
+
+    let mut rebound_project = project("1");
+    rebound_project.review_producers[0].subject = "replacement-service".to_owned();
+    let rebound = CaseworkService::new(
+        fixture.store.clone(),
+        rebound_project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("replacement producer service");
+    let replacement = actor("replacement-service", CaseworkRole::Requester, "producer");
+    let request_id = created.accepted.request_id;
+
+    assert!(matches!(
+        rebound.review_request(&replacement, request_id).await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    assert!(matches!(
+        rebound.review_result(&replacement, request_id).await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    assert!(rebound
+        .review_result_feed(&replacement, None, 10)
+        .await
+        .expect("replacement feed")
+        .items
+        .is_empty());
+    assert!(matches!(
+        rebound
+            .review_history(&replacement, request_id, None, "", None, 10)
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    assert!(matches!(
+        rebound
+            .review_clocks(&replacement, request_id, None, "")
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    assert!(matches!(
+        rebound
+            .add_review_note(
+                &replacement,
+                request_id,
+                None,
+                "",
+                ReviewNoteRequest {
+                    audience: ReviewHistoryAudience::Requester,
+                    note: "replacement note".to_owned(),
+                },
+                "replacement-note",
+            )
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    assert!(matches!(
+        rebound
+            .cancel_review_request(
+                &replacement,
+                request_id,
+                ReviewCancelRequest {
+                    subject: request.subject,
+                    reason: "replacement cancellation".to_owned(),
+                },
+                "replacement-cancel",
+            )
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+}
+
+#[tokio::test]
+async fn active_review_keeps_early_accountability_readable_past_provisional_expiry() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request(
+                "record-active-accountability",
+                "producer-ref-active-accountability",
+            ),
+            "create-active-accountability",
+        )
+        .await
+        .expect("create multi-stage review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-active-accountability",
+        )
+        .await
+        .expect("claim first stage");
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_a,
+            task,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Approve,
+            },
+            None,
+            "",
+            2,
+            "decide-active-accountability",
+        )
+        .await
+        .expect("advance to second stage");
+    let event_id: Uuid = fixture
+        .database
+        .query_one(
+            "SELECT event_id FROM casework_review_accountability WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("early accountability event")
+        .get(0);
+    let occurred = Utc::now() - TimeDelta::days(2);
+    let expired = Utc::now() - TimeDelta::days(1);
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_accountability
+             SET occurred_at=$2,retained_until=$3 WHERE event_id=$1",
+            &[&event_id, &occurred, &expired],
+        )
+        .await
+        .expect("expire provisional accountability row");
+    fixture
+        .service_v1
+        .erase_expired_reviews()
+        .await
+        .expect("run retention cleanup");
+    let accountability = fixture
+        .service_v1
+        .review_accountability(&fixture.supervisor, event_id)
+        .await
+        .expect("active accountability remains readable");
+    assert_eq!(accountability.request_id, created.accepted.request_id);
+}
+
+#[tokio::test]
+async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("record-retention", "producer-ref-retention"),
+            "create-retention-review",
+        )
+        .await
+        .expect("create retention review");
+    let request_id = created.accepted.request_id;
+    let primary = task_id(&fixture, request_id, 0).await;
+    let claimed_primary = fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            primary,
+            None,
+            "",
+            1,
+            "claim-retention-primary",
+        )
+        .await
+        .expect("claim retention primary task");
+    let draft_a = fixture
+        .service_v1
+        .save_review_task_draft(
+            &fixture.reviewer_a,
+            primary,
+            None,
+            "",
+            claimed_primary.revision,
+            ReviewTaskDraftInput {
+                body: json!({"private": "reviewer A draft"}),
+            },
+            "draft-retention-a",
+        )
+        .await
+        .expect("save reviewer A draft");
+    let delegated = fixture
+        .service_v1
+        .delegate_review_task(
+            &fixture.reviewer_a,
+            primary,
+            None,
+            "",
+            claimed_primary.revision + 1,
+            DelegateRequest {
+                delegate: fixture.reviewer_b.principal.clone(),
+                reason: Some("continue review".to_owned()),
+            },
+            "delegate-retention-primary",
+        )
+        .await
+        .expect("delegate retention primary task");
+    let draft_b = fixture
+        .service_v1
+        .save_review_task_draft(
+            &fixture.reviewer_b,
+            primary,
+            None,
+            "",
+            delegated.revision,
+            ReviewTaskDraftInput {
+                body: json!({"private": "reviewer B draft"}),
+            },
+            "draft-retention-b",
+        )
+        .await
+        .expect("save reviewer B draft");
+    assert_eq!(draft_a.revision, 1);
+    assert_eq!(draft_b.revision, 1);
+    let retained_drafts: Vec<serde_json::Value> = fixture
+        .database
+        .query(
+            "SELECT body FROM casework_review_task_drafts
+             WHERE task_id=$1 ORDER BY actor_subject",
+            &[&primary],
+        )
+        .await
+        .expect("read author-keyed drafts")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(
+        retained_drafts,
+        vec![
+            json!({"private": "reviewer A draft"}),
+            json!({"private": "reviewer B draft"})
+        ]
+    );
+
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_b,
+            primary,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Approve,
+            },
+            None,
+            "",
+            delegated.revision + 1,
+            "decide-retention-primary",
+        )
+        .await
+        .expect("advance retention review");
+    let secondary = task_id(&fixture, request_id, 1).await;
+    fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            secondary,
+            None,
+            "",
+            1,
+            "claim-retention-secondary",
+        )
+        .await
+        .expect("claim retention secondary task");
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_a,
+            secondary,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Reject {
+                    outcome: "incorrect".to_owned(),
+                    reason: Some("private retained reason".to_owned()),
+                    result: Some(json!({"correction": "bounded correction"})),
+                },
+            },
+            None,
+            "",
+            2,
+            "decide-retention-secondary",
+        )
+        .await
+        .expect("settle retention review");
+
+    let grant_id = Uuid::new_v4();
+    let primary_revision: i64 = fixture
+        .database
+        .query_one(
+            "SELECT revision FROM casework_review_tasks WHERE task_id=$1",
+            &[&primary],
+        )
+        .await
+        .expect("read retained task revision")
+        .get(0);
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_review_task_grants(
+                grant_id,task_id,request_id,task_revision,holder_issuer,holder_subject,
+                approver_profile,approver_role,idempotency_key,request_hash,record,
+                approved_at,expires_at)
+             VALUES($1,$2,$3,$4,$5,$6,'staff','staff','retention-grant',
+                    repeat('a',64),$7,now(),now()+interval '10 minutes')",
+            &[
+                &grant_id,
+                &primary,
+                &request_id,
+                &primary_revision,
+                &fixture.reviewer_b.principal.issuer,
+                &fixture.reviewer_b.principal.subject,
+                &json!({
+                    "holder": fixture.reviewer_b.principal,
+                    "subject": {
+                        "source": "registry",
+                        "subjectType": "record",
+                        "id": "record-retention"
+                    }
+                }),
+            ],
+        )
+        .await
+        .expect("retain identity-bearing review task grant");
+
+    let deadlines = fixture
+        .database
+        .query_one(
+            "SELECT r.accountability_retained_until,
+                    count(DISTINCT a.retained_until),min(a.retained_until)
+             FROM casework_review_requests r
+             JOIN casework_review_accountability a USING(request_id)
+             WHERE r.request_id=$1 GROUP BY r.accountability_retained_until",
+            &[&request_id],
+        )
+        .await
+        .expect("read terminal accountability deadlines");
+    assert_eq!(deadlines.get::<_, i64>(1), 1);
+    assert_eq!(
+        deadlines.get::<_, chrono::DateTime<Utc>>(0),
+        deadlines.get::<_, chrono::DateTime<Utc>>(2),
+        "every decision, including an earlier-stage decision, expires from terminal settlement"
+    );
+
+    let now = Utc::now();
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_results
+             SET completed_at=$2,available_until=$3 WHERE request_id=$1",
+            &[
+                &request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire retained result");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_terminal_events
+             SET completed_at=$2,retained_until=$3 WHERE request_id=$1",
+            &[
+                &request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire terminal feed event");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET next_attempt_at=$2,retained_until=$3 WHERE request_id=$1",
+            &[
+                &request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire completion event");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests
+             SET terminal_at=$2,result_available_until=$3
+             WHERE request_id=$1",
+            &[
+                &request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire terminal review before cleanup runs");
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_task(&fixture.reviewer_b, primary, None, "")
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_task_context(&fixture.reviewer_b, primary, None, "")
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_task_draft(&fixture.reviewer_b, primary, None, "")
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    for actor in [&fixture.producer, &fixture.reviewer_b] {
+        assert!(matches!(
+            fixture
+                .service_v1
+                .review_history(actor, request_id, None, "", None, 100)
+                .await,
+            Err(ReviewRuntimeError::ResultExpired)
+        ));
+    }
+
+    let identity = fixture
+        .database
+        .query_one(
+            "SELECT producer_id,producer_issuer,producer_subject
+             FROM casework_review_requests WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("read producer identity before fabricating erasure");
+    let tombstone = producer_tombstone(
+        request_id,
+        identity.get::<_, &str>(0),
+        identity.get::<_, &str>(1),
+        identity.get::<_, &str>(2),
+    );
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests
+             SET result_available_until=$2,result_erased_at=$3,
+                 producer_issuer=$4,producer_subject=$4
+             WHERE request_id=$1",
+            &[
+                &request_id,
+                &(now + TimeDelta::days(1)),
+                &(now - TimeDelta::seconds(1)),
+                &tombstone,
+            ],
+        )
+        .await
+        .expect("mark terminal result erased while task rows remain");
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_task(&fixture.reviewer_b, primary, None, "")
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_history(
+                &fixture.producer,
+                request_id,
+                None,
+                "producer-token",
+                None,
+                100,
+            )
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests
+             SET result_available_until=$2,result_erased_at=$2
+             WHERE request_id=$1",
+            &[&request_id, &(now - TimeDelta::days(1))],
+        )
+        .await
+        .expect("restore expired retention markers for cleanup");
+    fixture
+        .service_v1
+        .erase_expired_reviews()
+        .await
+        .expect("scrub terminal review payloads");
+
+    for table in [
+        "casework_review_results",
+        "casework_review_decisions",
+        "casework_review_history",
+    ] {
+        assert_eq!(
+            count_for_request(&fixture, table, request_id).await,
+            0,
+            "{table}"
+        );
+    }
+    let retained_draft_count: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_task_drafts d
+             JOIN casework_review_tasks t USING(task_id) WHERE t.request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("count scrubbed review drafts")
+        .get(0);
+    assert_eq!(retained_draft_count, 0);
+    assert_eq!(
+        count_for_request(&fixture, "casework_review_tasks", request_id).await,
+        0,
+        "terminal-expired task rows must not retain holder or assigner identities"
+    );
+    let retained_grant_count: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_task_grants WHERE grant_id=$1",
+            &[&grant_id],
+        )
+        .await
+        .expect("count terminal-expired review task grant")
+        .get(0);
+    assert_eq!(
+        retained_grant_count, 0,
+        "terminal-expired grants must not retain holder or governed subjects"
+    );
+    assert_eq!(
+        count_for_request(&fixture, "casework_review_accountability", request_id).await,
+        2
+    );
+    let accountability = fixture
+        .database
+        .query_one(
+            "SELECT count(*),bool_and(task_id IS NOT NULL),bool_and(retained_until>now())
+             FROM casework_review_accountability WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("inspect protected accountability rows");
+    assert_eq!(accountability.get::<_, i64>(0), 2);
+    assert!(accountability.get::<_, bool>(1));
+    assert!(
+        accountability.get::<_, bool>(2),
+        "terminalDays expires before accountabilityDays in this fixture"
+    );
+    let retained_accountability_event: Uuid = fixture
+        .database
+        .query_one(
+            "SELECT event_id FROM casework_review_accountability
+             WHERE request_id=$1 ORDER BY occurred_at,event_id LIMIT 1",
+            &[&request_id],
+        )
+        .await
+        .expect("select retained accountability event")
+        .get(0);
+    let retained_accountability = fixture
+        .service_v1
+        .review_accountability(&fixture.supervisor, retained_accountability_event)
+        .await
+        .expect("supervisor reads accountability after task cleanup");
+    assert_eq!(retained_accountability.request_id, request_id);
+    assert_eq!(
+        count_for_request(&fixture, "casework_review_requests", request_id).await,
+        1
+    );
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_task(&fixture.reviewer_b, primary, None, "")
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_request(&fixture.producer, request_id)
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_clocks(&fixture.producer, request_id, None, "producer-token")
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    let idempotency = fixture
+        .database
+        .query_one(
+            "SELECT count(*),bool_and(response IS NULL)
+             FROM casework_idempotency WHERE review_request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("inspect retained review idempotency tombstones");
+    assert!(idempotency.get::<_, i64>(0) > 0);
+    assert!(idempotency.get::<_, bool>(1));
+
+    assert!(matches!(
+        fixture
+            .service_v1
+            .add_review_note(
+                &fixture.producer,
+                request_id,
+                None,
+                "producer-token",
+                ReviewNoteRequest {
+                    audience: ReviewHistoryAudience::Requester,
+                    note: "must not resurrect erased history".to_owned(),
+                },
+                "note-after-terminal-retention",
+            )
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    fixture
+        .service_v1
+        .erase_expired_reviews()
+        .await
+        .expect("repeat terminal cleanup after refused note");
+    assert_eq!(
+        count_for_request(&fixture, "casework_review_history", request_id).await,
+        0
+    );
+    let resurrected_idempotency: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_idempotency
+             WHERE review_request_id=$1 AND idempotency_key='note-after-terminal-retention'",
+            &[&request_id],
+        )
+        .await
+        .expect("check refused note replay state")
+        .get(0);
+    assert_eq!(resurrected_idempotency, 0);
+
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests
+             SET accountability_retained_until=$2 WHERE request_id=$1",
+            &[&request_id, &(now - TimeDelta::seconds(1))],
+        )
+        .await
+        .expect("expire review accountability boundary");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_accountability
+             SET occurred_at=$2,retained_until=$3 WHERE request_id=$1",
+            &[
+                &request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire minimized accountability rows");
+    fixture
+        .service_v1
+        .erase_expired_reviews()
+        .await
+        .expect("erase accountability-expired review");
+    assert_eq!(
+        count_for_request(&fixture, "casework_review_requests", request_id).await,
+        0
+    );
+    let owned_idempotency: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_idempotency WHERE review_request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("inspect erased review idempotency")
+        .get(0);
+    assert_eq!(owned_idempotency, 0);
+}
+
+#[tokio::test]
+async fn canonical_json_bounds_allow_safe_postgresql_expansion_for_context_and_drafts() {
+    let fixture = fixture().await;
+    let mut project = project("canonical-storage");
+    let schema_examples = vec![1e100_f64; 8_000];
+    project.review_kinds[0].display_schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["summary", "numbers"],
+        "properties": {
+            "summary": {"type": "string", "maxLength": 160},
+            "numbers": {
+                "type": "array",
+                "maxItems": 1200,
+                "items": {"type": "number"}
+            }
+        },
+        "examples": schema_examples
+    });
+    project.review_kinds[0]
+        .result_schema
+        .as_mut()
+        .expect("result schema")
+        .as_object_mut()
+        .expect("object result schema")
+        .insert("examples".to_owned(), json!(vec![1e100_f64; 8_000]));
+    project.check().expect("canonical storage project");
+    for schema in [
+        &project.review_kinds[0].display_schema,
+        project.review_kinds[0]
+            .result_schema
+            .as_ref()
+            .expect("result schema"),
+    ] {
+        let bytes =
+            registry_platform_canonical_json::canonicalize_json(schema).expect("canonical schema");
+        assert!(bytes.len() > 48 * 1024);
+        assert!(bytes.len() <= 64 * 1024);
+    }
+    let policy_snapshot = project.review_kinds[0]
+        .snapshot()
+        .expect("bounded policy snapshot");
+    assert!(
+        registry_platform_canonical_json::canonicalize_json(
+            &serde_json::to_value(policy_snapshot).expect("policy snapshot value")
+        )
+        .expect("canonical policy snapshot")
+        .len()
+            <= MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES
+    );
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("canonical storage service");
+    let numbers = vec![1e100_f64; 1_000];
+    let expanded = json!({"numbers": numbers, "summary": "bounded expansion"});
+    assert!(
+        registry_platform_canonical_json::canonicalize_json(&expanded)
+            .expect("canonical expansion")
+            .len()
+            < 16 * 1024
+    );
+    let mut create = request("record-canonical-storage", "producer-ref-canonical-storage");
+    create.context = ReviewContext::Submitted {
+        snapshot: expanded.clone(),
+    };
+    let created = service
+        .create_review_request(&fixture.producer, create, "create-canonical-storage")
+        .await
+        .expect("store admitted submitted context");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    let claimed = service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-canonical-storage",
+        )
+        .await
+        .expect("claim canonical storage task");
+    service
+        .save_review_task_draft(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            claimed.revision,
+            ReviewTaskDraftInput {
+                body: expanded.clone(),
+            },
+            "draft-canonical-storage",
+        )
+        .await
+        .expect("store admitted canonical draft");
+    let stored = fixture
+        .database
+        .query_one(
+            "SELECT octet_length(r.context::text),octet_length(d.body::text),
+                    octet_length(r.policy_snapshot::text)
+             FROM casework_review_requests r
+             JOIN casework_review_tasks t USING(request_id)
+             JOIN casework_review_task_drafts d USING(task_id)
+             WHERE r.request_id=$1",
+            &[&created.accepted.request_id],
+        )
+        .await
+        .expect("measure expanded PostgreSQL jsonb storage");
+    assert!(stored.get::<_, i32>(0) > 65_536);
+    assert!(stored.get::<_, i32>(1) > 65_536);
+    assert!(stored.get::<_, i32>(2) > 262_144);
+    assert!(stored.get::<_, i32>(2) <= 16 * 1024 * 1024);
+    assert!(matches!(
+        service
+            .save_review_task_draft(
+                &fixture.reviewer_a,
+                task,
+                None,
+                "",
+                claimed.revision + 1,
+                ReviewTaskDraftInput {
+                    body: json!({"oversized": "x".repeat(17 * 1024)}),
+                },
+                "draft-canonical-storage-too-large",
+            )
+            .await,
+        Err(ReviewRuntimeError::Invalid)
+    ));
+}
+
+#[tokio::test]
+async fn retention_cleanup_skips_locked_rows_and_processes_one_bounded_batch() {
+    let mut fixture = fixture().await;
+    let mut request_ids = Vec::new();
+    for index in 0..102 {
+        let request_id = Uuid::new_v4();
+        let producer_id = format!("retention-batch-{index}");
+        let subject_id = format!("retention-subject-{index}");
+        fixture
+            .database
+            .execute(
+                "INSERT INTO casework_review_requests(
+                    request_id,producer_id,producer_issuer,producer_subject,source_namespace,
+                    subject_source,subject_type,subject_id,subject_version,subject_digest,
+                    requester_reference,context_strategy,context,policy_id,policy_version,
+                    policy_digest,policy_snapshot,submission_digest,lifecycle,active_stage_index,
+                    revision,created_at,updated_at,terminal_at,result_available_until,
+                    accountability_retained_until)
+                 VALUES($1,$2,'https://issuer.test','retention-service','registry','registry',
+                    'record',$3,'1',$4,$3,'submitted','{}'::jsonb,'retention','1',$4,
+                    '{}'::jsonb,$4,'approved',NULL,1,now()-interval '4 days',
+                    now()-interval '3 days',now()-interval '3 days',
+                    now()-interval '2 days',now()-interval '1 day')",
+                &[
+                    &request_id,
+                    &producer_id,
+                    &subject_id,
+                    &format!("sha256:{}", "a".repeat(64)),
+                ],
+            )
+            .await
+            .expect("insert retention batch request");
+        request_ids.push(request_id);
+    }
+    let service = fixture.service_v1.clone();
+    let locked_request = request_ids[0];
+    let locking = fixture
+        .database
+        .transaction()
+        .await
+        .expect("begin retention row lock");
+    locking
+        .query_one(
+            "SELECT request_id FROM casework_review_requests
+             WHERE request_id=$1 FOR UPDATE",
+            &[&locked_request],
+        )
+        .await
+        .expect("lock one expired request");
+    assert_eq!(
+        service
+            .erase_expired_reviews()
+            .await
+            .expect("run bounded retention batch around lock"),
+        100
+    );
+    let remaining: i64 = locking
+        .query_one("SELECT count(*) FROM casework_review_requests", &[])
+        .await
+        .expect("count requests after bounded batch")
+        .get(0);
+    assert_eq!(remaining, 2);
+    locking.commit().await.expect("release retention row lock");
+    assert_eq!(
+        service
+            .erase_expired_reviews()
+            .await
+            .expect("finish retention batch"),
+        2
+    );
+}
+
+#[tokio::test]
+async fn accountability_read_requires_live_retention_and_a_committed_audit() {
+    let fixture = fixture().await;
+    let project = answer_project(false);
+    project.check().expect("accountability test project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("accountability test service");
+    let mut answer_request = request("accountability-record", "accountability-ref");
+    answer_request.kind = "registry-answer".to_owned();
+    let created = service
+        .create_review_request(&fixture.producer, answer_request, "create-accountability")
+        .await
+        .expect("create accountability review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-accountability",
+        )
+        .await
+        .expect("claim accountability review");
+    service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            task,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Answer {
+                    outcome: "found".to_owned(),
+                    reason: Some("private accountability reason".to_owned()),
+                    result: Some(json!({"correction": "accountable answer"})),
+                },
+            },
+            None,
+            "",
+            2,
+            "decide-accountability",
+        )
+        .await
+        .expect("decide accountability review");
+    let accountability_event: Uuid = fixture
+        .database
+        .query_one(
+            "SELECT event_id FROM casework_review_accountability WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("accountability event")
+        .get(0);
+
+    let accountability = service
+        .review_accountability(&fixture.supervisor, accountability_event)
+        .await
+        .expect("audited accountability read");
+    assert_eq!(accountability.actor, fixture.reviewer_a.principal);
+    assert_eq!(
+        accountability.private_reason.as_deref(),
+        Some("private accountability reason")
+    );
+    let read_audit: serde_json::Value = fixture
+        .database
+        .query_one(
+            "SELECT audit_record FROM casework_audit_outbox
+             WHERE audit_record->>'event'='casework.review_accountability_read'
+               AND audit_record->>'accountabilityEventId'=$1",
+            &[&accountability_event.to_string()],
+        )
+        .await
+        .expect("committed accountability read audit")
+        .get(0);
+    assert_eq!(
+        read_audit["actor"]["subject"],
+        fixture.supervisor.principal.subject
+    );
+    assert_eq!(read_audit["profileId"], fixture.supervisor.profile_id);
+
+    fixture
+        .database
+        .batch_execute(
+            "CREATE FUNCTION reject_accountability_read_audit() RETURNS trigger
+             LANGUAGE plpgsql AS $$
+             BEGIN
+               IF NEW.audit_record->>'event'='casework.review_accountability_read' THEN
+                 RAISE EXCEPTION 'accountability audit unavailable';
+               END IF;
+               RETURN NEW;
+             END;
+             $$;
+             CREATE TRIGGER reject_accountability_read_audit
+             BEFORE INSERT ON casework_audit_outbox
+             FOR EACH ROW EXECUTE FUNCTION reject_accountability_read_audit();",
+        )
+        .await
+        .expect("install accountability audit failure");
+    assert!(matches!(
+        service
+            .review_accountability(&fixture.supervisor, accountability_event)
+            .await,
+        Err(ReviewRuntimeError::Store(_))
+    ));
+    let committed_reads: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_audit_outbox
+             WHERE audit_record->>'event'='casework.review_accountability_read'
+               AND audit_record->>'accountabilityEventId'=$1",
+            &[&accountability_event.to_string()],
+        )
+        .await
+        .expect("count committed accountability reads")
+        .get(0);
+    assert_eq!(committed_reads, 1);
+    fixture
+        .database
+        .batch_execute(
+            "DROP TRIGGER reject_accountability_read_audit ON casework_audit_outbox;
+             DROP FUNCTION reject_accountability_read_audit();",
+        )
+        .await
+        .expect("remove accountability audit failure");
+
+    let now = Utc::now();
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_accountability
+             SET occurred_at=$2,retained_until=$3 WHERE event_id=$1",
+            &[
+                &accountability_event,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire accountability record");
+    assert!(matches!(
+        service
+            .review_accountability(&fixture.supervisor, accountability_event)
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    let reads_after_expiry: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_audit_outbox
+             WHERE audit_record->>'event'='casework.review_accountability_read'
+               AND audit_record->>'accountabilityEventId'=$1",
+            &[&accountability_event.to_string()],
+        )
+        .await
+        .expect("count accountability reads after expiry")
+        .get(0);
+    assert_eq!(reads_after_expiry, 1);
+}
+
+#[tokio::test]
+async fn review_decisions_reach_the_audit_outbox_in_the_decision_transaction() {
+    let fixture = fixture().await;
+    let project = answer_project(false);
+    project.check().expect("decision audit test project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("decision audit test service");
+    let mut answer_request = request("decision-audit", "decision-audit-ref");
+    answer_request.kind = "registry-answer".to_owned();
+    let created = service
+        .create_review_request(&fixture.producer, answer_request, "create-decision-audit")
+        .await
+        .expect("create decision audit review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-decision-audit",
+        )
+        .await
+        .expect("claim decision audit review");
+    service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            task,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Answer {
+                    outcome: "found".to_owned(),
+                    reason: Some("private decision reason".to_owned()),
+                    result: Some(json!({"correction": "accountable answer"})),
+                },
+            },
+            None,
+            "",
+            2,
+            "decide-decision-audit",
+        )
+        .await
+        .expect("decide decision audit review");
+    let accountability_event: Uuid = fixture
+        .database
+        .query_one(
+            "SELECT event_id FROM casework_review_accountability WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("decision accountability event")
+        .get(0);
+    let decision_audit: serde_json::Value = fixture
+        .database
+        .query_one(
+            "SELECT audit_record FROM casework_audit_outbox
+             WHERE audit_record->>'event'='casework.review_decided'
+               AND audit_record->>'taskId'=$1",
+            &[&task.to_string()],
+        )
+        .await
+        .expect("committed decision audit")
+        .get(0);
+    assert_eq!(
+        decision_audit["actor"]["subject"],
+        fixture.reviewer_a.principal.subject
+    );
+    assert_eq!(decision_audit["profileId"], fixture.reviewer_a.profile_id);
+    assert_eq!(decision_audit["decision"], "answer");
+    assert_eq!(
+        decision_audit["accountabilityEventId"],
+        accountability_event.to_string()
+    );
+    // The audit trail carries who decided, not what they saw: the private
+    // reason and the structured result stay in the protected accountability
+    // record only.
+    assert!(decision_audit.get("reason").is_none());
+    assert!(decision_audit.get("result").is_none());
+
+    // The decision and its audit must commit or roll back together: reject
+    // the outbox insert and prove the whole decision disappears.
+    let mut second_request = request("decision-audit-2", "decision-audit-2-ref");
+    second_request.kind = "registry-answer".to_owned();
+    let second_created = service
+        .create_review_request(&fixture.producer, second_request, "create-decision-audit-2")
+        .await
+        .expect("create second decision audit review");
+    let second_task = task_id(&fixture, second_created.accepted.request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            second_task,
+            None,
+            "",
+            1,
+            "claim-decision-audit-2",
+        )
+        .await
+        .expect("claim second decision audit review");
+    fixture
+        .database
+        .batch_execute(
+            "CREATE FUNCTION reject_decision_audit() RETURNS trigger
+             LANGUAGE plpgsql AS $$
+             BEGIN
+               IF NEW.audit_record->>'event'='casework.review_decided' THEN
+                 RAISE EXCEPTION 'decision audit unavailable';
+               END IF;
+               RETURN NEW;
+             END;
+             $$;
+             CREATE TRIGGER reject_decision_audit
+             BEFORE INSERT ON casework_audit_outbox
+             FOR EACH ROW EXECUTE FUNCTION reject_decision_audit();",
+        )
+        .await
+        .expect("install decision audit failure");
+    assert!(matches!(
+        service
+            .decide_review_task(
+                &fixture.reviewer_a,
+                second_task,
+                ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Answer {
+                        outcome: "found".to_owned(),
+                        reason: None,
+                        result: Some(json!({"correction": "second answer"})),
+                    },
+                },
+                None,
+                "",
+                2,
+                "decide-decision-audit-2",
+            )
+            .await,
+        Err(ReviewRuntimeError::Store(_))
+    ));
+    assert_eq!(
+        count_for_request(
+            &fixture,
+            "casework_review_accountability",
+            second_created.accepted.request_id
+        )
+        .await,
+        0
+    );
+    let second_decided_history: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE request_id=$1 AND kind='review_decided'",
+            &[&second_created.accepted.request_id],
+        )
+        .await
+        .expect("count rolled back decision history")
+        .get(0);
+    assert_eq!(second_decided_history, 0);
+    fixture
+        .database
+        .batch_execute(
+            "DROP TRIGGER reject_decision_audit ON casework_audit_outbox;
+             DROP FUNCTION reject_decision_audit();",
+        )
+        .await
+        .expect("remove decision audit failure");
+    service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            second_task,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Answer {
+                    outcome: "found".to_owned(),
+                    reason: None,
+                    result: Some(json!({"correction": "second answer"})),
+                },
+            },
+            None,
+            "",
+            2,
+            "decide-decision-audit-2",
+        )
+        .await
+        .expect("decide second decision audit review after recovery");
+    let second_audits: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_audit_outbox
+             WHERE audit_record->>'event'='casework.review_decided'
+               AND audit_record->>'taskId'=$1",
+            &[&second_task.to_string()],
+        )
+        .await
+        .expect("count recovered decision audits")
+        .get(0);
+    assert_eq!(second_audits, 1);
+}
+
+#[tokio::test]
+async fn review_cancellation_reaches_the_audit_outbox_in_the_cancel_transaction() {
+    let fixture = fixture().await;
+    let project = answer_project(false);
+    project.check().expect("cancel audit test project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("cancel audit test service");
+    let mut create = request("cancel-audit", "cancel-audit-ref");
+    create.kind = "registry-answer".to_owned();
+    let created = service
+        .create_review_request(&fixture.producer, create.clone(), "create-cancel-audit")
+        .await
+        .expect("create cancel audit review");
+    service
+        .cancel_review_request(
+            &fixture.producer,
+            created.accepted.request_id,
+            ReviewCancelRequest {
+                subject: create.subject,
+                reason: "private cancellation reason".to_owned(),
+            },
+            "cancel-cancel-audit",
+        )
+        .await
+        .expect("cancel audit review");
+    let cancel_audit: serde_json::Value = fixture
+        .database
+        .query_one(
+            "SELECT audit_record FROM casework_audit_outbox
+             WHERE audit_record->>'event'='casework.review_cancelled'
+               AND audit_record->>'requestId'=$1",
+            &[&created.accepted.request_id.to_string()],
+        )
+        .await
+        .expect("committed cancellation audit")
+        .get(0);
+    assert_eq!(
+        cancel_audit["actor"]["issuer"],
+        fixture.producer.principal.issuer
+    );
+    assert_eq!(
+        cancel_audit["actor"]["subject"],
+        fixture.producer.principal.subject
+    );
+    assert_eq!(cancel_audit["profileId"], fixture.producer.profile_id);
+    let result_id: Uuid = fixture
+        .database
+        .query_one(
+            "SELECT result_id FROM casework_review_results WHERE request_id=$1",
+            &[&created.accepted.request_id],
+        )
+        .await
+        .expect("cancelled result")
+        .get(0);
+    assert_eq!(cancel_audit["resultId"], result_id.to_string());
+    // The audit trail carries who cancelled, not why: the private reason
+    // stays in the review history row only.
+    assert!(cancel_audit.get("reason").is_none());
+}
+
+#[tokio::test]
+async fn review_task_ownership_transitions_reach_the_audit_outbox() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("ownership-audit", "producer-ref-ownership-audit"),
+            "create-ownership-audit",
+        )
+        .await
+        .expect("create ownership audit review");
+    let request_id = created.accepted.request_id;
+    let task = task_id(&fixture, request_id, 0).await;
+    let assigned = fixture
+        .service_v1
+        .assign_review_task(
+            &fixture.supervisor,
+            task,
+            None,
+            "",
+            1,
+            AssignmentRequest {
+                assignee: fixture.reviewer_a.principal.clone(),
+                reason: Some("nominate for the audit trail".to_owned()),
+            },
+            "assign-ownership-audit",
+        )
+        .await
+        .expect("assign ownership audit task");
+    let delegated = fixture
+        .service_v1
+        .delegate_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            assigned.revision,
+            DelegateRequest {
+                delegate: fixture.reviewer_b.principal.clone(),
+                reason: Some("hand off for the audit trail".to_owned()),
+            },
+            "delegate-ownership-audit",
+        )
+        .await
+        .expect("delegate ownership audit task");
+    let released = fixture
+        .service_v1
+        .release_review_task(
+            &fixture.reviewer_b,
+            task,
+            delegated.revision,
+            "release-ownership-audit",
+        )
+        .await
+        .expect("release ownership audit task");
+    fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            released.revision,
+            "claim-ownership-audit",
+        )
+        .await
+        .expect("claim ownership audit task");
+    for (event, history_kind, actor, target) in [
+        (
+            "casework.task_assigned",
+            "task_assigned",
+            &fixture.supervisor,
+            Some(&fixture.reviewer_a),
+        ),
+        (
+            "casework.task_delegated",
+            "task_delegated",
+            &fixture.reviewer_a,
+            Some(&fixture.reviewer_b),
+        ),
+        (
+            "casework.task_released",
+            "task_released",
+            &fixture.reviewer_b,
+            None,
+        ),
+        (
+            "casework.task_claimed",
+            "task_claimed",
+            &fixture.reviewer_a,
+            None,
+        ),
+    ] {
+        // The outbox row shares the protected history row's event id, so the
+        // external audit chain records who took or transferred responsibility
+        // even after the review history is erased at result expiry.
+        let audit: serde_json::Value = fixture
+            .database
+            .query_one(
+                "SELECT a.audit_record FROM casework_audit_outbox a
+                 JOIN casework_review_history h ON h.event_id=a.event_id
+                 WHERE a.audit_record->>'event'=$1
+                   AND h.request_id=$2 AND h.task_id=$3 AND h.kind=$4",
+                &[&event, &request_id, &task, &history_kind],
+            )
+            .await
+            .unwrap_or_else(|error| panic!("committed {event} audit: {error}"))
+            .get(0);
+        assert_eq!(audit["actor"]["issuer"], actor.principal.issuer);
+        assert_eq!(audit["actor"]["subject"], actor.principal.subject);
+        assert_eq!(audit["profileId"], actor.profile_id);
+        assert_eq!(audit["requestId"], request_id.to_string());
+        assert_eq!(audit["taskId"], task.to_string());
+        match target {
+            Some(target) => {
+                assert_eq!(audit["target"]["issuer"], target.principal.issuer);
+                assert_eq!(audit["target"]["subject"], target.principal.subject);
+            }
+            None => assert!(audit.get("target").is_none()),
+        }
+        // The audit trail carries who took or transferred responsibility,
+        // not the private reason recorded beside it.
+        assert!(audit.get("reason").is_none());
+    }
+}
+
+#[tokio::test]
+async fn review_reads_check_access_before_disclosing_retention_expiry() {
+    let fixture = fixture().await;
+    let project = answer_project(false);
+    project.check().expect("retention ordering test project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("retention ordering test service");
+    let mut answer_request = request("retention-ordering", "retention-ordering-ref");
+    answer_request.kind = "registry-answer".to_owned();
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            answer_request,
+            "create-retention-ordering",
+        )
+        .await
+        .expect("create retention ordering review");
+    let request_id = created.accepted.request_id;
+    let task = task_id(&fixture, request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-retention-ordering",
+        )
+        .await
+        .expect("claim retention ordering review");
+    service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            task,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Answer {
+                    outcome: "found".to_owned(),
+                    reason: Some("private settled reason".to_owned()),
+                    result: Some(json!({"correction": "settled answer"})),
+                },
+            },
+            None,
+            "",
+            2,
+            "decide-retention-ordering",
+        )
+        .await
+        .expect("settle retention ordering review");
+    let now = Utc::now();
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests
+             SET terminal_at=$2,result_available_until=$3
+             WHERE request_id=$1",
+            &[
+                &request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("cross the retention boundary");
+
+    // An authenticated caller outside the review (a supervisor whose profile
+    // decides nothing in this kind) must be refused on access grounds alone:
+    // the retention boundary of a request they cannot see is not theirs to
+    // learn.
+    assert!(matches!(
+        service
+            .review_history(&fixture.supervisor, request_id, None, "", None, 10)
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    assert!(matches!(
+        service
+            .review_clocks(&fixture.supervisor, request_id, None, "")
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    // Entitled readers keep learning the retention state itself.
+    assert!(matches!(
+        service
+            .review_history(&fixture.reviewer_a, request_id, None, "", None, 10)
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    assert!(matches!(
+        service
+            .review_clocks(&fixture.reviewer_a, request_id, None, "")
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    assert!(matches!(
+        service
+            .review_history(
+                &fixture.producer,
+                request_id,
+                None,
+                "producer-token",
+                None,
+                10
+            )
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+}
+
+#[tokio::test]
+async fn standalone_structured_answers_support_polling_and_completion_modes() {
+    let fixture = fixture().await;
+    for (completion, subject) in [(false, "answer-poll"), (true, "answer-completion")] {
+        let project = answer_project(completion);
+        project.check().expect("answer project");
+        let service = CaseworkService::new(
+            fixture.store.clone(),
+            project,
+            Vec::<Arc<dyn SourceAdapter>>::new(),
+        )
+        .expect("answer service");
+        let mut answer_request = request(subject, &format!("producer-ref-{subject}"));
+        answer_request.kind = "registry-answer".to_owned();
+        let created = service
+            .create_review_request(
+                &fixture.producer,
+                answer_request,
+                &format!("create-{subject}"),
+            )
+            .await
+            .expect("create standalone answer");
+        let task = task_id(&fixture, created.accepted.request_id, 0).await;
+        service
+            .claim_review_task(
+                &fixture.reviewer_a,
+                task,
+                None,
+                "",
+                1,
+                &format!("claim-{subject}"),
+            )
+            .await
+            .expect("claim standalone answer");
+        service
+            .decide_review_task(
+                &fixture.reviewer_a,
+                task,
+                ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Answer {
+                        outcome: "found".to_owned(),
+                        reason: None,
+                        result: Some(json!({"correction":format!("answer for {subject}")})),
+                    },
+                },
+                None,
+                "",
+                2,
+                &format!("answer-{subject}"),
+            )
+            .await
+            .expect("settle standalone answer");
+        let result = service
+            .review_result(&fixture.producer, created.accepted.request_id)
+            .await
+            .expect("poll standalone answer");
+        assert!(matches!(
+            result,
+            ReviewResultRead::Available(result)
+                if result.status == ReviewResultStatus::Answered
+                    && result.result == Some(json!({"correction":format!("answer for {subject}")}))
+        ));
+        assert_terminal_atomic(&fixture, created.accepted.request_id, i64::from(completion)).await;
+    }
+}
+
+#[tokio::test]
+async fn rejected_cancelled_and_superseded_results_commit_atomically() {
+    let fixture = fixture().await;
+
+    let rejected = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("terminal-rejected", "terminal-rejected"),
+            "create-terminal-rejected",
+        )
+        .await
+        .expect("create rejected review");
+    let rejected_task = task_id(&fixture, rejected.accepted.request_id, 0).await;
+    fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            rejected_task,
+            None,
+            "",
+            1,
+            "claim-terminal-rejected",
+        )
+        .await
+        .expect("claim rejected review");
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_a,
+            rejected_task,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Reject {
+                    outcome: "incorrect".to_owned(),
+                    reason: Some("Incorrect record".to_owned()),
+                    result: Some(json!({"correction":"Replace the record"})),
+                },
+            },
+            None,
+            "",
+            2,
+            "reject-terminal",
+        )
+        .await
+        .expect("settle rejected review");
+    assert_terminal_atomic(&fixture, rejected.accepted.request_id, 1).await;
+
+    let cancelled_request = request("terminal-cancelled", "terminal-cancelled");
+    let cancelled = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            cancelled_request.clone(),
+            "create-terminal-cancelled",
+        )
+        .await
+        .expect("create cancelled review");
+    fixture
+        .service_v1
+        .cancel_review_request(
+            &fixture.producer,
+            cancelled.accepted.request_id,
+            registry_casework_core::ReviewCancelRequest {
+                subject: cancelled_request.subject,
+                reason: "Requester withdrew".to_owned(),
+            },
+            "cancel-terminal",
+        )
+        .await
+        .expect("cancel review");
+    assert_terminal_atomic(&fixture, cancelled.accepted.request_id, 1).await;
+
+    let first_request = request("terminal-superseded", "terminal-superseded-v1");
+    let first = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            first_request,
+            "create-terminal-superseded-v1",
+        )
+        .await
+        .expect("create first supersession round");
+    let mut second_request = request("terminal-superseded", "terminal-superseded-v2");
+    second_request.subject.version = "2".to_owned();
+    second_request.subject.digest = ContentDigest::for_bytes(b"terminal-superseded-v2");
+    fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            second_request,
+            "create-terminal-superseded-v2",
+        )
+        .await
+        .expect("create superseding round");
+    let first_result = fixture
+        .service_v1
+        .review_result(&fixture.producer, first.accepted.request_id)
+        .await
+        .expect("read superseded result");
+    assert!(matches!(
+        first_result,
+        ReviewResultRead::Available(result) if result.status == ReviewResultStatus::Superseded
+    ));
+    assert_terminal_atomic(&fixture, first.accepted.request_id, 1).await;
+}
+
+#[tokio::test]
+async fn concurrent_round_creation_and_duplicate_vote_leave_one_current_state() {
+    let fixture = fixture().await;
+    let first_service = fixture.service_v1.clone();
+    let second_service = fixture.service_v1.clone();
+    let producer_a = fixture.producer.clone();
+    let producer_b = fixture.producer.clone();
+    let first_request = request("concurrent-round", "concurrent-round-v1");
+    let mut second_request = request("concurrent-round", "concurrent-round-v2");
+    second_request.subject.version = "2".to_owned();
+    second_request.subject.digest = ContentDigest::for_bytes(b"concurrent-round-v2");
+    let (first, second) = tokio::join!(
+        first_service.create_review_request(
+            &producer_a,
+            first_request,
+            "create-concurrent-round-v1",
+        ),
+        second_service.create_review_request(
+            &producer_b,
+            second_request,
+            "create-concurrent-round-v2",
+        )
+    );
+    let first = first.expect("create first concurrent round");
+    let second = second.expect("create second concurrent round");
+    assert_ne!(first.accepted.request_id, second.accepted.request_id);
+    let lifecycles = fixture
+        .database
+        .query(
+            "SELECT lifecycle,count(*)
+             FROM casework_review_requests
+             WHERE subject_id='concurrent-round'
+             GROUP BY lifecycle ORDER BY lifecycle",
+            &[],
+        )
+        .await
+        .expect("read serialized concurrent rounds");
+    assert_eq!(lifecycles.len(), 2);
+    assert!(lifecycles
+        .iter()
+        .any(|row| row.get::<_, String>(0) == "reviewing" && row.get::<_, i64>(1) == 1));
+    assert!(lifecycles
+        .iter()
+        .any(|row| row.get::<_, String>(0) == "superseded" && row.get::<_, i64>(1) == 1));
+
+    let answer_service = CaseworkService::new(
+        fixture.store.clone(),
+        answer_project(false),
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("answer service");
+    let mut answer_request = request("duplicate-vote", "duplicate-vote");
+    answer_request.kind = "registry-answer".to_owned();
+    let answer = answer_service
+        .create_review_request(&fixture.producer, answer_request, "create-duplicate-vote")
+        .await
+        .expect("create duplicate vote review");
+    let task = task_id(&fixture, answer.accepted.request_id, 0).await;
+    answer_service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-duplicate-vote",
+        )
+        .await
+        .expect("claim duplicate vote review");
+    let first_service = answer_service.clone();
+    let second_service = answer_service.clone();
+    let reviewer_a = fixture.reviewer_a.clone();
+    let reviewer_b = fixture.reviewer_a.clone();
+    let decision = || ReviewTaskDecisionRequest {
+        decision: ReviewerDecisionKind::Answer {
+            outcome: "found".to_owned(),
+            reason: None,
+            result: Some(json!({"correction":"single terminal answer"})),
+        },
+    };
+    let (first_vote, second_vote) = tokio::join!(
+        first_service.decide_review_task(
+            &reviewer_a,
+            task,
+            decision(),
+            None,
+            "",
+            2,
+            "duplicate-vote-a",
+        ),
+        second_service.decide_review_task(
+            &reviewer_b,
+            task,
+            decision(),
+            None,
+            "",
+            2,
+            "duplicate-vote-b",
+        )
+    );
+    assert_eq!(
+        usize::from(first_vote.is_ok()) + usize::from(second_vote.is_ok()),
+        1
+    );
+    let failure = first_vote
+        .err()
+        .or_else(|| second_vote.err())
+        .expect("one refusal");
+    assert!(matches!(
+        failure,
+        ReviewRuntimeError::NotFound
+            | ReviewRuntimeError::RevisionConflict
+            | ReviewRuntimeError::TaskNotHeld
+    ));
+    assert_eq!(
+        count_for_request(
+            &fixture,
+            "casework_review_decisions",
+            answer.accepted.request_id,
+        )
+        .await,
+        1
+    );
+    assert_terminal_atomic(&fixture, answer.accepted.request_id, 0).await;
+}
+
+#[tokio::test]
+async fn cancellation_and_final_decision_commit_exactly_one_terminal_result() {
+    let fixture = fixture().await;
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        answer_project(false),
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("answer service");
+    let mut create = request("cancel-decision-race", "cancel-decision-race");
+    create.kind = "registry-answer".to_owned();
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            create.clone(),
+            "create-cancel-decision-race",
+        )
+        .await
+        .expect("create cancel-decision race");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-cancel-decision-race",
+        )
+        .await
+        .expect("claim cancel-decision race");
+
+    let cancelling = service.clone();
+    let deciding = service.clone();
+    let producer = fixture.producer.clone();
+    let reviewer = fixture.reviewer_a.clone();
+    let request_id = created.accepted.request_id;
+    let (cancelled, decided) = tokio::join!(
+        cancelling.cancel_review_request(
+            &producer,
+            request_id,
+            ReviewCancelRequest {
+                subject: create.subject,
+                reason: "Requester withdrew during decision".to_owned(),
+            },
+            "cancel-decision-race",
+        ),
+        deciding.decide_review_task(
+            &reviewer,
+            task,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Answer {
+                    outcome: "found".to_owned(),
+                    reason: None,
+                    result: Some(json!({"correction":"atomic winner"})),
+                },
+            },
+            None,
+            "",
+            2,
+            "decide-cancel-race",
+        )
+    );
+
+    assert_eq!(
+        usize::from(cancelled.is_ok()) + usize::from(decided.is_ok()),
+        1,
+        "request lock must serialize cancellation and the final decision"
+    );
+    let result = service
+        .review_result(&fixture.producer, request_id)
+        .await
+        .expect("read atomic terminal result");
+    assert!(matches!(
+        result,
+        ReviewResultRead::Available(result)
+            if (cancelled.is_ok() && result.status == ReviewResultStatus::Cancelled)
+                || (decided.is_ok() && result.status == ReviewResultStatus::Answered)
+    ));
+    assert_eq!(
+        count_for_request(&fixture, "casework_review_decisions", request_id).await,
+        i64::from(decided.is_ok())
+    );
+    assert_terminal_atomic(&fixture, request_id, 0).await;
+}
+
+#[tokio::test]
+async fn prior_stage_identity_and_invalid_structured_result_emit_nothing() {
+    let fixture = fixture().await;
+    let first = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("record-2", "producer-ref-2"),
+            "create-record-2",
+        )
+        .await
+        .expect("create identity review");
+    let primary = task_id(&fixture, first.accepted.request_id, 0).await;
+    fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            primary,
+            None,
+            "",
+            1,
+            "claim-identity-primary",
+        )
+        .await
+        .expect("claim primary");
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_a,
+            primary,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Approve,
+            },
+            None,
+            "",
+            2,
+            "decide-identity-primary",
+        )
+        .await
+        .expect("approve primary");
+    let secondary = task_id(&fixture, first.accepted.request_id, 1).await;
+    assert!(matches!(
+        fixture
+            .service_v1
+            .claim_review_task(
+                &fixture.reviewer_a,
+                secondary,
+                None,
+                "",
+                1,
+                "claim-excluded-secondary",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden)
+    ));
+    assert_eq!(
+        count_for_request(
+            &fixture,
+            "casework_review_terminal_events",
+            first.accepted.request_id,
+        )
+        .await,
+        0
+    );
+
+    let correction = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("record-3", "producer-ref-3"),
+            "create-record-3",
+        )
+        .await
+        .expect("create correction review");
+    let correction_task = task_id(&fixture, correction.accepted.request_id, 0).await;
+    fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_b,
+            correction_task,
+            None,
+            "",
+            1,
+            "claim-correction",
+        )
+        .await
+        .expect("claim correction review");
+    assert!(matches!(
+        fixture
+            .service_v1
+            .decide_review_task(
+                &fixture.reviewer_b,
+                correction_task,
+                ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Reject {
+                        outcome: "incorrect".to_owned(),
+                        reason: Some("The record needs a correction".to_owned()),
+                        result: None,
+                    },
+                },
+                None,
+                "",
+                2,
+                "invalid-correction",
+            )
+            .await,
+        Err(ReviewRuntimeError::Validation(error))
+            if error.path == "$.result"
+                && error.reason == ReviewValidationReason::ResultRequired
+    ));
+    for table in [
+        "casework_review_decisions",
+        "casework_review_results",
+        "casework_review_terminal_events",
+        "casework_review_completion_outbox",
+    ] {
+        assert_eq!(
+            count_for_request(&fixture, table, correction.accepted.request_id).await,
+            0,
+            "{table} must remain empty after a rejected transaction"
+        );
+    }
+}
+
+#[tokio::test]
+async fn reclaiming_a_held_task_advances_the_revision_like_the_client_contract_requires() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("record-reclaim", "producer-ref-reclaim"),
+            "create-reclaim",
+        )
+        .await
+        .expect("create reclaim review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    let claimed = fixture
+        .service_v1
+        .claim_review_task(&fixture.reviewer_a, task, None, "", 1, "reclaim-first")
+        .await
+        .expect("claim review task");
+    assert_eq!(claimed.revision, 2);
+    // A retried claim under a fresh idempotency key (a client that lost its
+    // first response) is still a real mutation to the maintained client,
+    // which accepts a claim only when the revision advances by exactly one,
+    // so the server must advance it too rather than return the unchanged
+    // task as success.
+    let reclaimed = fixture
+        .service_v1
+        .claim_review_task(&fixture.reviewer_a, task, None, "", 2, "reclaim-second")
+        .await
+        .expect("re-claim by the holder stays a successful transition");
+    assert_eq!(reclaimed.revision, claimed.revision + 1);
+    assert!(matches!(reclaimed.state, ReviewerTaskState::Held { .. }));
+    let claim_history: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE request_id=$1 AND kind='task_claimed'",
+            &[&created.accepted.request_id],
+        )
+        .await
+        .expect("count claim history")
+        .get(0);
+    assert_eq!(claim_history, 2);
+}
+
+#[tokio::test]
+async fn claiming_a_blocked_nomination_clears_the_failed_assigner() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request(
+                "record-blocked-nomination",
+                "producer-ref-blocked-nomination",
+            ),
+            "create-blocked-nomination",
+        )
+        .await
+        .expect("create blocked nomination review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    // The nominated reviewer is absent and the declared cover is not a member
+    // of the deciding queue, so the nomination leaves the task open under the
+    // supervisor's name instead of handing it over.
+    let absence_id = Uuid::new_v4();
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_absences(
+                absence_id,person_issuer,person_subject,starts_at,ends_at,
+                cover_issuer,cover_subject,revision)
+             VALUES($1,$2,$3,$4,$5,$6,$7,1)",
+            &[
+                &absence_id,
+                &fixture.reviewer_b.principal.issuer,
+                &fixture.reviewer_b.principal.subject,
+                &(Utc::now() - TimeDelta::hours(1)),
+                &(Utc::now() + TimeDelta::hours(1)),
+                &"https://issuer.test",
+                &"initiator",
+            ],
+        )
+        .await
+        .expect("record absence without eligible cover");
+    let assigned = fixture
+        .service_v1
+        .assign_review_task(
+            &fixture.supervisor,
+            task,
+            None,
+            "",
+            1,
+            AssignmentRequest {
+                assignee: fixture.reviewer_b.principal.clone(),
+                reason: Some("nominate absent reviewer".to_owned()),
+            },
+            "assign-absent-reviewer",
+        )
+        .await
+        .expect("nominate through the uncovered absence");
+    assert!(matches!(assigned.state, ReviewerTaskState::Open));
+    let blocked = fixture
+        .database
+        .query_one(
+            "SELECT assigned_by_issuer,assigned_by_subject
+             FROM casework_review_tasks WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("read blocked nomination assigner");
+    assert_eq!(
+        blocked.get::<_, Option<String>>(0).as_deref(),
+        Some(fixture.supervisor.principal.issuer.as_str())
+    );
+    // A later self-claim establishes the claimant as the assignment owner, so
+    // the supervisor who made the failed nomination must not stay on the row
+    // as the assigner of a claim they did not make.
+    fixture
+        .service_v1
+        .claim_review_task(&fixture.reviewer_a, task, None, "", 2, "claim-blocked")
+        .await
+        .expect("claim the unblocked task");
+    let claimed = fixture
+        .database
+        .query_one(
+            "SELECT assigned_by_issuer,assigned_by_subject
+             FROM casework_review_tasks WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("read claimed task assigner");
+    assert!(claimed.get::<_, Option<String>>(0).is_none());
+    assert!(claimed.get::<_, Option<String>>(1).is_none());
+}
+
+#[tokio::test]
+async fn claim_and_decide_require_current_exact_queue_membership() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("record-membership", "producer-ref-membership"),
+            "create-membership",
+        )
+        .await
+        .expect("create membership review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    let same_profile_nonmember = actor("not-a-member", CaseworkRole::Staff, "staff");
+    assert!(matches!(
+        fixture
+            .service_v1
+            .claim_review_task(
+                &same_profile_nonmember,
+                task,
+                None,
+                "",
+                1,
+                "nonmember-claim",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden)
+    ));
+
+    let assigned = fixture
+        .service_v1
+        .assign_review_task(
+            &fixture.supervisor,
+            task,
+            None,
+            "",
+            1,
+            AssignmentRequest {
+                assignee: fixture.reviewer_a.principal.clone(),
+                reason: Some("current member".to_owned()),
+            },
+            "membership-assignment",
+        )
+        .await
+        .expect("assign current member");
+    let delegated = fixture
+        .service_v1
+        .delegate_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            assigned.revision,
+            DelegateRequest {
+                delegate: fixture.reviewer_b.principal.clone(),
+                reason: Some("membership handoff".to_owned()),
+            },
+            "membership-delegation",
+        )
+        .await
+        .expect("delegate to current member");
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_memberships
+             WHERE team_id='review-team' AND issuer=$1 AND subject=$2 AND membership_kind='staff'",
+            &[
+                &fixture.reviewer_b.principal.issuer,
+                &fixture.reviewer_b.principal.subject,
+            ],
+        )
+        .await
+        .expect("remove delegated holder membership");
+    assert!(matches!(
+        fixture
+            .service_v1
+            .decide_review_task(
+                &fixture.reviewer_b,
+                task,
+                ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Approve,
+                },
+                None,
+                "",
+                delegated.revision,
+                "removed-holder-decision",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden)
+    ));
+    assert_eq!(
+        count_for_request(
+            &fixture,
+            "casework_review_decisions",
+            created.accepted.request_id,
+        )
+        .await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn delegation_requires_the_selected_profile_in_pinned_deciding_profiles() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request(
+                "record-delegation-profile",
+                "producer-ref-delegation-profile",
+            ),
+            "create-delegation-profile",
+        )
+        .await
+        .expect("create delegation profile review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    let claimed = fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-delegation-profile",
+        )
+        .await
+        .expect("claim delegation profile task");
+    let ineligible_selected_profile = ActorContext {
+        principal: fixture.reviewer_a.principal.clone(),
+        profile_id: "supervisor".to_owned(),
+        role: CaseworkRole::Supervisor,
+    };
+
+    assert!(matches!(
+        fixture
+            .service_v1
+            .delegate_review_task(
+                &ineligible_selected_profile,
+                task,
+                None,
+                "",
+                claimed.revision,
+                DelegateRequest {
+                    delegate: fixture.reviewer_b.principal.clone(),
+                    reason: Some("wrong selected profile".to_owned()),
+                },
+                "delegate-ineligible-profile",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden)
+    ));
+    let unchanged = fixture
+        .service_v1
+        .review_task(&fixture.reviewer_a, task, None, "")
+        .await
+        .expect("read unchanged held task");
+    assert_eq!(unchanged.revision, claimed.revision);
+    assert!(matches!(
+        unchanged.state,
+        ReviewerTaskState::Held { holder } if holder == fixture.reviewer_a.principal
+    ));
+    let delegation_events: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE request_id=$1 AND kind='task_delegated'",
+            &[&created.accepted.request_id],
+        )
+        .await
+        .expect("count refused delegation events")
+        .get(0);
+    assert_eq!(delegation_events, 0);
+
+    let delegated = fixture
+        .service_v1
+        .delegate_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            claimed.revision,
+            DelegateRequest {
+                delegate: fixture.reviewer_b.principal.clone(),
+                reason: Some("eligible selected profile".to_owned()),
+            },
+            "delegate-eligible-profile",
+        )
+        .await
+        .expect("delegate through eligible selected profile");
+    assert!(matches!(
+        delegated.state,
+        ReviewerTaskState::Held { ref holder } if holder == &fixture.reviewer_b.principal
+    ));
+}
+
+#[tokio::test]
+async fn delegation_requires_membership_matching_the_selected_role_in_a_mixed_stage() {
+    let fixture = fixture().await;
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
+             VALUES('review-team',$1,$2,'supervisor')",
+            &[
+                &fixture.reviewer_a.principal.issuer,
+                &fixture.reviewer_a.principal.subject,
+            ],
+        )
+        .await
+        .expect("give the holder a second directory role");
+    let mut mixed_project = project("mixed-delegation-membership");
+    mixed_project.review_kinds[0].stages[0]
+        .deciding_profiles
+        .push("supervisor".to_owned());
+    mixed_project.check().expect("mixed-profile review project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        mixed_project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("mixed-profile review service");
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            request(
+                "record-delegation-membership",
+                "producer-ref-delegation-membership",
+            ),
+            "create-delegation-membership",
+        )
+        .await
+        .expect("create mixed-profile review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    let claimed = service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-delegation-membership",
+        )
+        .await
+        .expect("claim through staff profile and membership");
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_memberships
+             WHERE team_id='review-team' AND issuer=$1 AND subject=$2
+               AND membership_kind='staff'",
+            &[
+                &fixture.reviewer_a.principal.issuer,
+                &fixture.reviewer_a.principal.subject,
+            ],
+        )
+        .await
+        .expect("remove only the holder's selected-role membership");
+
+    assert!(matches!(
+        service
+            .delegate_review_task(
+                &fixture.reviewer_a,
+                task,
+                None,
+                "",
+                claimed.revision,
+                DelegateRequest {
+                    delegate: fixture.reviewer_b.principal.clone(),
+                    reason: Some("cross-role directory fallback".to_owned()),
+                },
+                "delegate-cross-role-membership",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+    ));
+    let persisted = fixture
+        .database
+        .query_one(
+            "SELECT state,revision,holder_issuer,holder_subject
+             FROM casework_review_tasks WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("read task after refused cross-role delegation");
+    assert_eq!(persisted.get::<_, String>(0), "claimed");
+    assert_eq!(persisted.get::<_, i64>(1), claimed.revision);
+    assert_eq!(
+        persisted.get::<_, Option<String>>(2).as_deref(),
+        Some(fixture.reviewer_a.principal.issuer.as_str())
+    );
+    assert_eq!(
+        persisted.get::<_, Option<String>>(3).as_deref(),
+        Some(fixture.reviewer_a.principal.subject.as_str())
+    );
+    let delegation_events: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE request_id=$1 AND kind='task_delegated'",
+            &[&created.accepted.request_id],
+        )
+        .await
+        .expect("count refused cross-role delegation events")
+        .get(0);
+    assert_eq!(delegation_events, 0);
+
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
+             VALUES('review-team',$1,$2,'staff')",
+            &[
+                &fixture.reviewer_a.principal.issuer,
+                &fixture.reviewer_a.principal.subject,
+            ],
+        )
+        .await
+        .expect("restore the holder's selected-role membership");
+    let delegated = service
+        .delegate_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            claimed.revision,
+            DelegateRequest {
+                delegate: fixture.reviewer_b.principal.clone(),
+                reason: Some("exact-role membership restored".to_owned()),
+            },
+            "delegate-exact-role-membership",
+        )
+        .await
+        .expect("delegate with exact selected-role membership");
+    assert!(matches!(
+        delegated.state,
+        ReviewerTaskState::Held { ref holder } if holder == &fixture.reviewer_b.principal
+    ));
+
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    assert!(matches!(
+        service
+            .delegate_review_task(
+                &fixture.reviewer_a,
+                task,
+                None,
+                "",
+                claimed.revision,
+                DelegateRequest {
+                    delegate: fixture.reviewer_b.principal.clone(),
+                    reason: Some("exact-role membership restored".to_owned()),
+                },
+                "delegate-exact-role-membership",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+    ));
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+    assert_eq!(
+        service
+            .delegate_review_task(
+                &fixture.reviewer_a,
+                task,
+                None,
+                "",
+                claimed.revision,
+                DelegateRequest {
+                    delegate: fixture.reviewer_b.principal.clone(),
+                    reason: Some("exact-role membership restored".to_owned()),
+                },
+                "delegate-exact-role-membership",
+            )
+            .await
+            .expect("replay delegation through restored exact-role authority"),
+        delegated
+    );
+}
+
+#[tokio::test]
+async fn assignment_requires_a_selected_supervisor_profile_despite_directory_membership() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request(
+                "record-assignment-profile",
+                "producer-ref-assignment-profile",
+            ),
+            "create-assignment-profile",
+        )
+        .await
+        .expect("create assignment profile review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    let staff_scoped_supervisor_principal = ActorContext {
+        principal: fixture.supervisor.principal.clone(),
+        profile_id: "staff".to_owned(),
+        role: CaseworkRole::Staff,
+    };
+
+    assert!(matches!(
+        fixture
+            .service_v1
+            .assign_review_task(
+                &staff_scoped_supervisor_principal,
+                task,
+                None,
+                "",
+                1,
+                AssignmentRequest {
+                    assignee: fixture.reviewer_a.principal.clone(),
+                    reason: Some("staff-scoped assignment".to_owned()),
+                },
+                "assign-staff-scoped-supervisor",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden)
+    ));
+    let unchanged = fixture
+        .service_v1
+        .review_task(&fixture.reviewer_a, task, None, "")
+        .await
+        .expect("read unchanged open task");
+    assert_eq!(unchanged.revision, 1);
+    assert_eq!(unchanged.state, ReviewerTaskState::Open);
+    let assignment_events: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE request_id=$1 AND kind='task_assigned'",
+            &[&created.accepted.request_id],
+        )
+        .await
+        .expect("count refused assignment events")
+        .get(0);
+    assert_eq!(assignment_events, 0);
+
+    let assigned = fixture
+        .service_v1
+        .assign_review_task(
+            &fixture.supervisor,
+            task,
+            None,
+            "",
+            1,
+            AssignmentRequest {
+                assignee: fixture.reviewer_a.principal.clone(),
+                reason: Some("supervisor-scoped assignment".to_owned()),
+            },
+            "assign-supervisor-scoped",
+        )
+        .await
+        .expect("assign through selected supervisor profile");
+    assert!(matches!(
+        assigned.state,
+        ReviewerTaskState::Held { ref holder } if holder == &fixture.reviewer_a.principal
+    ));
+
+    set_review_membership(&fixture, &fixture.supervisor, "supervisor", false).await;
+    assert!(matches!(
+        fixture
+            .service_v1
+            .assign_review_task(
+                &fixture.supervisor,
+                task,
+                None,
+                "",
+                1,
+                AssignmentRequest {
+                    assignee: fixture.reviewer_a.principal.clone(),
+                    reason: Some("supervisor-scoped assignment".to_owned()),
+                },
+                "assign-supervisor-scoped",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+    ));
+    set_review_membership(&fixture, &fixture.supervisor, "supervisor", true).await;
+    assert_eq!(
+        fixture
+            .service_v1
+            .assign_review_task(
+                &fixture.supervisor,
+                task,
+                None,
+                "",
+                1,
+                AssignmentRequest {
+                    assignee: fixture.reviewer_a.principal.clone(),
+                    reason: Some("supervisor-scoped assignment".to_owned()),
+                },
+                "assign-supervisor-scoped",
+            )
+            .await
+            .expect("replay assignment through restored supervisor authority"),
+        assigned
+    );
+}
+
+#[tokio::test]
+async fn reviewer_mutation_replays_require_current_exact_role_authority() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("record-reviewer-replay", "producer-ref-reviewer-replay"),
+            "create-reviewer-replay",
+        )
+        .await
+        .expect("create reviewer replay review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    let claimed = fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-reviewer-replay",
+        )
+        .await
+        .expect("claim reviewer replay task");
+    let claimed_history = fixture
+        .database
+        .query_one(
+            "SELECT actor_ref,detail FROM casework_review_history
+             WHERE request_id=$1 AND task_id=$2 AND kind='task_claimed'",
+            &[&created.accepted.request_id, &task],
+        )
+        .await
+        .expect("claimed holder transition history");
+    let claimed_actor_ref = claimed_history.get::<_, String>(0);
+    let claimed_detail = claimed_history.get::<_, serde_json::Value>(1);
+    assert!(claimed_actor_ref.starts_with("actor_"));
+    assert!(!claimed_actor_ref.contains(&fixture.reviewer_a.principal.subject));
+    assert_eq!(claimed_detail["assignmentKind"], "claim");
+    assert_eq!(claimed_detail["targetRef"], claimed_actor_ref);
+    assert_eq!(claimed_detail["staffingBlocked"], false);
+
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    assert!(matches!(
+        fixture
+            .service_v1
+            .claim_review_task(
+                &fixture.reviewer_a,
+                task,
+                None,
+                "",
+                1,
+                "claim-reviewer-replay",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+    ));
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+    assert_eq!(
+        fixture
+            .service_v1
+            .claim_review_task(
+                &fixture.reviewer_a,
+                task,
+                None,
+                "",
+                1,
+                "claim-reviewer-replay",
+            )
+            .await
+            .expect("replay claim through restored staff authority"),
+        claimed
+    );
+    let claim_history_count = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE request_id=$1 AND task_id=$2 AND kind='task_claimed'",
+            &[&created.accepted.request_id, &task],
+        )
+        .await
+        .expect("count replayed claim history")
+        .get::<_, i64>(0);
+    assert_eq!(claim_history_count, 1);
+
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_tasks
+             SET assigned_by_issuer='https://issuer.test',assigned_by_subject='supervisor',
+                 assignment_absence_ids=$2 WHERE task_id=$1",
+            &[&task, &vec![Uuid::new_v4()]],
+        )
+        .await
+        .expect("seed assignment metadata");
+    let released = fixture
+        .service_v1
+        .release_review_task(
+            &fixture.reviewer_a,
+            task,
+            claimed.revision,
+            "release-reviewer-replay",
+        )
+        .await
+        .expect("release reviewer replay task");
+    let cleared_assignment = fixture
+        .database
+        .query_one(
+            "SELECT assigned_by_issuer,assigned_by_subject,assignment_absence_ids
+             FROM casework_review_tasks WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("inspect cleared assignment metadata");
+    assert!(cleared_assignment.get::<_, Option<String>>(0).is_none());
+    assert!(cleared_assignment.get::<_, Option<String>>(1).is_none());
+    assert!(cleared_assignment.get::<_, Vec<Uuid>>(2).is_empty());
+    let released_history = fixture
+        .database
+        .query_one(
+            "SELECT actor_ref,detail FROM casework_review_history
+             WHERE request_id=$1 AND task_id=$2 AND kind='task_released'",
+            &[&created.accepted.request_id, &task],
+        )
+        .await
+        .expect("released holder transition history");
+    let released_actor_ref = released_history.get::<_, String>(0);
+    let released_detail = released_history.get::<_, serde_json::Value>(1);
+    assert_eq!(released_actor_ref, claimed_actor_ref);
+    assert_eq!(released_detail["assignmentKind"], "release");
+    assert_eq!(released_detail["previousHolderRef"], released_actor_ref);
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    assert!(matches!(
+        fixture
+            .service_v1
+            .release_review_task(
+                &fixture.reviewer_a,
+                task,
+                claimed.revision,
+                "release-reviewer-replay",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+    ));
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+    assert_eq!(
+        fixture
+            .service_v1
+            .release_review_task(
+                &fixture.reviewer_a,
+                task,
+                claimed.revision,
+                "release-reviewer-replay",
+            )
+            .await
+            .expect("replay release through restored staff authority"),
+        released
+    );
+    let release_history_count = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE request_id=$1 AND task_id=$2 AND kind='task_released'",
+            &[&created.accepted.request_id, &task],
+        )
+        .await
+        .expect("count replayed release history")
+        .get::<_, i64>(0);
+    assert_eq!(release_history_count, 1);
+    let history = fixture
+        .service_v1
+        .review_history(
+            &fixture.reviewer_a,
+            created.accepted.request_id,
+            None,
+            "",
+            None,
+            100,
+        )
+        .await
+        .expect("reviewer holder transition history");
+    let claimed_entry = history
+        .items
+        .iter()
+        .find(|entry| entry.kind == "task_claimed")
+        .expect("claimed transition is readable");
+    let released_entry = history
+        .items
+        .iter()
+        .find(|entry| entry.kind == "task_released")
+        .expect("released transition is readable");
+    assert_eq!(
+        claimed_entry.actor_ref.as_deref(),
+        Some(claimed_actor_ref.as_str())
+    );
+    assert_eq!(
+        released_entry.actor_ref.as_deref(),
+        Some(claimed_actor_ref.as_str())
+    );
+    let holder_history_json = serde_json::to_string(&[claimed_entry, released_entry])
+        .expect("holder transition history JSON");
+    assert!(!holder_history_json.contains(&fixture.reviewer_a.principal.issuer));
+    assert!(!holder_history_json.contains(&fixture.reviewer_a.principal.subject));
+
+    let answer_service = CaseworkService::new(
+        fixture.store.clone(),
+        answer_project(false),
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("answer replay service");
+    let mut answer_request = request("record-decision-replay", "producer-ref-decision-replay");
+    answer_request.kind = "registry-answer".to_owned();
+    let answer = answer_service
+        .create_review_request(&fixture.producer, answer_request, "create-decision-replay")
+        .await
+        .expect("create decision replay review");
+    let answer_task = task_id(&fixture, answer.accepted.request_id, 0).await;
+    answer_service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            answer_task,
+            None,
+            "",
+            1,
+            "claim-decision-replay",
+        )
+        .await
+        .expect("claim decision replay task");
+    let decision = || ReviewTaskDecisionRequest {
+        decision: ReviewerDecisionKind::Answer {
+            outcome: "found".to_owned(),
+            reason: Some("private replay reason".to_owned()),
+            result: Some(json!({"correction": "protected replay result"})),
+        },
+    };
+    let decided = answer_service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            answer_task,
+            decision(),
+            None,
+            "",
+            2,
+            "decide-reviewer-replay",
+        )
+        .await
+        .expect("settle decision replay review");
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    assert!(matches!(
+        answer_service
+            .decide_review_task(
+                &fixture.reviewer_a,
+                answer_task,
+                decision(),
+                None,
+                "",
+                2,
+                "decide-reviewer-replay",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+    ));
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+    assert_eq!(
+        answer_service
+            .decide_review_task(
+                &fixture.reviewer_a,
+                answer_task,
+                decision(),
+                None,
+                "",
+                2,
+                "decide-reviewer-replay",
+            )
+            .await
+            .expect("replay terminal decision through restored staff authority"),
+        decided
+    );
+}
+
+#[tokio::test]
+async fn assignment_and_delegation_replay_use_the_addressed_pinned_stage() {
+    let fixture = fixture().await;
+    let mut stage_shift_project = project("assignment-replay-stage-shift");
+    stage_shift_project.review_kinds[0].stages[1].deciding_profiles = vec!["supervisor".to_owned()];
+    stage_shift_project
+        .check()
+        .expect("stage-shift replay project");
+    let stage_shift_service = CaseworkService::new(
+        fixture.store.clone(),
+        stage_shift_project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("stage-shift replay service");
+    let staged = stage_shift_service
+        .create_review_request(
+            &fixture.producer,
+            request(
+                "record-assignment-stage-replay",
+                "producer-ref-assignment-stage-replay",
+            ),
+            "create-assignment-stage-replay",
+        )
+        .await
+        .expect("create assignment stage replay review");
+    let first_stage_task = task_id(&fixture, staged.accepted.request_id, 0).await;
+    let assigned = stage_shift_service
+        .assign_review_task(
+            &fixture.supervisor,
+            first_stage_task,
+            None,
+            "",
+            1,
+            AssignmentRequest {
+                assignee: fixture.reviewer_a.principal.clone(),
+                reason: Some("advance beyond addressed stage".to_owned()),
+            },
+            "assign-before-stage-advance",
+        )
+        .await
+        .expect("assign before stage advance");
+    assert!(matches!(
+        stage_shift_service
+            .decide_review_task(
+                &fixture.reviewer_a,
+                first_stage_task,
+                ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Approve,
+                },
+                None,
+                "",
+                assigned.revision,
+                "decide-before-assignment-replay",
+            )
+            .await,
+        Ok(ReviewTransition::StageAdvanced { .. })
+    ));
+    assert_eq!(
+        stage_shift_service
+            .assign_review_task(
+                &fixture.supervisor,
+                first_stage_task,
+                None,
+                "",
+                1,
+                AssignmentRequest {
+                    assignee: fixture.reviewer_a.principal.clone(),
+                    reason: Some("advance beyond addressed stage".to_owned()),
+                },
+                "assign-before-stage-advance",
+            )
+            .await
+            .expect("replay assignment after role-changing stage advance"),
+        assigned
+    );
+
+    let answer_service = CaseworkService::new(
+        fixture.store.clone(),
+        answer_project(false),
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("terminal delegation replay service");
+    let mut answer_request = request(
+        "record-terminal-delegation-replay",
+        "producer-ref-terminal-delegation-replay",
+    );
+    answer_request.kind = "registry-answer".to_owned();
+    let answer = answer_service
+        .create_review_request(
+            &fixture.producer,
+            answer_request,
+            "create-terminal-delegation-replay",
+        )
+        .await
+        .expect("create terminal delegation replay review");
+    let answer_task = task_id(&fixture, answer.accepted.request_id, 0).await;
+    let claimed = answer_service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            answer_task,
+            None,
+            "",
+            1,
+            "claim-terminal-delegation-replay",
+        )
+        .await
+        .expect("claim terminal delegation replay task");
+    let delegated = answer_service
+        .delegate_review_task(
+            &fixture.reviewer_a,
+            answer_task,
+            None,
+            "",
+            claimed.revision,
+            DelegateRequest {
+                delegate: fixture.reviewer_b.principal.clone(),
+                reason: Some("settle after delegation".to_owned()),
+            },
+            "delegate-before-terminal-settlement",
+        )
+        .await
+        .expect("delegate before terminal settlement");
+    assert!(matches!(
+        answer_service
+            .decide_review_task(
+                &fixture.reviewer_b,
+                answer_task,
+                ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Answer {
+                        outcome: "found".to_owned(),
+                        reason: None,
+                        result: Some(json!({"correction": "terminal delegated answer"})),
+                    },
+                },
+                None,
+                "",
+                delegated.revision,
+                "settle-terminal-delegation-replay",
+            )
+            .await,
+        Ok(ReviewTransition::Settled { .. })
+    ));
+    assert_eq!(
+        answer_service
+            .delegate_review_task(
+                &fixture.reviewer_a,
+                answer_task,
+                None,
+                "",
+                claimed.revision,
+                DelegateRequest {
+                    delegate: fixture.reviewer_b.principal.clone(),
+                    reason: Some("settle after delegation".to_owned()),
+                },
+                "delegate-before-terminal-settlement",
+            )
+            .await
+            .expect("replay delegation after terminal settlement"),
+        delegated
+    );
+}
+
+#[tokio::test]
+async fn source_context_task_disclosure_requires_a_current_caller_source_read() {
+    let fixture = fixture().await;
+    let mut source_request = request("record-source-visible", "producer-ref-source-visible");
+    source_request.context = ReviewContext::Source {
+        binding: SourceContextBinding {
+            reference: "registry:record:record-source-visible".to_owned(),
+        },
+    };
+    let created = fixture
+        .service_v2
+        .create_review_request(
+            &fixture.producer,
+            source_request.clone(),
+            "create-source-visible",
+        )
+        .await
+        .expect("create source-context review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+
+    let concealed_without_source_profile = fixture
+        .service_v2
+        .review_tasks(&fixture.reviewer_a, None, "human-bearer", None, None, 10)
+        .await
+        .expect("source-context task is omitted without a source profile");
+    assert!(concealed_without_source_profile.items.is_empty());
+
+    let visible = fixture
+        .service_v2
+        .review_tasks(
+            &fixture.reviewer_a,
+            Some("staff"),
+            "human-bearer",
+            None,
+            None,
+            10,
+        )
+        .await
+        .expect("current caller source read");
+    assert_eq!(visible.items.len(), 1);
+    assert_eq!(visible.items[0].task_id, task);
+    assert!(matches!(
+        fixture
+            .service_v2
+            .review_task(&fixture.reviewer_a, task, None, "human-bearer")
+            .await,
+        Err(ReviewRuntimeError::SourceProfileRequired)
+    ));
+    assert_eq!(
+        fixture
+            .service_v2
+            .review_task(&fixture.reviewer_a, task, Some("staff"), "human-bearer")
+            .await
+            .expect("read source-context task")
+            .task_id,
+        task
+    );
+
+    fixture.source_read_blocked.store(true, Ordering::SeqCst);
+    let service = fixture.service_v2.clone();
+    let reviewer = fixture.reviewer_a.clone();
+    let raced_inbox = tokio::spawn(async move {
+        service
+            .review_tasks(&reviewer, Some("staff"), "human-bearer", None, None, 10)
+            .await
+    });
+    fixture.source_read_started.notified().await;
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    fixture.source_read_continue.notify_one();
+    assert!(raced_inbox
+        .await
+        .expect("inbox task joins")
+        .expect("revoked authority conceals the stale task")
+        .items
+        .is_empty());
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+
+    // The blocked-read handshake is one-shot, so re-arm it before the second
+    // race or notified().await below waits forever.
+    fixture.source_read_blocked.store(true, Ordering::SeqCst);
+    let service = fixture.service_v2.clone();
+    let reviewer = fixture.reviewer_a.clone();
+    let raced_terminal_inbox = tokio::spawn(async move {
+        service
+            .review_tasks(&reviewer, Some("staff"), "human-bearer", None, None, 10)
+            .await
+    });
+    fixture.source_read_started.notified().await;
+    fixture
+        .service_v2
+        .cancel_review_request(
+            &fixture.producer,
+            created.accepted.request_id,
+            registry_casework_core::ReviewCancelRequest {
+                subject: source_request.subject,
+                reason: "Requester withdrew during source preflight".to_owned(),
+            },
+            "cancel-during-inbox-preflight",
+        )
+        .await
+        .expect("cancel source-context review during inbox preflight");
+    fixture.source_read_continue.notify_one();
+    assert!(raced_terminal_inbox
+        .await
+        .expect("terminal inbox task joins")
+        .expect("terminal task is omitted after source preflight")
+        .items
+        .is_empty());
+
+    fixture.source_revoked.store(true, Ordering::SeqCst);
+    let concealed = fixture
+        .service_v2
+        .review_tasks(
+            &fixture.reviewer_a,
+            Some("staff"),
+            "human-bearer",
+            None,
+            None,
+            10,
+        )
+        .await
+        .expect("revoked source visibility conceals list item");
+    assert!(concealed.items.is_empty());
+    assert!(matches!(
+        fixture
+            .service_v2
+            .review_task(&fixture.reviewer_a, task, Some("staff"), "human-bearer")
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+}
+
+#[tokio::test]
+async fn claiming_refuses_a_source_advanced_past_the_pinned_occurrence() {
+    let fixture = fixture().await;
+    let mut source_request = request("record-source-advanced", "producer-ref-source-advanced");
+    source_request.context = ReviewContext::Source {
+        binding: SourceContextBinding {
+            reference: "registry:record:record-source-advanced".to_owned(),
+        },
+    };
+    let created = fixture
+        .service_v2
+        .create_review_request(&fixture.producer, source_request, "create-source-advanced")
+        .await
+        .expect("create source-context review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+
+    // The source advances between the caller view and the authoritative
+    // reread: the caller-visible binding still matches the pinned version
+    // while the authoritative observation describes the newer occurrence.
+    fixture.source_advanced.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        fixture
+            .service_v2
+            .claim_review_task(
+                &fixture.reviewer_a,
+                task,
+                Some("staff"),
+                "human-bearer",
+                1,
+                "claim-source-advanced",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden)
+    ));
+
+    fixture.source_advanced.store(false, Ordering::SeqCst);
+    let claimed = fixture
+        .service_v2
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            Some("staff"),
+            "human-bearer",
+            1,
+            "claim-source-advanced",
+        )
+        .await
+        .expect("the pinned occurrence is claimable again");
+    assert_eq!(claimed.task_id, task);
+}
+
+#[tokio::test]
+async fn source_context_task_inbox_honors_the_configured_source_read_budget() {
+    let fixture = fixture().await;
+    let mut bounded_project = project("2");
+    bounded_project.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    bounded_project.inbox = InboxPolicy {
+        default_page_size: 1,
+        maximum_candidate_scan: 2,
+        maximum_source_reads: 1,
+        maximum_concurrent_source_reads: 1,
+        page_deadline_milliseconds: 5_000,
+    };
+    bounded_project.check().expect("bounded review project");
+    let bounded_service = CaseworkService::new(
+        fixture.store.clone(),
+        bounded_project,
+        [Arc::new(ReviewSource {
+            revoked: Arc::clone(&fixture.source_revoked),
+            state: Arc::clone(&fixture.source_state),
+            read_blocked: Arc::clone(&fixture.source_read_blocked),
+            read_started: Arc::clone(&fixture.source_read_started),
+            read_continue: Arc::clone(&fixture.source_read_continue),
+            advanced: Arc::clone(&fixture.source_advanced),
+        }) as Arc<dyn SourceAdapter>],
+    )
+    .expect("bounded review service");
+
+    let mut task_ids = Vec::new();
+    for index in 0..2 {
+        let subject = format!("record-source-budget-{index}");
+        let mut source_request = request(&subject, &format!("producer-ref-budget-{index}"));
+        source_request.context = ReviewContext::Source {
+            binding: SourceContextBinding {
+                reference: format!("registry:record:{subject}"),
+            },
+        };
+        let created = fixture
+            .service_v2
+            .create_review_request(
+                &fixture.producer,
+                source_request,
+                &format!("create-source-budget-{index}"),
+            )
+            .await
+            .expect("create budgeted source-context review");
+        task_ids.push(task_id(&fixture, created.accepted.request_id, 0).await);
+    }
+
+    let first = bounded_service
+        .review_tasks(
+            &fixture.reviewer_a,
+            Some("staff"),
+            "human-bearer",
+            None,
+            None,
+            10,
+        )
+        .await
+        .expect("first bounded task page");
+    assert_eq!(first.items.len(), 1);
+    let cursor = first.next_cursor.expect("source-read budget continuation");
+    let second = bounded_service
+        .review_tasks(
+            &fixture.reviewer_a,
+            Some("staff"),
+            "human-bearer",
+            None,
+            Some(cursor),
+            10,
+        )
+        .await
+        .expect("second bounded task page");
+    assert_eq!(second.items.len(), 1);
+    assert_eq!(second.next_cursor, None);
+    let observed = [first.items[0].task_id, second.items[0].task_id]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(observed, task_ids.into_iter().collect());
+}
+
+#[tokio::test]
+async fn source_context_task_inbox_reports_a_first_read_deadline_without_losing_the_task() {
+    let fixture = fixture().await;
+    let mut bounded_project = project("2");
+    bounded_project.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    bounded_project.inbox.page_deadline_milliseconds = 100;
+    bounded_project
+        .check()
+        .expect("deadline-bounded review project");
+    let bounded_service = CaseworkService::new(
+        fixture.store.clone(),
+        bounded_project,
+        [Arc::new(ReviewSource {
+            revoked: Arc::clone(&fixture.source_revoked),
+            state: Arc::clone(&fixture.source_state),
+            read_blocked: Arc::clone(&fixture.source_read_blocked),
+            read_started: Arc::clone(&fixture.source_read_started),
+            read_continue: Arc::clone(&fixture.source_read_continue),
+            advanced: Arc::clone(&fixture.source_advanced),
+        }) as Arc<dyn SourceAdapter>],
+    )
+    .expect("deadline-bounded review service");
+    let mut source_request = request("record-source-deadline", "producer-ref-source-deadline");
+    source_request.context = ReviewContext::Source {
+        binding: SourceContextBinding {
+            reference: "registry:record:record-source-deadline".to_owned(),
+        },
+    };
+    fixture
+        .service_v2
+        .create_review_request(&fixture.producer, source_request, "create-source-deadline")
+        .await
+        .expect("create deadline-bounded source review");
+    fixture.source_read_blocked.store(true, Ordering::SeqCst);
+
+    assert!(matches!(
+        bounded_service
+            .review_tasks(
+                &fixture.reviewer_a,
+                Some("staff"),
+                "human-bearer",
+                None,
+                None,
+                10,
+            )
+            .await,
+        Err(ReviewRuntimeError::SourceUnavailable)
+    ));
+}
+
+#[tokio::test]
+async fn source_history_and_clocks_recheck_membership_after_source_io() {
+    let fixture = fixture().await;
+    let mut source_request = request("record-source-race", "producer-ref-source-race");
+    source_request.context = ReviewContext::Source {
+        binding: SourceContextBinding {
+            reference: "registry:record:record-source-race".to_owned(),
+        },
+    };
+    let created = fixture
+        .service_v2
+        .create_review_request(&fixture.producer, source_request, "create-source-race")
+        .await
+        .expect("create source-context review");
+
+    fixture.source_read_blocked.store(true, Ordering::SeqCst);
+    let service = fixture.service_v2.clone();
+    let reviewer = fixture.reviewer_a.clone();
+    let request_id = created.accepted.request_id;
+    let history = tokio::spawn(async move {
+        service
+            .review_history(
+                &reviewer,
+                request_id,
+                Some("staff"),
+                "human-bearer",
+                None,
+                10,
+            )
+            .await
+    });
+    fixture.source_read_started.notified().await;
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    fixture.source_read_continue.notify_one();
+    assert!(matches!(
+        history.await.expect("history task joins"),
+        Err(ReviewRuntimeError::NotFound)
+    ));
+
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+    fixture.source_read_blocked.store(true, Ordering::SeqCst);
+    let service = fixture.service_v2.clone();
+    let reviewer = fixture.reviewer_a.clone();
+    let clocks = tokio::spawn(async move {
+        service
+            .review_clocks(&reviewer, request_id, Some("staff"), "human-bearer")
+            .await
+    });
+    fixture.source_read_started.notified().await;
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    fixture.source_read_continue.notify_one();
+    assert!(matches!(
+        clocks.await.expect("clock task joins"),
+        Err(ReviewRuntimeError::NotFound)
+    ));
+}
+
+#[tokio::test]
+async fn review_task_pagination_rejects_a_cursor_removed_by_retention() {
+    let fixture = fixture().await;
+    for (subject, key) in [
+        ("record-page-one", "create-page-one"),
+        ("record-page-two", "create-page-two"),
+    ] {
+        fixture
+            .service_v1
+            .create_review_request(&fixture.producer, request(subject, key), key)
+            .await
+            .expect("create paged review");
+    }
+    let first = fixture
+        .service_v1
+        .review_tasks(&fixture.reviewer_a, None, "", Some("review"), None, 1)
+        .await
+        .expect("read first task page");
+    let cursor = first.next_cursor.expect("first page has a cursor");
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_review_tasks WHERE task_id=$1",
+            &[&cursor],
+        )
+        .await
+        .expect("simulate retention removing the cursor task");
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_tasks(
+                &fixture.reviewer_a,
+                None,
+                "",
+                Some("review"),
+                Some(cursor),
+                10,
+            )
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+}
+
+#[tokio::test]
+async fn review_task_pagination_rejects_a_cursor_outside_the_selected_scope() {
+    let fixture = fixture().await;
+    for (subject, key) in [
+        ("record-scope-one", "create-scope-one"),
+        ("record-scope-two", "create-scope-two"),
+    ] {
+        fixture
+            .service_v1
+            .create_review_request(&fixture.producer, request(subject, key), key)
+            .await
+            .expect("create scoped review");
+    }
+    let tasks = fixture
+        .service_v1
+        .review_tasks(&fixture.reviewer_a, None, "", Some("review"), None, 10)
+        .await
+        .expect("read the full task page");
+    let older = tasks.items[0].task_id;
+    let newer = tasks.items[1].task_id;
+
+    // A cursor naming a task outside the selected queue must not become the
+    // page anchor: accepting it would silently skip every visible task that
+    // sorts before the unrelated cursor.
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_tasks SET queue_id='intake' WHERE task_id=$1",
+            &[&newer],
+        )
+        .await
+        .expect("move the cursor task outside the selected queue");
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_tasks(
+                &fixture.reviewer_a,
+                None,
+                "",
+                Some("review"),
+                Some(newer),
+                10
+            )
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_tasks SET queue_id='review' WHERE task_id=$1",
+            &[&newer],
+        )
+        .await
+        .expect("restore the task to the selected queue");
+    let page = fixture
+        .service_v1
+        .review_tasks(
+            &fixture.reviewer_a,
+            None,
+            "",
+            Some("review"),
+            Some(older),
+            10,
+        )
+        .await
+        .expect("an in-scope cursor still pages");
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].task_id, newer);
+}
+
+#[tokio::test]
+async fn review_history_rejects_an_unknown_cursor_instead_of_truncating_the_page() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("record-history-cursor", "producer-ref-history-cursor"),
+            "create-history-cursor",
+        )
+        .await
+        .expect("create review with history");
+
+    assert!(matches!(
+        fixture
+            .service_v1
+            .review_history(
+                &fixture.producer,
+                created.accepted.request_id,
+                None,
+                "producer-token",
+                Some(Uuid::new_v4()),
+                10,
+            )
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+}
+
+#[tokio::test]
+async fn subject_clock_pauses_and_continues_across_review_rounds() {
+    let fixture = fixture().await;
+    let first = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("record-clock", "producer-ref-clock-1"),
+            "create-clock-1",
+        )
+        .await
+        .expect("create first clock round");
+    let initial = fixture
+        .service_v1
+        .review_clocks(
+            &fixture.producer,
+            first.accepted.request_id,
+            None,
+            "producer-token",
+        )
+        .await
+        .expect("read initial review clocks");
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].request_id, first.accepted.request_id);
+    assert_eq!(initial[0].state, ReviewClockState::Running);
+    let occurrence_id = initial[0].clock_occurrence_id;
+    let anchor = initial[0].anchor_at;
+
+    let task = task_id(&fixture, first.accepted.request_id, 0).await;
+    fixture
+        .service_v1
+        .claim_review_task(&fixture.reviewer_a, task, None, "", 1, "claim-clock")
+        .await
+        .expect("claim first clock round");
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_a,
+            task,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::ChangesRequested {
+                    outcome: "needs-correction".to_owned(),
+                    reason: Some("Please correct the record".to_owned()),
+                    result: Some(json!({"correction":"Update the legal name"})),
+                },
+            },
+            None,
+            "",
+            2,
+            "changes-clock",
+        )
+        .await
+        .expect("request changes for first round");
+    let paused = fixture
+        .service_v1
+        .review_clocks(
+            &fixture.producer,
+            first.accepted.request_id,
+            None,
+            "producer-token",
+        )
+        .await
+        .expect("read paused subject clock");
+    assert_eq!(paused[0].state, ReviewClockState::Paused);
+    assert_eq!(paused[0].clock_occurrence_id, occurrence_id);
+    assert_terminal_atomic(&fixture, first.accepted.request_id, 1).await;
+
+    let mut next_request = request("record-clock", "producer-ref-clock-2");
+    next_request.subject.version = "2".to_owned();
+    next_request.subject.digest = ContentDigest::for_bytes(b"record-clock-v2");
+    let second = fixture
+        .service_v1
+        .create_review_request(&fixture.producer, next_request, "create-clock-2")
+        .await
+        .expect("create corrected clock round");
+    let resumed = fixture
+        .service_v1
+        .review_clocks(
+            &fixture.producer,
+            second.accepted.request_id,
+            None,
+            "producer-token",
+        )
+        .await
+        .expect("read resumed subject clock");
+    assert_eq!(resumed.len(), 1);
+    assert_eq!(resumed[0].request_id, second.accepted.request_id);
+    assert_eq!(resumed[0].state, ReviewClockState::Running);
+    assert_eq!(resumed[0].clock_occurrence_id, occurrence_id);
+    assert_eq!(resumed[0].anchor_at, anchor);
+    assert!(resumed[0].due_at >= initial[0].due_at);
+}
+
+#[tokio::test]
+async fn subject_clock_restart_pins_the_policy_that_computed_the_new_deadline() {
+    let fixture = fixture().await;
+    let mut revised = project("2");
+    if let ClockPolicy::Subject { after, .. } = &mut revised.clocks[0] {
+        after.elapsed = "PT2H".to_owned();
+    }
+    revised.check().expect("revised clock project");
+    let revised_service = CaseworkService::new(
+        fixture.store.clone(),
+        revised,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("revised clock service");
+
+    let first = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("record-clock-pin", "producer-ref-clock-pin-1"),
+            "create-clock-pin-1",
+        )
+        .await
+        .expect("create first clock round");
+    let initial = fixture
+        .service_v1
+        .review_clocks(
+            &fixture.producer,
+            first.accepted.request_id,
+            None,
+            "producer-token",
+        )
+        .await
+        .expect("read initial review clocks");
+    assert_eq!(initial.len(), 1);
+    let pinned_before = initial[0].policy_digest.clone();
+
+    let task = task_id(&fixture, first.accepted.request_id, 0).await;
+    fixture
+        .service_v1
+        .claim_review_task(&fixture.reviewer_a, task, None, "", 1, "claim-clock-pin")
+        .await
+        .expect("claim first clock round");
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_a,
+            task,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Approve,
+            },
+            None,
+            "",
+            2,
+            "approve-clock-pin",
+        )
+        .await
+        .expect("approve first clock round");
+    let follow_on = task_id(&fixture, first.accepted.request_id, 1).await;
+    fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_b,
+            follow_on,
+            None,
+            "",
+            1,
+            "claim-clock-pin-2",
+        )
+        .await
+        .expect("claim follow-on clock round");
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_b,
+            follow_on,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Approve,
+            },
+            None,
+            "",
+            2,
+            "approve-clock-pin-2",
+        )
+        .await
+        .expect("approve follow-on clock round");
+    let settled = fixture
+        .service_v1
+        .review_clocks(
+            &fixture.producer,
+            first.accepted.request_id,
+            None,
+            "producer-token",
+        )
+        .await
+        .expect("read settled subject clock");
+    assert_eq!(settled[0].state, ReviewClockState::Completed);
+
+    let mut next_request = request("record-clock-pin", "producer-ref-clock-pin-2");
+    next_request.subject.version = "2".to_owned();
+    next_request.subject.digest = ContentDigest::for_bytes(b"record-clock-pin-v2");
+    let second = revised_service
+        .create_review_request(&fixture.producer, next_request, "create-clock-pin-2")
+        .await
+        .expect("create second clock round");
+    let restarted = revised_service
+        .review_clocks(
+            &fixture.producer,
+            second.accepted.request_id,
+            None,
+            "producer-token",
+        )
+        .await
+        .expect("read restarted subject clock");
+    assert_eq!(restarted.len(), 1);
+    assert_eq!(restarted[0].state, ReviewClockState::Running);
+
+    // A fresh subject under the revised policy pins that policy's digest at
+    // insert; the restarted occurrence must carry the same pin, because its
+    // fresh deadline was computed from the revised definition. A stale pin
+    // would claim the retired policy governed a deadline it never computed.
+    let fresh = revised_service
+        .create_review_request(
+            &fixture.producer,
+            request("record-clock-pin-fresh", "producer-ref-clock-pin-fresh"),
+            "create-clock-pin-fresh",
+        )
+        .await
+        .expect("create fresh clock subject");
+    let fresh_clocks = revised_service
+        .review_clocks(
+            &fixture.producer,
+            fresh.accepted.request_id,
+            None,
+            "producer-token",
+        )
+        .await
+        .expect("read fresh subject clocks");
+    assert_eq!(fresh_clocks.len(), 1);
+    assert_eq!(
+        restarted[0].policy_digest, fresh_clocks[0].policy_digest,
+        "the restarted clock must pin the policy that computed its deadline"
+    );
+    assert_ne!(restarted[0].policy_digest, pinned_before);
+}
+
+#[tokio::test]
+async fn subject_clock_restarts_for_a_new_round_after_a_terminal_settlement() {
+    let fixture = fixture().await;
+    let first = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("record-terminal-clock", "producer-ref-terminal-1"),
+            "create-terminal-clock-1",
+        )
+        .await
+        .expect("create first clock round");
+    let initial = fixture
+        .service_v1
+        .review_clocks(
+            &fixture.producer,
+            first.accepted.request_id,
+            None,
+            "producer-token",
+        )
+        .await
+        .expect("read initial review clocks");
+    assert_eq!(initial.len(), 1);
+    let occurrence_id = initial[0].clock_occurrence_id;
+
+    let task = task_id(&fixture, first.accepted.request_id, 0).await;
+    fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-terminal-clock",
+        )
+        .await
+        .expect("claim first clock round");
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_a,
+            task,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Approve,
+            },
+            None,
+            "",
+            2,
+            "approve-terminal-clock",
+        )
+        .await
+        .expect("approve first clock round");
+    let follow_on = task_id(&fixture, first.accepted.request_id, 1).await;
+    fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_b,
+            follow_on,
+            None,
+            "",
+            1,
+            "claim-terminal-clock-2",
+        )
+        .await
+        .expect("claim follow-on clock round");
+    fixture
+        .service_v1
+        .decide_review_task(
+            &fixture.reviewer_b,
+            follow_on,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Approve,
+            },
+            None,
+            "",
+            2,
+            "approve-terminal-clock-2",
+        )
+        .await
+        .expect("approve follow-on clock round");
+    let settled = fixture
+        .service_v1
+        .review_clocks(
+            &fixture.producer,
+            first.accepted.request_id,
+            None,
+            "producer-token",
+        )
+        .await
+        .expect("read settled subject clock");
+    assert_eq!(settled[0].state, ReviewClockState::Completed);
+
+    let mut next_request = request("record-terminal-clock", "producer-ref-terminal-2");
+    next_request.subject.version = "2".to_owned();
+    next_request.subject.digest = ContentDigest::for_bytes(b"record-terminal-clock-v2");
+    let second = fixture
+        .service_v1
+        .create_review_request(&fixture.producer, next_request, "create-terminal-clock-2")
+        .await
+        .expect("create second clock round");
+    let restarted = fixture
+        .service_v1
+        .review_clocks(
+            &fixture.producer,
+            second.accepted.request_id,
+            None,
+            "producer-token",
+        )
+        .await
+        .expect("read restarted subject clock");
+    assert_eq!(restarted.len(), 1);
+    assert_eq!(restarted[0].request_id, second.accepted.request_id);
+    assert_eq!(restarted[0].state, ReviewClockState::Running);
+    assert_eq!(restarted[0].clock_occurrence_id, occurrence_id);
+}
+
+#[tokio::test]
+async fn subject_clocks_are_independent_across_concurrent_review_kinds() {
+    let fixture = fixture().await;
+    let answer_service = CaseworkService::new(
+        fixture.store.clone(),
+        answer_project(false),
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("answer service");
+    let correction = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("shared-clock-subject", "shared-clock-correction"),
+            "create-shared-clock-correction",
+        )
+        .await
+        .expect("create correction review");
+    let mut answer_request = request("shared-clock-subject", "shared-clock-answer");
+    answer_request.kind = "registry-answer".to_owned();
+    let answer = answer_service
+        .create_review_request(
+            &fixture.producer,
+            answer_request,
+            "create-shared-clock-answer",
+        )
+        .await
+        .expect("create concurrent answer review");
+
+    let correction_clocks = fixture
+        .service_v1
+        .review_clocks(
+            &fixture.producer,
+            correction.accepted.request_id,
+            None,
+            "producer-token",
+        )
+        .await
+        .expect("read correction clock");
+    let answer_clocks = answer_service
+        .review_clocks(
+            &fixture.producer,
+            answer.accepted.request_id,
+            None,
+            "producer-token",
+        )
+        .await
+        .expect("read answer clock");
+    assert_eq!(correction_clocks.len(), 1);
+    assert_eq!(answer_clocks.len(), 1);
+    assert_ne!(
+        correction_clocks[0].clock_occurrence_id, answer_clocks[0].clock_occurrence_id,
+        "different review kinds must not rebind one subject occurrence"
+    );
+    assert_eq!(
+        correction_clocks[0].request_id,
+        correction.accepted.request_id
+    );
+    assert_eq!(answer_clocks[0].request_id, answer.accepted.request_id);
+
+    let keys = fixture
+        .database
+        .query(
+            "SELECT correlation_key FROM casework_review_clock_occurrences
+             WHERE subject_id='shared-clock-subject' AND scope='subject'
+             ORDER BY correlation_key",
+            &[],
+        )
+        .await
+        .expect("read subject clock identities")
+        .into_iter()
+        .map(|row| row.get::<_, String>(0))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        keys,
+        vec![
+            "review-kind:registry-answer".to_owned(),
+            "review-kind:registry-correction".to_owned(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn review_activity_clock_recovers_after_holiday_publication_and_applies_effects_once() {
+    let fixture = fixture().await;
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_queue_service(queue_id,team_id,revision)
+             VALUES('overdue-review','review-team',1)",
+            &[],
+        )
+        .await
+        .expect("serve overdue review queue");
+    let project = activity_clock_project();
+    project.check().expect("activity clock project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("activity clock service");
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            request("record-activity-clock", "producer-ref-activity-clock"),
+            "create-activity-clock",
+        )
+        .await
+        .expect("create activity-clock review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-activity-clock",
+        )
+        .await
+        .expect("claim activity-clock task");
+    let occurrence = fixture
+        .database
+        .query_one(
+            "SELECT clock_occurrence_id,state
+             FROM casework_review_clock_occurrences WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("activity clock occurrence");
+    let occurrence_id: Uuid = occurrence.get(0);
+    assert_eq!(occurrence.get::<_, String>(1), "source_facts_missing");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_clock_occurrences
+             SET anchor_at='2020-01-06T09:00:00Z',updated_at='2020-01-06T09:00:00Z'
+             WHERE clock_occurrence_id=$1",
+            &[&occurrence_id],
+        )
+        .await
+        .expect("place unresolved activity clock in the past");
+
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("defer review clock with unavailable holiday facts"),
+        0
+    );
+    assert!(fixture
+        .database
+        .query_one(
+            "SELECT next_action_at>transaction_timestamp()
+             FROM casework_review_clock_occurrences WHERE clock_occurrence_id=$1",
+            &[&occurrence_id],
+        )
+        .await
+        .expect("deferred review clock retry")
+        .get::<_, bool>(0));
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("immediate missing-facts retry is backed off"),
+        0
+    );
+
+    service
+        .create_holiday_revision(
+            &actor("admin", CaseworkRole::Administrator, "administrator"),
+            &HolidaySetDocument {
+                holiday_set: "office-holidays".to_owned(),
+                revision: 1,
+                dates: Vec::new(),
+            },
+            "publish-office-holidays",
+        )
+        .await
+        .expect("publish holiday revision");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_clock_occurrences
+             SET next_action_at='2020-01-06T09:00:00Z'
+             WHERE clock_occurrence_id=$1",
+            &[&occurrence_id],
+        )
+        .await
+        .expect("make the deferred clock eligible after holiday publication");
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("process recovered review clock"),
+        2
+    );
+
+    let task_row = fixture
+        .database
+        .query_one(
+            "SELECT queue_id,state,holder_issuer,revision
+             FROM casework_review_tasks WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("reassigned review task");
+    assert_eq!(task_row.get::<_, String>(0), "overdue-review");
+    assert_eq!(task_row.get::<_, String>(1), "open");
+    assert_eq!(task_row.get::<_, Option<String>>(2), None);
+    assert_eq!(task_row.get::<_, i64>(3), 3);
+    let clock_row = fixture
+        .database
+        .query_one(
+            "SELECT state,next_action_at,holiday_document->>'revision'
+             FROM casework_review_clock_occurrences WHERE clock_occurrence_id=$1",
+            &[&occurrence_id],
+        )
+        .await
+        .expect("processed review clock occurrence");
+    assert_eq!(clock_row.get::<_, String>(0), "running");
+    assert_eq!(clock_row.get::<_, Option<chrono::DateTime<Utc>>>(1), None);
+    assert_eq!(clock_row.get::<_, String>(2), "1");
+    assert_eq!(
+        fixture
+            .database
+            .query_one(
+                "SELECT count(*) FROM casework_review_clock_effects
+                 WHERE clock_occurrence_id=$1",
+                &[&occurrence_id],
+            )
+            .await
+            .expect("count review clock effects")
+            .get::<_, i64>(0),
+        2
+    );
+    assert_eq!(
+        fixture
+            .database
+            .query_one(
+                "SELECT count(*) FROM casework_review_history
+                 WHERE request_id=$1 AND kind IN ('clock_reminder','clock_step_applied')",
+                &[&created.accepted.request_id],
+            )
+            .await
+            .expect("count review clock history")
+            .get::<_, i64>(0),
+        2
+    );
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("repeat review clock pass"),
+        0
+    );
+}
+
+#[tokio::test]
+async fn review_clock_reassignment_to_an_unserved_queue_defers_until_the_queue_is_served() {
+    let fixture = fixture().await;
+    let project = activity_clock_project();
+    project.check().expect("activity clock project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("activity clock service");
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            request("record-unserved-queue", "producer-ref-unserved-queue"),
+            "create-unserved-queue",
+        )
+        .await
+        .expect("create unserved-queue review");
+    let request_id = created.accepted.request_id;
+    let task = task_id(&fixture, request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-unserved-queue",
+        )
+        .await
+        .expect("claim unserved-queue task");
+    let occurrence_id: Uuid = fixture
+        .database
+        .query_one(
+            "SELECT clock_occurrence_id FROM casework_review_clock_occurrences WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("activity clock occurrence")
+        .get(0);
+    service
+        .create_holiday_revision(
+            &actor("admin", CaseworkRole::Administrator, "administrator"),
+            &HolidaySetDocument {
+                holiday_set: "office-holidays".to_owned(),
+                revision: 1,
+                dates: Vec::new(),
+            },
+            "publish-office-holidays",
+        )
+        .await
+        .expect("publish holiday revision");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_clock_occurrences
+             SET anchor_at='2020-01-06T09:00:00Z',updated_at='2020-01-06T09:00:00Z',
+                 next_action_at='2020-01-06T09:00:00Z'
+             WHERE clock_occurrence_id=$1",
+            &[&occurrence_id],
+        )
+        .await
+        .expect("make the unserved-queue clock due");
+
+    // The reminder still applies, but the reassignment step cannot: no team
+    // serves the target queue, so applying it would drop the task out of
+    // every review inbox and record the effect as applied with no retry.
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("process review clock with unserved target queue"),
+        1
+    );
+    let deferred_task = fixture
+        .database
+        .query_one(
+            "SELECT queue_id,state,holder_issuer,holder_subject,revision
+             FROM casework_review_tasks WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("read deferred review task");
+    assert_eq!(deferred_task.get::<_, String>(0), "review");
+    assert_eq!(deferred_task.get::<_, String>(1), "claimed");
+    assert_eq!(
+        deferred_task.get::<_, Option<String>>(2).as_deref(),
+        Some(fixture.reviewer_a.principal.issuer.as_str())
+    );
+    assert_eq!(
+        deferred_task.get::<_, Option<String>>(3).as_deref(),
+        Some(fixture.reviewer_a.principal.subject.as_str())
+    );
+    assert_eq!(deferred_task.get::<_, i64>(4), 2);
+    assert_eq!(
+        fixture
+            .database
+            .query_one(
+                "SELECT count(*) FROM casework_review_clock_effects
+                 WHERE clock_occurrence_id=$1 AND effect_kind='step'",
+                &[&occurrence_id],
+            )
+            .await
+            .expect("count deferred review clock steps")
+            .get::<_, i64>(0),
+        0
+    );
+    assert_eq!(
+        fixture
+            .database
+            .query_one(
+                "SELECT count(*) FROM casework_review_history
+                 WHERE request_id=$1 AND kind='clock_step_applied'",
+                &[&request_id],
+            )
+            .await
+            .expect("count deferred review clock step history")
+            .get::<_, i64>(0),
+        0
+    );
+    assert!(fixture
+        .database
+        .query_one(
+            "SELECT next_action_at>transaction_timestamp()
+             FROM casework_review_clock_occurrences WHERE clock_occurrence_id=$1",
+            &[&occurrence_id],
+        )
+        .await
+        .expect("deferred unserved-queue retry")
+        .get::<_, bool>(0));
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("immediate unserved-queue retry is backed off"),
+        0
+    );
+
+    // Once a team serves the target queue again, the deferred step applies.
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_queue_service(queue_id,team_id,revision)
+             VALUES('overdue-review','review-team',1)",
+            &[],
+        )
+        .await
+        .expect("serve overdue review queue");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_clock_occurrences
+             SET next_action_at='2020-01-06T09:00:00Z'
+             WHERE clock_occurrence_id=$1",
+            &[&occurrence_id],
+        )
+        .await
+        .expect("make the deferred unserved-queue clock due again");
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("apply the deferred reassignment"),
+        1
+    );
+    let reassigned_task = fixture
+        .database
+        .query_one(
+            "SELECT queue_id,state,holder_issuer,revision
+             FROM casework_review_tasks WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("reread reassigned review task");
+    assert_eq!(reassigned_task.get::<_, String>(0), "overdue-review");
+    assert_eq!(reassigned_task.get::<_, String>(1), "open");
+    assert_eq!(reassigned_task.get::<_, Option<String>>(2), None);
+    assert_eq!(reassigned_task.get::<_, i64>(3), 3);
+    assert_eq!(
+        fixture
+            .database
+            .query_one(
+                "SELECT count(*) FROM casework_review_clock_effects
+                 WHERE clock_occurrence_id=$1",
+                &[&occurrence_id],
+            )
+            .await
+            .expect("count review clock effects after retry")
+            .get::<_, i64>(0),
+        2
+    );
+    assert!(fixture
+        .database
+        .query_one(
+            "SELECT next_action_at IS NULL
+             FROM casework_review_clock_occurrences WHERE clock_occurrence_id=$1",
+            &[&occurrence_id],
+        )
+        .await
+        .expect("completed review clock occurrence")
+        .get::<_, bool>(0));
+}
+
+#[tokio::test]
+async fn source_review_clock_defers_effects_until_the_frozen_binding_is_current() {
+    let fixture = fixture().await;
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_queue_service(queue_id,team_id,revision)
+             VALUES('overdue-review','review-team',1)",
+            &[],
+        )
+        .await
+        .expect("serve overdue review queue");
+    let mut project = activity_clock_project();
+    project.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    project.check().expect("source activity clock project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        [Arc::new(ReviewSource {
+            revoked: Arc::clone(&fixture.source_revoked),
+            state: Arc::clone(&fixture.source_state),
+            read_blocked: Arc::new(AtomicBool::new(false)),
+            read_started: Arc::new(Notify::new()),
+            read_continue: Arc::new(Notify::new()),
+            advanced: Arc::new(AtomicBool::new(false)),
+        }) as Arc<dyn SourceAdapter>],
+    )
+    .expect("source activity clock service");
+    let mut create = request("record-source-activity-clock", "source-clock-reference");
+    create.context = ReviewContext::Source {
+        binding: SourceContextBinding {
+            reference: "breg:registry:record:record-source-activity-clock:1".to_owned(),
+        },
+    };
+    let created = service
+        .create_review_request(&fixture.producer, create, "create-source-activity-clock")
+        .await
+        .expect("create source activity-clock review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            Some("staff"),
+            "human-bearer",
+            1,
+            "claim-source-activity-clock",
+        )
+        .await
+        .expect("claim source activity-clock task");
+    service
+        .create_holiday_revision(
+            &actor("admin", CaseworkRole::Administrator, "administrator"),
+            &HolidaySetDocument {
+                holiday_set: "office-holidays".to_owned(),
+                revision: 1,
+                dates: Vec::new(),
+            },
+            "publish-source-clock-holidays",
+        )
+        .await
+        .expect("publish source clock holiday revision");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_clock_occurrences
+             SET anchor_at='2020-01-06T09:00:00Z',updated_at='2020-01-06T09:00:00Z'
+             WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("place source activity clock in the past");
+
+    fixture.source_revoked.store(true, Ordering::SeqCst);
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("defer stale source review clock"),
+        0
+    );
+    let deferred_effects: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_clock_effects e
+              JOIN casework_review_clock_occurrences c USING(clock_occurrence_id)
+             WHERE c.task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("count deferred source clock effects")
+        .get(0);
+    assert_eq!(deferred_effects, 0);
+
+    fixture.source_revoked.store(false, Ordering::SeqCst);
+    for state in [
+        OccurrenceState::Cancelled,
+        OccurrenceState::Superseded,
+        OccurrenceState::Synchronizing,
+    ] {
+        *fixture.source_state.lock().expect("source state lock") = state;
+        fixture
+            .database
+            .execute(
+                "UPDATE casework_review_clock_occurrences
+                 SET next_action_at='2020-01-06T09:00:00Z',updated_at='2020-01-06T09:00:00Z'
+                 WHERE task_id=$1",
+                &[&task],
+            )
+            .await
+            .expect("make deferred source activity clock due");
+        assert_eq!(
+            service
+                .process_due_review_clocks(100)
+                .await
+                .expect("defer inactive source review clock"),
+            0
+        );
+    }
+
+    *fixture.source_state.lock().expect("source state lock") = OccurrenceState::WaitingApplication;
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_clock_occurrences
+             SET next_action_at='2020-01-06T09:00:00Z',updated_at='2020-01-06T09:00:00Z'
+             WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("make current source activity clock due");
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("apply current source review clock"),
+        2
+    );
+}
+
+#[tokio::test]
+async fn completed_source_occurrence_keeps_the_review_clock_current() {
+    let fixture = fixture().await;
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_queue_service(queue_id,team_id,revision)
+             VALUES('overdue-review','review-team',1)",
+            &[],
+        )
+        .await
+        .expect("serve overdue review queue");
+    let mut project = activity_clock_project();
+    project.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    project.check().expect("source activity clock project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        [Arc::new(ReviewSource {
+            revoked: Arc::clone(&fixture.source_revoked),
+            state: Arc::clone(&fixture.source_state),
+            read_blocked: Arc::new(AtomicBool::new(false)),
+            read_started: Arc::new(Notify::new()),
+            read_continue: Arc::new(Notify::new()),
+            advanced: Arc::new(AtomicBool::new(false)),
+        }) as Arc<dyn SourceAdapter>],
+    )
+    .expect("source activity clock service");
+    let mut create = request(
+        "record-source-completed-clock",
+        "source-completed-clock-reference",
+    );
+    create.context = ReviewContext::Source {
+        binding: SourceContextBinding {
+            reference: "breg:registry:record:record-source-completed-clock:1".to_owned(),
+        },
+    };
+    let created = service
+        .create_review_request(&fixture.producer, create, "create-source-completed-clock")
+        .await
+        .expect("create source completed-clock review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            Some("staff"),
+            "human-bearer",
+            1,
+            "claim-source-completed-clock",
+        )
+        .await
+        .expect("claim source completed-clock task");
+    service
+        .create_holiday_revision(
+            &actor("admin", CaseworkRole::Administrator, "administrator"),
+            &HolidaySetDocument {
+                holiday_set: "office-holidays".to_owned(),
+                revision: 1,
+                dates: Vec::new(),
+            },
+            "publish-source-completed-clock-holidays",
+        )
+        .await
+        .expect("publish source completed-clock holiday revision");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_clock_occurrences
+             SET anchor_at='2020-01-06T09:00:00Z',updated_at='2020-01-06T09:00:00Z'
+             WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("place source activity clock in the past");
+    *fixture.source_state.lock().expect("source state lock") = OccurrenceState::Completed;
+
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("apply completed-occurrence source review clock"),
+        2
+    );
+    let applied_effects: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_clock_effects e
+              JOIN casework_review_clock_occurrences c USING(clock_occurrence_id)
+             WHERE c.task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("count applied source clock effects")
+        .get(0);
+    assert_eq!(applied_effects, 2, "reminder and reassignment both apply");
+    // Every effect is applied, so the clock is finished instead of being
+    // deferred for another thirty-second cycle.
+    let deferred: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_clock_occurrences
+             WHERE task_id=$1 AND next_action_at IS NOT NULL",
+            &[&task],
+        )
+        .await
+        .expect("check completed source clock deferral")
+        .get(0);
+    assert_eq!(deferred, 0);
+}
+
+#[tokio::test]
+async fn later_stage_activity_clock_uses_the_current_requests_pinned_definition() {
+    let fixture = fixture().await;
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_queue_service(queue_id,team_id,revision)
+             VALUES('overdue-review','review-team',1)",
+            &[],
+        )
+        .await
+        .expect("serve overdue review queue");
+    let mut stage_project = project("clock-stages");
+    let stages = stage_project.review_kinds.remove(0).stages;
+    let mut old_project = activity_clock_project();
+    old_project.review_kinds[0].stages.clone_from(&stages);
+    old_project.check().expect("old activity clock project");
+    let old_service = CaseworkService::new(
+        fixture.store.clone(),
+        old_project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("old activity clock service");
+    old_service
+        .create_review_request(
+            &fixture.producer,
+            request("record-clock-definition", "old-clock-definition"),
+            "create-old-clock-definition",
+        )
+        .await
+        .expect("create old clock definition review");
+
+    let mut current_project = activity_clock_project();
+    current_project.casework.version = "activity-clock-2".to_owned();
+    current_project.review_kinds[0].version = "activity-clock-2".to_owned();
+    current_project.review_kinds[0].stages = stages;
+    let ClockPolicy::Activity { due_time, .. } = &mut current_project.clocks[0] else {
+        panic!("activity clock fixture changed shape");
+    };
+    *due_time = "18:00".to_owned();
+    current_project
+        .check()
+        .expect("current activity clock project");
+    let current_service = CaseworkService::new(
+        fixture.store.clone(),
+        current_project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("current activity clock service");
+    let mut current_request = request("record-clock-definition", "current-clock-definition");
+    current_request.subject.version = "2".to_owned();
+    current_request.subject.digest = ContentDigest::for_bytes(b"record-clock-definition-v2");
+    let current = current_service
+        .create_review_request(
+            &fixture.producer,
+            current_request,
+            "create-current-clock-definition",
+        )
+        .await
+        .expect("create current clock definition review");
+    let first_task = task_id(&fixture, current.accepted.request_id, 0).await;
+    current_service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            first_task,
+            None,
+            "",
+            1,
+            "claim-current-clock-definition",
+        )
+        .await
+        .expect("claim current first stage");
+    assert!(matches!(
+        current_service
+            .decide_review_task(
+                &fixture.reviewer_a,
+                first_task,
+                ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Approve,
+                },
+                None,
+                "",
+                2,
+                "advance-current-clock-definition",
+            )
+            .await,
+        Ok(ReviewTransition::StageAdvanced { .. })
+    ));
+    let second_task = task_id(&fixture, current.accepted.request_id, 1).await;
+    let due_time: String = fixture
+        .database
+        .query_one(
+            "SELECT policy->'clock'->>'dueTime'
+               FROM casework_review_clock_occurrences
+              WHERE request_id=$1 AND task_id=$2",
+            &[&current.accepted.request_id, &second_task],
+        )
+        .await
+        .expect("current later-stage activity clock")
+        .get(0);
+    assert_eq!(due_time, "18:00");
+}
+
+#[tokio::test]
+async fn review_task_coordination_preserves_exclusions_drafts_history_and_absence_cover() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("record-coordination", "producer-ref-coordination"),
+            "create-coordination",
+        )
+        .await
+        .expect("create coordinated review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests SET context='{}'::jsonb WHERE request_id=$1",
+            &[&created.accepted.request_id],
+        )
+        .await
+        .expect("represent a valid live empty submitted snapshot");
+    let listed = fixture
+        .service_v1
+        .review_tasks(&fixture.reviewer_a, None, "", Some("review"), None, 10)
+        .await
+        .expect("list review tasks");
+    assert!(listed.items.iter().any(|item| item.task_id == task));
+    assert_eq!(
+        fixture
+            .service_v1
+            .review_task(&fixture.reviewer_a, task, None, "")
+            .await
+            .expect("read submitted-context task")
+            .task_id,
+        task
+    );
+    let context = fixture
+        .service_v1
+        .review_task_context(&fixture.reviewer_a, task, None, "")
+        .await
+        .expect("read frozen submitted task context");
+    assert_eq!(context.task_id, task);
+    assert_eq!(context.request_id, created.accepted.request_id);
+    assert_eq!(context.policy, created.accepted.policy);
+    assert_eq!(context.requester_reference, "producer-ref-coordination");
+    assert!(matches!(
+        context.context,
+        registry_casework_core::ReviewTaskContextData::Submitted { snapshot }
+            if snapshot == json!({})
+    ));
+
+    let initiator = IssuerPrincipal {
+        issuer: "https://issuer.test".to_owned(),
+        subject: "initiator".to_owned(),
+    };
+    assert!(matches!(
+        fixture
+            .service_v1
+            .assign_review_task(
+                &fixture.supervisor,
+                task,
+                None,
+                "",
+                1,
+                AssignmentRequest {
+                    assignee: initiator,
+                    reason: Some("nominate initiator".to_owned()),
+                },
+                "assign-initiator",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden)
+    ));
+    let assigned = fixture
+        .service_v1
+        .assign_review_task(
+            &fixture.supervisor,
+            task,
+            None,
+            "",
+            1,
+            AssignmentRequest {
+                assignee: fixture.reviewer_a.principal.clone(),
+                reason: Some("primary nomination".to_owned()),
+            },
+            "assign-reviewer-a",
+        )
+        .await
+        .expect("assign review task");
+    assert!(matches!(
+        assigned.state,
+        ReviewerTaskState::Held { holder } if holder == fixture.reviewer_a.principal
+    ));
+    assert!(matches!(
+        fixture
+            .service_v1
+            .delegate_review_task(
+                &fixture.reviewer_a,
+                task,
+                None,
+                "",
+                assigned.revision,
+                DelegateRequest {
+                    delegate: IssuerPrincipal {
+                        issuer: "https://issuer.test".to_owned(),
+                        subject: "initiator".to_owned(),
+                    },
+                    reason: Some("excluded handoff".to_owned()),
+                },
+                "delegate-initiator",
+            )
+            .await,
+        Err(ReviewRuntimeError::Forbidden)
+    ));
+    let delegated = fixture
+        .service_v1
+        .delegate_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            assigned.revision,
+            DelegateRequest {
+                delegate: fixture.reviewer_b.principal.clone(),
+                reason: Some("handoff".to_owned()),
+            },
+            "delegate-reviewer-b",
+        )
+        .await
+        .expect("delegate review task");
+    assert!(matches!(
+        delegated.state,
+        ReviewerTaskState::Held { holder } if holder == fixture.reviewer_b.principal
+    ));
+
+    let draft = fixture
+        .service_v1
+        .save_review_task_draft(
+            &fixture.reviewer_b,
+            task,
+            None,
+            "",
+            delegated.revision,
+            ReviewTaskDraftInput {
+                body: json!({"private": "working notes"}),
+            },
+            "save-private-draft",
+        )
+        .await
+        .expect("save private draft");
+    assert_eq!(draft.body, json!({"private": "working notes"}));
+    let stored_draft = fixture
+        .service_v1
+        .review_task_draft(&fixture.reviewer_b, task, None, "")
+        .await
+        .expect("read private draft")
+        .expect("draft exists");
+    assert_eq!(stored_draft.task_id, draft.task_id);
+    assert_eq!(stored_draft.author, draft.author);
+    assert_eq!(stored_draft.body, draft.body);
+    assert_eq!(stored_draft.revision, draft.revision);
+    assert_eq!(
+        stored_draft.updated_at.timestamp_micros(),
+        draft.updated_at.timestamp_micros()
+    );
+    assert!(fixture
+        .service_v1
+        .review_task_draft(&fixture.reviewer_a, task, None, "")
+        .await
+        .expect("other reviewer draft lookup")
+        .is_none());
+
+    fixture
+        .service_v1
+        .add_review_note(
+            &fixture.reviewer_b,
+            created.accepted.request_id,
+            None,
+            "",
+            ReviewNoteRequest {
+                audience: ReviewHistoryAudience::Reviewers,
+                note: "reviewer-only note".to_owned(),
+            },
+            "reviewer-note",
+        )
+        .await
+        .expect("add reviewer note");
+    fixture
+        .service_v1
+        .add_review_note(
+            &fixture.producer,
+            created.accepted.request_id,
+            None,
+            "producer-token",
+            ReviewNoteRequest {
+                audience: ReviewHistoryAudience::Requester,
+                note: "requester-visible note".to_owned(),
+            },
+            "requester-note",
+        )
+        .await
+        .expect("add requester note");
+    let requester_history = fixture
+        .service_v1
+        .review_history(
+            &fixture.producer,
+            created.accepted.request_id,
+            None,
+            "producer-token",
+            None,
+            100,
+        )
+        .await
+        .expect("requester history");
+    let requester_history_json =
+        serde_json::to_string(&requester_history.items).expect("history JSON");
+    assert!(requester_history_json.contains("requester-visible note"));
+    assert!(!requester_history_json.contains("reviewer-only note"));
+    assert!(!requester_history_json.contains("working notes"));
+
+    let covered = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("record-covered", "producer-ref-covered"),
+            "create-covered",
+        )
+        .await
+        .expect("create covered review");
+    let covered_task = task_id(&fixture, covered.accepted.request_id, 0).await;
+    let absence_id = Uuid::new_v4();
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_absences(
+                absence_id,person_issuer,person_subject,starts_at,ends_at,
+                cover_issuer,cover_subject,revision)
+             VALUES($1,$2,$3,$4,$5,$6,$7,1)",
+            &[
+                &absence_id,
+                &fixture.reviewer_b.principal.issuer,
+                &fixture.reviewer_b.principal.subject,
+                &(Utc::now() - TimeDelta::hours(1)),
+                &(Utc::now() + TimeDelta::hours(1)),
+                &fixture.reviewer_a.principal.issuer,
+                &fixture.reviewer_a.principal.subject,
+            ],
+        )
+        .await
+        .expect("record active absence");
+    let assigned_cover = fixture
+        .service_v1
+        .assign_review_task(
+            &fixture.supervisor,
+            covered_task,
+            None,
+            "",
+            1,
+            AssignmentRequest {
+                assignee: fixture.reviewer_b.principal.clone(),
+                reason: Some("absence cover".to_owned()),
+            },
+            "assign-covered-review",
+        )
+        .await
+        .expect("assign through active absence");
+    assert!(matches!(
+        assigned_cover.state,
+        ReviewerTaskState::Held { holder } if holder == fixture.reviewer_a.principal
+    ));
+    let assignment_kind: String = fixture
+        .database
+        .query_one(
+            "SELECT assignment_kind FROM casework_review_tasks WHERE task_id=$1",
+            &[&covered_task],
+        )
+        .await
+        .expect("covered task assignment")
+        .get(0);
+    assert_eq!(assignment_kind, "absence_cover");
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_absences WHERE absence_id=$1",
+            &[&absence_id],
+        )
+        .await
+        .expect("end active absence");
+    assert_eq!(
+        fixture
+            .service_v1
+            .reconcile_review_absences(100)
+            .await
+            .expect("reconcile ended absence"),
+        1
+    );
+    let restored = fixture
+        .database
+        .query_one(
+            "SELECT holder_subject,assignment_kind FROM casework_review_tasks WHERE task_id=$1",
+            &[&covered_task],
+        )
+        .await
+        .expect("restored assignment");
+    assert_eq!(restored.get::<_, String>(0), "reviewer-b");
+    assert_eq!(restored.get::<_, String>(1), "nomination");
+    let stale_scan_time = Utc::now() - TimeDelta::days(1);
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_tasks SET updated_at=$2 WHERE task_id=$1",
+            &[&covered_task, &stale_scan_time],
+        )
+        .await
+        .expect("make unchanged assignment the oldest scan candidate");
+    assert_eq!(
+        fixture
+            .service_v1
+            .reconcile_review_absences(100)
+            .await
+            .expect("rotate unchanged absence candidate"),
+        0
+    );
+    let rotated_at: chrono::DateTime<Utc> = fixture
+        .database
+        .query_one(
+            "SELECT updated_at FROM casework_review_tasks WHERE task_id=$1",
+            &[&covered_task],
+        )
+        .await
+        .expect("read rotated absence candidate")
+        .get(0);
+    assert!(rotated_at > stale_scan_time);
+}

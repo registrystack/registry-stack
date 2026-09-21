@@ -24,8 +24,8 @@ pub use breg_attachment::*;
 mod breg_metadata;
 
 use breg_metadata::{
-    BRegChangeRequestApplicationMode, BRegChangeRequestDisposition, BRegChangeRequestPlannerKind,
-    BRegChangeRequestReviewMode, BRegDirectWrite, BRegMetadata, BRegMetadataErrorKind,
+    BRegChangeRequestOnApprovedMode, BRegChangeRequestPlannerKind,
+    BRegChangeRequestReviewRequirement, BRegDirectWrite, BRegMetadata, BRegMetadataErrorKind,
     BRegMetadataSelectionErrorKind, BRegOperationKind,
 };
 
@@ -146,7 +146,7 @@ fn fixture() -> Value {
 
 fn lifecycle_schema(kind: &str) -> Value {
     match kind {
-        "approve_request" => json!({
+        "apply_request" => json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
             "additionalProperties": false,
@@ -165,7 +165,7 @@ fn lifecycle_schema(kind: &str) -> Value {
                     "type": "string",
                     "maxLength": 4096,
                     "pattern": "^[^\\u0000]*$",
-                    "description": "Optional reviewer explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."
+                    "description": "Optional application explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."
                 }
             }
         }),
@@ -189,9 +189,9 @@ fn lifecycle_fixture() -> Value {
             "submit_request",
         ),
         (
-            "records.company.request.stages.legal-review.approve",
-            "/v1/records/companies/{record_id}/actions/stages/legal-review/approve",
-            "approve_request",
+            "records.company.request.apply",
+            "/v1/records/companies/{record_id}/actions/apply",
+            "apply_request",
         ),
     ] {
         lifecycle_operations.push(operation(
@@ -326,28 +326,14 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
             "possibleWriteCount": 1,
             "possibleWriteOperations": ["patch"]
         },
-        "reviewMode": "staged",
-        "stages": [
-            {
-                "id": "legal-review",
-                "approvals": 2,
-                "excludeSubmitter": true,
-                "excludePreviousReviewers": true
-            },
-            {"id": "operations", "approvals": 1, "excludeSubmitter": false}
-        ],
-        "application": {
-            "mode": "planner",
-            "allowedDispositions": ["apply", "queue"],
-            "queueReasons": [{"code": "manual-check", "label": "Manual check"}]
-        }
+        "review": {"authority":"casework", "policyId":"address-review"},
+        "onApproved": {"mode":"automatic", "executor":"breg-worker"},
+        "application": {"preconditions":{"request":[]}}
     });
     let mut value = fixture();
     value["entities"][0]["changeRequest"] = capability.clone();
     let metadata = parse(&value);
-    let change_request = metadata
-        .change_request_capability("company")
-        .expect("visible request capability is typed");
+    let change_request = metadata.change_request_capability("company").unwrap();
     assert_eq!(
         change_request.planner().kind(),
         BRegChangeRequestPlannerKind::Rhai
@@ -356,76 +342,36 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
         change_request.planner().abi(),
         Some("registry.change-request-plan/v1")
     );
-    let limits = change_request
-        .planner()
-        .limits()
-        .expect("Rhai limits exist");
+    let limits = change_request.planner().limits().unwrap();
     assert_eq!(limits.maximum_targets(), 16);
     assert_eq!(limits.maximum_field_mutations(), 128);
-    assert_eq!(limits.maximum_snapshot_bytes(), 2_097_152);
-    assert_eq!(limits.maximum_source_bytes(), 65_536);
-    assert_eq!(limits.maximum_operations(), 100_000);
-    assert_eq!(limits.maximum_call_depth(), 32);
-    assert_eq!(limits.maximum_expression_depth(), 64);
-    assert_eq!(limits.maximum_string_bytes(), 16_384);
-    assert_eq!(limits.maximum_array_items(), 256);
-    assert_eq!(limits.maximum_map_entries(), 256);
-    assert_eq!(limits.maximum_modules(), 0);
     assert_eq!(change_request.planner().possible_write_count(), Some(1));
     assert!(matches!(
         change_request.planner().possible_write_operations(),
         [BRegOperationKind::Patch]
     ));
+    let BRegChangeRequestReviewRequirement::External(requirement) = change_request.review() else {
+        panic!("external")
+    };
+    assert_eq!(requirement.authority(), "casework");
+    assert_eq!(requirement.policy_id(), "address-review");
     assert_eq!(
-        change_request.review_mode(),
-        BRegChangeRequestReviewMode::Staged
+        change_request.on_approved().mode(),
+        BRegChangeRequestOnApprovedMode::Automatic
     );
-    let stages = change_request
-        .stages()
-        .expect("new servers advertise stages");
-    assert_eq!(stages.len(), 2);
-    assert_eq!(stages[0].identifier(), "legal-review");
-    assert_eq!(stages[0].approvals(), 2);
-    assert!(stages[0].exclude_submitter());
-    assert!(stages[0].exclude_previous_reviewers());
-    assert!(!stages[1].exclude_previous_reviewers());
+    assert_eq!(change_request.on_approved().executor(), Some("breg-worker"));
     assert_eq!(
-        change_request.application().mode(),
-        BRegChangeRequestApplicationMode::Planner
+        change_request.application().preconditions(),
+        Some(&json!({"request":[]}))
     );
-    assert_eq!(
-        change_request.application().allowed_dispositions(),
-        [
-            BRegChangeRequestDisposition::Apply,
-            BRegChangeRequestDisposition::Queue
-        ]
-    );
-    assert_eq!(
-        change_request.application().queue_reasons()[0].code(),
-        "manual-check"
-    );
-    assert_eq!(
-        change_request.application().queue_reasons()[0].label(),
-        "Manual check"
-    );
-    assert!(!format!("{change_request:?}").contains("Manual check"));
-    assert!(!format!("{change_request:?}").contains("legal-review"));
+    assert!(!format!("{change_request:?}").contains("address-review"));
+    assert!(!format!("{change_request:?}").contains("breg-worker"));
     assert!(matches!(
         metadata
             .select_direct_write("records.company.patch", "company-writer")
-            .expect("descriptive capability does not alter direct-write authority"),
+            .unwrap(),
         BRegDirectWrite::Patch(_)
     ));
-
-    let mut legacy_capability = capability.clone();
-    legacy_capability.as_object_mut().unwrap().remove("stages");
-    let mut legacy = fixture();
-    legacy["entities"][0]["changeRequest"] = legacy_capability;
-    assert!(parse(&legacy)
-        .change_request_capability("company")
-        .unwrap()
-        .stages()
-        .is_none());
 
     for malformed in [
         {
@@ -435,32 +381,25 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
         },
         {
             let mut malformed = capability.clone();
-            malformed["planner"]["limits"]["maximumModules"] = json!(1);
+            malformed["review"]["mode"] = json!("external");
             malformed
         },
         {
             let mut malformed = capability.clone();
-            malformed["planner"]["possibleWriteOperations"] = json!(["patch", "patch"]);
+            malformed["onApproved"]
+                .as_object_mut()
+                .unwrap()
+                .remove("executor");
             malformed
         },
         {
             let mut malformed = capability.clone();
-            malformed["stages"][1]["id"] = json!("legal-review");
-            malformed
-        },
-        {
-            let mut malformed = capability.clone();
-            malformed["stages"][0]["approvals"] = json!(33);
-            malformed
-        },
-        {
-            let mut malformed = capability.clone();
-            malformed["stages"][0]["excludePreviousReviewers"] = Value::Null;
+            malformed["onApproved"]["mode"] = json!("manual");
             malformed
         },
         {
             let mut malformed = capability;
-            malformed["stages"][0]["privateGrant"] = json!("reviewers");
+            malformed["application"]["privateGrant"] = json!("writers");
             malformed
         },
     ] {
@@ -469,7 +408,6 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
         assert!(BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
     }
 }
-
 #[test]
 fn duplicate_json_members_are_refused_at_every_depth() {
     let duplicate_root = format!(

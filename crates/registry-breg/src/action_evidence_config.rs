@@ -402,12 +402,12 @@ mod tests {
             "requestEntityId": "synthetic-request",
             "contractFingerprint": format!("sha256:{}", "0".repeat(64)),
             "retentionMode": "retain",
-            "reviewMode": "stages",
+            "review": {"mode": "none"},
+            "onApproved": {"mode": "manual"},
             "application": {
-                "mode": "manual", "allowedDispositions": [], "queueReasons": {},
                 "preconditions": {"evidence": [{"capability": capability, "subjects": {}, "requires": []}]}
             },
-            "effects": [], "stages": [], "actions": [], "reviewPermissions": [],
+            "effects": [], "actions": [],
             "applyPermissions": [], "presencePermissions": [], "targetEntities": [],
             "maximumTargets": 1, "maximumFieldMutations": 1, "maximumSnapshotBytes": 1
         });

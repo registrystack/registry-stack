@@ -14,10 +14,9 @@ use serde_json::{Map as JsonMap, Value};
 use crate::{
     contract::{Operation, CHANGE_REQUEST_PLAN_ABI_V1},
     model::{
-        CompiledChangeRequest, CompiledChangeRequestApplicationMode,
-        CompiledChangeRequestDisposition, CompiledChangeRequestMutation,
-        CompiledChangeRequestPlanner, CompiledChangeRequestPlannerWrite,
-        CompiledChangeRequestTargetBinding, CompiledChangeRequestValue,
+        CompiledChangeRequest, CompiledChangeRequestMutation, CompiledChangeRequestPlanner,
+        CompiledChangeRequestPlannerWrite, CompiledChangeRequestTargetBinding,
+        CompiledChangeRequestValue,
     },
 };
 
@@ -70,7 +69,6 @@ pub enum ChangeRequestPlannerError {
     Execution,
     Result,
     Ceiling,
-    Disposition,
     Resource,
     Deadline,
 }
@@ -78,13 +76,12 @@ pub enum ChangeRequestPlannerError {
 impl ChangeRequestPlannerError {
     /// The closed kinds a submission is refused for. A planner that exhausted
     /// its time budget is absent: it is a service outage, not a refusal.
-    pub const PLAN_REFUSALS: [Self; 7] = [
+    pub const PLAN_REFUSALS: [Self; 6] = [
         Self::Source,
         Self::Entrypoint,
         Self::Execution,
         Self::Result,
         Self::Ceiling,
-        Self::Disposition,
         Self::Resource,
     ];
 
@@ -95,7 +92,6 @@ impl ChangeRequestPlannerError {
             Self::Execution => "change_request.planner.execution",
             Self::Result => "change_request.planner.result",
             Self::Ceiling => "change_request.planner.ceiling",
-            Self::Disposition => "change_request.planner.disposition",
             Self::Resource => "change_request.planner.resource",
             Self::Deadline => "change_request.planner.deadline",
         }
@@ -124,9 +120,6 @@ impl ChangeRequestPlannerError {
             Self::Ceiling => {
                 "The change-request planner refused the submission: change_request.planner.ceiling."
             }
-            Self::Disposition => {
-                "The change-request planner refused the submission: change_request.planner.disposition."
-            }
             Self::Resource => {
                 "The change-request planner refused the submission: change_request.planner.resource."
             }
@@ -146,8 +139,6 @@ impl std::error::Error for ChangeRequestPlannerError {}
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledEffectPlanCandidate {
     pub effects: Vec<CandidateChangeRequestEffect>,
-    pub disposition: CompiledChangeRequestDisposition,
-    pub queue_reason: Option<CandidateQueueReason>,
     pub planner_binding: CandidatePlannerBinding,
 }
 
@@ -156,12 +147,6 @@ pub struct CandidatePlannerBinding {
     pub kind: &'static str,
     pub abi_identifier: String,
     pub script_sha256: Option<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CandidateQueueReason {
-    pub code: String,
-    pub label: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -287,13 +272,6 @@ fn declarative_candidate(
     plan: &CompiledChangeRequest,
     _request_fields: &JsonMap<String, Value>,
 ) -> Result<CompiledEffectPlanCandidate, ChangeRequestPlannerError> {
-    let disposition = match plan.application.mode {
-        CompiledChangeRequestApplicationMode::Manual => CompiledChangeRequestDisposition::Queue,
-        CompiledChangeRequestApplicationMode::Automatic => CompiledChangeRequestDisposition::Apply,
-        CompiledChangeRequestApplicationMode::Planner => {
-            return Err(ChangeRequestPlannerError::Disposition)
-        }
-    };
     let effects = plan
         .effects
         .iter()
@@ -355,8 +333,6 @@ fn declarative_candidate(
         .collect::<Result<Vec<_>, _>>()?;
     Ok(CompiledEffectPlanCandidate {
         effects,
-        disposition,
-        queue_reason: None,
         planner_binding: CandidatePlannerBinding {
             kind: "declarative",
             abi_identifier: CHANGE_REQUEST_PLAN_ABI_V1.to_owned(),
@@ -460,7 +436,7 @@ fn decode_plan(
     let map = result
         .try_cast::<Map>()
         .ok_or(ChangeRequestPlannerError::Result)?;
-    exact_keys(&map, &["effects"], &["disposition", "reasonCode"])?;
+    exact_keys(&map, &["effects"], &[])?;
     let effects = map
         .get("effects")
         .and_then(Dynamic::read_lock::<Array>)
@@ -513,54 +489,8 @@ fn decode_plan(
         }
     }
     let decoded = order_candidates(decoded)?;
-    let authored_disposition = map.get("disposition").map(dynamic_string).transpose()?;
-    let reason_code = map.get("reasonCode").map(dynamic_string).transpose()?;
-    let disposition = match plan.application.mode {
-        CompiledChangeRequestApplicationMode::Manual => {
-            if authored_disposition.is_some() || reason_code.is_some() {
-                return Err(ChangeRequestPlannerError::Disposition);
-            }
-            CompiledChangeRequestDisposition::Queue
-        }
-        CompiledChangeRequestApplicationMode::Automatic => {
-            if authored_disposition.is_some() || reason_code.is_some() {
-                return Err(ChangeRequestPlannerError::Disposition);
-            }
-            CompiledChangeRequestDisposition::Apply
-        }
-        CompiledChangeRequestApplicationMode::Planner => match authored_disposition.as_deref() {
-            Some("apply") if reason_code.is_none() => CompiledChangeRequestDisposition::Apply,
-            Some("queue") if reason_code.is_some() => CompiledChangeRequestDisposition::Queue,
-            _ => return Err(ChangeRequestPlannerError::Disposition),
-        },
-    };
-    if plan.application.mode == CompiledChangeRequestApplicationMode::Planner
-        && !plan.application.allowed_dispositions.contains(&disposition)
-    {
-        return Err(ChangeRequestPlannerError::Disposition);
-    }
-    let queue_reason = match (disposition, reason_code) {
-        (CompiledChangeRequestDisposition::Queue, Some(code)) => {
-            let label = plan
-                .application
-                .queue_reasons
-                .get(&code)
-                .cloned()
-                .ok_or(ChangeRequestPlannerError::Disposition)?;
-            Some(CandidateQueueReason { code, label })
-        }
-        (CompiledChangeRequestDisposition::Queue, None)
-            if plan.application.mode == CompiledChangeRequestApplicationMode::Manual =>
-        {
-            None
-        }
-        (CompiledChangeRequestDisposition::Apply, None) => None,
-        _ => return Err(ChangeRequestPlannerError::Disposition),
-    };
     Ok(CompiledEffectPlanCandidate {
         effects: decoded,
-        disposition,
-        queue_reason,
         planner_binding: CandidatePlannerBinding {
             kind: "rhai",
             abi_identifier: planner.abi.clone(),

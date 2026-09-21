@@ -1,7 +1,7 @@
 {
   "entity": "label-correction",
   "accessProfile": "correction-reviewer",
-  "operation": "approve_request",
+  "operation": "get",
   "claims": {
     "principalClaim": "registry_principal",
     "principal": "synthetic-clerk",

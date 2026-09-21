@@ -99,9 +99,10 @@ entities:
           set:
             site: {fromField: proposed-site}
       review:
-        stages:
-          - {id: review, approvals: 1, excludeSubmitter: true}
-          - {id: final-approval, approvals: 1, excludeSubmitter: true}
+        authority: casework
+        policyId: asset-placement-correction
+      onApproved:
+        mode: manual
   - id: inspection-event
     primaryDataset: "asset-site-placement-change-requests"
     route: inspections
@@ -161,6 +162,7 @@ accessProfiles:
         rowBoundaries: []
         operations: [create, get, list, patch, submit_request, revise_request, cancel_request]
         readableFields: [placement, proposed-site, reason]
+        readableRequestFields: [reason, review_state]
         writableFields: [placement, proposed-site, reason]
         requestVisibility: owner
   - id: correction-reviewer
@@ -171,25 +173,9 @@ accessProfiles:
     permissions:
       - entity: placement-correction-request
         rowBoundaries: []
-        operations: [get, list, approve_request, reject_request, request_revision]
+        operations: [get, list]
         readableFields: [placement, proposed-site, reason]
-        reviewStages:
-          - stage: review
-            targets:
-              - {entity: asset-placement, readableFields: [site], rowBoundaries: []}
-  - id: correction-supervisor
-    principalClaim: registry_principal
-    requiredScopes: [registry:corrections:supervise]
-    requiredPurposes: [asset-correction-review]
-    permissions:
-      - entity: placement-correction-request
-        rowBoundaries: []
-        operations: [get, approve_request, reject_request, request_revision]
-        readableFields: [placement, proposed-site, reason]
-        reviewStages:
-          - stage: final-approval
-            targets:
-              - {entity: asset-placement, readableFields: [site], rowBoundaries: []}
+        readableRequestFields: [reason, review_state]
   - id: correction-applier
     principalClaim: registry_principal
     requiredScopes: [registry:corrections:apply]
@@ -199,6 +185,7 @@ accessProfiles:
         rowBoundaries: []
         operations: [get, apply_request]
         readableFields: [placement, proposed-site, reason]
+        readableRequestFields: [reason, review_state]
         applyTargets:
           - {entity: asset-placement, rowBoundaries: []}
 vocabularies:

@@ -30,6 +30,9 @@ pub(super) struct Clients {
     /// Exact local Evidence provider bindings for governed action packages.
     #[serde(default)]
     pub evidence_providers: BTreeMap<String, LocalEvidenceProvider>,
+    /// Exact local Casework review-authority bindings for governed proposals.
+    #[serde(default)]
+    pub review_authorities: BTreeMap<String, LocalReviewAuthority>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -62,6 +65,21 @@ pub(super) struct LocalEvidencePrivateKeyJwt {
     pub assertion_audience: String,
     pub resource: String,
     pub scopes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct LocalReviewAuthority {
+    pub endpoint: String,
+    /// Casework requester access profile selected on every authority exchange.
+    pub profile: String,
+    pub producer_id: String,
+    pub recovery_days: u32,
+    /// Logical client from this same closed file. Its generated key is copied
+    /// into the private runtime secret tree and is never written to this file.
+    pub client: String,
+    pub completion_token_file: Option<PathBuf>,
+    pub completion_recipient: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -374,6 +392,56 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
     }
     if clients.evidence_providers.len() > 8 {
         bail!("at most 8 local Evidence providers may be bound");
+    }
+    if clients.review_authorities.len() > 8 {
+        bail!("at most 8 local review authorities may be bound");
+    }
+    for (id, authority) in &clients.review_authorities {
+        let endpoint = reqwest::Url::parse(&authority.endpoint)
+            .context("local review authority endpoint must be an exact loopback HTTP URL")?;
+        if !governed_identifier(id)
+            || endpoint.scheme() != "http"
+            || endpoint.host_str() != Some("127.0.0.1")
+            || endpoint.port().is_none_or(|port| port == 0)
+            || !endpoint.username().is_empty()
+            || endpoint.password().is_some()
+            || endpoint.query().is_some()
+            || endpoint.fragment().is_some()
+            || registry_platform_httputil::client::ServiceBaseUrl::new(endpoint).is_err()
+            || authority.profile.is_empty()
+            || authority.profile.len() > 128
+            || !authority.profile.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
+            || authority.producer_id.trim().is_empty()
+            || authority.producer_id.len() > 128
+            || authority.producer_id.chars().any(char::is_control)
+            || !(1..=90).contains(&authority.recovery_days)
+            || !clients
+                .clients
+                .iter()
+                .any(|client| client.id == authority.client)
+        {
+            bail!("local review authorities need bounded IDs, exact loopback endpoints, producer bindings, recovery windows, and declared clients");
+        }
+        match (
+            &authority.completion_token_file,
+            &authority.completion_recipient,
+        ) {
+            (None, None) => (),
+            (Some(file), Some(recipient))
+                if !recipient.trim().is_empty()
+                    && recipient.len() <= 128
+                    && !recipient.chars().any(char::is_control) =>
+            {
+                private::check(file, false)?;
+                let token = Zeroizing::new(private::read(file, 4096)?);
+                if token.is_empty() || !token.iter().all(|byte| byte.is_ascii_graphic()) {
+                    bail!("local review completion tokens must be bounded visible ASCII");
+                }
+            }
+            _ => bail!("local review completion token and recipient must be declared together"),
+        }
     }
     for (id, provider) in &clients.evidence_providers {
         let origin = reqwest::Url::parse(&provider.base_url)
@@ -742,6 +810,33 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
             let bytes = Zeroizing::new(private::read(source, 64 * 1024)?);
             private::create(
                 &root.join("secrets").join(format!("evidence-ca-{id}")),
+                &bytes,
+            )?;
+        }
+    }
+    for (id, authority) in &clients.review_authorities {
+        let credentials = root.join("credentials").join(&authority.client);
+        for (source, name, maximum) in [
+            (
+                credentials.join("client-id"),
+                format!("review-authority-{id}-client-id"),
+                1024,
+            ),
+            (
+                credentials.join("assertion-key.jwk"),
+                format!("review-authority-{id}-client-assertion-key"),
+                64 * 1024,
+            ),
+        ] {
+            let bytes = Zeroizing::new(private::read(&source, maximum)?);
+            private::create(&root.join("secrets").join(name), &bytes)?;
+        }
+        if let Some(source) = &authority.completion_token_file {
+            let bytes = Zeroizing::new(private::read(source, 4096)?);
+            private::create(
+                &root
+                    .join("secrets")
+                    .join(format!("review-completion-{id}-token")),
                 &bytes,
             )?;
         }
@@ -1263,9 +1358,50 @@ pub(super) fn runtime(
                 "trustedJwksRef":format!("secret:file/evidence-jwks-{id}"),
                 "revokedKeyIds":provider.revoked_key_ids,
                 "caBundleRef":provider.ca_bundle_file.as_ref().map(|_| format!("secret:file/evidence-ca-{id}"))
-            }))).collect::<BTreeMap<_,_>>()
+            }))).collect::<BTreeMap<_,_>>(),
+            "reviewAuthorities":local_review_authorities(state, clients)
         }),
     )
+}
+
+fn local_review_authorities(state: &State, clients: &Clients) -> BTreeMap<String, Value> {
+    clients
+        .review_authorities
+        .iter()
+        .map(|(id, authority)| {
+            let client = clients
+                .clients
+                .iter()
+                .find(|client| client.id == authority.client)
+                .expect("closed local review authority validation resolves its client");
+            let resource = clients
+                .issuer
+                .client_resources
+                .get(&authority.client)
+                .cloned()
+                .unwrap_or_else(|| state.audience());
+            let mut binding = json!({
+                "endpoint": authority.endpoint,
+                "profile": authority.profile,
+                "producerId": authority.producer_id,
+                "recoveryDays": authority.recovery_days,
+                "privateKeyJwt": {
+                    "tokenEndpoint": format!("{}/oauth2/token", state.issuer_origin()),
+                    "clientIdRef": format!("secret:file/review-authority-{id}-client-id"),
+                    "clientAssertionKeyRef": format!("secret:file/review-authority-{id}-client-assertion-key"),
+                    "assertionAudience": state.issuer_origin(),
+                    "resource": resource,
+                    "scopes": client.scopes,
+                }
+            });
+            if let Some(recipient) = &authority.completion_recipient {
+                binding["completionTokenRef"] =
+                    json!(format!("secret:file/review-completion-{id}-token"));
+                binding["completionRecipient"] = json!(recipient);
+            }
+            (id.clone(), binding)
+        })
+        .collect()
 }
 
 pub(super) fn external_event_destinations(

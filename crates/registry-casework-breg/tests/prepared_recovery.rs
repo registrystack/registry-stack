@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig, StaticToken};
-use registry_casework_breg::{BregAdapter, BregReviewStage, BregSourceConfig};
+use registry_casework_breg::{BregAdapter, BregSourceConfig};
 use registry_casework_core::*;
 use serde_json::{json, Value};
 use wiremock::{
@@ -24,16 +24,11 @@ fn adapter(base: &str) -> BregAdapter {
             source_id: "source".into(),
             entity: "company".into(),
             route: "companies".into(),
-            stages: vec![BregReviewStage {
-                id: "review".into(),
-                approvals: 1,
-                exclude_submitter: false,
-                exclude_previous_reviewers: false,
-            }],
             routing_metadata: RoutingSourceMetadata {
-                stages: vec!["review".into()],
+                stages: vec![],
                 fields: vec![],
             },
+            context_projection: Vec::new(),
             display_reference: None,
             expected_registry_revision: REVISION.into(),
             binding_generation: "generation-1".into(),
@@ -95,7 +90,7 @@ fn metadata() -> Value {
                 "fieldNames": "api", "queryParameters": [], "body": "change_request_action",
                 "contentType": "application/json", "ifMatchRequired": true,
                 "idempotencyKeyRequired": true, "mutationSemantics": "change_request_lifecycle",
-                "schema": {"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["proposalVersion","effectDigest"],"properties":{"proposalVersion":{"type":"integer","format":"int64","minimum":1,"maximum":4294967295_u64},"effectDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$","description":"Digest of the immutable proposal effects displayed to the actor."},"reason":{"type":"string","maxLength":4096,"pattern":"^[^\\u0000]*$","description":"Optional reviewer explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."}}}
+                "schema": {"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["proposalVersion","effectDigest"],"properties":{"proposalVersion":{"type":"integer","format":"int64","minimum":1,"maximum":4294967295_u64},"effectDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$","description":"Digest of the immutable proposal effects displayed to the actor."},"reason":{"type":"string","maxLength":4096,"pattern":"^[^\\u0000]*$","description":"Optional application explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."}}}
             }
         }]
     })
@@ -107,7 +102,19 @@ fn record() -> Value {
             "recordIdentifier": ID, "revisionIdentifier": "7",
             "domainData": {"secretProposalBody": "PROPOSAL-BODY-CANARY"},
             "request": {
-                "bregState": "approved", "proposalVersion": 7, "effectDigest": DIGEST,
+                "bregState": "submitted", "proposalVersion": 7, "effectDigest": DIGEST,
+                "proposal":{"review":{"authority":"casework-main","policyId":"registry-correction"}},
+                "review":{
+                    "submission":{"state":"accepted","authority":"casework-main",
+                        "requestId":"00000000-0000-4000-8000-000000000003",
+                        "submissionDigest":DIGEST,
+                        "policy":{"id":"registry-correction","version":"1","digest":DIGEST}},
+                    "result":{"state":"approved","resultId":"00000000-0000-4000-8000-000000000004",
+                        "completedAt":"2026-09-10T00:00:00Z","availableUntil":"2026-10-10T00:00:00Z"},
+                    "delivery":{"state":"polling"},
+                    "application":{"mode":"manual","state":"ready"},
+                    "recovery":{"state":"none"}
+                },
                 "editable": false,
                 "actions": [{
                     "operation": "apply_request", "method": "POST",

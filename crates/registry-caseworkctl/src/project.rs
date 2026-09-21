@@ -33,19 +33,70 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [casework:admin]
     role: administrator
+  - id: integration-requester
+    principalClaim: registry_principal
+    requiredScopes: [casework:reviews:request]
+    role: requester
 sources:
-  - id: professional-register
+  - id: professional-licences
     adapter: breg
-    description: sources/professional-register.json
+    description: sources/professional-licences.json
     requests:
       - entity: scope-correction
         queue: corrections
+        contextProjection:
+          - record
+          - licensed-activities
+          - authorization-conditions
+          - supporting-reference
         target:
           id: first-review-response
           after: {elapsed: PT48H}
 queues:
   - id: corrections
     label: Licence corrections
+reviewKinds:
+  - id: scope-correction
+    version: "1"
+    purpose: approval
+    contextStrategy: source
+    stages:
+      - id: review
+        queue: corrections
+        decidingProfiles: [staff]
+        requiredApprovals: 1
+    retention:
+      terminalDays: 30
+      accountabilityDays: 365
+    displaySchema:
+      # The projected source fields a caller-filtered read may disclose,
+      # under their API names. All are optional: the source omits any field
+      # the reading caller cannot see.
+      type: object
+      additionalProperties: false
+      properties:
+        record:
+          type: object
+          additionalProperties: false
+          required: [recordRef]
+          properties:
+            recordRef: {type: string, maxLength: 128}
+        licensedActivities:
+          type: array
+          items: {type: string}
+          minItems: 1
+          maxItems: 3
+          uniqueItems: true
+        authorizationConditions: {type: string, maxLength: 500}
+        supportingReference: {type: string, minLength: 1, maxLength: 500}
+reviewProducers:
+  - id: registry-breg
+    profile: integration-requester
+    issuer: http://127.0.0.1:8091
+    subject: professional-review-breg
+    sourceNamespaces: [professional-licences]
+    kinds: [scope-correction]
+    recoveryDays: 7
 "#;
 
 const RUNTIME_SCHEMA: &str =
@@ -74,7 +125,7 @@ fn runtime_example(project: &Path, include_source: bool) -> Result<String> {
         "sources": {}
     });
     if include_source {
-        document["sources"]["professional-register"] = json!({
+        document["sources"]["professional-licences"] = json!({
             "baseUrl": "https://registry.example.test",
             "readerProfile": "casework-reader",
             "tokenEndpoint": "https://identity.example.test/realms/registry/token",
@@ -93,16 +144,22 @@ const BREG_SOURCE_DESCRIPTION: &str = r#"{
   "kind": "BRegCaseworkSourceDescription",
   "origin": "bregctl explain change-requests",
   "authority": "none",
-  "sourceId": "professional-register",
+  "sourceId": "professional-licences",
   "sourceRevision": "sha256:source-revision",
   "request": {
     "requestEntity": "scope-correction",
     "requestRoute": "scope-corrections",
-    "reviewMode": "staged",
-    "stages": [{"id":"review","approvals":1,"excludeSubmitter":true,"excludePreviousReviewers":false}],
-    "fields": [],
+    "fields": [
+      {"field":"record","apiName":"record","schema":{"type":"object","additionalProperties":false,"required":["recordRef"],"properties":{"recordRef":{"type":"string","maxLength":128}}}},
+      {"field":"licensed-activities","apiName":"licensedActivities","schema":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":3,"uniqueItems":true}},
+      {"field":"authorization-conditions","apiName":"authorizationConditions","schema":{"type":"string","maxLength":500}},
+      {"field":"reason","apiName":"reason","schema":{"type":"string","minLength":1,"maxLength":500}},
+      {"field":"supporting-reference","apiName":"supportingReference","schema":{"type":"string","minLength":1,"maxLength":500}}
+    ],
     "contractFingerprint": "sha256:contract",
-    "application": {"mode":"manual"}
+    "review": {"authority":"casework-main","policyId":"scope-correction"},
+    "onApproved": {"mode":"manual"},
+    "application": {}
   }
 }
 "#;
@@ -111,7 +168,7 @@ const FIXTURE: &str = r#"apiVersion: registry.registrystack.org/casework-fixture
 kind: CaseworkFixture
 name: professional-review-offline
 source:
-  id: professional-register
+  id: professional-licences
   requestEntity: scope-correction
   reviewStage: review
 expect:
@@ -144,15 +201,19 @@ accessProfiles:
     principalClaim: sub
     requiredScopes: [casework:request]
     role: requester
-    kinds: [decision]
 queues:
   - id: decisions
     label: Decisions awaiting review
-hostedKinds:
+reviewKinds:
   - id: decision
     version: "1"
-    queue: decisions
-    decidingProfiles: [staff]
+    purpose: answer
+    contextStrategy: submitted
+    stages:
+      - id: answer
+        queue: decisions
+        decidingProfiles: [staff]
+        requiredApprovals: 1
     retention:
       terminalDays: 90
       accountabilityDays: 365
@@ -166,16 +227,26 @@ hostedKinds:
     outcomes:
       - id: confirmed
         label: Confirm
+        settlement: answered
         reasonRequired: false
       - id: rejected
         label: Return for correction
+        settlement: answered
         reasonRequired: true
+reviewProducers:
+  - id: requester
+    profile: requester
+    issuer: http://127.0.0.1:8093
+    subject: b75315b2-5854-70f3-8867-511dd771a6da
+    sourceNamespaces: [standalone]
+    kinds: [decision]
+    recoveryDays: 30
 "#;
 
 const STANDALONE_FIXTURE: &str = r#"apiVersion: registry.registrystack.org/casework-fixture/v1alpha1
 kind: CaseworkFixture
 name: standalone-decision-offline
-hosted:
+review:
   kind: decision
   display:
     summary: Confirm the prepared synthetic batch
@@ -263,6 +334,11 @@ clients:
     claims:
       registry_actor_kind: human
       registry_principal: professional-review-staff
+  - id: integration-requester
+    accessProfile: integration-requester
+    scopes: [casework:reviews:request]
+    claims:
+      registry_principal: professional-review-breg
 # Every queue `casework.yaml` declares needs a team serving it before
 # `caseworkctl doctor` reports ready.
 directory:
@@ -275,7 +351,7 @@ directory:
 pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     let (project_yaml, fixture_name, fixture, dev_clients, next) = match template {
         "professional-review" => (CASEWORK_YAML, "professional-review.yaml", FIXTURE, PROFESSIONAL_REVIEW_DEV_CLIENTS,
-            "Run caseworkctl source add with the authored BReg project and --source-id professional-register."),
+            "Run caseworkctl source add with the authored BReg project and --source-id professional-licences."),
         "standalone-decision" => (STANDALONE_YAML, "standalone-decision.yaml", STANDALONE_FIXTURE, STANDALONE_DEV_CLIENTS,
             "Run caseworkctl check and test, then caseworkctl dev to start a local Casework runtime, its database and its token issuer, with the directory in dev-clients.yaml already seeded."),
         _ => bail!("unknown template {template:?}; available templates: professional-review, standalone-decision"),
@@ -378,7 +454,8 @@ pub(super) fn check(project: &Path, production: bool, deny_findings: bool) -> Re
                 "projectId": policy.casework.id,
                 "mode": "standalone",
                 "queues": policy.queues,
-                "hostedKinds": policy.hosted_kinds,
+                "reviewKinds": policy.review_kinds,
+                "reviewProducers": policy.review_producers,
                 "inbox": policy.inbox,
                 "sourceConnections": 0
             },
@@ -486,8 +563,8 @@ pub(super) fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
     let policy = CaseworkProject::load(project.join("casework.yaml"))
         .context("loading and checking casework.yaml")?;
     if policy.sources.is_empty() {
-        if policy.hosted_kinds.is_empty() {
-            bail!("declare a hosted kind or connect a source before checking the project");
+        if policy.review_kinds.is_empty() || policy.review_producers.is_empty() {
+            bail!("declare a review kind and producer or connect a source before checking the project");
         }
         return Ok(policy);
     }
@@ -617,26 +694,27 @@ fn validate_fixture(fixture: &Value, effective: &Value, policy: &CaseworkProject
     {
         bail!("fixture must declare the v1alpha1 CaseworkFixture contract");
     }
-    if let Some(hosted) = fixture.get("hosted") {
-        let kind_id = hosted["kind"]
+    if let Some(review) = fixture.get("review") {
+        let kind_id = review["kind"]
             .as_str()
-            .context("hosted fixture requires a kind")?;
+            .context("review fixture requires a kind")?;
         let kind = policy
-            .hosted_kinds
+            .review_kinds
             .iter()
             .find(|kind| kind.id == kind_id)
-            .context("hosted fixture names an undeclared kind")?;
-        kind.validate_display(&hosted["display"])
-            .context("hosted fixture display does not satisfy the kind schema")?;
+            .context("review fixture names an undeclared kind")?;
+        kind.snapshot()?
+            .validate_display(&review["display"])
+            .context("review fixture display does not satisfy the kind schema")?;
         let outcomes = kind
             .outcomes
             .iter()
             .map(|outcome| outcome.id.as_str())
             .collect::<Vec<_>>();
-        if fixture["expect"]["queue"] != kind.queue
+        if fixture["expect"]["queue"] != kind.stages[0].queue
             || fixture["expect"]["outcomes"] != json!(outcomes)
         {
-            bail!("hosted fixture queue or outcomes do not match the declared kind");
+            bail!("review fixture queue or outcomes do not match the declared kind");
         }
         return Ok(());
     }
@@ -1051,6 +1129,73 @@ mod tests {
     }
 
     #[test]
+    fn starter_display_schema_admits_every_projected_source_field() {
+        let policy: CaseworkProject = serde_norway::from_str(CASEWORK_YAML).unwrap();
+        let description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
+        let authored = &policy.sources[0].requests[0].context_projection;
+        let kind = policy
+            .review_kinds
+            .iter()
+            .find(|kind| kind.id == "scope-correction")
+            .unwrap();
+        // A caller-filtered source read discloses each projected field under
+        // its API name, and preflight validates that map against the kind's
+        // displaySchema; a closed schema that admits none of them conceals
+        // every source-backed task.
+        let mut disclosed = serde_json::Map::new();
+        for field in description["request"]["fields"].as_array().unwrap() {
+            if !authored
+                .iter()
+                .any(|name| name == field["field"].as_str().unwrap())
+            {
+                continue;
+            }
+            let sample = match field["apiName"].as_str().unwrap() {
+                "record" => json!({"recordRef": "licences/1042"}),
+                "licensedActivities" => json!(["general-practice"]),
+                "authorizationConditions" => json!("Scope changes need a supervisor decision."),
+                "supportingReference" => json!("correction-case-1189"),
+                other => panic!("the starter projects unknown field {other:?}"),
+            };
+            disclosed.insert(field["apiName"].as_str().unwrap().to_owned(), sample);
+        }
+        assert_eq!(disclosed.len(), authored.len());
+        kind.snapshot()
+            .unwrap()
+            .validate_display(&Value::Object(disclosed))
+            .unwrap();
+    }
+
+    #[test]
+    fn starter_producer_subject_matches_its_dev_client_principal() {
+        let policy: CaseworkProject = serde_norway::from_str(CASEWORK_YAML).unwrap();
+        let clients: Value = serde_norway::from_str(PROFESSIONAL_REVIEW_DEV_CLIENTS).unwrap();
+        for producer in &policy.review_producers {
+            let profile = &policy
+                .access_profiles
+                .iter()
+                .find(|profile| profile.id == producer.profile)
+                .unwrap();
+            let client = clients["clients"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|client| client["accessProfile"].as_str() == Some(profile.id.as_str()))
+                .unwrap();
+            // The dev flow exports this client with the same principal claim
+            // to the shared BReg stock issuer, and Casework admits the
+            // requester only when the producer's subject is exactly that
+            // claim value.
+            assert_eq!(
+                client["claims"][profile.principal_claim.as_str()].as_str(),
+                Some(producer.subject.as_str()),
+                "producer {} does not match its dev client principal",
+                producer.id
+            );
+        }
+    }
+
+    #[test]
     fn doctor_never_reports_unattested_event_wiring_as_ready() {
         let check = doctor_source_check("professional-register");
         assert_eq!(check["sourceId"], "professional-register");
@@ -1142,7 +1287,7 @@ mod tests {
     #[test]
     fn fixture_exercises_effective_defaults() {
         let fixture: Value = serde_norway::from_str(FIXTURE).unwrap();
-        let effective = json!({"sourceId":"professional-register","requestEntity":"scope-correction","queue":"corrections","applicationMode":"manual","queueTarget":{"elapsed":"PT48H"}});
+        let effective = json!({"sourceId":"professional-licences","requestEntity":"scope-correction","queue":"corrections","applicationMode":"manual","queueTarget":{"elapsed":"PT48H"}});
         validate_fixture(
             &fixture,
             &effective,
@@ -1162,7 +1307,12 @@ mod tests {
             (
                 "professional-review",
                 "corrections",
-                vec!["administrator", "supervisor", "staff"],
+                vec![
+                    "administrator",
+                    "supervisor",
+                    "staff",
+                    "integration-requester",
+                ],
             ),
         ] {
             let root = tempfile::tempdir().unwrap();
@@ -1412,7 +1562,7 @@ mod tests {
     }
 
     #[test]
-    fn standalone_starter_checks_real_display_schema_without_a_source() {
+    fn standalone_starter_checks_real_review_display_schema_without_a_source() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let root = tempfile::tempdir().unwrap();
@@ -1429,8 +1579,8 @@ mod tests {
         );
         let checked = check(&project, false, false).unwrap();
         assert_eq!(
-            load_and_check_policy(&project).unwrap().hosted_kinds,
-            vec![registry_casework_core::standalone_decision_starter_kind()]
+            load_and_check_policy(&project).unwrap().review_kinds.len(),
+            1
         );
         assert_eq!(checked["effective"]["mode"], "standalone");
         assert_eq!(checked["effective"]["sourceConnections"], 0);
@@ -1442,7 +1592,7 @@ mod tests {
         assert_eq!(tested["productionClosure"], false);
         let fixture = project.join("fixtures/standalone-decision.yaml");
         let mut value = load_yaml(&fixture, "fixture").unwrap();
-        value["hosted"]["display"]["undeclared"] = json!("synthetic");
+        value["review"]["display"]["undeclared"] = json!("synthetic");
         fs::write(&fixture, serde_norway::to_string(&value).unwrap()).unwrap();
         assert!(test(&project).is_err());
         let runtime = RuntimeConfig::load(project.join("runtime.example.yaml")).unwrap();
@@ -1494,20 +1644,20 @@ mod tests {
         fs::create_dir_all(project.join("sources")).unwrap();
         fs::write(project.join("casework.yaml"), CASEWORK_YAML).unwrap();
         fs::write(
-            project.join("sources/professional-register.json"),
+            project.join("sources/professional-licences.json"),
             BREG_SOURCE_DESCRIPTION,
         )
         .unwrap();
 
         package(&project, &output).unwrap();
-        assert!(output.join("sources/professional-register.json").is_file());
+        assert!(output.join("sources/professional-licences.json").is_file());
         let policy = CaseworkProject::load(output.join("casework.yaml")).unwrap();
         assert!(
             verify_policy_package(&output.join("casework.yaml"), &policy)
                 .unwrap()
                 .is_some()
         );
-        fs::write(output.join("sources/professional-register.json"), "{}\n").unwrap();
+        fs::write(output.join("sources/professional-licences.json"), "{}\n").unwrap();
         assert!(verify_policy_package(&output.join("casework.yaml"), &policy).is_err());
     }
 
@@ -1524,7 +1674,7 @@ mod tests {
         fs::write(directory.path().join("casework.yaml"), CASEWORK_YAML).unwrap();
         fs::create_dir(directory.path().join("sources")).unwrap();
         fs::write(
-            directory.path().join("sources/professional-register.json"),
+            directory.path().join("sources/professional-licences.json"),
             BREG_SOURCE_DESCRIPTION,
         )
         .unwrap();
@@ -1532,6 +1682,6 @@ mod tests {
         fs::write(&runtime, runtime_example(directory.path(), true).unwrap()).unwrap();
         let config = RuntimeConfig::load(runtime).unwrap();
         assert_eq!(config.listener.bind, "127.0.0.1:8100".parse().unwrap());
-        assert!(config.sources.contains_key("professional-register"));
+        assert!(config.sources.contains_key("professional-licences"));
     }
 }

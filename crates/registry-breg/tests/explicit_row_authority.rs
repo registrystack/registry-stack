@@ -3,7 +3,6 @@
 use registry_breg::contract::{
     AccessPermissionSource, AccessProfileSource, AccessRequirementsSource,
     ActionTargetPermissionSource, ApplyTargetPermissionSource, RequestPresencePermissionSource,
-    ReviewStageTargetPermissionSource,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -27,9 +26,6 @@ fn every_row_bearing_grant_requires_an_explicit_declaration() {
     }));
     requires_explicit_rows::<ActionTargetPermissionSource>(json!({"entity":"record"}));
     requires_explicit_rows::<ApplyTargetPermissionSource>(json!({"entity":"record"}));
-    requires_explicit_rows::<ReviewStageTargetPermissionSource>(json!({
-        "entity":"record", "readableFields":["label"]
-    }));
     requires_explicit_rows::<RequestPresencePermissionSource>(json!({"requestType":"correction"}));
 }
 

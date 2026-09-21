@@ -32,13 +32,31 @@ journeys:
         request: {operation: get, recordRef: routine-request}
         expect: {outcome: success, status: 200}
         capture: routine-before-submit
-      - id: submit-routine-and-apply
+      - id: submit-routine
         entity: person-name-change-request
         accessProfile: name-change-submitter
         claims: *submitter_claims
         request: {operation: submit_request, recordRef: routine-before-submit, etagRef: routine-before-submit}
         expect: {outcome: success, status: 200}
-      - id: get-routine-person-after-atomic-apply
+      - id: get-routine-before-apply
+        entity: person-name-change-request
+        accessProfile: name-change-submitter
+        claims: *submitter_claims
+        request: {operation: get, recordRef: routine-request}
+        expect: {outcome: success, status: 200}
+        capture: routine-before-apply
+      - id: apply-routine-without-rerun
+        entity: person-name-change-request
+        accessProfile: name-change-submitter
+        claims: *submitter_claims
+        request:
+          operation: apply_request
+          recordRef: routine-before-apply
+          etagRef: routine-before-apply
+          proposalVersionRef: routine-before-apply
+          effectDigestRef: routine-before-apply
+        expect: {outcome: success, status: 200}
+      - id: get-routine-person-after-apply
         entity: person
         accessProfile: person-operator
         claims: *operator_claims
@@ -69,7 +87,7 @@ journeys:
         request: {operation: get, recordRef: assisted-request}
         expect: {outcome: success, status: 200}
         capture: assisted-before-submit
-      - id: submit-assisted-and-queue
+      - id: submit-assisted
         entity: person-name-change-request
         accessProfile: name-change-submitter
         claims: *submitter_claims

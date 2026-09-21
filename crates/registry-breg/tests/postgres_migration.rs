@@ -1097,9 +1097,8 @@ async fn real_postgres_field_encryption_flip_retains_pre_boundary_plaintext_hist
         .execute(
             "INSERT INTO registry_internal.registry_request_state
                  (request_entity_id, request_id, owner_reference, state,
-                  proposal_version, workflow_revision, review_completed_at)
-             VALUES ('encryption-request', $1, 'owner:hash', 'canceled', 1, 1,
-                     transaction_timestamp())",
+                  proposal_version, workflow_revision)
+             VALUES ('encryption-request', $1, 'owner:hash', 'cancelled', 1, 1)",
             &[&request_id],
         )
         .await

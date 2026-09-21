@@ -64,10 +64,9 @@ entities:
           set:
             label: {fromField: label}
       review:
-        stages:
-          - {id: review, approvals: 1, excludeSubmitter: true}
-          - {id: final-approval, approvals: 1, excludeSubmitter: true, excludePreviousReviewers: true}
-      application: {mode: manual}
+        authority: casework
+        policyId: label-correction
+      onApproved: {mode: manual}
       retention: {mode: operator_erase}
 actions:
   - id: register-record
@@ -168,34 +167,10 @@ accessProfiles:
     requiredPurposes: [record-administration]
     permissions:
       - entity: label-correction
-        operations: [get, approve_request, reject_request, request_revision]
+        operations: [get]
         readableFields: [record, label, district]
         rowBoundaries:
           - {field: district, claim: assigned_districts, operator: in}
-        reviewStages:
-          - stage: review
-            targets:
-              - entity: reviewed-record
-                readableFields: [label, district]
-                rowBoundaries:
-                  - {field: district, claim: assigned_districts, operator: in}
-  - id: correction-final-approver
-    principalClaim: registry_principal
-    requiredScopes: [correction:final-approve]
-    requiredPurposes: [record-administration]
-    permissions:
-      - entity: label-correction
-        operations: [get, approve_request, reject_request, request_revision]
-        readableFields: [record, label, district]
-        rowBoundaries:
-          - {field: district, claim: assigned_districts, operator: in}
-        reviewStages:
-          - stage: final-approval
-            targets:
-              - entity: reviewed-record
-                readableFields: [label, district]
-                rowBoundaries:
-                  - {field: district, claim: assigned_districts, operator: in}
   - id: correction-applier
     principalClaim: registry_principal
     requiredScopes: [correction:apply]

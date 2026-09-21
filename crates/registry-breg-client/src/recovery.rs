@@ -100,8 +100,8 @@ enum DecodedLifecycleEvidence {
 capsule!(BRegPreparedCreate, CreateEvidence);
 
 /// Inert minimal lifecycle-action evidence for explicit, exact recovery.
-/// It contains no access token, record fields, proposal preview, history, or
-/// decisions. Store it with the attempt in application-protected state.
+/// It contains no access token, record fields, proposal, external-review
+/// status, or history. Store it with the attempt in application-protected state.
 pub struct BRegPreparedLifecycle(Zeroizing<Vec<u8>>);
 
 impl BRegPreparedLifecycle {
@@ -227,8 +227,8 @@ impl BaseRegistryClient {
     }
 
     /// Prepare the exact promoted action's minimal authority and record binding.
-    /// Record fields, proposal and review previews, history, and decisions are
-    /// excluded. No token acquisition or I/O occurs; persist before execution.
+    /// Record fields, proposal, external-review status, and history are excluded.
+    /// No token acquisition or I/O occurs; persist before execution.
     pub fn prepare_lifecycle_action(
         &self,
         authority: &BRegLifecycleAuthority,

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-11"
+last_reviewed: "2026-09-20"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -29,14 +29,14 @@ Registry Casework owns that coordination record, and only that record.
 {/* Evidence: crates/registry-casework-core/src/model.rs, WorkItem and OccurrenceState;
     crates/registry-casework/src/store.rs, SourceBinding. */}
 
-Every item has one of two origins. A Casework project declares one origin or both, and a project that declares no source and no hosted kind is refused when you check it, because it describes no work.
+Casework coordinates source-owned work items and unified review requests. A project that declares neither a source nor a review kind is refused because it describes no work.
 
-| What differs | Source-backed item | Hosted item |
+| What differs | Source-backed item | Unified review request |
 | ------ | ------ | ------ |
-| Where it starts | A governed [change request](../../reference/glossary/#change-request) that a [Base Registry Engine](../../reference/glossary/#base-registry-engine) already holds | A Requester service creating one directly under a declared [hosted kind](../../reference/glossary/#hosted-kind) |
-| What Casework holds | Assignment, routing, clocks, private drafts, attempts, and recovery | The whole item: its display fields, its history, its outcome, and its retention |
-| What stays with the source | Eligibility, current visibility, and the record change itself | Nothing, because no other system is in the loop |
-| How it finishes | An accountable attempt against the source, made by a person | One outcome from the list the hosted kind declares |
+| Where it starts | A governed [change request](../../reference/glossary/#change-request) that a [Base Registry Engine](../../reference/glossary/#base-registry-engine) already holds | An admitted producer creating one under a declared review kind |
+| What Casework holds | Assignment, routing, clocks, private drafts, attempts, and recovery | Immutable subject and policy bindings, context, tasks, decisions, result, and accountability |
+| What stays with the source | Eligibility, current visibility, and the record change itself | The producer's business object and correlation reference |
+| How it finishes | An accountable attempt against the source, made by a person | An approved, rejected, changes-requested, answered, cancelled, or superseded result |
 
 {/* Evidence: crates/registry-casework-core/src/config.rs, CaseworkProject and NoConfiguredWork. */}
 
@@ -47,13 +47,21 @@ Everything a source-backed item shows a caller comes from a read made for that c
 {/* Evidence: crates/registry-casework-core/src/adapter.rs, SourceAdapter, discover_active, and read_for_caller;
     crates/registry-casework-breg/src/lib.rs, read_authoritative. */}
 
-A [hosted item](../../reference/glossary/#hosted-item) lives in Casework alone.
-A Requester service creates it under a hosted kind the project declares, and that kind fixes what the item can become: which human profiles may decide it, which outcomes they may record, whether a reason is required, and how long the item and its accountability record survive.
-The policy is pinned onto the item at creation, so publishing a changed policy later shapes new items and never rewrites existing ones.
-The starter project ships one such kind, a generic decision with two outcomes, which is enough to run a deployment with no registry behind it.
+An admitted producer creates a unified review request with an immutable subject binding and either a submitted snapshot or a source-context reference.
+The review kind fixes the ordered stages, thresholds, reviewer exclusions, context strategy, schemas, outcomes, clocks, and retention.
+Casework pins the policy identity and canonical submission digest at creation, so publishing a changed policy later shapes new requests and never rewrites existing ones.
+The starter project ships one answer policy and admitted producer, which is enough to run without a registry.
 
-{/* Evidence: crates/registry-casework-core/src/hosted.rs, HostedKindPolicy, HostedPolicyDigest, and standalone_decision_starter_kind;
-    crates/registry-casework/src/hosted.rs, decide_hosted_item. */}
+{/* Evidence: crates/registry-casework-core/src/review.rs, ReviewKindPolicy and ReviewKindPolicySnapshot;
+    crates/registry-casework/src/review.rs, create_review_request and decide_review_task. */}
+
+A review decision may carry a structured result beside a configured rejected, changes-requested, or answer outcome.
+The kind's `resultSchema` types that result, and the producer's `resultConstraints` narrow fields to a subset the schema already admits.
+Casework validates the result against the pinned schema first and the narrowing second, then returns it through polling, the result feed, or an optional authenticated completion signal.
+An approved decision remains payload-free.
+
+{/* Evidence: crates/registry-casework-core/src/review.rs, validate_result_constraints and
+    validate_outcome; crates/registry-casework/src/review.rs, decide_review_task. */}
 
 ## Who may act
 
@@ -62,9 +70,9 @@ Four profiles exist, and a request selects exactly one of them.
 | Profile | What it may do |
 | --- | --- |
 | Staff | Work the queues their teams serve: claim an item, release it, keep a private draft, delegate an item they hold, and record a decision. |
-| Supervisor | Work those queues, and also assign visible work, maintain absence records for staff they supervise, move a caseload, and read the accountability record behind a hosted outcome. |
+| Supervisor | Work those queues, assign visible work, maintain absence records for staff they supervise, move a caseload, and read protected review accountability. |
 | Administrator | Maintain the directory and publish holiday revisions while the service runs. |
-| Requester | Create hosted items, page its own terminal feed, and cancel an item it created. It cannot claim or decide. |
+| Requester | Act as an admitted producer, read its own requests and results, page its result feed, and cancel an active request. It cannot claim or decide. |
 
 {/* Evidence: crates/registry-casework-core/src/config.rs, AccessProfile and access_roles_are_separately_scoped;
     products/casework/README.md. */}
@@ -217,27 +225,26 @@ A clock reads the source and changes nothing there, decides no outcome, and send
 
 ## What Casework keeps
 
-A hosted kind sets two periods, and the second is at least as long as the first.
-The terminal period is how long a finished item keeps the content a decision was made on.
-The accountability period is how long the [accountability record](../../reference/glossary/#accountability-record) behind the outcome survives: who decided, when, and why.
-When both expire, Casework deletes the accountability record and the terminal event, and strips the requester-supplied and display content from the item.
+A review kind sets two periods, and the second is at least as long as the first.
+The terminal period is how long a producer can read the result and associated request state.
+The accountability period is how long the protected record of who decided, when, and why survives.
+When both expire, Casework deletes accountability and its payload-free replay tombstone.
 
-{/* Evidence: crates/registry-casework-core/src/hosted.rs, HostedRetentionPolicy and HostedAccountabilityRecord;
-    crates/registry-casework/src/hosted.rs, erase_expired_hosted_at. */}
+{/* Evidence: crates/registry-casework-core/src/review.rs, ReviewRetentionPolicy and ReviewAccountabilityRecord;
+    crates/registry-casework/src/review.rs, erase_expired_reviews_at. */}
 
-The outcome a Requester reads names no person.
-A terminal result carries an opaque actor reference, a prefixed token that stands for the deciding person without disclosing an issuer, a subject, a display name, or an internal note.
-The identity behind that reference is reachable only by a Supervisor with current authority over the item's queue, only while the accountability period lasts, and every such read writes its own audit record in the same transaction as the read.
+The result a producer reads names no person and carries no private reason.
+The identity behind one accountability event is reachable only by a Supervisor with current authority over the task's queue, only while the accountability period lasts, and every such read writes its own audit record in the same transaction as the read.
 Accountability is therefore a deliberate, recorded act rather than a field on a response.
 
-{/* Evidence: crates/registry-casework-core/src/hosted.rs, OpaqueActorRef and HostedTerminalState;
-    crates/registry-casework/src/hosted.rs, hosted_accountability. */}
+{/* Evidence: crates/registry-casework-core/src/review.rs, ReviewResult and ReviewAccountabilityRecord;
+    crates/registry-casework/src/review.rs, review_accountability. */}
 
 Idempotency outlives the payload it protected.
-When a hosted item is erased, Casework keeps a payload-free tombstone holding a hash of the original request and hashed binding metadata, which is enough to recognise a replayed key and refuse a changed body under the same key.
+When a review request is erased, Casework keeps a payload-free tombstone holding the original request hash and hashed binding metadata, which is enough to recognise a replayed key and refuse a changed body under the same key.
 After the accountability deadline, the tombstone goes too and the key becomes reusable, so a retry that arrives years late is answered as expired rather than answered from retained content.
 
-{/* Evidence: crates/registry-casework/src/hosted.rs, erase_expired_hosted_at;
+{/* Evidence: crates/registry-casework/src/review.rs, erase_expired_reviews_at;
     crates/registry-casework/src/problem.rs, IdempotencyExpired;
     products/casework/README.md. */}
 
@@ -266,7 +273,7 @@ A pending or uncertain attempt blocks that erasure until the attempt is recovere
 
 ## Next
 
-- [Author a Casework policy](../../configure/casework/): hosted kinds, sources, routing rules, calendars, and clocks.
+- [Author a Casework policy](../../configure/casework/): review kinds, producers, sources, routing rules, calendars, and clocks.
 - [Deploy Registry Casework](../../operate/casework/): database setup, the operator file, directory bootstrap, and the operator paths for recovery.
 - [Retention in Registry Casework](../../operate/casework-retention/): what each retention period removes and what survives it.
 - [Registry Casework API](../../reference/apis/registry-casework/): every route, header, and problem code.

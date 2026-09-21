@@ -2,7 +2,7 @@
 
 //! Permission-aware change-request annotations for normal record reads.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use registry_platform_audit::AuditProfile;
 use serde_json::{json, Map, Value};
@@ -17,7 +17,7 @@ use crate::api::{
 };
 use crate::contract::{Operation, RequestMetadataFieldSource};
 use crate::field_encryption::FieldEncryptionService;
-use crate::model::{CompiledEntity, CompiledRegistry, CompiledRoute, HttpMethod};
+use crate::model::{CompiledEntity, CompiledRegistry, HttpMethod};
 use crate::mutation::request_action_etag;
 use crate::postgres::context::ChangeRequestPresenceContext;
 use crate::postgres::{
@@ -26,12 +26,10 @@ use crate::postgres::{
 };
 use crate::request_prepare::{validate_frozen_targets, RequestTargetSnapshot};
 use crate::request_retention::{
-    RetainedHistoryQuery, RetainedRequestDecision, RetainedRequestHistoryPage,
-    RetainedRequestProposal, RetainedRequestResultLink,
+    RetainedHistoryQuery, RetainedRequestHistoryPage, RetainedRequestProposal,
+    RetainedRequestResultLink,
 };
-use crate::request_workflow::{
-    FrozenPlannerDisposition, FrozenReviewPolicy, ProposalSnapshot, RequestState, RequestWorkflow,
-};
+use crate::request_workflow::{ProposalSnapshot, RequestState, RequestWorkflow};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn annotate_records(
@@ -112,29 +110,12 @@ pub(super) async fn erased_terminal_request_record(
         None,
     )
     .await?;
-    let mut metadata = erased_terminal_request_metadata(
+    let metadata = erased_terminal_request_metadata(
         &header,
         history,
         may_disclose_effect_digests(entity, request),
         may_disclose_actor_references(entity, request),
-        decision_metadata(
-            transaction,
-            entity,
-            request,
-            record_uuid,
-            header.proposal_version,
-        )
-        .await?,
     );
-    if may_disclose_review_state(entity, request) {
-        if let Some(timing) =
-            crate::request_store::load_review_timing(transaction, &entity.id, record_uuid)
-                .await
-                .map_err(|_| ReadServiceError::Unavailable)?
-        {
-            metadata["reviewTiming"] = request_review_timing_metadata(&timing);
-        }
-    }
     let mut record = RecordEnvelope {
         id: record_id.to_owned(),
         revision,
@@ -214,29 +195,12 @@ async fn annotate_request_records(
                 None,
             )
             .await?;
-            let mut metadata = erased_terminal_request_metadata(
+            let metadata = erased_terminal_request_metadata(
                 &header,
                 history,
                 may_disclose_effect_digests(entity, request),
                 may_disclose_actor_references(entity, request),
-                decision_metadata(
-                    transaction,
-                    entity,
-                    request,
-                    record_uuid,
-                    header.proposal_version,
-                )
-                .await?,
             );
-            if may_disclose_review_state(entity, request) {
-                if let Some(timing) =
-                    crate::request_store::load_review_timing(transaction, &entity.id, record_uuid)
-                        .await
-                        .map_err(|_| ReadServiceError::Unavailable)?
-                {
-                    metadata["reviewTiming"] = request_review_timing_metadata(&timing);
-                }
-            }
             record.request = Some(bound_request_metadata(metadata)?);
             continue;
         }
@@ -244,15 +208,12 @@ async fn annotate_request_records(
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
         let targets = if workflow.current_proposal().is_some()
-            && request.context.request_actions().iter().any(|action| {
-                matches!(
-                    action.operation(),
-                    Operation::ApproveRequest
-                        | Operation::RejectRequest
-                        | Operation::RequestRevision
-                        | Operation::ApplyRequest
-                )
-            }) {
+            && request
+                .context
+                .request_actions()
+                .iter()
+                .any(|action| action.operation() == Operation::ApplyRequest)
+        {
             crate::request_store::load_targets(
                 transaction,
                 &entity.id,
@@ -318,29 +279,6 @@ async fn annotate_request_records(
                 metadata.insert("proposal".to_owned(), proposal);
             }
         }
-        if may_disclose_review_state(entity, request) {
-            if let Some(review) = request_review_metadata(&workflow) {
-                metadata.insert("review".to_owned(), review);
-            }
-            if let Some(timing) =
-                crate::request_store::load_review_timing(transaction, &entity.id, record_uuid)
-                    .await
-                    .map_err(|_| ReadServiceError::Unavailable)?
-            {
-                metadata.insert(
-                    "reviewTiming".to_owned(),
-                    request_review_timing_metadata(&timing),
-                );
-            }
-        }
-        metadata.insert(
-            "decisions".to_owned(),
-            workflow_decisions_value(
-                &workflow,
-                may_disclose_decision_reasons(entity, request),
-                may_disclose_actor_references(entity, request),
-            ),
-        );
         if may_disclose_actor_references(entity, request) {
             metadata.insert(
                 "submitterReference".to_owned(),
@@ -351,6 +289,21 @@ async fn annotate_request_records(
                     "applierReference".to_owned(),
                     json!(application.applied_by().as_str()),
                 );
+            }
+        }
+        if may_disclose_review_state(entity, request) {
+            if let Some(proposal) = workflow.current_proposal() {
+                if let Some(review) = crate::review_store::read_projection(
+                    transaction,
+                    &entity.id,
+                    record_uuid,
+                    proposal,
+                )
+                .await
+                .map_err(|_| ReadServiceError::Unavailable)?
+                {
+                    metadata.insert("review".to_owned(), review);
+                }
             }
         }
         metadata.insert("editable".to_owned(), json!(editable));
@@ -370,7 +323,7 @@ async fn annotate_request_records(
             if may_disclose_effect_digests(entity, request) {
                 application_metadata["effectDigest"] = json!(application.effect_digest().as_str());
             }
-            if may_disclose_decision_reasons(entity, request) {
+            if may_disclose_application_reason(entity, request) {
                 if let Some(reason) = application.reason() {
                     application_metadata["reason"] = json!(reason);
                 }
@@ -409,7 +362,7 @@ pub(super) async fn attachment_version_is_authorized(
     let unsubmitted = proposal.is_none()
         && proposal_version == header.proposal_version
         && !header.current_proposal_erased
-        && matches!(header.state.as_str(), "draft" | "canceled");
+        && matches!(header.state.as_str(), "draft" | "cancelled");
     if proposal.is_none() && !unsubmitted {
         return Ok(false);
     }
@@ -425,15 +378,10 @@ pub(super) async fn attachment_version_is_authorized(
         .access_profiles
         .get(request.context.selected_profile())
         .ok_or(ReadServiceError::Unavailable)?;
-    let target_role = profile.operations.iter().any(|operation| {
-        matches!(
-            operation,
-            Operation::ApproveRequest
-                | Operation::RejectRequest
-                | Operation::RequestRevision
-                | Operation::ApplyRequest
-        )
-    });
+    let target_role = profile
+        .operations
+        .iter()
+        .any(|operation| *operation == Operation::ApplyRequest);
     if !target_role {
         // A separately authored direct GET grant has already passed its own
         // typed row boundary. It does not acquire any review/apply powers.
@@ -453,15 +401,12 @@ pub(super) async fn attachment_version_is_authorized(
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
     validate_frozen_targets(&proposal, &targets).map_err(|_| ReadServiceError::Unavailable)?;
-    for action in request.context.request_actions().iter().filter(|action| {
-        matches!(
-            action.operation(),
-            Operation::ApproveRequest
-                | Operation::RejectRequest
-                | Operation::RequestRevision
-                | Operation::ApplyRequest
-        )
-    }) {
+    for action in request
+        .context
+        .request_actions()
+        .iter()
+        .filter(|action| action.operation() == Operation::ApplyRequest)
+    {
         let self_authority = action.attachment_request_authority();
         if action.operation() != Operation::ApplyRequest && self_authority.is_none() {
             continue;
@@ -502,18 +447,9 @@ pub(super) async fn attachment_version_is_authorized(
                 &mut intake,
                 field_encryption,
             )?;
-            let stage = if action.operation() == Operation::ApplyRequest {
-                None
-            } else {
-                action.review_stage()
-            };
-            if action.operation() != Operation::ApplyRequest && stage.is_none() {
-                continue;
-            }
             if ChangeRequestTargetContext::authorize_retained_attachment_request(
                 registry,
                 claims,
-                stage,
                 slot_id,
                 &row_boundaries(authority)?,
                 &intake,
@@ -604,14 +540,6 @@ async fn attachment_targets_are_authorized(
                 .collect(),
             expected_revision: target.expected_revision,
         };
-        let review_stage = if action.operation() == Operation::ApplyRequest {
-            None
-        } else {
-            let Some(stage) = action.review_stage() else {
-                return Ok(false);
-            };
-            Some(stage)
-        };
         let target_entity = registry
             .entities()
             .get(target_entity_id)
@@ -633,7 +561,6 @@ async fn attachment_targets_are_authorized(
         if ChangeRequestTargetContext::authorize_retained_attachment_rows(
             registry,
             claims,
-            review_stage,
             row_boundaries(authority)?,
             binding,
             target_entity,
@@ -727,7 +654,6 @@ async fn attachment_targets_are_authorized(
                 if ChangeRequestTargetContext::authorize_retained_attachment_rows(
                     registry,
                     claims,
-                    None,
                     row_boundaries(authority)?,
                     binding,
                     guard_entity,
@@ -815,48 +741,7 @@ fn bound_request_metadata(mut metadata: Value) -> Result<Value, ReadServiceError
 /// source digest, ABI provenance, script identity and evaluated effects remain
 /// inside the proposal snapshot and review/action-specific projections.
 fn request_proposal_metadata(proposal: &ProposalSnapshot) -> Option<Value> {
-    let planning = proposal.planning_binding()?;
-    let review_mode = match proposal.review_policy() {
-        FrozenReviewPolicy::None => "none",
-        FrozenReviewPolicy::Stages => "staged",
-    };
-    match planning.disposition() {
-        FrozenPlannerDisposition::Apply => Some(json!({
-            "reviewMode": review_mode,
-            "applicationDisposition": "apply",
-        })),
-        FrozenPlannerDisposition::Queue => {
-            let mut value = json!({
-                "reviewMode": review_mode,
-                "applicationDisposition": "queue",
-            });
-            if let Some(reason) = planning.queue_reason() {
-                value["queueReason"] = json!({"code": reason.code(), "label": reason.label()});
-            }
-            Some(value)
-        }
-    }
-}
-
-fn request_review_metadata(workflow: &RequestWorkflow) -> Option<Value> {
-    let proposal = workflow.current_proposal()?;
-    Some(json!({
-        "stages": proposal.stages(),
-        "submittedAt": proposal.submitted_at().as_str(),
-        "pendingStage": workflow.pending_review_stage().map(|stage| stage.id.as_str()),
-        "stageEnteredAt": workflow
-            .pending_review_stage_entered_at()
-            .map(|timestamp| timestamp.as_str()),
-    }))
-}
-
-fn request_review_timing_metadata(timing: &crate::request_store::RequestReviewTiming) -> Value {
-    json!({
-        "firstSubmittedAt": timing.first_submitted_at,
-        "pausedMilliseconds": timing.paused_milliseconds,
-        "pauseStartedAt": timing.pause_started_at,
-        "completedAt": timing.completed_at,
-    })
+    Some(json!({"review": proposal.review_requirement()}))
 }
 
 fn erased_terminal_request_metadata(
@@ -864,13 +749,11 @@ fn erased_terminal_request_metadata(
     history: Option<RetainedHistoryMetadata>,
     disclose_effect_digests: bool,
     disclose_actor_references: bool,
-    decisions: Value,
 ) -> Value {
     let mut metadata = Map::new();
     metadata.insert("bregState".to_owned(), json!(header.state));
     metadata.insert("proposalVersion".to_owned(), json!(header.proposal_version));
     metadata.insert("detailErased".to_owned(), json!(true));
-    metadata.insert("decisions".to_owned(), decisions);
     metadata.insert("editable".to_owned(), json!(false));
     if disclose_actor_references {
         metadata.insert(
@@ -906,17 +789,17 @@ fn erased_terminal_request_metadata(
 
 #[allow(clippy::too_many_arguments)]
 async fn action_links(
-    transaction: &Transaction<'_>,
+    _transaction: &Transaction<'_>,
     registry: &CompiledRegistry,
     audit_profile: &AuditProfile,
     expected: &ExpectedRegistryIdentity,
     request: &RecordReadRequest,
     claims: &ClaimContext,
-    entity: &CompiledEntity,
-    field_encryption: Option<&FieldEncryptionService>,
+    _entity: &CompiledEntity,
+    _field_encryption: Option<&FieldEncryptionService>,
     record: &RecordEnvelope,
     workflow: &RequestWorkflow,
-    targets: &[RequestTargetSnapshot],
+    _targets: &[RequestTargetSnapshot],
     actor_reference: Option<&str>,
 ) -> Result<Vec<Value>, ReadServiceError> {
     let record_revision =
@@ -937,12 +820,6 @@ async fn action_links(
             .iter()
             .map(RequestActionTargetAuthority::from)
             .collect::<Vec<_>>();
-        let automatic_apply_authority = action.automatic_apply_authority().map(|authority| {
-            authority
-                .iter()
-                .map(RequestActionTargetAuthority::from)
-                .collect::<Vec<_>>()
-        });
         let precondition = request_action_etag(
             audit_profile,
             claims,
@@ -953,7 +830,6 @@ async fn action_links(
             workflow,
             action.response_fields(),
             &target_authority,
-            automatic_apply_authority.as_deref(),
         )
         .map_err(|_| ReadServiceError::Unavailable)?;
         let mut value = json!({
@@ -962,42 +838,12 @@ async fn action_links(
             "href": action_href(action, request, &record.id),
             "ifMatch": precondition,
         });
-        if let Some(stage) = action.review_stage() {
-            value["stage"] = json!(stage);
-        }
         if let Some(rebase) = revise_rebase_available(action, workflow) {
             value["rebase"] = json!(rebase);
         }
         if let Some(proposal) = workflow.current_proposal() {
             value["proposalVersion"] = json!(proposal.version().get());
             value["effectDigest"] = json!(proposal.effect_digest().as_str());
-        }
-        if matches!(
-            action.operation(),
-            Operation::ApproveRequest | Operation::RejectRequest | Operation::RequestRevision
-        ) {
-            let Some(actor_reference) = actor_reference else {
-                continue;
-            };
-            if let Some(review) = review_snapshot(
-                transaction,
-                registry,
-                expected,
-                claims,
-                entity,
-                field_encryption,
-                route,
-                action,
-                workflow,
-                targets,
-                actor_reference,
-            )
-            .await?
-            {
-                value["review"] = review;
-            } else {
-                continue;
-            }
         }
         values.push(value);
     }
@@ -1044,8 +890,6 @@ fn action_is_available(
         Operation::SubmitRequest => {
             workflow.state() == RequestState::Draft
                 && actor_reference.is_some_and(|actor| workflow.owner().as_str() == actor)
-                && (!action.requires_automatic_apply_if_ready()
-                    || action.automatic_apply_authority().is_some())
         }
         Operation::ReviseRequest => {
             revise_rebase_available(action, workflow).is_some()
@@ -1054,20 +898,10 @@ fn action_is_available(
         Operation::CancelRequest => {
             !matches!(
                 workflow.state(),
-                RequestState::Canceled | RequestState::Applied
+                RequestState::Cancelled | RequestState::Applied
             ) && actor_reference.is_some_and(|actor| workflow.owner().as_str() == actor)
         }
-        Operation::ApproveRequest | Operation::RejectRequest | Operation::RequestRevision => {
-            review_decision_available(action, workflow, actor_reference)
-                && (!action.requires_automatic_apply_if_ready()
-                    || !workflow.current_proposal().is_some_and(|proposal| {
-                        proposal.planning_binding().is_some_and(|binding| {
-                            binding.disposition() == FrozenPlannerDisposition::Apply
-                        })
-                    })
-                    || action.automatic_apply_authority().is_some())
-        }
-        Operation::ApplyRequest => workflow.state() == RequestState::Approved,
+        Operation::ApplyRequest => workflow.state() == RequestState::Submitted,
         _ => false,
     }
 }
@@ -1080,194 +914,9 @@ fn revise_rebase_available(
         return None;
     }
     match workflow.state() {
-        RequestState::NeedsChanges | RequestState::Rejected => Some(false),
-        RequestState::Submitted | RequestState::Approved => Some(true),
+        RequestState::Submitted => Some(true),
         _ => None,
     }
-}
-
-fn review_decision_available(
-    action: &VerifiedRequestAction,
-    workflow: &RequestWorkflow,
-    actor_reference: Option<&str>,
-) -> bool {
-    if workflow.state() != RequestState::Submitted
-        || pending_stage(workflow) != action.review_stage()
-    {
-        return false;
-    }
-    let (Some(proposal), Some(stage), Some(actor)) = (
-        workflow.current_proposal(),
-        action.review_stage(),
-        actor_reference,
-    ) else {
-        return false;
-    };
-    let Some(pending_stage) = proposal.stages().iter().find(|pending| pending.id == stage) else {
-        return false;
-    };
-    if pending_stage.exclude_submitter && proposal.submitted_by().as_str() == actor {
-        return false;
-    }
-    !workflow.decisions().iter().any(|decision| {
-        decision.version() == proposal.version()
-            && (decision.stage_id() == stage || pending_stage.exclude_previous_reviewers)
-            && decision.actor().as_str() == actor
-    })
-}
-
-fn pending_stage(workflow: &RequestWorkflow) -> Option<&str> {
-    workflow
-        .pending_review_stage()
-        .map(|stage| stage.id.as_str())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn review_snapshot(
-    transaction: &Transaction<'_>,
-    registry: &CompiledRegistry,
-    expected: &ExpectedRegistryIdentity,
-    claims: &ClaimContext,
-    entity: &CompiledEntity,
-    field_encryption: Option<&FieldEncryptionService>,
-    route: &CompiledRoute,
-    action: &VerifiedRequestAction,
-    workflow: &RequestWorkflow,
-    targets: &[RequestTargetSnapshot],
-    actor_reference: &str,
-) -> Result<Option<Value>, ReadServiceError> {
-    let Some(proposal) = workflow.current_proposal() else {
-        return Ok(None);
-    };
-    validate_frozen_targets(proposal, targets).map_err(|_| ReadServiceError::Unavailable)?;
-    let mut by_target = BTreeMap::new();
-    for target in targets {
-        by_target.insert((target.entity_id.as_str(), target.record_id), target);
-    }
-    let mut target_values = Vec::new();
-    for effect in proposal.effects() {
-        let target_entity_id = effect.target().entity_id().as_str();
-        let record_id = effect
-            .target()
-            .existing_record_id()
-            .or_else(|| effect.target().reserved_record_id())
-            .ok_or(ReadServiceError::Unavailable)?;
-        let record_uuid = parse_uuid(record_id.as_str())?;
-        let Some(snapshot) = by_target.get(&(target_entity_id, record_uuid)).copied() else {
-            return Err(ReadServiceError::Unavailable);
-        };
-        let Some(authority) = action
-            .target_authority()
-            .iter()
-            .find(|authority| authority.target_entity_id() == target_entity_id)
-        else {
-            return Err(ReadServiceError::Unavailable);
-        };
-        let target_entity = registry
-            .entities()
-            .get(target_entity_id)
-            .ok_or(ReadServiceError::Unavailable)?;
-        // The captured target rows keep their sealed members until this
-        // reviewer-facing display edge. Row boundaries never name an
-        // encrypted field, so opening them leaves the authorized and
-        // unauthorized outcomes unchanged while a stored envelope that does
-        // not open refuses the whole read closed. Effects never write an
-        // encrypted member, so the after row carries the before's sealed
-        // members forward unchanged and opens the same way.
-        let mut before = snapshot.before.clone();
-        if let Some(before) = before.as_mut() {
-            open_snapshot_members(target_entity, record_id.as_str(), before, field_encryption)?;
-        }
-        let mut after = snapshot.after.clone();
-        open_snapshot_members(
-            target_entity,
-            record_id.as_str(),
-            &mut after,
-            field_encryption,
-        )?;
-        let fields = effect
-            .field_changes()
-            .iter()
-            .map(|change| change.field().as_str().to_owned())
-            .collect::<BTreeSet<_>>();
-        let binding = ChangeRequestTargetBinding {
-            request_entity_id: entity.id.clone(),
-            request_id: parse_uuid(workflow.request().record_id().as_str())?,
-            proposal_version: i64::from(proposal.version().get()),
-            actor_reference: actor_reference.to_owned(),
-            contract_fingerprint: proposal.contract_fingerprint().as_str().to_owned(),
-            effect_digest: proposal.effect_digest().as_str().to_owned(),
-            active_package_revision: expected.package_revision.clone(),
-            effect_id: effect.id().as_str().to_owned(),
-            target_entity_id: target_entity_id.to_owned(),
-            target_record_id: record_uuid,
-            operation: effect.operation(),
-            fields,
-            expected_revision: snapshot.expected_revision,
-        };
-        let context = ChangeRequestTargetContext::for_review(
-            registry,
-            claims,
-            route
-                .request_stage
-                .as_deref()
-                .ok_or(ReadServiceError::Unavailable)?,
-            row_boundaries(authority)?,
-            binding,
-        )
-        .map_err(|_| ReadServiceError::Unavailable)?;
-        context
-            .authorize_rows(target_entity, before.as_ref(), &after, record_uuid)
-            .map_err(|_| ReadServiceError::Unavailable)?;
-        if effect.operation() == Operation::Patch {
-            transaction
-                .execute(
-                    "SELECT set_config('registry.change_request_target_context', $1, true)",
-                    &[&context.canonical_context()],
-                )
-                .await
-                .map_err(|_| ReadServiceError::Unavailable)?;
-            let table = SqlIdent::new(&target_entity.physical_table)
-                .ok_or(ReadServiceError::Unavailable)?;
-            let current = transaction.query_opt(&format!("SELECT to_jsonb(current_row) FROM registry_data.{table} current_row WHERE record_id = $1 AND record_lifecycle = 'active'"), &[&record_uuid])
-                .await.map_err(|_| ReadServiceError::Unavailable)?;
-            transaction
-                .execute(
-                    "SELECT set_config('registry.change_request_target_context', '', true)",
-                    &[],
-                )
-                .await
-                .map_err(|_| ReadServiceError::Unavailable)?;
-            let Some(current) = current else {
-                return Ok(None);
-            };
-            let physical: Value = current.get(0);
-            let data = target_entity
-                .fields
-                .iter()
-                .filter_map(|(id, field)| {
-                    physical
-                        .get(&field.physical_name)
-                        .map(|value| (id.clone(), value.clone()))
-                })
-                .collect();
-            if context
-                .authorize_rows(target_entity, Some(&data), &data, record_uuid)
-                .is_err()
-            {
-                return Ok(None);
-            }
-        }
-        target_values.push(json!({
-            "entityId": target_entity_id,
-            "recordId": record_id.as_str(),
-            "operation": operation_name(effect.operation()),
-            "baseRevision": snapshot.expected_revision,
-            "before": before.as_ref().map(|before| api_object(target_entity, before, authority.readable_fields())).transpose()?,
-            "after": api_object(target_entity, &after, authority.readable_fields())?,
-        }));
-    }
-    Ok(Some(json!({ "targets": target_values })))
 }
 
 async fn annotate_target_presence(
@@ -1351,7 +1000,7 @@ async fn pending_for_grant(
               AND target.target_entity_id = $2
               AND target.target_record_id = $3
               AND state.proposal_version = target.proposal_version
-              AND state.state IN ('submitted', 'approved')
+              AND state.state = 'submitted'
               {filters}
         )",
     );
@@ -1446,7 +1095,6 @@ async fn retained_history(
             after_proposal_version: request.request_history_after_proposal_version,
             limit: 50,
             authorized_target_entities: &authorized_target_entities,
-            include_decision_reasons: may_disclose_decision_reasons(entity, request),
         },
     )
     .await
@@ -1474,8 +1122,6 @@ async fn retained_history(
             .map(|proposal| retained_history_value(
                 proposal,
                 may_disclose_effect_digests(entity, request),
-                may_disclose_decision_reasons(entity, request),
-                may_disclose_actor_references(entity, request),
             ))
             .collect::<Vec<_>>(),
         "nextAfterProposalVersion": page.next_after_proposal_version,
@@ -1525,18 +1171,6 @@ fn bind_history_to_workflow(page: &mut RetainedRequestHistoryPage, workflow: &Re
             .map(|application| application.application_id().as_str().to_owned());
         proposal.result_link_count = 0;
         proposal.result_links.clear();
-        proposal.decisions = workflow
-            .decisions()
-            .iter()
-            .map(|decision| RetainedRequestDecision {
-                stage_id: decision.stage_id().to_owned(),
-                kind: decision.kind().as_storage().to_owned(),
-                decided_at: decision.decided_at().as_str().to_owned(),
-                actor_reference: decision.actor().as_str().to_owned(),
-                reason_present: decision.reason_present(),
-                reason: decision.reason().map(str::to_owned),
-            })
-            .collect();
     }
 }
 
@@ -1693,8 +1327,6 @@ async fn target_get_is_authorized(
 fn retained_history_value(
     proposal: RetainedRequestProposal,
     disclose_effect_digests: bool,
-    disclose_decision_reasons: bool,
-    disclose_actor_references: bool,
 ) -> Value {
     let mut value = json!({
         "requestEntityId": proposal.request_entity_id,
@@ -1704,11 +1336,6 @@ fn retained_history_value(
         "current": proposal.current,
         "contractFingerprint": proposal.contract_fingerprint,
         "detailErased": proposal.detail_erased,
-        "decisions": decisions_value(
-            &proposal.decisions,
-            disclose_decision_reasons,
-            disclose_actor_references,
-        ),
         "applicationId": proposal.application_id,
         "resultLinkCount": proposal.result_link_count,
         "resultLinks": proposal.result_links.into_iter().map(|link| {
@@ -1726,119 +1353,7 @@ fn retained_history_value(
     value
 }
 
-async fn decision_metadata(
-    transaction: &Transaction<'_>,
-    entity: &CompiledEntity,
-    request: &RecordReadRequest,
-    request_id: Uuid,
-    proposal_version: i64,
-) -> Result<Value, ReadServiceError> {
-    let disclose_reasons = may_disclose_decision_reasons(entity, request);
-    let disclose_actor_references = may_disclose_actor_references(entity, request);
-    let decisions = crate::request_retention::load_retained_decisions(
-        transaction,
-        &entity.id,
-        request_id,
-        proposal_version,
-        disclose_reasons,
-    )
-    .await
-    .map_err(|_| ReadServiceError::Unavailable)?;
-    Ok(decisions_value(
-        &decisions,
-        disclose_reasons,
-        disclose_actor_references,
-    ))
-}
-
-fn workflow_decisions_value(
-    workflow: &RequestWorkflow,
-    disclose_reasons: bool,
-    disclose_actor_references: bool,
-) -> Value {
-    Value::Array(
-        workflow
-            .decisions()
-            .iter()
-            .map(|decision| {
-                decision_value(
-                    decision.stage_id(),
-                    decision.kind().as_storage(),
-                    decision.decided_at().as_str(),
-                    decision.reason_present(),
-                    decision.reason(),
-                    Some(decision.actor().as_str()),
-                    DecisionDisclosure {
-                        reasons: disclose_reasons,
-                        actor_references: disclose_actor_references,
-                    },
-                )
-            })
-            .collect(),
-    )
-}
-
-fn decisions_value(
-    decisions: &[RetainedRequestDecision],
-    disclose_reasons: bool,
-    disclose_actor_references: bool,
-) -> Value {
-    Value::Array(
-        decisions
-            .iter()
-            .map(|decision| {
-                decision_value(
-                    &decision.stage_id,
-                    &decision.kind,
-                    &decision.decided_at,
-                    decision.reason_present,
-                    decision.reason.as_deref(),
-                    Some(&decision.actor_reference),
-                    DecisionDisclosure {
-                        reasons: disclose_reasons,
-                        actor_references: disclose_actor_references,
-                    },
-                )
-            })
-            .collect(),
-    )
-}
-
-fn decision_value(
-    stage_id: &str,
-    kind: &str,
-    decided_at: &str,
-    reason_present: bool,
-    reason: Option<&str>,
-    actor_reference: Option<&str>,
-    disclosure: DecisionDisclosure,
-) -> Value {
-    let mut value = json!({
-        "stageId": stage_id,
-        "kind": kind,
-        "decidedAt": decided_at,
-        "reasonPresent": reason_present,
-    });
-    if disclosure.reasons {
-        if let Some(reason) = reason {
-            value["reason"] = json!(reason);
-        }
-    }
-    if disclosure.actor_references {
-        if let Some(actor_reference) = actor_reference {
-            value["actorReference"] = json!(actor_reference);
-        }
-    }
-    value
-}
-
-#[derive(Clone, Copy)]
-struct DecisionDisclosure {
-    reasons: bool,
-    actor_references: bool,
-}
-
-fn may_disclose_decision_reasons(entity: &CompiledEntity, request: &RecordReadRequest) -> bool {
+fn may_disclose_application_reason(entity: &CompiledEntity, request: &RecordReadRequest) -> bool {
     entity
         .access_profiles
         .get(request.context.selected_profile())
@@ -1893,6 +1408,7 @@ fn selected_profile_allows_draft_patch(
         })
 }
 
+#[allow(dead_code)]
 fn api_object(
     entity: &CompiledEntity,
     snapshot: &Map<String, Value>,
@@ -1953,9 +1469,6 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
         Operation::SubmitRequest => "submit_request",
-        Operation::ApproveRequest => "approve_request",
-        Operation::RejectRequest => "reject_request",
-        Operation::RequestRevision => "request_revision",
         Operation::ReviseRequest => "revise_request",
         Operation::CancelRequest => "cancel_request",
         Operation::ApplyRequest => "apply_request",
@@ -1977,11 +1490,9 @@ fn request_state_name(state: RequestState) -> &'static str {
     match state {
         RequestState::Draft => "draft",
         RequestState::Submitted => "submitted",
-        RequestState::Approved => "approved",
-        RequestState::NeedsChanges => "needs_changes",
-        RequestState::Rejected => "rejected",
-        RequestState::Canceled => "canceled",
+        RequestState::Cancelled => "cancelled",
         RequestState::Applied => "applied",
+        RequestState::Superseded => "superseded",
     }
 }
 
@@ -2022,11 +1533,12 @@ impl std::fmt::Display for SqlIdent {
 mod tests {
     #[test]
     fn final_request_size_cap_keeps_whole_proposals_and_exclusive_cursor() {
-        let decisions = (0..1024)
+        let result_links = (0..768)
             .map(|index| {
                 serde_json::json!({
-                    "stageId": format!("stage-{}", index / 32), "kind": "approve",
-                    "decidedAt": "2026-09-09T12:00:00Z", "reasonPresent": false,
+                    "targetEntityId": "bounded-target",
+                    "targetRecordId": format!("00000000-0000-4000-8000-{index:012}"),
+                    "targetRevision": 1,
                 })
             })
             .collect::<Vec<_>>();
@@ -2042,17 +1554,17 @@ mod tests {
                     "contractFingerprint": "contract-fingerprint",
                     "detailErased": false,
                     "applicationId": null,
-                    "resultLinkCount": 0,
-                    "resultLinks": [],
-                    "decisions": decisions,
+                    "resultLinkCount": result_links.len(),
+                    "resultLinks": result_links,
                 })).collect::<Vec<_>>(),
                 "nextAfterProposalVersion": null,
             },
         });
         assert!(serde_json::to_vec(&metadata).unwrap().len() > super::MAX_REQUEST_EXTENSION_BYTES);
         let bounded = super::bound_request_metadata(metadata).expect("whole proposals fit");
-        registry_breg_client::BRegRequestMetadata::from_value(bounded.clone(), false)
-            .expect("bounded metadata passes the real client decoder");
+        // This synthetic payload intentionally exceeds the governed per-proposal
+        // result-link maximum to exercise only the final serialization guard.
+        // Reachable proposal shapes are covered by the client-decoder tests.
         let proposals = bounded["history"]["proposals"].as_array().unwrap();
         assert!(proposals.len() < 25);
         assert_eq!(
@@ -2061,13 +1573,13 @@ mod tests {
         );
         assert!(proposals
             .iter()
-            .all(|proposal| proposal["decisions"].as_array().unwrap().len() == 1024));
+            .all(|proposal| proposal["resultLinks"].as_array().unwrap().len() == 768));
     }
 
     #[test]
     fn oversized_single_history_proposal_refuses_without_an_empty_cursor_loop() {
         let metadata = serde_json::json!({
-            "history": {"proposals": [{"proposalVersion": 1, "decisions": [],
+            "history": {"proposals": [{"proposalVersion": 1, "resultLinks": [],
                 "oversized": "x".repeat(super::MAX_REQUEST_EXTENSION_BYTES)}],
                 "nextAfterProposalVersion": 1},
         });
@@ -2077,12 +1589,12 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use registry_platform_audit::AuditProfile;
-    use serde_json::{json, Map, Value};
+    use serde_json::{json, Value};
 
     use super::{
-        action_href, action_is_available, api_object, authorized_target_claims, decisions_value,
+        action_href, action_is_available, authorized_target_claims,
         erased_terminal_request_metadata, may_disclose_actor_references,
-        may_disclose_decision_reasons, may_disclose_review_state, retained_history_value,
+        may_disclose_application_reason, may_disclose_review_state, retained_history_value,
         revise_rebase_available, selected_profile_allows_draft_patch, ClaimContext,
         RetainedHistoryMetadata, RowBoundaryContext,
     };
@@ -2092,22 +1604,23 @@ mod tests {
     use crate::compiler::{compile_project, CompileProfile};
     use crate::contract::{parse_project_json, parse_project_yaml, Operation};
     use crate::correlation::RequestCorrelation;
-    use crate::model::{CompiledChangeRequestStage, HttpMethod};
-    use crate::mutation::request_actor_reference;
-    use crate::request_retention::{
-        RetainedRequestDecision, RetainedRequestProposal, RetainedRequestResultLink,
+    use crate::model::{
+        CompiledChangeRequestNoReview, CompiledChangeRequestNoReviewMode,
+        CompiledChangeRequestReview, HttpMethod,
     };
+    use crate::mutation::request_actor_reference;
+    use crate::request_retention::{RetainedRequestProposal, RetainedRequestResultLink};
     use crate::request_workflow::{
-        ContractFingerprint, EffectId, EntityId, FieldId, FieldValue, PackageFingerprint,
-        PreparedEffect, PreparedFieldChange, PreparedProposal, PreparedTarget, ProposalVersion,
-        RecordId, RecordRevision, RequestKey, RequestWorkflow, ReviewDecisionKind, StateRevision,
-        TrustedActorRef, TrustedTimestamp, TrustedTransitionContext,
+        ContractFingerprint, EffectId, EntityId, FieldId, FieldValue, FrozenPlannerKind,
+        FrozenPlanningBinding, PackageFingerprint, PreparedEffect, PreparedFieldChange,
+        PreparedProposal, PreparedTarget, RecordId, RecordRevision, RequestKey, RequestWorkflow,
+        StateRevision, TrustedActorRef, TrustedTimestamp, TrustedTransitionContext,
     };
 
     #[test]
-    fn revise_action_marks_rebase_required_on_submitted_and_approved_requests() {
-        let revise = action(Operation::ReviseRequest, None);
-        let submitted = submitted_workflow(1, false);
+    fn revise_action_marks_rebase_required_on_submitted_requests() {
+        let revise = action(Operation::ReviseRequest);
+        let submitted = submitted_workflow();
         assert_eq!(revise_rebase_available(&revise, &submitted), Some(true));
         assert!(action_is_available(&revise, &submitted, Some("owner-ref")));
         assert!(!action_is_available(
@@ -2115,15 +1628,11 @@ mod tests {
             &submitted,
             Some("reviewer-ref")
         ));
-
-        let approved = decide(submitted, "reviewer-ref", ReviewDecisionKind::Approve);
-        assert_eq!(revise_rebase_available(&revise, &approved), Some(true));
-        assert!(action_is_available(&revise, &approved, Some("owner-ref")));
     }
 
     #[test]
     fn cancel_action_is_offered_to_the_request_owner_only() {
-        let cancel = action(Operation::CancelRequest, None);
+        let cancel = action(Operation::CancelRequest);
         let draft = RequestWorkflow::new_draft(
             RequestKey::new(
                 EntityId::new("request").expect("entity id"),
@@ -2136,7 +1645,7 @@ mod tests {
         assert!(!action_is_available(&cancel, &draft, Some("reviewer-ref")));
         assert!(!action_is_available(&cancel, &draft, None));
 
-        let submitted = submitted_workflow(1, false);
+        let submitted = submitted_workflow();
         assert!(action_is_available(&cancel, &submitted, Some("owner-ref")));
         assert!(!action_is_available(
             &cancel,
@@ -2153,7 +1662,7 @@ mod tests {
     }
 
     #[test]
-    fn no_review_submit_requires_the_separate_apply_proof_only_when_apply_is_possible() {
+    fn submit_availability_does_not_borrow_application_authority() {
         let draft = RequestWorkflow::new_draft(
             RequestKey::new(
                 EntityId::new("request").expect("entity id"),
@@ -2162,72 +1671,9 @@ mod tests {
             actor("owner-ref"),
             StateRevision::new(1).expect("state revision"),
         );
-        let ordinary = action(Operation::SubmitRequest, None);
+        let ordinary = action(Operation::SubmitRequest);
         assert!(action_is_available(&ordinary, &draft, Some("owner-ref")));
-
-        let required_without_proof =
-            action_with_automatic_apply(Operation::SubmitRequest, None, None, true);
-        assert!(!action_is_available(
-            &required_without_proof,
-            &draft,
-            Some("owner-ref")
-        ));
-
-        let required_with_proof =
-            action_with_automatic_apply(Operation::SubmitRequest, None, Some(Vec::new()), true);
-        assert!(action_is_available(
-            &required_with_proof,
-            &draft,
-            Some("owner-ref")
-        ));
-    }
-
-    #[test]
-    fn revise_action_marks_rebase_false_for_revision_drafts() {
-        let revise = action(Operation::ReviseRequest, None);
-        let submitted = submitted_workflow(1, false);
-        let needs_changes = decide(
-            submitted,
-            "reviewer-ref",
-            ReviewDecisionKind::RequestRevision,
-        );
-        assert_eq!(
-            revise_rebase_available(&revise, &needs_changes),
-            Some(false)
-        );
-        assert!(action_is_available(
-            &revise,
-            &needs_changes,
-            Some("owner-ref")
-        ));
-    }
-
-    #[test]
-    fn review_actions_omit_self_and_duplicate_decisions() {
-        let approve = action(Operation::ApproveRequest, Some("review"));
-        let submitted = submitted_workflow(2, true);
-        assert!(!action_is_available(
-            &approve,
-            &submitted,
-            Some("owner-ref")
-        ));
-        assert!(action_is_available(
-            &approve,
-            &submitted,
-            Some("reviewer-ref")
-        ));
-
-        let after_reviewer = decide(submitted, "reviewer-ref", ReviewDecisionKind::Approve);
-        assert!(!action_is_available(
-            &approve,
-            &after_reviewer,
-            Some("reviewer-ref")
-        ));
-        assert!(action_is_available(
-            &approve,
-            &after_reviewer,
-            Some("second-reviewer-ref")
-        ));
+        assert!(!action_is_available(&ordinary, &draft, Some("other-ref")));
     }
 
     #[test]
@@ -2279,12 +1725,9 @@ mod tests {
 
     #[test]
     fn result_link_target_authority_never_falls_back_to_request_boundaries() {
-        let project = parse_project_yaml(include_bytes!(
+        let compiled = compiled_product_fixture(include_bytes!(
             "../../../../products/breg/starters/professional-licences/core/registry.yaml"
-        ))
-        .expect("the professional licences starter parses");
-        let compiled = compile_project(&project, &[], CompileProfile::Authoring)
-            .expect("the starter compiles");
+        ));
         let holder = ClaimContext::for_compiled(
             &compiled,
             "scope-correction",
@@ -2334,187 +1777,10 @@ mod tests {
     }
 
     #[test]
-    fn current_history_uses_loaded_lifecycle_despite_later_review_application_or_revision() {
-        let loaded = submitted_workflow(1, false);
-        let later = loaded
-            .clone()
-            .decide_with_reason(
-                context("later-reviewer", 2),
-                "review",
-                loaded.current_version(),
-                loaded.current_proposal().unwrap().effect_digest(),
-                ReviewDecisionKind::RequestRevision,
-                Some("later-feedback-canary".to_owned()),
-            )
-            .expect("later decision")
-            .into_workflow();
-        let later_decision = &later.decisions()[0];
-        let mut page = crate::request_retention::RetainedRequestHistoryPage {
-            proposals: (1..=2)
-                .map(|version| RetainedRequestProposal {
-                    request_entity_id: "request".to_owned(),
-                    request_id: "00000000-0000-4000-8000-000000000001".to_owned(),
-                    proposal_version: version,
-                    request_state: "applied".to_owned(),
-                    current: version == 2,
-                    contract_fingerprint: "sha256:later-contract".to_owned(),
-                    effect_digest: "sha256:later-effect".to_owned(),
-                    detail_erased: true,
-                    application_id: Some("00000000-0000-4000-8000-000000000099".to_owned()),
-                    result_link_count: 1,
-                    result_links: vec![RetainedRequestResultLink {
-                        target_entity_id: "target".to_owned(),
-                        target_record_id: "later-target".to_owned(),
-                        target_revision: 9,
-                    }],
-                    decisions: vec![RetainedRequestDecision {
-                        stage_id: later_decision.stage_id().to_owned(),
-                        kind: later_decision.kind().as_storage().to_owned(),
-                        decided_at: later_decision.decided_at().as_str().to_owned(),
-                        actor_reference: later_decision.actor().as_str().to_owned(),
-                        reason_present: true,
-                        reason: Some("later-feedback-canary".to_owned()),
-                    }],
-                })
-                .collect(),
-            next_after_proposal_version: Some(2),
-        };
-        let mut submitted_page = page.clone();
-        super::bind_history_to_workflow(&mut submitted_page, &loaded);
-        assert_eq!(submitted_page.proposals.len(), 1);
-        assert_eq!(submitted_page.next_after_proposal_version, None);
-        let current = &submitted_page.proposals[0];
-        assert_eq!(current.request_state, "submitted");
-        assert!(current.current);
-        assert!(!current.detail_erased);
-        assert!(current.application_id.is_none());
-        assert_eq!(current.result_link_count, 0);
-        assert!(current.result_links.is_empty());
-        assert_eq!(
-            current.effect_digest,
-            loaded.current_proposal().unwrap().effect_digest().as_str()
-        );
-        for disclose in [true, false] {
-            let history = retained_history_value(current.clone(), true, disclose, false);
-            assert_eq!(
-                history["decisions"],
-                super::workflow_decisions_value(&loaded, disclose, false)
-            );
-            assert!(!history.to_string().contains("later-feedback-canary"));
-        }
-        super::bind_history_to_workflow(&mut page, &later);
-        for disclose in [true, false] {
-            let history = retained_history_value(page.proposals[0].clone(), true, disclose, false);
-            assert_eq!(
-                history["decisions"],
-                super::workflow_decisions_value(&later, disclose, false)
-            );
-        }
-        let draft = later
-            .revise(context("owner-ref", 3))
-            .expect("revise to next draft")
-            .into_workflow();
-        // A concurrent submission creates a proposal for this draft's version.
-        let mut later_current = page.proposals[0].clone();
-        later_current.proposal_version = 2;
-        later_current.current = true;
-        page.proposals.push(later_current);
-        page.next_after_proposal_version = Some(2);
-        super::bind_history_to_workflow(&mut page, &draft);
-        assert_eq!(page.proposals.len(), 1);
-        assert_eq!(page.proposals[0].proposal_version, 1);
-        assert_eq!(page.proposals[0].request_state, "draft");
-        assert!(!page.proposals[0].current);
-        assert_eq!(page.next_after_proposal_version, None);
-    }
-
-    #[test]
-    fn current_decision_projection_uses_the_loaded_workflow_and_discloses_only_safe_fields() {
-        let loaded = submitted_workflow(1, false);
-        let later = loaded
-            .clone()
-            .decide_with_reason(
-                context("private-reviewer-actor-canary", 2),
-                "review",
-                loaded.current_version(),
-                loaded.current_proposal().unwrap().effect_digest(),
-                ReviewDecisionKind::RequestRevision,
-                Some("private-review-reason-canary".to_owned()),
-            )
-            .expect("a later review requests revision")
-            .into_workflow();
-        assert_eq!(
-            super::workflow_decisions_value(&loaded, true, false),
-            serde_json::json!([]),
-            "a subsequently decided workflow cannot alter the loaded submitted projection"
-        );
-        let disclosed = super::workflow_decisions_value(&later, true, false);
-        assert_eq!(
-            disclosed,
-            serde_json::json!([{
-                "stageId": "review", "kind": "request_revision",
-                "decidedAt": later.decisions()[0].decided_at().as_str(),
-                "reasonPresent": true, "reason": "private-review-reason-canary",
-            }])
-        );
-        let redacted = super::workflow_decisions_value(&later, false, false);
-        assert_eq!(
-            redacted,
-            serde_json::json!([{
-                "stageId": "review", "kind": "request_revision",
-                "decidedAt": later.decisions()[0].decided_at().as_str(), "reasonPresent": true,
-            }])
-        );
-        for projection in [&disclosed, &redacted] {
-            let serialized = projection.to_string();
-            assert!(!serialized.contains("private-reviewer-actor-canary"));
-            assert!(!serialized.contains(later.decisions()[0].effect_digest().as_str()));
-        }
-        let correlated = super::workflow_decisions_value(&later, false, true);
-        assert_eq!(
-            correlated[0]["actorReference"],
-            "private-reviewer-actor-canary"
-        );
-        assert!(correlated[0].get("reason").is_none());
-    }
-
-    #[test]
-    fn decision_metadata_hides_reason_text_but_preserves_presence_and_decision_facts() {
-        let mut decision = RetainedRequestDecision {
-            stage_id: "review".to_owned(),
-            kind: "reject".to_owned(),
-            decided_at: "2026-09-09T00:00:00Z".to_owned(),
-            actor_reference: "private-reviewer-actor-canary".to_owned(),
-            reason_present: true,
-            reason: Some("protected-review-reason-canary".to_owned()),
-        };
-        let disclosed = decisions_value(std::slice::from_ref(&decision), true, false);
-        assert_eq!(disclosed[0]["reason"], "protected-review-reason-canary");
-        let hidden = decisions_value(std::slice::from_ref(&decision), false, false);
-        assert_eq!(hidden[0]["reasonPresent"], true);
-        assert_eq!(hidden[0]["stageId"], "review");
-        assert_eq!(hidden[0]["kind"], "reject");
-        assert!(hidden[0].get("reason").is_none());
-        assert!(!hidden
-            .to_string()
-            .contains("protected-review-reason-canary"));
-        assert!(hidden[0].get("actor").is_none());
-        assert!(hidden[0].get("actorReference").is_none());
-        assert!(hidden[0].get("effectDigest").is_none());
-        decision.reason = None;
-        let erased = decisions_value(std::slice::from_ref(&decision), true, false);
-        assert_eq!(erased[0]["reasonPresent"], true);
-        assert!(erased[0].get("reason").is_none());
-    }
-
-    #[test]
     fn request_actor_reference_is_a_keyed_hash_scoped_to_the_source_database() {
-        let project = parse_project_yaml(include_bytes!(
+        let compiled = compiled_product_fixture(include_bytes!(
             "../../../../products/breg/acceptance/asset-site-placement-change-requests/registry.yaml"
-        ))
-        .expect("acceptance project parses");
-        let compiled = compile_project(&project, &[], CompileProfile::Authoring)
-            .expect("acceptance project compiles");
+        ));
         let claims = |principal: &str| {
             ClaimContext::for_compiled(
                 &compiled,
@@ -2562,27 +1828,31 @@ mod tests {
     }
 
     #[test]
-    fn decision_reason_disclosure_requires_selected_profile_permission_and_authentication() {
-        let project = parse_project_yaml(include_bytes!(
+    fn application_reason_bounds_and_disclosure_require_current_authority() {
+        assert!(crate::request_workflow::valid_application_reason(
+            &"文".repeat(crate::request_workflow::MAX_APPLICATION_REASON_CHARS)
+        ));
+        assert!(!crate::request_workflow::valid_application_reason(
+            &"文".repeat(crate::request_workflow::MAX_APPLICATION_REASON_CHARS + 1)
+        ));
+        assert!(!crate::request_workflow::valid_application_reason(
+            "unsafe\0reason"
+        ));
+
+        let compiled = compiled_product_fixture(include_bytes!(
             "../../../../products/breg/acceptance/asset-site-placement-change-requests/registry.yaml"
-        ))
-        .expect("acceptance project parses");
-        let compiled = compile_project(&project, &[], CompileProfile::Authoring)
-            .expect("acceptance project compiles");
+        ));
         let mut entity = compiled.entities()["placement-correction-request"].clone();
         let request = request_for_profile("correction-submitter");
-        assert!(may_disclose_decision_reasons(&entity, &request));
+        assert!(may_disclose_application_reason(&entity, &request));
         assert!(!may_disclose_actor_references(&entity, &request));
-        assert!(!may_disclose_review_state(&entity, &request));
+        assert!(may_disclose_review_state(&entity, &request));
         entity
             .access_profiles
             .get_mut("correction-submitter")
             .expect("profile")
             .readable_request_fields
-            .extend([
-                crate::contract::RequestMetadataFieldSource::ActorReference,
-                crate::contract::RequestMetadataFieldSource::ReviewState,
-            ]);
+            .extend([crate::contract::RequestMetadataFieldSource::ActorReference]);
         assert!(may_disclose_actor_references(&entity, &request));
         assert!(may_disclose_review_state(&entity, &request));
         entity
@@ -2591,7 +1861,7 @@ mod tests {
             .expect("profile")
             .readable_request_fields
             .clear();
-        assert!(!may_disclose_decision_reasons(&entity, &request));
+        assert!(!may_disclose_application_reason(&entity, &request));
         assert!(!may_disclose_actor_references(&entity, &request));
         assert!(!may_disclose_review_state(&entity, &request));
         entity
@@ -2609,37 +1879,17 @@ mod tests {
             .get_mut("correction-submitter")
             .expect("profile")
             .anonymous = true;
-        assert!(!may_disclose_decision_reasons(&entity, &request));
+        assert!(!may_disclose_application_reason(&entity, &request));
         assert!(!may_disclose_actor_references(&entity, &request));
         assert!(!may_disclose_review_state(&entity, &request));
-        assert!(!may_disclose_decision_reasons(
+        assert!(!may_disclose_application_reason(
             &entity,
             &request_for_profile("missing")
         ));
     }
-
-    #[test]
-    fn current_review_metadata_uses_frozen_stages_and_authoritative_entry_time() {
-        let workflow = submitted_workflow(2, true);
-        let review = super::request_review_metadata(&workflow).expect("submitted proposal");
-        assert_eq!(review["stages"][0]["id"], "review");
-        assert_eq!(review["stages"][0]["approvals"], 2);
-        assert_eq!(review["stages"][0]["excludeSubmitter"], true);
-        assert_eq!(review["submittedAt"], "2026-08-31T00:00:01Z");
-        assert_eq!(review["pendingStage"], "review");
-        assert_eq!(review["stageEnteredAt"], review["submittedAt"]);
-
-        let current_configuration = vec![CompiledChangeRequestStage {
-            id: "replacement-stage".to_owned(),
-            approvals: 1,
-            exclude_submitter: false,
-            exclude_previous_reviewers: false,
-        }];
-        assert_ne!(
-            review["stages"],
-            serde_json::to_value(current_configuration).unwrap(),
-            "a current configuration change cannot rewrite a frozen proposal"
-        );
+    fn compiled_product_fixture(bytes: &[u8]) -> crate::model::CompiledRegistry {
+        let project = parse_project_yaml(bytes).expect("product fixture parses");
+        compile_project(&project, &[], CompileProfile::Authoring).expect("product fixture compiles")
     }
 
     #[test]
@@ -2648,12 +1898,11 @@ mod tests {
             request_entity_id: "request".to_owned(),
             request_id: "00000000-0000-4000-8000-000000000001".to_owned(),
             proposal_version: 2,
-            request_state: "approved".to_owned(),
+            request_state: "applied".to_owned(),
             current: true,
             contract_fingerprint: "sha256:contract".to_owned(),
             effect_digest: "sha256:effect".to_owned(),
             detail_erased: true,
-            decisions: Vec::new(),
             application_id: Some("00000000-0000-4000-8000-0000000000aa".to_owned()),
             result_link_count: 1,
             result_links: vec![RetainedRequestResultLink {
@@ -2662,7 +1911,7 @@ mod tests {
                 target_revision: 7,
             }],
         };
-        let value = retained_history_value(proposal, true, true, false);
+        let value = retained_history_value(proposal, true);
         assert_eq!(value["detailErased"], json!(true));
         assert_eq!(value["effectDigest"], json!("sha256:effect"));
         assert_eq!(value["resultLinkCount"], json!(1));
@@ -2679,18 +1928,15 @@ mod tests {
                 request_entity_id: "request".to_owned(),
                 request_id: "00000000-0000-4000-8000-000000000001".to_owned(),
                 proposal_version: 2,
-                request_state: "approved".to_owned(),
+                request_state: "applied".to_owned(),
                 current: true,
                 contract_fingerprint: "sha256:contract".to_owned(),
                 effect_digest: "sha256:effect".to_owned(),
                 detail_erased: true,
-                decisions: Vec::new(),
                 application_id: Some("00000000-0000-4000-8000-0000000000aa".to_owned()),
                 result_link_count: 0,
                 result_links: Vec::new(),
             },
-            false,
-            false,
             false,
         );
         assert_eq!(value["detailErased"], json!(true));
@@ -2727,7 +1973,6 @@ mod tests {
             }),
             true,
             true,
-            json!([]),
         );
         assert_eq!(value["bregState"], json!("applied"));
         assert_eq!(value["proposalVersion"], json!(2));
@@ -2769,7 +2014,6 @@ mod tests {
             }),
             true,
             true,
-            json!([]),
         );
         assert_eq!(
             value["application"],
@@ -2808,7 +2052,6 @@ mod tests {
             }),
             false,
             false,
-            json!([]),
         );
         assert_eq!(value["bregState"], json!("applied"));
         assert!(value.get("effectDigest").is_none());
@@ -2819,79 +2062,25 @@ mod tests {
     #[test]
     fn action_href_preserves_selected_access_profile() {
         let request = request_for_profile("editor-profile");
-        let action = action(Operation::ReviseRequest, None);
+        let action = action(Operation::ReviseRequest);
         assert_eq!(
             action_href(&action, &request, "00000000-0000-4000-8000-000000000001"),
             "/requests/00000000-0000-4000-8000-000000000001/action?accessProfile=editor-profile"
         );
     }
 
-    #[test]
-    fn review_snapshot_uses_configured_api_names() {
-        let project = parse_project_json(
-            br#"{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{"id":"snapshot-api-name","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-              "entities":[{
-                "id":"target","primaryDataset":"test-dataset","route":"targets","mutationMode":"mutable",
-                "fields":[
-                  {"id":"proposed-site","apiName":"proposedSite","type":"string","maxLength":64,"classification":"internal"},
-                  {"id":"hidden-field","apiName":"hiddenField","type":"string","maxLength":64,"classification":"internal"}
-                ]
-              }],
-              "accessProfiles":[{
-                "id":"operator","default":true,"principalClaim":"principal","permissions":[{
-                  "entity":"target","operations":["get"],"readableFields":["proposed-site"],
-                  "rowBoundaries": []
-                }]
-              }]
-            }"#,
-        )
-        .expect("fixture parses");
-        let compiled =
-            compile_project(&project, &[], CompileProfile::Authoring).expect("fixture compiles");
-        let target = compiled.entities().get("target").expect("target exists");
-        let snapshot = Map::from_iter([
-            ("proposed-site".to_owned(), json!("site-a")),
-            ("hidden-field".to_owned(), json!("do-not-include")),
-        ]);
-        let value = api_object(
-            target,
-            &snapshot,
-            &BTreeSet::from(["proposed-site".to_owned()]),
-        )
-        .expect("snapshot serializes");
-        assert_eq!(value, json!({"proposedSite": "site-a"}));
-        assert!(value.get("proposed-site").is_none());
-        assert!(value.get("hiddenField").is_none());
-    }
-    fn action(operation: Operation, stage: Option<&str>) -> VerifiedRequestAction {
-        action_with_automatic_apply(operation, stage, None, false)
-    }
-
-    fn action_with_automatic_apply(
-        operation: Operation,
-        stage: Option<&str>,
-        automatic_apply_authority: Option<Vec<crate::api::VerifiedRequestTargetAuthority>>,
-        requires_automatic_apply_if_ready: bool,
-    ) -> VerifiedRequestAction {
+    fn action(operation: Operation) -> VerifiedRequestAction {
         VerifiedRequestAction::new(
             "records.request.action".to_owned(),
             HttpMethod::Post,
             "/requests/{record_id}/action".to_owned(),
             operation,
-            stage.map(str::to_owned),
             BTreeSet::new(),
-            crate::api::VerifiedRequestActionAuthority::new(
-                Vec::new(),
-                automatic_apply_authority,
-                requires_automatic_apply_if_ready,
-            ),
+            crate::api::VerifiedRequestActionAuthority::new(Vec::new()),
         )
     }
 
-    fn submitted_workflow(approvals: u16, exclude_submitter: bool) -> RequestWorkflow {
+    fn submitted_workflow() -> RequestWorkflow {
         RequestWorkflow::new_draft(
             RequestKey::new(
                 EntityId::new("request").expect("entity id"),
@@ -2900,25 +2089,25 @@ mod tests {
             actor("owner-ref"),
             StateRevision::new(1).expect("state revision"),
         )
-        .submit(
-            context("owner-ref", 1),
-            proposal(approvals, exclude_submitter),
-        )
+        .submit(context("owner-ref", 1), proposal())
         .expect("submit succeeds")
         .into_workflow()
     }
 
-    fn proposal(approvals: u16, exclude_submitter: bool) -> PreparedProposal {
-        PreparedProposal::new(
+    fn proposal() -> PreparedProposal {
+        PreparedProposal::new_with_binding(
             RecordRevision::new(1).expect("record revision"),
             ContractFingerprint::new("sha256:contract").expect("contract fingerprint"),
             PackageFingerprint::new("sha256:package").expect("package fingerprint"),
-            vec![CompiledChangeRequestStage {
-                id: "review".to_owned(),
-                approvals,
-                exclude_submitter,
-                exclude_previous_reviewers: false,
-            }],
+            CompiledChangeRequestReview::None(CompiledChangeRequestNoReview {
+                mode: CompiledChangeRequestNoReviewMode::None,
+            }),
+            FrozenPlanningBinding::new(
+                FrozenPlannerKind::Declarative,
+                "registry.change-request-plan/v1",
+                None,
+            )
+            .expect("planning binding"),
             vec![PreparedEffect::new(
                 EffectId::new("effect").expect("effect id"),
                 Operation::Patch,
@@ -2938,28 +2127,6 @@ mod tests {
             1024,
         )
         .expect("proposal")
-    }
-
-    fn decide(
-        workflow: RequestWorkflow,
-        actor_reference: &str,
-        decision: ReviewDecisionKind,
-    ) -> RequestWorkflow {
-        let digest = workflow
-            .current_proposal()
-            .expect("current proposal")
-            .effect_digest()
-            .clone();
-        workflow
-            .decide(
-                context(actor_reference, 2),
-                "review",
-                ProposalVersion::first(),
-                &digest,
-                decision,
-            )
-            .expect("decision succeeds")
-            .into_workflow()
     }
 
     fn actor(value: &str) -> TrustedActorRef {

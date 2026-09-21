@@ -237,6 +237,14 @@ impl ExpectedManagedCatalog {
                 Some((false, false)),
             );
         }
+        for (table, privileges) in crate::review_store::REVIEW_TABLES {
+            catalog.table(
+                &format!("registry_internal.{table}"),
+                privileges.iter().copied(),
+                std::iter::empty::<&str>(),
+                Some((false, false)),
+            );
+        }
         for (table, privileges) in crate::ingestion_store::INGESTION_TABLES {
             catalog.table(
                 &format!("registry_internal.{table}"),

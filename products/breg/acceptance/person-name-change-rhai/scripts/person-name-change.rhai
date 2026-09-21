@@ -12,13 +12,5 @@ fn plan(ctx) {
         set: #{"display-name": display_name}
     };
 
-    if ctx.request["handling"] == "routine" {
-        return #{effects: [effect], disposition: "apply"};
-    }
-
-    #{
-        effects: [effect],
-        disposition: "queue",
-        reasonCode: "assisted-review"
-    }
+    #{effects: [effect]}
 }

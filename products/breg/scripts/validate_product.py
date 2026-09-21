@@ -30,7 +30,7 @@ PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|FIXME|placeholder)\b", re.IGNORECASE)
 CONTRACT_STATES = {"enforced", "partial", "planned"}
 V1_REQUIREMENT_IDS = tuple(f"BREG-V1-{index:02d}" for index in range(1, 45))
 ACCEPTANCE_JOURNEY_IDS = tuple(f"BREG-J{index:02d}" for index in range(1, 22))
-SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 83))
+SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 86))
 ACCEPTANCE_FIXTURES = {
     "BREG-J01": ("asset-site-placement", "acceptance/asset-site-placement"),
     "BREG-J02": ("asset-site-placement", "acceptance/asset-site-placement"),
@@ -126,12 +126,12 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_ingestion_receipts",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_change_requests",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_task_grants",
-    "cargo test --locked -p registry-breg --features postgres-test --test postgres_request_authority",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_request_receipts",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_request_upgrade_retention",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_request_events",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_request_queries",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_request_read_retention",
+    "cargo test --locked -p registry-breg --features postgres-test --test postgres_review_executor",
     "cargo test --locked -p registry-breg --features postgres-test,tooling --test postgres_request_activation",
     "cargo test --locked -p registry-breg --features postgres-test,tooling --test postgres_audit_tooling",
     "cargo test --locked -p registry-breg --features postgres-test --test postgres_pilot_acceptance",

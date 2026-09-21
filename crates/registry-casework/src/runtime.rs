@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use registry_casework_breg::BregBinding;
 use registry_casework_core::{CaseworkProject, SourceAdapter};
 use registry_platform_audit::{AuditEnvelope, AuditProfile, ChainState, JsonlFileSink};
 use registry_platform_config::{SecretProvider, SecretResolver};
+use registry_platform_httputil::{read_bounded, BearerToken, OutboundClientBuilder};
 use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -19,6 +21,286 @@ use uuid::Uuid;
 use crate::{
     router, CaseworkAuthenticator, CaseworkService, HttpState, PostgresStore, RuntimeConfig,
 };
+
+struct ReviewCompletionTarget {
+    url: String,
+    bearer_token: BearerToken,
+    timeout: Duration,
+    maximum_attempts: u32,
+    retry: Duration,
+}
+
+struct ReviewCompletionDispatcher {
+    store: PostgresStore,
+    client: reqwest::Client,
+    targets: BTreeMap<String, Arc<ReviewCompletionTarget>>,
+}
+
+struct OwnedReviewCompletion {
+    delivery: crate::LeasedReviewCompletion,
+    attempt_count: i32,
+    lease_until: chrono::DateTime<chrono::Utc>,
+}
+
+impl ReviewCompletionDispatcher {
+    fn new(
+        store: PostgresStore,
+        configured: &BTreeMap<String, crate::ReviewCompletionRuntimeConfig>,
+        secrets: &SecretResolver,
+    ) -> Result<Self, RuntimeError> {
+        let mut targets = BTreeMap::new();
+        for (id, target) in configured {
+            let secret = secrets
+                .resolve(&target.bearer_token_ref)
+                .map_err(|_| RuntimeError::CompletionConfiguration)?;
+            let token = completion_bearer_token(secret.expose_secret())?;
+            targets.insert(
+                id.clone(),
+                Arc::new(ReviewCompletionTarget {
+                    url: target.url.clone(),
+                    bearer_token: token,
+                    timeout: Duration::from_millis(target.timeout_milliseconds),
+                    maximum_attempts: target.maximum_attempts,
+                    retry: Duration::from_secs(target.retry_seconds),
+                }),
+            );
+        }
+        Ok(Self {
+            store,
+            client: OutboundClientBuilder::new()
+                .try_build()
+                .map_err(|_| RuntimeError::CompletionConfiguration)?,
+            targets,
+        })
+    }
+
+    async fn pass(&self) -> Result<(), crate::ReviewRuntimeError> {
+        // Lease immediately before each remote call. Pre-leasing the whole pass
+        // would let later rows expire while earlier receivers are still slow.
+        for _ in 0..50 {
+            let Some(owned) = self.lease_one().await? else {
+                break;
+            };
+            let Some(target) = self.targets.get(&owned.delivery.destination_id) else {
+                self.finish(&owned, false, 1, chrono::Utc::now()).await?;
+                continue;
+            };
+            let delivered = deliver_review_completion(&self.client, target, &owned.delivery).await;
+            let retry_at = chrono::Utc::now()
+                + chrono::TimeDelta::from_std(target.retry)
+                    .unwrap_or_else(|_| chrono::TimeDelta::seconds(30));
+            self.finish(&owned, delivered, target.maximum_attempts, retry_at)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn lease_one(&self) -> Result<Option<OwnedReviewCompletion>, crate::ReviewRuntimeError> {
+        let client = self.store.client().await?;
+        // Runtime validation caps receiver timeouts at 30 seconds. The longer
+        // lease avoids ordinary timeout overlap; the finish fence below still
+        // protects a replacement owner after a process stall or lease recovery.
+        let row = client
+            .query_opt(
+                "WITH due AS (
+                    SELECT event_id FROM casework_review_completion_outbox
+                    WHERE retained_until>transaction_timestamp()
+                      AND next_attempt_at<=transaction_timestamp()
+                      AND (state='pending' OR
+                           (state='leased' AND lease_until<=transaction_timestamp()))
+                    ORDER BY next_attempt_at,event_id LIMIT 1 FOR UPDATE SKIP LOCKED
+                 ), leased AS (
+                    UPDATE casework_review_completion_outbox o
+                    SET state='leased',
+                        lease_until=transaction_timestamp()+interval '60 seconds',
+                        attempt_count=attempt_count+1
+                    FROM due WHERE o.event_id=due.event_id
+                    RETURNING o.event_id,o.destination_id,o.recipient_binding,
+                              o.attempt_count,o.lease_until
+                 )
+                 SELECT l.event_id,e.request_id,e.result_id,e.completed_at,
+                        l.destination_id,l.recipient_binding,l.attempt_count,l.lease_until
+                 FROM leased l JOIN casework_review_terminal_events e ON e.event_id=l.event_id",
+                &[],
+            )
+            .await?;
+        Ok(row.map(|row| OwnedReviewCompletion {
+            delivery: crate::LeasedReviewCompletion {
+                event: registry_casework_core::ReviewCompletion {
+                    event_type: registry_casework_core::ReviewCompletionType::ReviewCompleted,
+                    event_id: row.get(0),
+                    request_id: row.get(1),
+                    result_id: row.get(2),
+                    completed_at: row.get(3),
+                },
+                destination_id: row.get(4),
+                recipient_binding: row.get(5),
+            },
+            attempt_count: row.get(6),
+            lease_until: row.get(7),
+        }))
+    }
+
+    async fn finish(
+        &self,
+        owned: &OwnedReviewCompletion,
+        delivered: bool,
+        maximum_attempts: u32,
+        retry_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), crate::ReviewRuntimeError> {
+        let client = self.store.client().await?;
+        if delivered {
+            client
+                .execute(
+                    "UPDATE casework_review_completion_outbox
+                     SET state='delivered',delivered_at=transaction_timestamp(),
+                         lease_until=NULL,last_failure_class=NULL
+                     WHERE event_id=$1 AND state='leased'
+                       AND attempt_count=$2 AND lease_until=$3",
+                    &[
+                        &owned.delivery.event.event_id,
+                        &owned.attempt_count,
+                        &owned.lease_until,
+                    ],
+                )
+                .await?;
+        } else {
+            client
+                .execute(
+                    "UPDATE casework_review_completion_outbox
+                     SET state=CASE WHEN attempt_count >= $2 OR $3>=retained_until
+                                    THEN 'exhausted' ELSE 'pending' END,
+                         next_attempt_at=LEAST($3,retained_until - interval '1 microsecond'),
+                         lease_until=NULL,last_failure_class='delivery_failed'
+                     WHERE event_id=$1 AND state='leased'
+                       AND attempt_count=$4 AND lease_until=$5",
+                    &[
+                        &owned.delivery.event.event_id,
+                        &i32::try_from(maximum_attempts)
+                            .map_err(|_| crate::ReviewRuntimeError::Invalid)?,
+                        &retry_at,
+                        &owned.attempt_count,
+                        &owned.lease_until,
+                    ],
+                )
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+fn completion_bearer_token(bytes: &[u8]) -> Result<BearerToken, RuntimeError> {
+    let token = std::str::from_utf8(bytes).map_err(|_| RuntimeError::CompletionConfiguration)?;
+    BearerToken::new(token.to_owned()).map_err(|_| RuntimeError::CompletionConfiguration)
+}
+
+async fn validate_retained_completion_destinations(
+    store: &PostgresStore,
+    configured: &BTreeMap<String, crate::ReviewCompletionRuntimeConfig>,
+) -> Result<(), RuntimeError> {
+    let client = store.client().await?;
+    let retained = client
+        .query(
+            "SELECT DISTINCT destination_id
+               FROM casework_review_completion_outbox
+              WHERE state IN ('pending','leased')
+                AND retained_until>transaction_timestamp()",
+            &[],
+        )
+        .await
+        .map_err(crate::StoreError::Postgres)?;
+    if retained
+        .iter()
+        .map(|row| row.get::<_, String>(0))
+        .any(|destination| !configured.contains_key(&destination))
+    {
+        return Err(RuntimeError::CompletionConfiguration);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn validate_retained_completion_destinations_for_test(
+    store: &PostgresStore,
+    destination_ids: &[&str],
+) -> Result<(), RuntimeError> {
+    let configured = destination_ids
+        .iter()
+        .map(|id| {
+            (
+                (*id).to_owned(),
+                crate::ReviewCompletionRuntimeConfig {
+                    url: "http://127.0.0.1/completion".to_owned(),
+                    bearer_token_ref: "secret:env/TEST".to_owned(),
+                    timeout_milliseconds: 1_000,
+                    maximum_attempts: 1,
+                    retry_seconds: 1,
+                },
+            )
+        })
+        .collect();
+    validate_retained_completion_destinations(store, &configured).await
+}
+
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn dispatch_review_completions_once_for_test(
+    store: PostgresStore,
+    destination_id: &str,
+    url: String,
+    bearer_token: &str,
+) -> Result<(), crate::ReviewRuntimeError> {
+    let dispatcher = ReviewCompletionDispatcher {
+        store,
+        client: OutboundClientBuilder::new()
+            .try_build()
+            .expect("build test review completion client"),
+        targets: BTreeMap::from([(
+            destination_id.to_owned(),
+            Arc::new(ReviewCompletionTarget {
+                url,
+                bearer_token: BearerToken::new(bearer_token.to_owned())
+                    .map_err(|_| crate::ReviewRuntimeError::Invalid)?,
+                timeout: Duration::from_secs(30),
+                maximum_attempts: 3,
+                retry: Duration::from_secs(1),
+            }),
+        )]),
+    };
+    dispatcher.pass().await
+}
+
+async fn deliver_review_completion(
+    client: &reqwest::Client,
+    target: &ReviewCompletionTarget,
+    delivery: &crate::LeasedReviewCompletion,
+) -> bool {
+    let Ok(response) = client
+        .post(&target.url)
+        .timeout(target.timeout)
+        .header(
+            reqwest::header::AUTHORIZATION,
+            target.bearer_token.authorization_header_value(),
+        )
+        .header("idempotency-key", delivery.event.event_id.to_string())
+        .header("registry-recipient-binding", &delivery.recipient_binding)
+        .json(&delivery.event)
+        .send()
+        .await
+    else {
+        return false;
+    };
+    let status = response.status();
+    let body_is_empty = read_bounded(response, 0)
+        .await
+        .is_ok_and(|body| body.is_empty());
+    completion_acknowledged(status, body_is_empty)
+}
+
+fn completion_acknowledged(status: reqwest::StatusCode, body_is_empty: bool) -> bool {
+    status == reqwest::StatusCode::NO_CONTENT && body_is_empty
+}
 
 #[must_use]
 pub fn command() -> Command {
@@ -70,6 +352,8 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     let secrets = secret_resolver(&config)?;
     let store = PostgresStore::connect_runtime(&config.database, &secrets)?;
     store.ready().await?;
+    validate_retained_completion_destinations(&store, &config.review_completion_destinations)
+        .await?;
 
     let project_root = config.package.root.as_path();
     let mut adapters: Vec<Arc<dyn SourceAdapter>> = Vec::new();
@@ -117,6 +401,11 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         .transpose()?;
     let service = CaseworkService::new(store.clone(), project.clone(), adapters)?
         .with_task_authority(task_authority);
+    let completion_dispatcher = Arc::new(ReviewCompletionDispatcher::new(
+        store.clone(),
+        &config.review_completion_destinations,
+        &secrets,
+    )?);
 
     let audit_sink = Arc::new(
         JsonlFileSink::new_single_writer(&config.audit.path).map_err(|_| RuntimeError::Audit)?,
@@ -156,10 +445,13 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             if let Err(error) = worker_service.process_due_clocks(100).await {
                 tracing::warn!(error = %error, "Casework clock pass did not complete");
             }
+            if let Err(error) = worker_service.process_due_review_clocks(100).await {
+                tracing::warn!(error = %error, "Casework review clock pass did not complete");
+            }
             retention_ticks = (retention_ticks + 1) % 30;
             if retention_ticks == 0 {
-                if let Err(error) = worker_service.erase_expired_hosted().await {
-                    tracing::warn!(error = %error, "Casework hosted retention pass did not complete");
+                if let Err(error) = worker_service.erase_expired_reviews().await {
+                    tracing::warn!(error = %error, "Casework review retention pass did not complete");
                 }
                 if let Err(error) = worker_service.erase_expired_cursors().await {
                     tracing::warn!(error = %error, "Casework inbox cursor retention pass did not complete");
@@ -182,12 +474,30 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
                 if let Err(error) = worker_service.reconcile_ineligible_assignments(100).await {
                     tracing::warn!(error = %error, "Casework assignment eligibility pass did not complete");
                 }
+                if let Err(error) = worker_service.reconcile_review_absences(100).await {
+                    tracing::warn!(error = %error, "Casework review absence-cover pass did not complete");
+                }
                 if let Err(error) = worker_service.erase_expired_clock_previews().await {
                     tracing::warn!(error = %error, "Casework clock preview retention pass did not complete");
                 }
             }
         }
     }));
+    let completion_worker = Arc::clone(&completion_dispatcher);
+    workers.push(supervise(
+        "review completion delivery",
+        worker_stopped.clone(),
+        async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                if let Err(error) = completion_worker.pass().await {
+                    tracing::warn!(error = %error, "Casework review completion pass did not complete");
+                }
+            }
+        },
+    ));
     for (source_id, binding) in &config.sources {
         let reconciliation = service.clone();
         let source_id = source_id.clone();
@@ -536,10 +846,134 @@ fn update_audit_health(
 
 #[cfg(test)]
 mod tests {
+    use chrono::{TimeZone as _, Utc};
     use tokio::sync::Mutex;
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
     use crate::service::AuditPublisherHealth;
+
+    #[tokio::test]
+    async fn review_completion_delivery_is_minimal_authenticated_and_stable_after_lost_ack() {
+        let server = MockServer::start().await;
+        let event = registry_casework_core::ReviewCompletion {
+            event_type: registry_casework_core::ReviewCompletionType::ReviewCompleted,
+            event_id: Uuid::parse_str("11111111-1111-4111-8111-111111111111").expect("event id"),
+            request_id: Uuid::parse_str("22222222-2222-4222-8222-222222222222")
+                .expect("request id"),
+            result_id: Uuid::parse_str("33333333-3333-4333-8333-333333333333").expect("result id"),
+            completed_at: Utc
+                .with_ymd_and_hms(2026, 9, 19, 12, 34, 56)
+                .single()
+                .expect("completion timestamp"),
+        };
+        Mock::given(method("POST"))
+            .and(path("/completion"))
+            .and(header("authorization", "Bearer dispatch-secret"))
+            .and(header(
+                "idempotency-key",
+                "11111111-1111-4111-8111-111111111111",
+            ))
+            .and(header("registry-recipient-binding", "registry-service"))
+            .and(body_json(&event))
+            .respond_with(ResponseTemplate::new(503))
+            .with_priority(1)
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/completion"))
+            .and(header("authorization", "Bearer dispatch-secret"))
+            .and(header(
+                "idempotency-key",
+                "11111111-1111-4111-8111-111111111111",
+            ))
+            .and(header("registry-recipient-binding", "registry-service"))
+            .and(body_json(&event))
+            .respond_with(ResponseTemplate::new(204))
+            .with_priority(2)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = OutboundClientBuilder::new()
+            .try_build()
+            .expect("completion client");
+        let target = ReviewCompletionTarget {
+            url: format!("{}/completion", server.uri()),
+            bearer_token: BearerToken::new("dispatch-secret").expect("completion token"),
+            timeout: Duration::from_secs(1),
+            maximum_attempts: 3,
+            retry: Duration::from_secs(1),
+        };
+        let delivery = crate::LeasedReviewCompletion {
+            event,
+            destination_id: "registry-completion".to_owned(),
+            recipient_binding: "registry-service".to_owned(),
+        };
+
+        assert!(!deliver_review_completion(&client, &target, &delivery).await);
+        assert!(deliver_review_completion(&client, &target, &delivery).await);
+
+        Mock::given(method("POST"))
+            .and(path("/nonempty-success"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("accepted"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let nonempty_success_target = ReviewCompletionTarget {
+            url: format!("{}/nonempty-success", server.uri()),
+            bearer_token: BearerToken::new("dispatch-secret").expect("completion token"),
+            timeout: Duration::from_secs(1),
+            maximum_attempts: 3,
+            retry: Duration::from_secs(1),
+        };
+        assert!(
+            !deliver_review_completion(&client, &nonempty_success_target, &delivery).await,
+            "only an empty 204 acknowledges completion"
+        );
+        assert!(!completion_acknowledged(reqwest::StatusCode::OK, true));
+        assert!(!completion_acknowledged(
+            reqwest::StatusCode::NO_CONTENT,
+            false
+        ));
+
+        Mock::given(method("POST"))
+            .and(path("/redirect"))
+            .respond_with(
+                ResponseTemplate::new(307)
+                    .insert_header("location", format!("{}/redirect-target", server.uri())),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/redirect-target"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let redirect_target = ReviewCompletionTarget {
+            url: format!("{}/redirect", server.uri()),
+            bearer_token: BearerToken::new("dispatch-secret").expect("completion token"),
+            timeout: Duration::from_secs(1),
+            maximum_attempts: 3,
+            retry: Duration::from_secs(1),
+        };
+        assert!(!deliver_review_completion(&client, &redirect_target, &delivery).await);
+    }
+
+    #[test]
+    fn review_completion_bearer_tokens_are_validated_before_dispatch() {
+        assert!(completion_bearer_token(b"dispatch-secret").is_ok());
+        for invalid in [b"dispatch-secret\n".as_slice(), &[0xff]] {
+            assert!(matches!(
+                completion_bearer_token(invalid),
+                Err(RuntimeError::CompletionConfiguration)
+            ));
+        }
+    }
 
     #[cfg(unix)]
     #[test]
@@ -984,6 +1418,8 @@ pub enum RuntimeError {
     Audit,
     #[error("the Casework audit journal could not be initialized: {0}")]
     AuditSecret(String),
+    #[error("the Casework review completion destination configuration is invalid")]
+    CompletionConfiguration,
     #[error(transparent)]
     Store(#[from] crate::StoreError),
     #[error(transparent)]

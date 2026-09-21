@@ -156,8 +156,8 @@ entities:
           operation: patch
           set: {label: {fromField: reason}}
       review:
-        stages:
-          - {id: review, approvals: 1}
+        mode: none
+      onApproved: {mode: manual}
       retention: {mode: operator_erase}
 accessProfiles:
   - id: operator
@@ -197,26 +197,20 @@ accessProfiles:
           - entity: dossier
             rowBoundaries:
               - {field: jurisdiction, claim: jurisdiction, operator: equals}
-  - id: reviewer
+  - id: applier
     principalClaim: registry_principal
     requiredPurposes: [case-management]
     permissions:
       - entity: dossier-request
-        operations: [get, approve_request, reject_request, request_revision]
-        readableFields: [jurisdiction, reason, dossier, secret, evidence]
+        operations: [get, apply_request]
+        readableFields: [jurisdiction, reason, dossier, code, secret, evidence]
         writableFields: []
         rowBoundaries:
           - {field: jurisdiction, claim: jurisdiction, operator: equals}
-        reviewStages:
-          - stage: review
-            targets:
-              - entity: dossier
-                readableFields: [jurisdiction, label, code]
-                rowBoundaries:
-                  - {field: jurisdiction, claim: jurisdiction, operator: equals}
-              - entity: dossier-request
-                readableFields: [evidence]
-                rowBoundaries: []
+        applyTargets:
+          - entity: dossier
+            rowBoundaries:
+              - {field: jurisdiction, claim: jurisdiction, operator: equals}
 "#;
 
 const JOURNEY_SOURCE: &str = r#"journeys:
@@ -2275,7 +2269,7 @@ async fn submitted_dossier_request(server: &LiveServer, dossier_id: &str) -> Str
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn review_snapshot_opens_target_before_for_the_reviewer() {
+async fn submitted_target_snapshot_stays_encrypted_at_rest() {
     let server = boot_live_server().await;
 
     let response = send(
@@ -2301,36 +2295,6 @@ async fn review_snapshot_opens_target_before_for_the_reviewer() {
         .to_owned();
 
     let request_id = submitted_dossier_request(&server, &dossier_id).await;
-
-    // The reviewer sees the captured target row opened at the display edge.
-    let reviewed = send_as(
-        &server,
-        Method::GET,
-        &format!("/v1/records/dossier-requests/{request_id}?accessProfile=reviewer"),
-        &[],
-        None,
-        &token_for("reviewer", "area-a"),
-    )
-    .await;
-    assert_eq!(reviewed.status(), StatusCode::OK);
-    let reviewed = body_json(reviewed).await;
-    let approve = find_action(&reviewed, "approve_request");
-    let targets = approve["review"]["targets"]
-        .as_array()
-        .expect("the approve action carries review targets");
-    let target = targets
-        .iter()
-        .find(|target| target["entityId"] == "dossier")
-        .expect("the dossier target is reviewed");
-    assert_eq!(
-        target["before"]["code"], "ABC-1234",
-        "the captured before row opens for the reviewer"
-    );
-    // Phase 1 refuses encrypted change-request targets, so the effect changes
-    // the plaintext label; the encrypted code member travels sealed in both
-    // captured rows and opens here unchanged.
-    assert_eq!(target["after"]["label"], "correct the label");
-    assert_eq!(target["after"]["code"], "ABC-1234");
 
     // The stored target reference keeps the tagged member.
     let base_snapshot: String = server
@@ -2383,31 +2347,31 @@ async fn attachment_authorization_over_encrypted_records_fails_closed() {
 
     let request_id = submitted_dossier_request(&server, &dossier_id).await;
     let download = format!(
-        "/v1/records/dossier-requests/{request_id}/attachments/evidence?proposalVersion=1&accessProfile=reviewer"
+        "/v1/records/dossier-requests/{request_id}/attachments/evidence?proposalVersion=1&accessProfile=applier"
     );
 
-    // An authorized reviewer downloads the retained attachment.
+    // An authorized applier downloads the retained attachment.
     let authorized = send_as(
         &server,
         Method::GET,
         &download,
         &[],
         None,
-        &token_for("reviewer", "area-a"),
+        &token_for("applier", "area-a"),
     )
     .await;
     assert_eq!(authorized.status(), StatusCode::OK);
     let bytes = body_bytes(authorized).await;
     assert_eq!(bytes, b"dossier evidence");
 
-    // A reviewer outside the row boundary is refused without the bytes.
+    // An applier outside the row boundary is refused without the bytes.
     let unauthorized = send_as(
         &server,
         Method::GET,
         &download,
         &[],
         None,
-        &token_for("reviewer", "area-b"),
+        &token_for("applier", "area-b"),
     )
     .await;
     assert_eq!(
@@ -2416,47 +2380,43 @@ async fn attachment_authorization_over_encrypted_records_fails_closed() {
         "an excluded row cannot authorize attachment disclosure"
     );
 
-    // Corrupt the tagged envelope in every revision snapshot of the request
-    // record, so whichever revision the retained-attachment guard froze as its
-    // intake refuses to open.
-    let record_uuid = Uuid::parse_str(&request_id).expect("request id is a UUID");
-    let revisions: Vec<i64> = server
+    // Corrupt the tagged envelope in the retained target snapshot used by the
+    // current apply grant, so its row authorization refuses to open.
+    let request_uuid = Uuid::parse_str(&request_id).expect("request id is a UUID");
+    let stored = server
         .booted
         .database
         .admin
-        .query(
-            "SELECT record_revision FROM registry_internal.registry_revisions
-             WHERE entity_id = 'dossier-request' AND record_id = $1
-             ORDER BY record_revision",
-            &[&record_uuid],
+        .query_one(
+            "SELECT base_snapshot, after_snapshot
+             FROM registry_internal.registry_request_targets
+             WHERE request_entity_id = 'dossier-request' AND request_id = $1
+               AND proposal_version = 1 AND target_entity_id = 'dossier'",
+            &[&request_uuid],
         )
         .await
-        .expect("the request record revisions read")
-        .into_iter()
-        .map(|row| row.get(0))
-        .collect();
-    assert!(!revisions.is_empty(), "the request record has revisions");
-    for revision in revisions {
-        let stored = revision_snapshot(&server, "dossier-request", &request_id, revision).await;
-        let Ok(text) = String::from_utf8(stored) else {
-            continue;
-        };
-        if !text.contains("__bregEncryptedV1") {
-            continue;
-        }
-        let tampered = tamper_encrypted_member(text.as_bytes());
-        server
-            .booted
-            .database
-            .admin
-            .execute(
-                "UPDATE registry_internal.registry_revisions SET snapshot = $1
-                 WHERE entity_id = 'dossier-request' AND record_id = $2 AND record_revision = $3",
-                &[&tampered, &record_uuid, &revision],
-            )
-            .await
-            .expect("tampered intake snapshot writes");
-    }
+        .expect("the retained target snapshots read");
+    let before: Value = stored.get(0);
+    let after: Value = stored.get(1);
+    let before = serde_json::to_vec(&before).expect("the retained base snapshot serializes");
+    let after = serde_json::to_vec(&after).expect("the retained after snapshot serializes");
+    let tampered_before: Value = serde_json::from_slice(&tamper_encrypted_member(&before))
+        .expect("the tampered base snapshot remains JSON");
+    let tampered_after: Value = serde_json::from_slice(&tamper_encrypted_member(&after))
+        .expect("the tampered after snapshot remains JSON");
+    server
+        .booted
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_targets
+             SET base_snapshot = $1, after_snapshot = $2
+             WHERE request_entity_id = 'dossier-request' AND request_id = $3
+               AND proposal_version = 1 AND target_entity_id = 'dossier'",
+            &[&tampered_before, &tampered_after, &request_uuid],
+        )
+        .await
+        .expect("tampered target snapshot writes");
 
     // The tampered envelope refuses the disclosure closed instead of
     // authorizing it, value-free.
@@ -2466,7 +2426,7 @@ async fn attachment_authorization_over_encrypted_records_fails_closed() {
         &download,
         &[],
         None,
-        &token_for("reviewer", "area-a"),
+        &token_for("applier", "area-a"),
     )
     .await;
     assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);

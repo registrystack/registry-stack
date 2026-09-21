@@ -50,11 +50,6 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
             "access.membership.read_only",
         ),
         (
-            "/accessProfiles/0/permissions/0/reviewStages",
-            json!([{"stage":"review"}]),
-            "access.membership.read_only",
-        ),
-        (
             "/accessProfiles/0/permissions/0/applyTargets",
             json!([{"entity":"facility","rowBoundaries":[]}]),
             "access.membership.read_only",

@@ -48,7 +48,7 @@ struct RunArgs {
     /// Completed population attempt whose typed captures this scenario uses.
     #[arg(long)]
     from_attempt: Option<uuid::Uuid>,
-    /// Reviewed changes advance one explicit stage; approval never applies a change.
+    /// Advance one explicit source-owned request step. External review is completed separately.
     #[arg(long)]
     step: Option<ReviewStep>,
 }
@@ -56,8 +56,6 @@ struct RunArgs {
 enum ReviewStep {
     Submit,
     Inspect,
-    Approve,
-    Reject,
     Apply,
     History,
 }
@@ -66,8 +64,6 @@ impl ReviewStep {
         match self {
             Self::Submit => "submit",
             Self::Inspect => "inspect",
-            Self::Approve => "approve",
-            Self::Reject => "reject",
             Self::Apply => "apply",
             Self::History => "history",
         }
@@ -113,8 +109,6 @@ enum Operation {
     Invoke,
     Get,
     Submit,
-    Approve,
-    Reject,
     Apply,
     History,
 }
@@ -125,8 +119,6 @@ impl Operation {
             Self::Invoke => BRegOperationKind::Invoke,
             Self::Get => BRegOperationKind::Get,
             Self::Submit => BRegOperationKind::SubmitRequest,
-            Self::Approve => BRegOperationKind::ApproveRequest,
-            Self::Reject => BRegOperationKind::RejectRequest,
             Self::Apply => BRegOperationKind::ApplyRequest,
             Self::History => BRegOperationKind::Revisions,
         }
@@ -134,8 +126,6 @@ impl Operation {
     fn lifecycle(self) -> Option<BRegLifecycleOperation> {
         match self {
             Self::Submit => Some(BRegLifecycleOperation::SubmitRequest),
-            Self::Approve => Some(BRegLifecycleOperation::ApproveRequest),
-            Self::Reject => Some(BRegLifecycleOperation::RejectRequest),
             Self::Apply => Some(BRegLifecycleOperation::ApplyRequest),
             _ => None,
         }
@@ -284,8 +274,6 @@ fn catalogue(project: &Path) -> Result<(Catalogue, Vec<u8>)> {
                 ("draft", Operation::Create),
                 ("submit", Operation::Submit),
                 ("inspect", Operation::Get),
-                ("approve", Operation::Approve),
-                ("reject", Operation::Reject),
                 ("apply", Operation::Apply),
                 ("history", Operation::History),
             ] {
@@ -294,11 +282,13 @@ fn catalogue(project: &Path) -> Result<(Catalogue, Vec<u8>)> {
                     .iter()
                     .any(|s| s.id == id && s.operation == operation)
                 {
-                    bail!("reviewed-change requires draft, submit, inspect, approve, reject, apply and history steps");
+                    bail!(
+                        "reviewed-change requires draft, submit, inspect, apply and history steps"
+                    );
                 }
             }
-            if scenario.steps.len() != 7 {
-                bail!("reviewed-change contains exactly seven fixed steps");
+            if scenario.steps.len() != 5 {
+                bail!("reviewed-change contains exactly five fixed steps");
             }
         }
     }
@@ -805,18 +795,12 @@ fn selected_steps<'a>(
     let prerequisite = match id {
         "submit" => None,
         "inspect" => Some("submit"),
-        "approve" | "reject" => Some("inspect"),
-        "apply" => Some("approve"),
+        "apply" => Some("inspect"),
         "history" => Some("submit"),
         _ => unreachable!(),
     };
     if prerequisite.is_some_and(|p| !attempt.completed.contains_key(p)) {
-        bail!("review step requires its previous explicit stage; submit, inspect, approve or reject, then apply");
-    }
-    if (["approve", "apply"].contains(&id) && attempt.completed.contains_key("reject"))
-        || (id == "reject" && attempt.completed.contains_key("approve"))
-    {
-        bail!("this attempt already has a different review decision");
+        bail!("request step requires its previous explicit source step; submit, inspect, then apply after external approval");
     }
     if id == "submit" {
         Ok(scenario
@@ -1220,12 +1204,7 @@ async fn execute(
         "submit"
     } else if !attempt.completed.contains_key("inspect") {
         "inspect"
-    } else if !attempt.completed.contains_key("approve")
-        && !attempt.completed.contains_key("reject")
-    {
-        "approve"
-    } else if attempt.completed.contains_key("approve") && !attempt.completed.contains_key("apply")
-    {
+    } else if !attempt.completed.contains_key("apply") {
         "apply"
     } else {
         "history"
@@ -1260,7 +1239,7 @@ async fn execute(
         next
     };
     Ok(
-        json!({"ok":true,"command":"examples run","project":state.project,"scenario":scenario.id,"attempt":attempt.id,"captures":attempt.captures,"fromAttempt":attempt.from_attempt,"completedSteps":attempt.completed.keys().collect::<Vec<_>>(),"results":results,"nextCommand":next,"historyScope":"first-page-only","message":if args.step.is_some_and(|s|matches!(s,ReviewStep::Approve)){"Approval recorded. Approval alone does not change the target; apply is a separate command."}else{"Example progress retained. Reuse this attempt to resume."}}),
+        json!({"ok":true,"command":"examples run","project":state.project,"scenario":scenario.id,"attempt":attempt.id,"captures":attempt.captures,"fromAttempt":attempt.from_attempt,"completedSteps":attempt.completed.keys().collect::<Vec<_>>(),"results":results,"nextCommand":next,"historyScope":"first-page-only","message":"Example progress retained. External review remains independent from these source-owned steps."}),
     )
 }
 fn shell_path(path: &Path) -> String {
@@ -1359,7 +1338,7 @@ mod tests {
         }
     }
     #[test]
-    fn review_stages_do_not_implicitly_approve_or_apply() {
+    fn external_review_is_not_a_local_example_step() {
         let (catalogue, _) = catalogue(&assets()).unwrap();
         let scenario = catalogue
             .scenarios
@@ -1379,13 +1358,11 @@ mod tests {
         attempt.completed.insert("submit".into(), json!({}));
         attempt.completed.insert("inspect".into(), json!({}));
         assert_eq!(
-            selected_steps(scenario, &attempt, Some(ReviewStep::Approve)).unwrap()[0].operation,
-            Operation::Approve
+            selected_steps(scenario, &attempt, Some(ReviewStep::Apply)).unwrap()[0].operation,
+            Operation::Apply
         );
-        assert!(selected_steps(scenario, &attempt, Some(ReviewStep::Apply)).is_err());
-        attempt.completed.insert("reject".into(), json!({}));
-        assert!(selected_steps(scenario, &attempt, Some(ReviewStep::Apply)).is_err());
-        assert!(selected_steps(scenario, &attempt, Some(ReviewStep::Approve)).is_err());
+        assert!(ReviewStep::from_str("approve", false).is_err());
+        assert!(ReviewStep::from_str("reject", false).is_err());
     }
     #[test]
     fn attempt_files_are_private_and_generation_and_pending_operation_survive_reload() {
@@ -1906,7 +1883,7 @@ mod tests {
             .unwrap();
         for (id, profile, missing) in [
             ("history", "reader", "revisions"),
-            ("reject", "editor", "reject_request"),
+            ("apply", "editor", "apply_request"),
         ] {
             let mut scenario = review.clone();
             let step = scenario.steps.iter_mut().find(|s| s.id == id).unwrap();
@@ -2186,7 +2163,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires source-built bregctl/breg and Docker; creates one disposable owned dev database"]
-    fn native_create_and_apply_recover_after_process_exit_without_duplicate_revisions() {
+    fn native_create_recovers_after_process_exit_without_duplicate_records() {
         let temp = tempfile::Builder::new()
             .prefix("breg-example-recovery-")
             .tempdir()
@@ -2284,45 +2261,6 @@ mod tests {
                 "concurrent examples cannot enter while dev lock is held"
             );
         }
-        child(&owned.project, "reviewed-change", Some("submit"), None);
-        child(&owned.project, "reviewed-change", Some("inspect"), None);
-        child(&owned.project, "reviewed-change", Some("approve"), None);
-        let before = child(&owned.project, "reviewed-change", Some("history"), None).unwrap();
-        assert_eq!(
-            before["results"]["history"]["items"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1,
-            "approval does not mutate target"
-        );
-        assert!(
-            observed_count_and_apply_action(&owned.project).1,
-            "approved request advertises apply"
-        );
-        child(
-            &owned.project,
-            "reviewed-change",
-            Some("apply"),
-            Some("apply"),
-        );
-        assert!(
-            !observed_count_and_apply_action(&owned.project).1,
-            "committed apply disappears from current record before recovery"
-        );
-        owned.succeed(&["stop"]);
-        owned.succeed(&[]);
-        child(&owned.project, "reviewed-change", Some("apply"), None);
-        child(&owned.project, "reviewed-change", Some("apply"), None);
-        let history = child(&owned.project, "reviewed-change", Some("history"), None).unwrap();
-        assert_eq!(
-            history["results"]["history"]["items"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2,
-            "application must produce one revision despite uncertain reply and replay"
-        );
         let sample_path = owned.project.join("examples/inputs/starter-data.json");
         let mut sample_input: Value =
             serde_json::from_slice(&fs::read(&sample_path).unwrap()).unwrap();

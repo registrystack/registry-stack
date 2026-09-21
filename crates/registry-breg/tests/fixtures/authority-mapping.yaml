@@ -30,7 +30,9 @@ entities:
           operation: patch
           set: {label: {fromField: label}}
       review:
-        stages: [{id: review, approvals: 1}]
+        authority: casework-main
+        policyId: correction-review
+      onApproved: {mode: manual}
 accessProfiles:
   - id: operator
     default: true
@@ -52,15 +54,9 @@ accessProfiles:
     principalClaim: registry_principal
     permissions:
       - entity: correction
-        operations: [get, submit_request, approve_request, reject_request, request_revision, apply_request]
+        operations: [get, submit_request, apply_request]
         readableFields: [asset, label]
         rowBoundaries: []
-        reviewStages:
-          - stage: review
-            targets:
-              - entity: asset
-                readableFields: [label]
-                rowBoundaries: [{field: label, claim: review_labels, operator: in}]
         applyTargets:
           - entity: asset
             rowBoundaries: [{field: label, claim: apply_label, operator: equals}]

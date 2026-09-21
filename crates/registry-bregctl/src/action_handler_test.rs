@@ -197,8 +197,6 @@ pub(super) fn run(
         assertions_passed,
         planner: None,
         handler: Some(identity),
-        disposition: None,
-        queue_reason: None,
         counts: PlannerTestCountReport {
             effects: effects.len(),
             field_mutations: effects.iter().map(|e| e.mutations.len()).sum(),
@@ -850,7 +848,6 @@ accessProfiles:
         let mut report = run(&args, &compiled).unwrap_or_else(|failure| {
             panic!("expected refusal failed: {}", failure.diagnostics[0].code)
         });
-        assert_eq!(report.disposition, None);
         assert_eq!(report.counts.effects, 0);
         assert_eq!(report.assertions_passed, Some(true));
         assert!(serde_json::to_value(&report)

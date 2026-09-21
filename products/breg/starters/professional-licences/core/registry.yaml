@@ -321,15 +321,10 @@
           }
         ],
         "review": {
-          "stages": [
-            {
-              "id": "review",
-              "approvals": 1,
-              "excludeSubmitter": true
-            }
-          ]
+          "authority": "casework",
+          "policyId": "scope-correction"
         },
-        "application": {
+        "onApproved": {
           "mode": "manual"
         },
         "retention": {
@@ -442,7 +437,11 @@
             "supporting-reference"
           ],
           "requestVisibility": "owner",
-          "rowBoundaries": []
+          "rowBoundaries": [],
+          "readableRequestFields": [
+            "reason",
+            "review_state"
+          ]
         }
       ]
     },
@@ -486,9 +485,6 @@
           "entity": "scope-correction",
           "operations": [
             "get",
-            "approve_request",
-            "reject_request",
-            "request_revision",
             "apply_request",
             "list"
           ],
@@ -503,34 +499,15 @@
             "record"
           ],
           "rowBoundaries": [],
-          "reviewStages": [
-            {
-              "stage": "review",
-              "targets": [
-                {
-                  "entity": "professional-license",
-                  "readableFields": [
-                    "local-identifier",
-                    "person-reference",
-                    "regulator-reference",
-                    "jurisdiction-reference",
-                    "profession-code",
-                    "licence-status",
-                    "valid-from",
-                    "valid-to",
-                    "licensed-activities",
-                    "authorization-conditions"
-                  ],
-                  "rowBoundaries": []
-                }
-              ]
-            }
-          ],
           "applyTargets": [
             {
               "entity": "professional-license",
               "rowBoundaries": []
             }
+          ],
+          "readableRequestFields": [
+            "reason",
+            "review_state"
           ]
         }
       ],
@@ -609,6 +586,10 @@
           "rowBoundaries": [],
           "submitterTargets": [
             "professional-license"
+          ],
+          "readableRequestFields": [
+            "reason",
+            "review_state"
           ]
         }
       ]

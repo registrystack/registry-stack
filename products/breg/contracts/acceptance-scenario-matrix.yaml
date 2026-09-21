@@ -48,7 +48,7 @@ scenarios:
   - id: BREG-J09
     state: enforced
     doneWhen: "Package, profile, purpose, row boundary, projection, query, and delegated task status changes invalidate replay after fresh authorization."
-    evidence: [{path: crates/registry-breg/tests/postgres_mutation.rs, name: real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable}, {path: crates/registry-breg/tests/postgres_read.rs, name: real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced}, {path: crates/registry-breg/tests/postgres_task_grants.rs, name: task_http_to_postgres_preserves_original_authority_and_completed_receipts}, {path: crates/registry-breg/tests/postgres_task_grants.rs, name: automatic_apply_rechecks_original_task_after_human_approval}]
+    evidence: [{path: crates/registry-breg/tests/postgres_mutation.rs, name: real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable}, {path: crates/registry-breg/tests/postgres_read.rs, name: real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced}, {path: crates/registry-breg/tests/postgres_task_grants.rs, name: task_http_to_postgres_preserves_original_authority_and_completed_receipts}, {path: crates/registry-breg/tests/postgres_task_grants.rs, name: external_review_submission_preserves_exact_task_grant_and_refuses_substitution}]
   - id: BREG-J10
     state: enforced
     doneWhen: "Fault injection proves atomic record, revision, audit, idempotency, and configured outbox state."

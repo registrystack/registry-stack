@@ -36,13 +36,12 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                         | Operation::Snapshot
                 )
             }) || !profile.writable_fields.is_empty()
-                || !profile.review_stages.is_empty()
                 || !profile.apply_targets.is_empty()
                 || !profile.request_presence.is_empty()
                 || profile.request_visibility.is_some()
             {
                 errors.push(Diagnostic::error("access.membership.read_only", &location,
-                    "membership boundaries support get, lookup, list, revisions and snapshot only; use a separate directly authorized profile for writes and review"));
+                    "membership boundaries support get, lookup, list, revisions and snapshot only; use a separate directly authorized profile for writes and proposal application"));
             }
             if profile.spatial_queries.is_some() {
                 errors.push(Diagnostic::error("access.membership.spatial_unsupported", &location,

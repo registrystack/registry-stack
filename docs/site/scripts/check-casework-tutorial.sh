@@ -20,17 +20,19 @@
 # CASEWORKCTL_BIN, BREG_BIN and BREGCTL_BIN select exact candidate or
 # released bytes, then replays each registered tutorial's own shell fences from
 # an empty reader directory, the way a reader starts after installing the
-# binaries. The Base Registry Engine binaries are part of the toolset because
-# the two-product page runs a registry beside Casework. What CI runs is what a
-# reader copies.
+# binaries. The toolset retains Base Registry Engine compatibility for any
+# future registered cross-product shell journey, although the current BReg to
+# Casework boundary guide contains no executable shell fences. What CI runs is
+# what a reader copies.
 #
 # Usage:
 #   scripts/check-casework-tutorial.sh              replay every registered tutorial
 #   scripts/check-casework-tutorial.sh --dry-run    resolve the journeys only
 #
-# The full run needs Docker, because `caseworkctl dev` and `bregctl dev`, which
-# the tutorials start, each run PostgreSQL in a container. The dry run needs
-# neither Docker nor a compiler, which is what lets it run in the docs checks.
+# The full run needs Docker because `caseworkctl dev` runs PostgreSQL in a
+# container. The cleanup also remains able to reclaim a registered journey's
+# BReg development session. The dry run needs neither Docker nor a compiler,
+# which is what lets it run in the docs checks.
 #
 # Registering a tutorial means adding its slug to CASEWORK_TUTORIALS and a
 # branch to load_spec. Each spec holds two things:
@@ -99,7 +101,6 @@ CASEWORK_DOC_SECTIONS=(
 
 CASEWORK_TUTORIALS=(
 	tutorials/first-casework
-	tutorials/review-breg-changes-in-casework
 )
 
 # Every other page that runs Registry Casework commands, and the reason it is
@@ -108,6 +109,7 @@ CASEWORK_TUTORIALS=(
 # unexplained.
 EXCLUDED_CASEWORK_TUTORIALS=(
 	start/casework # product overview; its one fence is the opening three commands of tutorials/first-casework, which replays them and stops the runtime it starts
+	tutorials/review-breg-changes-in-casework # joins the BReg and Casework runtimes with direct HTTP calls into both; the Casework product contract gate replays the same journey, not yet specified as a journey here
 )
 
 in_list() {
@@ -199,61 +201,20 @@ load_spec() {
 		SPEC_STEPS=(
 			"run:Create a project"
 			"run:Start Casework"
-			"run:Submit a request as the Requester"
-			"run:Open the inbox as Staff"
-			"run:Claim the item"
-			"run:Decide the item"
-			"run:Read the outcome as the Requester"
-			"run:See who decided, as the Supervisor"
-			"run:Requests Casework refuses"
+			"run:Create the review request"
+			"run:Claim and answer the task"
+			"run:Poll the result"
 			"run:Stop Casework"
 		)
-		# Every documented refusal on this page is read with curl --write-out
-		# and no --fail-with-body, so the fence exits zero whether Casework
-		# refuses or answers. A profile boundary that stopped refusing, a
-		# version check that stopped being enforced, a decision that stopped
-		# reaching a terminal state, or an accountability record that stopped
-		# naming the profile behind it would leave the whole journey green.
-		# These are the assertions that catch it.
+		# The HTTP exchanges use curl --write-out and no --fail-with-body, so
+		# the fences exit zero even if Casework answers with the wrong status.
+		# The result is printed after polling, so retain its terminal status and
+		# configured outcome as well as the create and decision status codes.
 		SPEC_ASSERTS=(
-			"HTTP 412"
-			"precondition.failed"
-			"operation.not-authorized"
-			"profile.not-authorized"
-			"request.invalid"
-			'"state": "completed"'
-			'"profileId": "staff"'
-		)
-		;;
-	tutorials/review-breg-changes-in-casework)
-		# The page opens with two install one-liners, which this gate replaces
-		# with the toolset under test. It starts a registry with `bregctl dev`
-		# and then Casework through the bounded --source-project bridge, so
-		# the registry has to be running first and both sessions are stopped
-		# at the end.
-		SPEC_STEPS=(
-			"run:Create the two projects"
-			"run:Connect the registry to Casework"
-			"run:Start the registry"
-			"run:Start Casework"
-			"run:Submit a change request"
-			"run:Open the inbox as Staff"
-			"run:Approve the review"
-			"run:Apply the change"
-			"run:Verify the registry"
-			"run:Stop both sessions"
-		)
-		# The two decisions are read with curl --write-out and no
-		# --fail-with-body, and the registry's own view of the result is read
-		# through the example runner, which exits zero on any answer it can
-		# show. A review that stopped reaching the registry, an application
-		# that stopped changing the record, or a registry that stopped
-		# recording the applied state would leave the whole journey green.
-		# These are the assertions that catch it.
-		SPEC_ASSERTS=(
-			'"resultingState": "approved"'
-			'"resultingState": "applied"'
-			'"bregState": "applied"'
+			"HTTP 201"
+			"HTTP 204"
+			'"status": "answered"'
+			'"outcome": "confirmed"'
 		)
 		;;
 	*)
@@ -294,11 +255,12 @@ SHIM_DIR="$WORK_ROOT/bin"
 
 # Stop every local development session the replay started, and reclaim its
 # container and volume. A journey that fails halfway leaves `caseworkctl dev`,
-# and on the two-product page `bregctl dev` beside it, running with a database
-# container behind each, and deleting the work root alone would orphan those
-# containers. Stopping with --remove is idempotent, so a journey that already
-# stopped its own sessions costs nothing here. Casework sessions stop first so
-# they no longer reconcile against a registry that is stopping.
+# and a future registered cross-product journey may also leave `bregctl dev`,
+# running with a database container behind each. Deleting the work root alone
+# would orphan those containers. Stopping with --remove is idempotent, so a
+# journey that already stopped its own sessions costs nothing here. Casework
+# sessions stop first so they no longer reconcile against a registry that is
+# stopping.
 # Returns non-zero when a session was left behind, which is what keeps its
 # project under the work root for a second attempt.
 stop_dev_sessions() {

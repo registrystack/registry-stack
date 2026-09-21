@@ -1,0 +1,12 @@
+apiVersion: registry.registrystack.org/casework-fixture/v1alpha1
+kind: CaseworkFixture
+name: payment-review-offline
+review:
+  kind: payment-batch
+  display:
+    batchId: synthetic-batch-0042
+    amountMinor: 12500
+    currency: USD
+expect:
+  queue: payment-review
+  outcomes: []

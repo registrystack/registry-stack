@@ -43,6 +43,35 @@ def require(condition: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
+def diagnostic_summary(report: dict) -> str:
+    diagnostics = report.get("diagnostics")
+    if not isinstance(diagnostics, list) or not diagnostics:
+        return "private report available"
+    first = diagnostics[0]
+    if not isinstance(first, dict):
+        return "private report available"
+    code = str(first.get("code", "unknown"))
+    path = str(first.get("path", "unknown"))
+    message = " ".join(str(first.get("message", "no message")).split())
+    return f"{code} at {path}: {message}"[:400]
+
+
+def isolate_attachment_contract(project: Path) -> None:
+    """Keep this attachment-only harness independent of an external review service."""
+    registry_path = project / "registry.yaml"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    requests = [entity for entity in registry.get("entities", [])
+                if entity.get("id") == "correction-request"]
+    require(len(requests) == 1, "Attachment fixture must declare one correction-request")
+    change_request = requests[0].get("changeRequest")
+    require(isinstance(change_request, dict), "Attachment fixture lost its change request")
+    require(change_request.get("review") == {
+        "authority": "casework", "policyId": "attachment-correction"},
+        "Attachment fixture review contract changed unexpectedly")
+    change_request["review"] = {"mode": "none"}
+    registry_path.write_text(json.dumps(registry, indent=2) + "\n", encoding="utf-8")
+
+
 def read_runtime_yaml(path: str) -> dict:
     try:
         import yaml
@@ -69,6 +98,7 @@ def test_request_attachment_journey() -> None:
     temporary = Path(tempfile.mkdtemp(prefix="breg-request-attachments-")).resolve()
     project = temporary / "project"
     shutil.copytree(args.project, project, ignore=shutil.ignore_patterns(".breg"))
+    isolate_attachment_contract(project)
     environment = dict(os.environ)
     environment["PATH"] = str(binaries) + os.pathsep + environment.get("PATH", "")
     environment["SSL_CERT_FILE"] = str(project / ".breg/dev/tls/ca.pem")
@@ -93,8 +123,7 @@ def test_request_attachment_journey() -> None:
         except ValueError:
             raise RuntimeError(f"{label} returned no JSON report") from None
         if result.returncode or report.get("ok") is not True:
-            codes = ", ".join(str(d.get("code", "unknown")) for d in report.get("diagnostics", []))
-            raise RuntimeError(f"{label} failed ({codes or 'private report available'})")
+            raise RuntimeError(f"{label} failed: {diagnostic_summary(report)}")
         return report
 
     try:
@@ -376,15 +405,17 @@ def test_request_attachment_journey() -> None:
                                                  ("reviewer", "reviewer", version + 1)]:
             require(request("GET", attachment_path, role, profile=profile, version=requested_version)[0] == 404,
                     "Unauthorized or wrong-version download revealed attachment content")
-        document(action("approve_request", "reviewer", key="attachment-review"), 200, "Approve evidence")
-        document(action("apply_request", "applier", key="attachment-apply"), 200, "Apply reviewed request")
-        applied, _ = document(request("GET", f"/v1/records/records/{record_id}", "operator"), 200, "Read applied record")
-        require(applied["data"]["domainData"]["label"] == "Corrected label", "Reviewed correction was not applied")
-        print("Exact submitted evidence downloads, review and application passed.", flush=True)
+        unchanged, _ = document(request("GET", f"/v1/records/records/{record_id}", "operator"), 200,
+                                "Read target before explicit application")
+        require(unchanged["data"]["domainData"]["label"] == "Original label",
+                "Submission applied effects without an explicit application")
+        document(action("cancel_request", "owner", key="attachment-cancel"), 200,
+                 "Cancel submitted request")
+        print("Exact submitted evidence downloads, non-application and cancellation passed.", flush=True)
         listing = cli("retention-list", "request-retention", "list", "--runtime-config", runtime,
                       "--request-entity", "correction-request")
         require(any(item["requestId"] == request_id and item["eligibleForErasure"] for item in listing["requests"]),
-                "Applied request was not eligible for operator retention")
+                "Cancelled request was not eligible for operator retention")
         exact = ("--runtime-config", runtime, "--request-entity", "correction-request",
                  "--request-id", request_id, "--proposal-version", str(version))
         dry = cli("retention-dry-run", "request-retention", "dry-run", *exact)
@@ -402,7 +433,7 @@ def test_request_attachment_journey() -> None:
                 "Database storage unexpectedly retained external cleanup work")
         passed = True
         mode = " with asynchronous verification" if args.verification else ""
-        print(f"Request attachments{mode}: authoring, native schema-test/package/activation, draft refusal, storage failure recovery, HTTP upload, owner/reviewer/applier reads, review/apply and exact operator erasure passed.")
+        print(f"Request attachments{mode}: authoring, native schema-test/package/activation, draft refusal, storage failure recovery, HTTP upload, owner/reviewer/applier reads, non-application, cancellation and exact operator erasure passed.")
     finally:
         verifier_release.set()
         if configured_process is not None:

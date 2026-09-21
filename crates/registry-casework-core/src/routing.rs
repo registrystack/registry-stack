@@ -70,6 +70,39 @@ pub struct RoutingFieldDescriptor {
     pub schema: Value,
 }
 
+/// Check that an imported source descriptor carries a compilable generated
+/// JSON Schema before an adapter becomes active.
+pub fn check_source_field_descriptor(descriptor: &RoutingFieldDescriptor) -> bool {
+    JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .compile(&descriptor.schema)
+        .is_ok()
+}
+
+/// Validate one current source value against the exact generated descriptor
+/// imported for that source field. Adapters use this before releasing a
+/// caller-authorized review-context projection.
+pub fn validate_source_field_value(
+    descriptor: &RoutingFieldDescriptor,
+    value: &Value,
+) -> Result<(), RoutingDiagnostic> {
+    let schema = JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .compile(&descriptor.schema)
+        .map_err(|_| {
+            RoutingDiagnostic::new(
+                format!("source.fields.{}", descriptor.field),
+                RoutingDiagnosticReason::UnknownField,
+            )
+        })?;
+    schema.validate(value).map_err(|_| {
+        RoutingDiagnostic::new(
+            format!("source.fields.{}", descriptor.field),
+            RoutingDiagnosticReason::InvalidSourceValue,
+        )
+    })
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RoutingSourceMetadata {
@@ -181,8 +214,7 @@ pub fn check_routing_policy(
             .collect::<BTreeMap<_, _>>()
     });
     if let Some(metadata) = source {
-        if metadata.stages.is_empty()
-            || metadata.stages.len() > MAXIMUM_ROUTING_SOURCE_STAGES
+        if metadata.stages.len() > MAXIMUM_ROUTING_SOURCE_STAGES
             || metadata.stages.iter().collect::<BTreeSet<_>>().len() != metadata.stages.len()
             || metadata.stages.iter().any(|stage| !valid_identifier(stage))
             || metadata.fields.len() > MAXIMUM_ROUTING_SOURCE_FIELDS
@@ -578,6 +610,53 @@ mod tests {
             Err(RoutingDiagnostic::new(
                 "routing[0].when.fields.region",
                 RoutingDiagnosticReason::InvalidPredicateValue,
+            ))
+        );
+    }
+
+    #[test]
+    fn empty_source_stages_are_valid_without_authored_stage_predicates() {
+        let queues = BTreeSet::from(["triage".to_owned(), "regional".to_owned()]);
+        let metadata = RoutingSourceMetadata {
+            stages: Vec::new(),
+            fields: metadata().fields,
+        };
+        let field_rule = rule(
+            "north",
+            RoutingCondition {
+                fields: BTreeMap::from([(
+                    "region".to_owned(),
+                    RoutingPredicate::Equals(EqualsPredicate {
+                        equals: json!("north"),
+                    }),
+                )]),
+                ..RoutingCondition::default()
+            },
+            "regional",
+        );
+        assert!(check_routing_policy(
+            "triage",
+            &["region".to_owned()],
+            &[field_rule],
+            &queues,
+            Some(&metadata),
+        )
+        .is_ok());
+
+        let stage_rule = rule(
+            "staged",
+            RoutingCondition {
+                activity: Some(RoutingActivity::Review),
+                stage: Some("technical".to_owned()),
+                ..RoutingCondition::default()
+            },
+            "regional",
+        );
+        assert_eq!(
+            check_routing_policy("triage", &[], &[stage_rule], &queues, Some(&metadata)),
+            Err(RoutingDiagnostic::new(
+                "routing[0].when.stage",
+                RoutingDiagnosticReason::UnknownStage,
             ))
         );
     }

@@ -142,7 +142,6 @@ fn profile(id: &str, role: CaseworkRole) -> AccessProfile {
         principal_claim: "sub".to_owned(),
         required_scopes: vec!["casework".to_owned()],
         role,
-        kinds: Vec::new(),
     }
 }
 
@@ -175,12 +174,14 @@ fn project() -> CaseworkProject {
                 entity: REQUEST_KIND.to_owned(),
                 queue: QUEUE.to_owned(),
                 projection: Vec::new(),
+                context_projection: Vec::new(),
                 routing: Vec::new(),
                 clock: None,
                 target: None,
             }],
         }],
-        hosted_kinds: Vec::new(),
+        review_kinds: Vec::new(),
+        review_producers: Vec::new(),
         calendars: Vec::new(),
         clocks: Vec::new(),
         inbox: InboxPolicy::default(),

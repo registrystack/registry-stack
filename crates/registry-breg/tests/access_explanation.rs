@@ -105,7 +105,7 @@ fn access_explanation_includes_nested_target_authority_and_owner_read_limits() {
     .unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
     let explanation = registry_breg::access::explain_access(&registry);
-    for surface in ["review_target", "apply_target", "request_presence"] {
+    for surface in ["apply_target", "request_presence"] {
         let reach = explanation
             .row_reach
             .iter()

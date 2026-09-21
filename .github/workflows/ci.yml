@@ -662,21 +662,20 @@ jobs:
         env:
           CASEWORK_VISIBILITY_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_visibility
         run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test service_visibility
-      - name: Create isolated hosted test databases
+      - name: Create isolated Casework test databases
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: |
-          docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_hosted
-          docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_hosted_acceptance
           docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_clocks
           docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_inbox_ordering
           docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_source_retention
-      - name: Verify hosted authorization, assignment, replay, and retention
+          docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_review
+          docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_review_migration
+      - name: Verify assignment and source routing
         env:
-          CASEWORK_HOSTED_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_hosted
-          CASEWORK_ASSIGNMENT_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_hosted
-          CASEWORK_ROUTING_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_hosted
-        run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test hosted_postgres --test assignment_postgres --test routing_postgres
+          CASEWORK_ASSIGNMENT_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_review
+          CASEWORK_ROUTING_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_review
+        run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres
       - name: Verify persisted source clocks, restart, and recompute
         # An inexact name filter that selects nothing still exits 0, so the
         # step names the test exactly and fails unless it reports one pass.
@@ -693,14 +692,24 @@ jobs:
         env:
           CASEWORK_INBOX_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_inbox_ordering
         run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test inbox_ordering_postgres
-      - name: Verify standalone hosted work through the maintained client
-        env:
-          CASEWORK_HOSTED_ACCEPTANCE_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_hosted_acceptance
-        run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test hosted_standalone
       - name: Verify source erasure, replay authority, and restart
         env:
           CASEWORK_SOURCE_RETENTION_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_source_retention
         run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test source_retention_postgres
+      - name: Verify governed review persistence, HTTP, and source integration
+        env:
+          CASEWORK_REVIEW_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_review
+          BREG_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_review
+        run: >-
+          cargo test --locked --profile ci -p registry-casework --features postgres-test
+          --test review_postgres
+          --test review_http
+          --test review_payment_fixture_postgres
+          --test breg_review_journey
+      - name: Verify governed review schema upgrades
+        env:
+          CASEWORK_REVIEW_MIGRATION_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_review_migration
+        run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test review_migration_postgres
 
   breg-contracts:
     name: Base Registry Engine product contracts (${{ matrix.lane }})
@@ -1376,6 +1385,20 @@ jobs:
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.casework_tutorial == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_DB: casework
+          POSTGRES_USER: casework
+          POSTGRES_PASSWORD: casework_test
+        options: >-
+          --health-cmd "pg_isready -U casework -d casework"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -1420,10 +1443,15 @@ jobs:
         run: |
           set -euo pipefail
           # The retained session owns a PostgreSQL container of its own, so
-          # this test stays in the Docker-backed job.
-          CARGO_TARGET_DIR="target/casework-tutorial-source" \
-            cargo test --locked --profile ci -p registry-caseworkctl \
-            --test dev_lifecycle -- --ignored
+          # this test stays in the Docker-backed job. The lifecycle also drives
+          # the unified Node and Python Casework facades; the maintained script
+          # builds those candidate bindings and names them for the test.
+          products/casework/scripts/check-review-journeys.sh
+
+      - name: Verify BReg, payment, and standalone review examples
+        env:
+          CASEWORK_REVIEW_EXAMPLES_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
+        run: products/casework/scripts/check-review-examples.sh
 
       - name: Execute the Registry Casework tutorial from a reader directory
         shell: bash

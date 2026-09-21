@@ -1,13 +1,12 @@
 # Registry Casework
 
 Registry Casework gives a team one accountable inbox for source-owned work and
-for small human decisions requested by another service. It supports two
-standalone deployment profiles: a hosted decision needs no registry source,
-while the original checkpoint connects one governed Base Registry Engine
-change-request source. A project may configure either surface or both.
+source-neutral reviews requested by another service. It can run without a
+registry source for submitted-context reviews, or connect governed sources such
+as Base Registry Engine. A project may configure either surface or both.
 Source-backed holders can also [approve bounded agent tasks](TASK_GRANTS.md).
 
-## Standalone hosted decisions
+## Standalone unified reviews
 
 Create the source-free starter, then inspect its effective configuration:
 
@@ -25,97 +24,95 @@ establish source reachability or deployment readiness.
 
 The maintained authored form is
 [`examples/standalone-decision/casework.yaml`](examples/standalone-decision/casework.yaml).
-It declares one `decision` kind, one queue, its bounded JSON Schema display,
-allowed outcomes, and separate terminal and accountability retention periods.
-The runtime does not install this kind implicitly. Every accepted hosted item
-must name a kind declared by the active project.
+It declares one `decision` review kind, one queue, its bounded JSON Schema
+display, allowed answer outcomes, separate result and accountability retention,
+and an admitted producer identity. The runtime does not install this policy
+implicitly. Every accepted request must name a kind and producer declared by
+the active project.
 
-An operator must still configure PostgreSQL, token verification, the
-Administrator, Staff, Supervisor, and Requester profiles, and a team serving
-the kind's queue. The Administrator bootstraps that directory through the
-authenticated directory API. A standalone deployment does not start or depend
-on BReg. It supplies an API and maintained client, not a staff-facing UI or an
-external-reference resolver.
+An operator must still configure PostgreSQL, token verification, human
+Casework profiles, and a team serving the first review stage queue. The
+Administrator bootstraps that directory through the authenticated directory
+API. A standalone deployment does not start or depend on BReg.
 
-A Requester is the service integration role. It creates an item with an
-`Idempotency-Key`, reads, adds and lists notes, or cancels only items created
-under the same issuer, subject, and Requester profile, and pages its own
-terminal feed. It cannot claim or decide. Staff, Supervisor, and Administrator
-remain human roles and must carry the configured human-identity assertion.
-Requester admission does not require that assertion; if it is present, it adds
-no human-role or decision authority.
+An authenticated producer creates a request at `POST /v1/review-requests` with
+an `Idempotency-Key`. Admission binds the producer's exact issuer and subject,
+source namespace, kind, and optional completion destination. A producer can
+read, cancel, poll results, or page its result feed only inside that same
+binding. Producer authority never grants human review authority.
 
-The create body contains only the configured kind, the requester's opaque
-correlation reference, and display data validated against the kind's bounded
-JSON Schema:
+The submitted-context create body carries the configured kind, immutable
+subject binding, an opaque requester correlation reference, a trusted qualified
+initiator when the policy excludes the initiator, and display data validated
+against the kind's bounded JSON Schema:
 
 ```json
 {
   "kind": "decision",
+  "subject": {
+    "source": "standalone",
+    "type": "batch",
+    "id": "batch-0042",
+    "version": "1",
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
   "requesterReference": "batch-0042",
-  "display": {
-    "summary": "Review the 12 entries in the prepared batch",
-    "reference": "batch-0042"
+  "initiator": {
+    "issuer": "http://127.0.0.1:8091",
+    "subject": "requester"
+  },
+  "context": {
+    "strategy": "submitted",
+    "snapshot": {
+      "summary": "Review the 12 entries in the prepared batch",
+      "reference": "batch-0042"
+    }
   }
 }
 ```
 
-It cannot select an actor, team, outcome vocabulary, callback, URL to fetch,
-or human/service classification. A typed hosted validation failure keeps the
-six-field problem body value-free and may add the paired
+It cannot select an actor, team, stage, outcome vocabulary, or arbitrary
+callback. A typed review validation failure keeps the six-field problem body
+value-free and may add the paired
 `Registry-Casework-Validation-Path` and
 `Registry-Casework-Validation-Reason` response headers. The path is bounded to
 256 characters, the reason comes from a closed enum, and neither header echoes
 rejected values.
 
-A human Staff or Supervisor profile listed by the hosted kind uses the existing
-work-item list, read, claim, and release routes without a source-profile header,
-reads the retained hosted lifecycle history including requester notes through
-`GET /v1/work-items/{itemId}/hosted-history`, then posts a declared outcome to
-the hosted-decision route. Current team service is also required. Casework pins
-the kind version, policy digest, display, and outcome vocabulary when it accepts
-the item, so a later configuration change does not rewrite existing work.
+Human reviewers use `/v1/review-tasks` to list, read, claim, assign, delegate,
+release, draft, and decide work. Every mutation checks the current task revision,
+membership, queue service, exclusions, and idempotency binding in the committing
+transaction. `GET /v1/review-tasks/{taskId}/context` returns only the frozen
+submitted context, or a bounded current source projection authorized for the
+exact human caller, together with the policy snapshot pinned to that task.
+Kind descriptions supply the currently configured kinds for discovery; task
+handling uses the returned pinned snapshot. Casework pins the policy identity
+and submission digest once, so a later configuration change cannot reinterpret
+accepted work.
 
-`GET /v1/work-items/{itemId}/history` is the separate source-scoped history
-read. It requires a `Registry-Source-Profile` header and answers from the
-source, so hosted work has no usable answer there and a call without that
-header returns `source-profile.required` with HTTP 400. `hosted-history` is the
-staff-readable route for hosted work and returns `source-profile.not-applicable`
-with HTTP 400 when that header is present. A profile with no source, such as
-every profile in the `standalone-decision` starter, therefore reads
-`hosted-history`.
+Results are read through `GET /v1/review-requests/{requestId}/result` or the
+producer result feed. Completion-mode producers may instead configure one
+authenticated logical destination. Outbound events contain no result payload
+or reviewer identity and use a stable event id across bounded lost-ack retries.
+Polling-only producers omit completion configuration.
 
-Requester terminal results are ordered by terminal time and stable event id.
-Each result is either a completed outcome with an opaque `actorRef`, or a
-cancellation with its reason. The ordinary requester response never contains
-the deciding person's issuer, subject, email, display name, internal note, or
-decision reason. Casework retains the raw issuer-qualified identity and staff
-reason in its protected accountability state. A Supervisor who currently
-leads a team serving the item's queue can resolve one completed terminal
-`eventId` through the separate accountability route. That read is audited and
-ends when the accountability record expires. Cancellations have no deciding
-actor accountability record.
+The maintained
+[`examples/payment-review`](examples/payment-review/casework.yaml) project is
+the equivalent source-independent approval example. It owns the payment policy
+and producer binding while its
+[`runtime.example.yaml`](examples/payment-review/runtime.example.yaml) binds the
+logical completion destination. The payment application still retrieves the
+result and performs its own guarded, idempotent release. The completion event is
+only a wake-up signal. The PostgreSQL fixture proves direct polling, lost
+acknowledgement and receiver-restart recovery, expired-feed-cursor recovery,
+and an exact source-owned release receipt without a BReg dependency.
 
-`terminalDays` bounds the requester-visible terminal feed from the terminal
-time. `accountabilityDays` independently bounds protected accountability state
-from the same time and must be at least as long. Cursors are bound to the
-requester's issuer, subject, selected profile, and feed context for 15 minutes.
-A malformed, unknown, or context-mismatched cursor returns `cursor.invalid`.
-If a matching cursor expires, the API returns `cursor.expired`; restart without
-a cursor and deduplicate by `eventId`. Clients must poll within the configured
-terminal period because an expired item is no longer available through the
-requester read, notes, staff history, or terminal feed. The runtime retention
-pass removes expired terminal events and item payload state, then removes the
-protected raw actor record at its later accountability expiry.
-
-Hosted idempotency follows the same outer accountability deadline. When the
-item payload expires, Casework erases the stored response and retains no
-request or display payload in the idempotency tombstone. It keeps only a
-request hash and hashed binding metadata. An exact retry during that remaining
-period returns `idempotency.expired` with HTTP 410 so the caller can reconcile
-the original operation; a changed request under the same key remains
-`idempotency.key-reused`. After the accountability deadline, Casework forgets
-the tombstone and the key may be reused.
+`terminalDays` bounds producer-visible results. `accountabilityDays` independently
+bounds protected accountability state and must be at least as long. Result-feed
+and history cursors are bound to their caller and query context. After result
+expiry, Casework erases request, context, result, history, notes, drafts, tasks,
+and replay response payloads while retaining only the bounded tombstone needed
+to prevent unsafe idempotency-key reissue until accountability expiry.
 
 ## Absence cover and explicit assignment
 
@@ -157,10 +154,9 @@ person, and traversed absence ids. If the chain ends without an eligible staff
 member, the item remains open in its serving queue with
 `staffingDiagnostic: no_cover_available`; this staffing state is returned on
 the item rather than as a problem response. A source-backed item requires
-`Registry-Source-Profile`. Omitting that header selects hosted work when the
-selected Casework profile is a deciding profile for at least one hosted kind;
-otherwise a deployment with a configured source returns
-`source-profile.required`.
+`Registry-Source-Profile`. Unified review-task assignment and delegation use
+the `/v1/review-tasks/{taskId}` routes and apply the same current membership,
+queue-service, reviewer-exclusion, and source-context authority checks.
 
 Caseload movement is a review-then-apply operation for Supervisor profiles in
 currently served queues. Preview returns only caller-visible items held by the
@@ -198,7 +194,8 @@ Source-backed inboxes accept one selector: either the three-part source subject
 or an exact `reference` of at most 512 Unicode scalar values with no control
 characters. The `sort` parameter is closed to `due`, `age`, or `type`; `due`
 is the default. Cursor context binds the selector by a one-way reference hash
-and the selected sort. Hosted inboxes reject source selectors and source sorts.
+and the selected sort. Unified review tasks use their own bounded task list and
+do not participate in source work-item selectors or sorts.
 
 `GET /v1/work-items/next` returns the same `WorkItemPage` envelope with at most
 one item. Empty `complete` and `budget_exhausted` pages are successful `200`
@@ -283,16 +280,16 @@ it:
 ```sh
 caseworkctl init ./casework --template professional-review
 caseworkctl source add ./registry \
-  --project ./casework --source-id professional-register
+  --project ./casework --source-id professional-licences
 caseworkctl source add ./registry \
-  --project ./casework --source-id professional-register --apply
+  --project ./casework --source-id professional-licences --apply
 caseworkctl check ./casework
 caseworkctl test ./casework
 ```
 
 `source add` drives the same-version public `bregctl check` and `bregctl explain
 change-requests` interfaces. Preview reports the exact local BReg event and
-read-only service grant additions plus a runtime destination candidate. Apply
+read-only service grant additions plus the authority and optional executor runtime candidates. Apply
 checks a staged copy before changing the authored registry, writes the imported
 source description and runtime candidate, and checks BReg again. It does not
 activate a package, provision an identity provider, or infer authority from the
@@ -301,7 +298,7 @@ are refused.
 
 `check` and `test` are offline. Check prints effective inbox limits and the
 passive target default. When source metadata has been imported, it checks the
-complete ordered staged-review policy, routing field schemas, and manual
+Casework approval policy, producer admission, routing field schemas, and selected
 application contract. Test evaluates maintained synthetic fixtures against the
 same effective inputs.
 
@@ -403,7 +400,7 @@ Each access profile must also require a scope unavailable from the combined
 scopes of every other profile at the same or a lower role. Profiles may share
 common scopes when each has its own scope discriminator. This keeps a token
 with several valid lower or peer grants from selecting another profile's
-identity or authority, including authority pinned to an existing hosted item
+identity or authority, including authority pinned to an existing review request
 under an earlier policy. A higher-role credential may explicitly include a
 lower profile's required scopes when it is intended to select that profile.
 
@@ -527,9 +524,9 @@ python3 products/casework/scripts/check_dependency_direction.py
 python3 -m unittest products/casework/scripts/test_dependency_direction.py
 ```
 
-The PostgreSQL checkpoint tests deliberately require **distinct, disposable**
-databases. They reset the schemas they use and must never point at retained
-operator data. Nine operator-supplied variables are required, one per suite:
+The PostgreSQL checkpoint tests deliberately require **disposable** databases.
+They reset the schemas they use and must never point at retained operator data.
+The following operator-supplied variables select the maintained suites:
 
 | Variable | Suite | Database |
 |---|---|---|
@@ -537,20 +534,17 @@ operator data. Nine operator-supplied variables are required, one per suite:
 | `CASEWORK_VISIBILITY_TEST_DATABASE_URL` | `--test service_visibility` | Its own: the suite resets `public` |
 | `CASEWORK_SOURCE_RETENTION_TEST_DATABASE_URL` | `--test source_retention_postgres` | Its own: the suite resets `public` |
 | `CASEWORK_CLOCK_TEST_DATABASE_URL` | `--lib clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget` | Its own: the test resets `public` |
-| `CASEWORK_HOSTED_TEST_DATABASE_URL` | `--test hosted_postgres` | May be shared: the fixture creates a unique schema |
+| `CASEWORK_REVIEW_TEST_DATABASE_URL` | `--test review_postgres --test review_http --test review_payment_fixture_postgres` | May be shared: each fixture creates a unique schema |
+| `CASEWORK_REVIEW_MIGRATION_TEST_DATABASE_URL` | `--test review_migration_postgres` | May be shared: the fixture creates a unique schema |
 | `CASEWORK_ASSIGNMENT_TEST_DATABASE_URL` | `--test assignment_postgres` | May be shared: the fixture creates a unique schema |
 | `CASEWORK_ROUTING_TEST_DATABASE_URL` | `--test routing_postgres` | May be shared: the fixture creates a unique schema |
 | `CASEWORK_INBOX_TEST_DATABASE_URL` | `--test inbox_ordering_postgres` | May be shared: the fixture creates a unique schema |
-| `CASEWORK_HOSTED_ACCEPTANCE_DATABASE_URL` | `--test hosted_standalone` | May be shared: the test creates a unique schema |
 
 The first four suites run `DROP SCHEMA public CASCADE`, so each of those four
-variables must resolve to a database no other suite uses. The last five create
-a per-fixture schema and set `search_path`, so several of them may resolve to
-one database: root CI points the hosted, assignment, and routing variables at a
-single `casework_hosted` database. `CASEWORK_HOSTED_ACCEPTANCE_SCHEMA_URL` is
-not an operator input; the standalone suite derives it from
-`CASEWORK_HOSTED_ACCEPTANCE_DATABASE_URL` and its own schema name. A missing
-variable fails visibly rather than silently skipping the required proof.
+variables must resolve to a database no other suite uses. The remaining suites
+create a per-fixture schema and set `search_path`, so several may resolve to one
+disposable database. A missing variable fails visibly rather than silently
+skipping the required proof.
 
 Create the databases, export the URLs, and enable the `postgres-test` feature:
 
@@ -559,20 +553,30 @@ export CASEWORK_TEST_DATABASE_URL=postgresql://localhost/casework_transactions_t
 export CASEWORK_VISIBILITY_TEST_DATABASE_URL=postgresql://localhost/casework_visibility_test
 export CASEWORK_SOURCE_RETENTION_TEST_DATABASE_URL=postgresql://localhost/casework_source_retention_test
 export CASEWORK_CLOCK_TEST_DATABASE_URL=postgresql://localhost/casework_clocks_test
-export CASEWORK_HOSTED_TEST_DATABASE_URL=postgresql://localhost/casework_hosted_test
-export CASEWORK_ASSIGNMENT_TEST_DATABASE_URL=postgresql://localhost/casework_hosted_test
-export CASEWORK_ROUTING_TEST_DATABASE_URL=postgresql://localhost/casework_hosted_test
+export CASEWORK_REVIEW_TEST_DATABASE_URL=postgresql://localhost/casework_review_test
+export CASEWORK_REVIEW_MIGRATION_TEST_DATABASE_URL=postgresql://localhost/casework_review_test
+export CASEWORK_ASSIGNMENT_TEST_DATABASE_URL=postgresql://localhost/casework_review_test
+export CASEWORK_ROUTING_TEST_DATABASE_URL=postgresql://localhost/casework_review_test
 export CASEWORK_INBOX_TEST_DATABASE_URL=postgresql://localhost/casework_inbox_ordering_test
-export CASEWORK_HOSTED_ACCEPTANCE_DATABASE_URL=postgresql://localhost/casework_hosted_acceptance_test
 cargo test -p registry-casework --features postgres-test --test postgres_transactions --locked
 cargo test -p registry-casework --features postgres-test --test service_visibility --locked
 cargo test -p registry-casework --features postgres-test --test source_retention_postgres --locked
 cargo test -p registry-casework --features postgres-test --lib --locked \
   -- --exact clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget
 cargo test -p registry-casework --features postgres-test --locked \
-  --test hosted_postgres --test assignment_postgres --test routing_postgres
+  --test review_postgres --test review_http --test review_payment_fixture_postgres \
+  --test review_migration_postgres --test assignment_postgres --test routing_postgres
 cargo test -p registry-casework --features postgres-test --test inbox_ordering_postgres --locked
-cargo test -p registry-casework --features postgres-test --test hosted_standalone --locked
+```
+
+The maintained BReg, payment, and standalone review examples have one aggregate
+non-browser proof. It also runs the owning Casework and BReg configuration,
+runtime-schema, and retention-compatibility checks. The database must be
+explicitly disposable; every included suite creates its own schema:
+
+```sh
+CASEWORK_REVIEW_EXAMPLES_DATABASE_URL=postgresql://localhost/casework_review_test \
+  products/casework/scripts/check-review-examples.sh
 ```
 
 Install the kit dependencies and browser from the [demo prerequisites](demo/README.md),
