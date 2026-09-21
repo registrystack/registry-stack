@@ -159,6 +159,7 @@ impl IngestionApiOperation {
             Self::ReadRun => &[
                 crate::problem::ProblemCode::RequestInvalid,
                 crate::problem::ProblemCode::AuthenticationRefused,
+                crate::problem::ProblemCode::IngestionProfileMismatch,
                 crate::problem::ProblemCode::ResourceNotFound,
                 crate::problem::ProblemCode::ServiceUnavailable,
             ],

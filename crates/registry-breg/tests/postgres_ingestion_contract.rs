@@ -123,6 +123,32 @@ async fn ingestion_operations_publish_exactly_their_producible_problem_codes() {
     }
 }
 
+/// The run read answers 403 `ingestion.profile_mismatch` when the run's
+/// selected profile or bound claim context no longer matches the caller, so
+/// the published read-run entry must carry that response: a producible
+/// refusal outside the published contract is invisible to generated clients
+/// and contract validators.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn read_run_publishes_the_profile_mismatch_response() {
+    let harness = ContractHarness::create(compiled_registry()).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let response = harness.get_json("/openapi.json", &claims).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let document = body_json(response).await;
+    let operation = &document["paths"]["/v1/records/widgets/ingestion-runs/{run_id}"]["get"];
+    assert_eq!(
+        operation["x-registry-operation"], "ingestionReadRun",
+        "the published read-run entry is the operation under test"
+    );
+    let example = &operation["responses"]["403"]["content"]["application/problem+json"]["examples"]
+        ["ingestion.profile_mismatch"];
+    assert_eq!(
+        example["value"]["code"], "ingestion.profile_mismatch",
+        "the read-run operation publishes the profile-mismatch refusal it can answer with"
+    );
+    assert_eq!(example["value"]["status"], 403);
+}
+
 /// The run creation document publishes the input-length bound the service
 /// enforces. The run store admits only a positive announced source size, so a
 /// schema that admitted zero would advertise a request the service always
