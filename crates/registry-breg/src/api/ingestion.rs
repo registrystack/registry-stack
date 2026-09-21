@@ -23,6 +23,12 @@ use crate::postgres::{
 /// the source bytes stay with the caller and only digests travel.
 const MAX_RUN_DOCUMENT_BYTES: usize = 4 * 1024;
 
+/// The largest integer every JSON-number consumer decodes exactly (2^53 - 1,
+/// the JavaScript safe-integer bound). The announced run counts travel as
+/// JSON numbers, so a count above it would round silently in a downstream
+/// client and misreport the run's own checkpoint metadata.
+const MAXIMUM_JAVASCRIPT_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+
 /// One compiled batch route every run of an entity is bound to, layered as a
 /// request extension exactly like the attachment routes bind their base.
 #[derive(Clone)]
@@ -731,7 +737,12 @@ fn parse_create_run_body(body: &[u8], entity_id: &str) -> Result<IngestionRunCre
         return Err(());
     }
     let count = |member: &str| {
-        i64::try_from(object.get(member).and_then(Value::as_u64).ok_or(())?).map_err(|_| ())
+        let value =
+            i64::try_from(object.get(member).and_then(Value::as_u64).ok_or(())?).map_err(|_| ())?;
+        if value > MAXIMUM_JAVASCRIPT_SAFE_INTEGER {
+            return Err(());
+        }
+        Ok(value)
     };
     let (input_length, item_count, chunk_count) = (
         count("inputLength")?,
@@ -1312,9 +1323,9 @@ fn create_run_schema() -> Value {
             "packageRevision": {"type": "string", "minLength": 1},
             "schemaFingerprint": {"type": "string", "minLength": 1},
             "inputDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-            "inputLength": {"type": "integer", "minimum": 1},
-            "itemCount": {"type": "integer", "minimum": 1},
-            "chunkCount": {"type": "integer", "minimum": 1},
+            "inputLength": {"type": "integer", "minimum": 1, "maximum": MAXIMUM_JAVASCRIPT_SAFE_INTEGER},
+            "itemCount": {"type": "integer", "minimum": 1, "maximum": MAXIMUM_JAVASCRIPT_SAFE_INTEGER},
+            "chunkCount": {"type": "integer", "minimum": 1, "maximum": MAXIMUM_JAVASCRIPT_SAFE_INTEGER},
             "chunkAlgorithmVersion": {"const": crate::data::RUN_CHUNK_ALGORITHM_VERSION}
         }
     })

@@ -149,12 +149,14 @@ async fn read_run_publishes_the_profile_mismatch_response() {
     assert_eq!(example["value"]["status"], 403);
 }
 
-/// The run creation document publishes the input-length bound the service
-/// enforces. The run store admits only a positive announced source size, so a
-/// schema that admitted zero would advertise a request the service always
-/// answers request.invalid.
+/// The run creation document publishes the count range the service enforces.
+/// The run store admits only a positive announced source size, so a schema
+/// that admitted zero would advertise a request the service always answers
+/// request.invalid, and every announced count crosses the wire as a JSON
+/// number, so a schema that admitted a value beyond the JavaScript-safe
+/// integer range would advertise counts a downstream client silently rounds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn create_run_schema_publishes_the_enforced_positive_input_length() {
+async fn create_run_schema_publishes_the_enforced_count_range() {
     let harness = ContractHarness::create(compiled_registry()).await;
     let claims = operator_claims(PRINCIPAL, "zone-a");
     let response = harness.get_json("/openapi.json", &claims).await;
@@ -162,14 +164,18 @@ async fn create_run_schema_publishes_the_enforced_positive_input_length() {
     let document = body_json(response).await;
     let schema = &document["paths"]["/v1/records/widgets/ingestion-runs"]["post"]["requestBody"]
         ["content"]["application/json"]["schema"];
+    let range = json!({
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 9_007_199_254_740_991_u64
+    });
     assert_eq!(
-        schema["properties"]["inputLength"],
-        json!({"type": "integer", "minimum": 1}),
-        "the published input length is the positive byte count the service enforces"
+        schema["properties"]["inputLength"], range,
+        "the published input length is the enforced positive, exactly representable range"
     );
-    // The sibling announcement counts stay positive in the same document.
-    assert_eq!(schema["properties"]["itemCount"]["minimum"], 1);
-    assert_eq!(schema["properties"]["chunkCount"]["minimum"], 1);
+    // The sibling announcement counts carry the same enforced range.
+    assert_eq!(schema["properties"]["itemCount"], range);
+    assert_eq!(schema["properties"]["chunkCount"], range);
 }
 
 /// The catalogue's concealed-404 entries are producible on the operations

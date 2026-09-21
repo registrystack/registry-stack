@@ -514,6 +514,69 @@ async fn run_creation_refuses_an_operation_the_profile_cannot_execute() {
     assert_eq!(body_json(created).await["run"]["operation"], "patch");
 }
 
+/// The announced counts cross the wire as JSON numbers, so every downstream
+/// consumer decodes them through a binary float at best and silently rounds
+/// anything above the JavaScript safe-integer bound (2^53 - 1). Creation
+/// refuses a count beyond the bound as request.invalid without writing a run
+/// row, and the boundary neighbor stays a lawful announcement.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn run_creation_refuses_counts_beyond_the_javascript_safe_integer() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&announce_items("safe-integer", 1), 1);
+
+    // An item count beyond the bound cannot be announced exactly, whatever
+    // chunking the run claims; the matching chunk count keeps the run store's
+    // own budget checks out of the answer.
+    let mut over = harness.run_body("create", &chunks);
+    over["itemCount"] = json!(9_007_199_254_740_992_i64);
+    over["chunkCount"] = json!(9_007_199_254_740_992_i64);
+    let refused = harness
+        .post_json("/v1/records/widgets/ingestion-runs", &claims, over)
+        .await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(refused).await["code"], "request.invalid");
+
+    // The input length is the other announced size, and it is refused at the
+    // same bound.
+    let mut oversized = harness.run_body("create", &chunks);
+    oversized["inputLength"] = json!(9_007_199_254_740_992_i64);
+    let refused = harness
+        .post_json("/v1/records/widgets/ingestion-runs", &claims, oversized)
+        .await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(refused).await["code"], "request.invalid");
+
+    // No run row was written for either refusal.
+    let listed = harness
+        .get_json("/v1/records/widgets/ingestion-runs", &claims)
+        .await;
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(listed).await["runs"]
+            .as_array()
+            .expect("runs")
+            .len(),
+        0
+    );
+
+    // The boundary neighbor announces exactly, so it stays lawful: one item
+    // per chunk is a completable budget, and the echo carries the count
+    // undamaged.
+    let mut boundary = harness.run_body("create", &chunks);
+    boundary["itemCount"] = json!(9_007_199_254_740_991_i64);
+    boundary["chunkCount"] = json!(9_007_199_254_740_991_i64);
+    let created = harness
+        .post_json("/v1/records/widgets/ingestion-runs", &claims, boundary)
+        .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(
+        body_json(created).await["run"]["itemCount"],
+        9_007_199_254_740_991_i64,
+        "the run echoes an exactly representable announced count"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn package_change_blocks_the_run_and_keeps_it_inspectable() {
     let harness = IngestionHarness::create().await;
