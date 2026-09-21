@@ -142,11 +142,7 @@ impl SchedulingClient {
         offering: &str,
         start: DateTime<Utc>,
     ) -> Result<SchedulingComplete<ExplainDocument>, SchedulingClientError> {
-        if offering.is_empty() {
-            return Err(SchedulingClientError::invalid_request(
-                "the offering selector is invalid",
-            ));
-        }
+        validate_offering(offering)?;
         let query = [
             (OFFERING_QUERY_PARAMETER, offering.to_owned()),
             (START_QUERY_PARAMETER, rfc3339(start)),
@@ -564,6 +560,14 @@ fn validate_identifier(
     Ok(())
 }
 
+/// The offering selector both availability routes carry. It travels as a
+/// query parameter rather than a path segment, so an out-of-grammar value
+/// cannot reach a different route; what it would otherwise buy is a round
+/// trip spent sending a URL the runtime's own grammar already refuses.
+fn validate_offering(offering: &str) -> Result<(), SchedulingClientError> {
+    validate_identifier(offering, "the offering selector is invalid")
+}
+
 fn validate_availability(
     offering: &str,
     _start: Option<DateTime<Utc>>,
@@ -571,11 +575,7 @@ fn validate_availability(
     cursor: Option<&str>,
     limit: Option<u32>,
 ) -> Result<(), SchedulingClientError> {
-    if offering.is_empty() {
-        return Err(SchedulingClientError::invalid_request(
-            "the offering selector is invalid",
-        ));
-    }
+    validate_offering(offering)?;
     validate_cursor(cursor)?;
     if limit.is_some_and(|value| value == 0) {
         return Err(SchedulingClientError::invalid_request(
@@ -646,6 +646,30 @@ mod tests {
         assert!(validate_availability("", None, None, None, None).is_err());
         assert!(validate_availability("registry-update-30", None, None, Some(""), None).is_err());
         assert!(validate_availability("registry-update-30", None, None, None, Some(0)).is_err());
+    }
+
+    /// Both availability entry points refuse an out-of-grammar selector
+    /// before any I/O, with the identifier bound the route identifiers
+    /// already use.
+    #[test]
+    fn offering_selectors_are_bounded_before_io() {
+        assert!(validate_offering("registry-update-30").is_ok());
+        for foreign in [
+            "",
+            "registry/update",
+            "registry update",
+            "registry?update",
+            &"x".repeat(MAXIMUM_IDENTIFIER_BYTES + 1),
+        ] {
+            assert!(
+                validate_offering(foreign).is_err(),
+                "{foreign:?} must be refused"
+            );
+            assert!(
+                validate_availability(foreign, None, None, None, None).is_err(),
+                "{foreign:?} must be refused by availability"
+            );
+        }
     }
 
     #[test]
