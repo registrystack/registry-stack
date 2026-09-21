@@ -184,7 +184,7 @@ bregctl explain change-requests ./my-registry
 
 The JSON report carries a `controlledWrites` list, one entry per target entity with its `requiredFor` operations and `eligibleRequestTypes`, and a `requests` list with the actions and routes of each request entity.
 
-{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml; crates/registry-breg/src/contract.rs, ChangeControlSource and ChangeRequestSource and RequestVisibilitySource; crates/registry-breg/src/request_workflow.rs; crates/registry-breg/src/access.rs. */}
+{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml; crates/registry-breg/src/contract.rs, ChangeControlSource and ChangeRequestSource and RequestVisibilitySource; crates/registry-breg/src/request_workflow.rs; crates/registry-breg/src/lifecycle.rs, request_lifecycle and superseded_is_unreachable_and_non_terminal_while_applied_and_cancelled_are_terminal; crates/registry-breg/src/access.rs. */}
 
 ### Require submitter authority over targets
 

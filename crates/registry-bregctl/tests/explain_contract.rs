@@ -285,6 +285,52 @@ fn explain_lifecycle_matches_contract() {
     assert_matches_contract("lifecycle", "LifecycleExplanation", &report["explanation"]);
 }
 
+/// The request machine does not vary by project, so its identifiers are wire
+/// contract and the schema pins them. Without that, renaming a state or an
+/// event and updating the Rust unit tests in the same change would leave this
+/// contract test green, which is exactly the drift "pinned in full" denies.
+#[test]
+fn renaming_a_lifecycle_state_or_event_fails_the_contract() {
+    let report = explain_lifecycle_report();
+    let schema = load_schema("LifecycleExplanation");
+
+    let renamed_state: Value = serde_json::from_str(
+        &report["explanation"]
+            .to_string()
+            .replace("\"submitted\"", "\"in_review\""),
+    )
+    .expect("renamed explanation is JSON");
+    assert!(
+        schema.validate(&renamed_state).is_err(),
+        "renaming the submitted state must fail the schema: {renamed_state:#?}"
+    );
+
+    let renamed_event: Value = serde_json::from_str(
+        &report["explanation"]
+            .to_string()
+            .replace("\"event\":\"apply\"", "\"event\":\"commit\""),
+    )
+    .expect("renamed explanation is JSON");
+    assert!(
+        schema.validate(&renamed_event).is_err(),
+        "renaming the apply event must fail the schema: {renamed_event:#?}"
+    );
+
+    let extra_edge = {
+        let mut explanation = report["explanation"].clone();
+        let transitions = explanation["lifecycles"][0]["transitions"]
+            .as_array_mut()
+            .expect("transitions array");
+        let duplicate = transitions[0].clone();
+        transitions.push(duplicate);
+        explanation
+    };
+    assert!(
+        schema.validate(&extra_edge).is_err(),
+        "an eighth edge must fail the schema: {extra_edge:#?}"
+    );
+}
+
 /// The lifecycle report names no revision, because no project produced it.
 /// Every other subject does, so this also asserts the contrast rather than
 /// just the absence.

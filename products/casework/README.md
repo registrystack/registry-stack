@@ -295,9 +295,9 @@ Which decision outcome a given review reaches, one of `approved`, `rejected`,
 `changes_requested`, or `answered`, is a policy decision, made by the project's
 stages, quorum, and exclusions. The other two terminal states are not policy
 decisions: `cancelled` is the requester withdrawing their own request, and
-`superseded` is applied automatically to a request still in `reviewing` when a
-replacement is created for the same subject and policy. Neither consults a
-stage, a quorum, or an exclusion. This report describes the shape available to
+`superseded` is applied automatically to a request still in `reviewing` when
+the same admitted producer creates a replacement for the same subject and
+policy. Neither consults a stage, a quorum, or an exclusion. This report describes the shape available to
 every project, not the path one project takes.
 
 ## BReg change-request checkpoint

@@ -197,12 +197,14 @@ const REVIEW_SETTLE_EVENT: &str = "settle";
 const REVIEW_RECORD_EVENT: &str = "record_decision";
 const REVIEW_ADVANCE_EVENT: &str = "advance_stage";
 
-/// What `record_review_decision` checks before it looks at the decision at
-/// all. Every edge it raises carries these, so the sentence is written once
-/// and concatenated onto each of the six rather than drifting six ways.
+/// What a decision must satisfy before the engine looks at the decision at
+/// all: the checks `record_review_decision` makes, and the source preflight
+/// the runtime runs ahead of it. Every edge a decision raises carries both,
+/// so the sentence is written once and concatenated onto each of the six
+/// rather than drifting six ways.
 macro_rules! review_decision_gate {
     () => {
-        "Raised on a task on the active stage that the reviewer holds, under a deciding profile that both the stage and the task allow, on a request still in reviewing and not already settled, with no earlier decision on that task, no earlier decision by the same reviewer in this stage, and the stage's initiator and previous-stage-reviewer exclusions satisfied."
+        "Raised on a task on the active stage that the reviewer holds, under a deciding profile that both the stage and the task allow, on a request still in reviewing and not already settled, with no earlier decision on that task, no earlier decision by the same reviewer in this stage, and the stage's initiator and previous-stage-reviewer exclusions satisfied. Where the review kind takes its context from a source, the runtime first re-reads that source as the deciding caller and refuses unless the view still matches the subject, binding version and integrity digest pinned on the request and the authoritative occurrence is still reviewable, so a caller who has lost source access, or an occurrence withdrawn, superseded or still synchronizing at the source, blocks the decision even when every check above passes."
     };
 }
 
@@ -225,9 +227,9 @@ macro_rules! review_decision_gate {
 ///
 /// The last two are not decisions at all and must not be described as if they
 /// were. `cancelled` is the requester withdrawing their own request, and
-/// `superseded` is applied automatically to a prior reviewing request when a
-/// replacement is created for the same subject and policy. Neither path
-/// consults a stage, a quorum, or an exclusion.
+/// `superseded` is applied automatically to a prior reviewing request when the
+/// same admitted producer creates a replacement for the same subject and
+/// policy. Neither path consults a stage, a quorum, or an exclusion.
 pub fn review_lifecycle() -> LifecycleDescription {
     let state_ids: Vec<&'static str> = [
         ReviewRequestLifecycle::Reviewing,
@@ -307,7 +309,7 @@ pub fn review_lifecycle() -> LifecycleDescription {
             from: reviewing,
             event: REVIEW_SETTLE_EVENT,
             to: review_lifecycle_state_id(ReviewRequestLifecycle::Superseded),
-            guard: "Settlement only applies to a request still in reviewing; supersession is applied automatically when a replacement request is created for the same subject and policy, is raised by no reviewer and through no task, consults no stage, quorum, or exclusion, and carries no outcome and no result.",
+            guard: "Settlement only applies to a request still in reviewing; supersession is applied automatically when a replacement request is created for the same subject and policy by the same admitted producer, matched on that producer's id, issuer and subject, so a request one producer creates never supersedes another producer's; it is raised by no reviewer and through no task, consults no stage, quorum, or exclusion, and carries no outcome and no result.",
         },
     ];
     describe(
@@ -645,5 +647,41 @@ mod tests {
         ] {
             assert!(ids.contains(review_lifecycle_state_id(variant)));
         }
+    }
+
+    /// A decision on a source-context review kind also has to survive a fresh
+    /// source read; a guard that stops at the task and policy checks would
+    /// report the transition as permitted after source access is gone.
+    #[test]
+    fn every_decision_edge_names_the_source_preflight() {
+        let description = review_lifecycle();
+        for edge in &description.transitions {
+            let decision = edge.guard.contains("that the reviewer holds");
+            assert_eq!(
+                decision,
+                edge.guard.contains("takes its context from a source"),
+                "{edge:?}"
+            );
+        }
+        let decisions = description
+            .transitions
+            .iter()
+            .filter(|edge| edge.guard.contains("takes its context from a source"))
+            .count();
+        assert_eq!(decisions, 6);
+    }
+
+    /// Two admitted producers may hold requests for the same subject and
+    /// policy at once, so supersession that reads as unscoped is wrong.
+    #[test]
+    fn supersession_is_scoped_to_the_same_producer() {
+        let guard = review_lifecycle()
+            .transitions
+            .into_iter()
+            .find(|edge| edge.to == "superseded")
+            .expect("superseded edge")
+            .guard;
+        assert!(guard.contains("by the same admitted producer"), "{guard}");
+        assert!(guard.contains("id, issuer and subject"), "{guard}");
     }
 }

@@ -128,7 +128,7 @@ pub fn request_lifecycle() -> LifecycleDescription {
                 from: "submitted",
                 event: "apply",
                 to: "applied",
-                guard: "the request is submitted and unapplied at the current version; digest, fingerprint, review evidence, targets and links verify",
+                guard: "the caller's task grant and the proposal's task grant are each confirmed current and still live by the task-status check before the transaction opens, and both are re-verified as unchanged and current inside it; the request is submitted and unapplied at the current version; digest, fingerprint, review evidence, targets and links verify",
             },
             LifecycleTransition {
                 from: "superseded",
@@ -159,6 +159,26 @@ mod tests {
                 "{edge:?}"
             );
         }
+    }
+
+    /// `apply` is the one edge whose authority is a task grant rather than
+    /// request ownership, and it is checked twice: once before the
+    /// transaction opens and again inside it. A guard that listed only the
+    /// proposal and review integrity checks would report a revoked grant as
+    /// no obstacle.
+    #[test]
+    fn the_apply_edge_names_both_task_grant_checks() {
+        let apply = request_lifecycle()
+            .transitions
+            .into_iter()
+            .find(|edge| edge.event == "apply")
+            .expect("apply edge");
+        assert!(apply.guard.contains("task grant"), "{apply:?}");
+        assert!(
+            apply.guard.contains("before the transaction opens"),
+            "{apply:?}"
+        );
+        assert!(apply.guard.contains("re-verified"), "{apply:?}");
     }
 
     use registry_platform_canonical_json::canonicalize_json;
