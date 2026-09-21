@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/breg-explain/v1alpha1/ModelExplanation.schema.json",
+  "title": "ModelExplanation",
+  "description": "Wire shape of `explanation` for `bregctl explain model`. Nested compiled-model trees (entities, package, manifestProjection, physicalNames) are declared opaque because bregctl serializes them by passing a compiled-model value straight to serde, so their shape can change without any corresponding line changing in bregctl.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "registryId",
+    "version",
+    "moduleOrder",
+    "moduleClosure",
+    "entities",
+    "physicalNames",
+    "package",
+    "manifestProjection"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/breg-explain/v1alpha1"
+    },
+    "kind": {
+      "const": "ModelExplanation"
+    },
+    "registryId": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "moduleOrder": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "moduleClosure": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "digest", "version"],
+        "properties": {
+          "id": { "type": "string" },
+          "digest": { "type": "string" },
+          "version": { "type": "string" }
+        }
+      }
+    },
+    "entities": {
+      "type": "object",
+      "description": "Compiled entity table, keyed by entity id. Passthrough of the compiled model; shape follows CompiledEntity and is outside this contract version."
+    },
+    "physicalNames": {
+      "type": "object",
+      "description": "Compiled physical-name mapping. Passthrough of the compiled model; shape follows the runtime's physical-name projection and is outside this contract version."
+    },
+    "package": {
+      "type": "object",
+      "description": "Compiled package identity. Passthrough of the compiled model; shape follows the runtime's package projection and is outside this contract version."
+    },
+    "manifestProjection": {
+      "type": "object",
+      "description": "Registry Manifest projection of this registry. Passthrough of the compiled model; shape follows the runtime's manifest projection and is outside this contract version."
+    }
+  }
+}

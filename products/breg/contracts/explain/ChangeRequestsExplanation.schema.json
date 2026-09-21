@@ -1,0 +1,368 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/breg-explain/v1alpha1/ChangeRequestsExplanation.schema.json",
+  "title": "ChangeRequestsExplanation",
+  "description": "Wire shape of `explanation` for `bregctl explain change-requests`. Every node is reconstructed field by field by bregctl and is pinned in full, except `application` and `onApproved`, which are raw passthroughs of compiled-model values, and `fields[].schema`, which is a JSON Schema fragment read from the generated entity schema artifact; all three are declared opaque.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "requests", "controlledWrites"],
+  "$defs": {
+    "fieldRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "apiName"],
+      "properties": {
+        "field": { "type": "string" },
+        "apiName": { "type": "string" }
+      }
+    },
+    "operation": {
+      "enum": [
+        "create", "get", "lookup", "list", "patch", "tombstone", "batch",
+        "revisions", "snapshot", "submit_request", "revise_request",
+        "cancel_request", "apply_request", "invoke"
+      ]
+    },
+    "rowBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim", "field", "operator"],
+      "properties": {
+        "claim": { "type": "string" },
+        "field": { "type": "string" },
+        "operator": { "enum": ["equals", "in"] }
+      }
+    }
+  },
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/breg-explain/v1alpha1"
+    },
+    "kind": {
+      "const": "ChangeRequestsExplanation"
+    },
+    "controlledWrites": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entity", "route", "requiredFor", "eligibleRequestTypes", "directWriteRestriction"],
+        "properties": {
+          "entity": { "type": "string" },
+          "route": { "type": "string" },
+          "requiredFor": { "type": "array", "items": { "$ref": "#/$defs/operation" } },
+          "eligibleRequestTypes": { "type": "array", "items": { "type": "string" } },
+          "directWriteRestriction": { "type": "string" }
+        }
+      }
+    },
+    "requests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requestEntity", "requestRoute", "fields", "contractFingerprint", "bounds",
+          "planner", "review", "onApproved", "application", "effects", "actions",
+          "applyPermissions", "presencePermissions"
+        ],
+        "properties": {
+          "requestEntity": { "type": "string" },
+          "requestRoute": { "type": "string" },
+          "contractFingerprint": { "type": "string" },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["field", "apiName", "schema"],
+              "properties": {
+                "field": { "type": "string" },
+                "apiName": { "type": "string" },
+                "schema": {
+                  "type": "object",
+                  "description": "JSON Schema fragment for this field, read from the entity's generated schema artifact. Outside this contract version."
+                }
+              }
+            }
+          },
+          "bounds": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["maximumTargets", "maximumFieldMutations", "maximumSnapshotBytes"],
+            "properties": {
+              "maximumTargets": { "type": "integer" },
+              "maximumFieldMutations": { "type": "integer" },
+              "maximumSnapshotBytes": { "type": "integer" }
+            }
+          },
+          "planner": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "abi"],
+                "properties": {
+                  "kind": { "const": "declarative" },
+                  "abi": { "type": "string" }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind", "abi", "rhaiVersion", "scriptSha256", "declaringOrigin",
+                  "requestFields", "limits", "possibleWrites"
+                ],
+                "properties": {
+                  "kind": { "const": "rhai" },
+                  "abi": { "type": "string" },
+                  "rhaiVersion": { "type": "string" },
+                  "scriptSha256": { "type": "string" },
+                  "declaringOrigin": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["kind"],
+                        "properties": { "kind": { "const": "project" } }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["kind", "id"],
+                        "properties": {
+                          "kind": { "const": "module" },
+                          "id": { "type": "string" }
+                        }
+                      }
+                    ]
+                  },
+                  "requestFields": { "type": "array", "items": { "$ref": "#/$defs/fieldRef" } },
+                  "limits": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "maximumTargets", "maximumFieldMutations", "maximumSnapshotBytes",
+                      "maximumSourceBytes", "maximumOperations", "maximumCallDepth",
+                      "maximumExpressionDepth", "maximumStringBytes", "maximumArrayItems",
+                      "maximumMapEntries", "maximumModules"
+                    ],
+                    "properties": {
+                      "maximumTargets": { "type": "integer" },
+                      "maximumFieldMutations": { "type": "integer" },
+                      "maximumSnapshotBytes": { "type": "integer" },
+                      "maximumSourceBytes": { "type": "integer" },
+                      "maximumOperations": { "type": "integer" },
+                      "maximumCallDepth": { "type": "integer" },
+                      "maximumExpressionDepth": { "type": "integer" },
+                      "maximumStringBytes": { "type": "integer" },
+                      "maximumArrayItems": { "type": "integer" },
+                      "maximumMapEntries": { "type": "integer" },
+                      "maximumModules": { "type": "integer" }
+                    }
+                  },
+                  "possibleWrites": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["target", "operation", "fields"],
+                      "properties": {
+                        "target": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["kind", "entity", "fromField"],
+                              "properties": {
+                                "kind": { "const": "existing" },
+                                "entity": { "type": "string" },
+                                "fromField": { "$ref": "#/$defs/fieldRef" }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["kind", "entity"],
+                              "properties": {
+                                "kind": { "const": "reserved_create" },
+                                "entity": { "type": "string" }
+                              }
+                            }
+                          ]
+                        },
+                        "operation": { "$ref": "#/$defs/operation" },
+                        "fields": { "type": "array", "items": { "$ref": "#/$defs/fieldRef" } }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "review": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["authority", "policyId"],
+                "properties": {
+                  "authority": { "type": "string" },
+                  "policyId": { "type": "string" }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["mode"],
+                "properties": {
+                  "mode": { "const": "none" }
+                }
+              }
+            ]
+          },
+          "onApproved": {
+            "type": "object",
+            "description": "Passthrough of the compiled change request's on-approved application mode. Outside this contract version."
+          },
+          "application": {
+            "type": "object",
+            "description": "Passthrough of the compiled change request's application settings. Outside this contract version."
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "operation", "target", "fields", "dependsOn"],
+              "properties": {
+                "id": { "type": "string" },
+                "operation": { "$ref": "#/$defs/operation" },
+                "target": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["entity", "binding"],
+                  "properties": {
+                    "entity": { "type": "string" },
+                    "binding": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["kind", "fromField"],
+                          "properties": {
+                            "kind": { "const": "existing" },
+                            "fromField": { "$ref": "#/$defs/fieldRef" }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["kind", "effect"],
+                          "properties": {
+                            "kind": { "const": "reserved_create" },
+                            "effect": { "type": "string" }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "fields": {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["kind", "target", "value"],
+                        "properties": {
+                          "kind": { "const": "set" },
+                          "target": { "$ref": "#/$defs/fieldRef" },
+                          "value": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["kind", "field"],
+                                "properties": {
+                                  "kind": { "const": "from_field" },
+                                  "field": { "$ref": "#/$defs/fieldRef" }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["kind", "effect", "targetEntity"],
+                                "properties": {
+                                  "kind": { "const": "from_effect" },
+                                  "effect": { "type": "string" },
+                                  "targetEntity": { "type": "string" }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["kind", "target"],
+                        "properties": {
+                          "kind": { "const": "clear" },
+                          "target": { "$ref": "#/$defs/fieldRef" }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "dependsOn": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["method", "operation", "preconditions", "routeId"],
+              "properties": {
+                "method": { "const": "POST" },
+                "operation": { "$ref": "#/$defs/operation" },
+                "preconditions": { "type": "array", "items": { "type": "string" } },
+                "routeId": { "type": ["string", "null"] }
+              }
+            }
+          },
+          "applyPermissions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["profile", "targetEntity", "rowBoundaries"],
+              "properties": {
+                "profile": { "type": "string" },
+                "targetEntity": { "type": "string" },
+                "rowBoundaries": { "type": "array", "items": { "$ref": "#/$defs/rowBoundary" } }
+              }
+            }
+          },
+          "presencePermissions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["profile", "targetEntity", "requestRowBoundaries"],
+              "properties": {
+                "profile": { "type": "string" },
+                "targetEntity": { "type": "string" },
+                "requestRowBoundaries": { "type": "array", "items": { "$ref": "#/$defs/rowBoundary" } }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

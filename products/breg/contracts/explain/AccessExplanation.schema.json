@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/breg-explain/v1alpha1/AccessExplanation.schema.json",
+  "title": "AccessExplanation",
+  "description": "Wire shape of `explanation` for `bregctl explain access` without `--scenario`. The evaluation-rule strings are hand-authored constants and are pinned; `routes`, `entities`, `actions`, `rowReach`, `claimContract`, and `claimContractError` are passthroughs of compiled-model values and are declared opaque, except `routes.entries[].entityId`, which is pinned because consumers read it today.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "scopeMatching",
+    "purposeMatching",
+    "rowMatching",
+    "profileSelection",
+    "relationshipMatching",
+    "missingClaims",
+    "evaluation",
+    "routes",
+    "entities",
+    "actions",
+    "rowReach",
+    "claimContract",
+    "claimContractError"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/breg-explain/v1alpha1"
+    },
+    "kind": {
+      "const": "AccessExplanation"
+    },
+    "scopeMatching": { "type": "string" },
+    "purposeMatching": { "type": "string" },
+    "rowMatching": { "type": "string" },
+    "profileSelection": { "type": "string" },
+    "relationshipMatching": { "type": "string" },
+    "missingClaims": { "type": "string" },
+    "evaluation": { "type": "string" },
+    "routes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entries"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "Passthrough of the compiled access-route inventory; only `entityId` is pinned. Other fields follow CompiledAccessEntry and are outside this contract version.",
+            "additionalProperties": true,
+            "required": ["entityId"],
+            "properties": {
+              "entityId": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "entities": {
+      "type": "array",
+      "description": "Passthrough of the compiled model's per-entity access explanation; shape follows EntityAccessExplanation and is outside this contract version.",
+      "items": { "type": "object" }
+    },
+    "actions": {
+      "type": "object",
+      "description": "Passthrough of the compiled action inventory; shape follows CompiledActionInventory and is outside this contract version."
+    },
+    "rowReach": {
+      "type": "array",
+      "description": "Passthrough of the compiled model's row-reach explanation; shape follows RowReachExplanation and is outside this contract version.",
+      "items": { "type": "object" }
+    },
+    "claimContract": {
+      "type": ["object", "null"],
+      "description": "Passthrough of the compiled authority inventory, or null when the registry declares no authority contract; shape follows AuthorityInventory and is outside this contract version."
+    },
+    "claimContractError": {
+      "type": ["object", "null"],
+      "description": "Passthrough of the compiled authority inventory's error, or null; shape follows AuthorityInventoryError and is outside this contract version."
+    }
+  }
+}

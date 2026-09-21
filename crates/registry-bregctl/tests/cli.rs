@@ -2765,7 +2765,7 @@ fn explain_routes_preserves_action_free_output_shape() {
             .keys()
             .cloned()
             .collect::<Vec<_>>(),
-        vec!["routes"]
+        vec!["apiVersion", "kind", "routes"]
     );
     let routes = explanation["routes"].as_array().expect("routes are listed");
     assert!(!routes.is_empty());

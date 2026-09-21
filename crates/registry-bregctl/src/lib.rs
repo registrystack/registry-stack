@@ -5402,6 +5402,45 @@ fn planner_test_failure(code: &str, path: &str, message: &str) -> FailureReport 
     )
 }
 
+/// `apiVersion` for every `bregctl explain` payload, versioned as a whole: a removal,
+/// rename, or type change to a pinned key in any of the eight kinds bumps this, an
+/// additive optional key does not.
+const EXPLAIN_API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha1";
+
+/// Which `explanation` kind a subject (and, for `access`, whether a scenario ran)
+/// produces. Kept beside `explain_envelope` because the two always travel together.
+fn explain_kind(subject: ExplainSubject, scenario_present: bool) -> &'static str {
+    match subject {
+        ExplainSubject::Model => "ModelExplanation",
+        ExplainSubject::Access if scenario_present => "AccessPreview",
+        ExplainSubject::Access => "AccessExplanation",
+        ExplainSubject::Routes => "RoutesExplanation",
+        ExplainSubject::Queries => "QueriesExplanation",
+        ExplainSubject::Actions => "ActionsExplanation",
+        ExplainSubject::ChangeRequests => "ChangeRequestsExplanation",
+        ExplainSubject::Events => "EventsExplanation",
+    }
+}
+
+/// Insert the envelope's `apiVersion` and `kind` into an already-serialized explanation,
+/// the same post-serialization technique `explain_routes` uses for its `kind` discriminator
+/// (see the comment there for why). The envelope cannot live on `SuccessReport` itself:
+/// `explanation` is a slot `project lock` and `generate` also populate, and it cannot live
+/// on a `registry-breg` type either: `AccessExplanation` and `AccessPreview` are runtime
+/// types, and `CompiledEventDeliveryInventory` is `deny_unknown_fields` and round-trips
+/// through package inventories, so an extra field on any of them would either misdescribe
+/// an unrelated report or break an unrelated contract.
+fn explain_envelope(kind: &'static str, mut explanation: Value) -> Value {
+    explanation
+        .as_object_mut()
+        .expect("every explanation payload serializes as an object")
+        .extend([
+            ("apiVersion".to_string(), Value::from(EXPLAIN_API_VERSION)),
+            ("kind".to_string(), Value::from(kind)),
+        ]);
+    explanation
+}
+
 fn explain(
     subject: ExplainSubject,
     project_path: &Path,
@@ -5441,6 +5480,7 @@ fn explain(
     } else {
         None
     };
+    let scenario_present = scenario.is_some();
     let explanation = match subject {
         ExplainSubject::Model => explain_model(&compiled),
         ExplainSubject::Access => {
@@ -5469,6 +5509,7 @@ fn explain(
             SuggestedAction::RetryInventoryExplanation,
         )],
     })?;
+    let explanation = explain_envelope(explain_kind(subject, scenario_present), explanation);
     Ok(SuccessReport {
         ok: true,
         command: "explain",

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/breg-explain/v1alpha1/AccessPreview.schema.json",
+  "title": "AccessPreview",
+  "description": "Wire shape of `explanation` for `bregctl explain access --scenario <file>`. The offline synthetic-admission result is a small hand-written struct and is pinned in full, except `effectiveProfile`, which is a passthrough of a compiled access profile and is declared opaque.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "mode",
+    "admitted",
+    "reason",
+    "recordAccess",
+    "credentialsVerified",
+    "authorityIssued",
+    "rowValuesDisclosed",
+    "effectiveProfile"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/breg-explain/v1alpha1"
+    },
+    "kind": {
+      "const": "AccessPreview"
+    },
+    "mode": { "const": "offline_synthetic" },
+    "admitted": { "type": "boolean" },
+    "reason": { "type": "string" },
+    "recordAccess": { "const": "not_evaluated" },
+    "credentialsVerified": { "type": "boolean" },
+    "authorityIssued": { "type": "boolean" },
+    "rowValuesDisclosed": { "type": "boolean" },
+    "effectiveProfile": {
+      "type": ["object", "null"],
+      "description": "Passthrough of the compiled access profile the scenario resolved to, or null when no profile matched. Shape follows AccessProfileSource and is outside this contract version."
+    }
+  }
+}
