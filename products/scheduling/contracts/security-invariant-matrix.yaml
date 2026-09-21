@@ -454,6 +454,28 @@ invariants:
     negativeTest:
       path: crates/registry-scheduling/tests/postgres_commitments.rs
       name: records_replacement_refuses_a_window_staffed_by_an_exact_time_pool
+  - id: SCHEDULING-SEC-27
+    state: enforced
+    threat: >-
+      A resource pool and a published window take the same supply identifier.
+      Both anchor their capacity transactions on the one row keyed by it, and
+      the two namespaces are authored separately, so nothing else makes them
+      disjoint. The pool then serializes against a window's anchor, and the
+      next records replacement deletes it, leaving every commitment against
+      that pool refused until the policy is republished.
+    enforcementPoint: >-
+      The authoring checks refuse the collision on both sides, against the
+      policy alone and against the policy with the window records it governs,
+      so packaging reports it as well. The two anchor writes then share one
+      insert that returns the kind it settled on, which makes a standing row
+      of the other kind a named refusal rather than a primary key abort on one
+      path and a silently skipped anchor on the other.
+    refusal: >-
+      Refuse the write, naming the identifier and the kind of supply that
+      already holds it, and leave the standing anchor and its kind unchanged.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments.rs
+      name: a_supply_identifier_may_not_anchor_both_a_pool_and_a_window
 deferred:
   - id: SCHEDULING-DEF-01
     subject: Full task-grant bounds re-checked inside the capacity transaction

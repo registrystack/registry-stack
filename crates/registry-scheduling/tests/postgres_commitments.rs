@@ -4503,6 +4503,101 @@ async fn records_replacement_refuses_a_window_staffed_by_an_exact_time_pool() {
     );
 }
 
+/// A resource pool and a published window anchor their capacity
+/// transactions on one row keyed by the identifier, and the two namespaces
+/// are authored separately. Sharing an identifier makes the two publish
+/// paths write the same row: the records write would abort on the primary
+/// key, and the policy write used to skip the anchor silently, leaving the
+/// pool serializing against a window row that the next records swap deletes.
+/// Both directions are refused by name instead.
+#[tokio::test]
+async fn a_supply_identifier_may_not_anchor_both_a_pool_and_a_window() {
+    let start = (Utc::now() + TimeDelta::days(2))
+        .with_nanosecond(0)
+        .expect("second precision");
+    let fx = fixture_publishing(
+        &policy_with_window().replace(WINDOW_ID, "north-counter"),
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+    )
+    .await;
+
+    // A window record taking the identifier a live pool already anchors.
+    let mut colliding = records_with_window(start);
+    colliding.windows[0].id = "north-counter".to_owned();
+    let refusal = fx
+        .store
+        .replace_facts(SCHEDULING_ID, &colliding, Uuid::new_v4(), operator_audit())
+        .await
+        .expect_err("a window may not take a pool's supply identifier");
+    assert!(
+        refusal
+            .to_string()
+            .contains("windows[0].id: supply-identifier-collision"),
+        "{refusal}"
+    );
+
+    // The reverse, taken at the anchor row itself: the row is planted here
+    // because both writes now refuse to produce one, and the publication
+    // that would claim it as a pool is refused rather than skipping the
+    // anchor and stranding the offering that needs it.
+    fx.admin
+        .execute(
+            "INSERT INTO scheduling_supply(supply_id, kind) VALUES('south-counter','window')",
+            &[],
+        )
+        .await
+        .expect("plant a window anchor the policy will collide with");
+    let deployed = fx
+        .store
+        .scheduling_meta()
+        .await
+        .expect("the deployment metadata before the refusal");
+    let mut replacement =
+        parse_policy_yaml(&policy_with_window().replace(WINDOW_ID, "north-counter"))
+            .expect("the deployed policy");
+    replacement.scheduling.version += 1;
+    replacement
+        .offerings
+        .iter_mut()
+        .find(|offering| offering.id == "registry-review-45")
+        .and_then(|offering| offering.exact_time.as_mut())
+        .expect("the idle exact-time offering")
+        .pool = "south-counter".to_owned();
+    let digest = replacement.policy_digest();
+    let refusal = fx
+        .store
+        .apply_policy(
+            SCHEDULING_ID,
+            &digest,
+            &[
+                "north-counter".to_owned(),
+                "two-counter".to_owned(),
+                "south-counter".to_owned(),
+            ],
+            &replacement,
+        )
+        .await
+        .expect_err("a pool may not take a window's supply identifier");
+    assert!(refusal.to_string().contains("south-counter"), "{refusal}");
+
+    let after = fx
+        .store
+        .scheduling_meta()
+        .await
+        .expect("the deployment metadata after the refusal");
+    assert_eq!(after, deployed, "a refused publication deploys nothing");
+    let anchored: String = fx
+        .admin
+        .query_one(
+            "SELECT kind FROM scheduling_supply WHERE supply_id='south-counter'",
+            &[],
+        )
+        .await
+        .expect("read the planted anchor")
+        .get(0);
+    assert_eq!(anchored, "window", "the standing anchor keeps its kind");
+}
+
 /// The same combined invariant, reached from the other side. The deployed
 /// records are legal under the deployed policy, and it is the next policy
 /// publication that puts an exact-time offering on the pool staffing a

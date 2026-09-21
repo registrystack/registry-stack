@@ -189,3 +189,7 @@ entries:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: records_replacement_refuses_a_window_staffed_by_an_exact_time_pool}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: policy_publication_refuses_an_exact_time_offering_on_a_deployed_windows_staffing}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: an_unpartitioned_shared_staffing_block_is_rejected}
+  - id: SCHEDULING-SEC-27
+    tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_supply_identifier_may_not_anchor_both_a_pool_and_a_window}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: a_pool_and_a_window_may_not_share_one_supply_identifier}

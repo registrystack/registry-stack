@@ -56,6 +56,10 @@ pub enum PolicyCheckReason {
     /// Two declarations draw on the same supply without a partition the
     /// ledger can enforce.
     SharedSupplyUnpartitioned,
+    /// A resource pool and a published window claim the same identifier.
+    /// Both anchor their capacity transactions on one row keyed by that
+    /// identifier, so the two kinds of supply must not share one.
+    SupplyIdentifierCollision,
     /// A local hook omits or changes the shared handler ABI.
     UnsupportedHookAbi,
     /// A hook phase and handler kind cannot run together.
@@ -101,6 +105,7 @@ impl PolicyCheckReason {
             Self::InvalidBands => "invalid-bands",
             Self::SubquotaOverdrawn => "subquota-overdrawn",
             Self::SharedSupplyUnpartitioned => "shared-supply-unpartitioned",
+            Self::SupplyIdentifierCollision => "supply-identifier-collision",
             Self::UnsupportedHookAbi => "unsupported-hook-abi",
             Self::UnsupportedHookPhase => "unsupported-hook-phase",
             Self::UnsupportedHookTrigger => "unsupported-hook-trigger",

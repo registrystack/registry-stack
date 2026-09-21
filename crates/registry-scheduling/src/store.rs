@@ -134,6 +134,19 @@ pub enum StoreError {
     },
     #[error("the proposed policy would strand standing commitments: {0}")]
     PolicyInUse(String),
+    /// A commitment asked to serialize against supply no publication
+    /// anchored. Naming the reference is what makes this an operator's
+    /// deployment gap in the diagnostics rather than an unexplained
+    /// inconsistency; the caller is told only that the deployment is
+    /// unavailable.
+    #[error("the Scheduling deployment anchors no supply for {0}")]
+    UnanchoredSupply(String),
+    /// A resource pool and a published window claim the same supply
+    /// identifier. The two publish paths would write one anchor row between
+    /// them, so the identifier is refused by name at whichever of them
+    /// arrives second.
+    #[error("the supply identifier {0}")]
+    SupplyIdentifierCollision(String),
     /// A policy and the window records it governs contradict each other.
     /// The authoring tool refuses the same combination against the files on
     /// an operator's disk; this is that refusal taken at the write, where
@@ -854,13 +867,7 @@ impl PostgresStore {
                 .await?;
         }
         for id in pool_ids {
-            transaction
-                .execute(
-                    "INSERT INTO scheduling_supply(supply_id, kind) VALUES($1,$2) \
-                     ON CONFLICT(supply_id) DO NOTHING",
-                    &[id, &"pool"],
-                )
-                .await?;
+            anchor_supply(&transaction, id, "pool").await?;
         }
         transaction.commit().await?;
         Ok(revision)
@@ -2648,6 +2655,38 @@ fn combined_conflicts(
         .collect()
 }
 
+/// Anchor one supply identifier under the kind that claims it.
+///
+/// The pool anchors and the window anchors are written by two independent
+/// publish paths into one table keyed by the identifier, and the two
+/// namespaces are authored separately. Both paths write it through here, so
+/// an identifier the other kind already holds is refused by name at the
+/// second of them rather than aborting the transaction on the primary key or
+/// silently leaving the other kind's row standing. A row of the same kind is
+/// left exactly as it is: republishing a policy re-anchors its pools, and
+/// that is a no-op, not a conflict.
+async fn anchor_supply(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    supply_id: &str,
+    kind: &str,
+) -> Result<(), StoreError> {
+    let anchored: String = transaction
+        .query_one(
+            "INSERT INTO scheduling_supply(supply_id, kind) VALUES($1,$2) \
+             ON CONFLICT(supply_id) DO UPDATE SET kind=scheduling_supply.kind \
+             RETURNING kind",
+            &[&supply_id, &kind],
+        )
+        .await?
+        .get(0);
+    if anchored != kind {
+        return Err(StoreError::SupplyIdentifierCollision(format!(
+            "{supply_id} already anchors {anchored} supply and cannot also anchor a {kind}"
+        )));
+    }
+    Ok(())
+}
+
 /// The window records the deployment currently holds, in identifier order.
 async fn deployed_windows(
     transaction: &deadpool_postgres::Transaction<'_>,
@@ -2985,12 +3024,7 @@ pub(crate) async fn replace_facts_in_transaction(
                 &[&window.id, &record],
             )
             .await?;
-        transaction
-            .execute(
-                "INSERT INTO scheduling_supply(supply_id, kind) VALUES($1,'window')",
-                &[&window.id],
-            )
-            .await?;
+        anchor_supply(transaction, &window.id, "window").await?;
         transaction
             .execute(
                 "INSERT INTO scheduling_window_revision_heads(window_id, window_record, updated_at) \
@@ -3206,7 +3240,13 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
             )
             .await?;
         if rows.len() != supply_ids.len() {
-            return Err(StoreError::Corrupt);
+            let anchored: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
+            let missing: Vec<&str> = supply_ids
+                .iter()
+                .map(String::as_str)
+                .filter(|wanted| !anchored.iter().any(|found| found == wanted))
+                .collect();
+            return Err(StoreError::UnanchoredSupply(missing.join(", ")));
         }
         Ok(())
     }
