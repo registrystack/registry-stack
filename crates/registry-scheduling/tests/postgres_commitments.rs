@@ -1494,6 +1494,45 @@ async fn an_elapsed_booking_no_longer_holds_the_partys_duplicate_key() {
     );
 }
 
+/// The guard above reads every claim that carries one party's key, and a
+/// booking stays `active` once its time has passed, so the set it filters
+/// accumulates for the life of the deployment. Hold the schema to an index
+/// that answers the whole predicate: on the key alone the offering and the
+/// elapsed bookings fall to a recheck over that accumulating history.
+#[tokio::test]
+async fn the_duplicate_guard_is_indexed_on_the_whole_predicate_it_filters() {
+    let fx = fixture().await;
+
+    let definitions: Vec<String> = fx
+        .admin
+        .query(
+            "SELECT indexdef FROM pg_indexes \
+             WHERE schemaname=current_schema() AND tablename='scheduling_claims' \
+               AND indexdef LIKE '%duplicate_key%'",
+            &[],
+        )
+        .await
+        .expect("read the claim ledger indexes")
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+
+    assert_eq!(
+        definitions.len(),
+        1,
+        "one index answers the duplicate guard: {definitions:?}"
+    );
+    let definition = &definitions[0];
+    assert!(
+        definition.contains("(duplicate_key, offering, occupied_end)"),
+        "the index carries every column the guard filters on: {definition}"
+    );
+    assert!(
+        definition.contains("state = 'active'") && definition.contains("duplicate_key IS NOT NULL"),
+        "the index stays partial to the live keyed claims: {definition}"
+    );
+}
+
 /// A policy may move an exact-time offering's opening dates while retaining
 /// its offering and pool. The standing appointment then falls outside the new
 /// opening span, but its offering-scoped duplicate key remains active and must

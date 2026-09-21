@@ -46,6 +46,11 @@
   identifier and sell it under a different service or location, once no claim
   on it is live, and the retry each receipt exists to serve is still
   authorized against the offering as it stood when the claim was committed.
+- Bound the offering-wide duplicate guard to the bookings it decides on. The
+  ledger closes no booking when its time passes, so the active claims carrying
+  one party's key accumulate for the life of the deployment; the guard now
+  reads an index over the key, the offering, and the booking's end rather than
+  over the key alone.
 - Provide `schedulingctl init`, `check`, `test`, `explain`, and `package`, and
   write complete `runtime.example.yaml` and `records.yaml` documents beside
   every initialized project.

@@ -67,16 +67,20 @@ const WINDOW_RECORDS_MIGRATION_VERSION: i64 = 5;
 const WINDOW_REVISION_HEADS_MIGRATION: &str =
     include_str!("../migrations/0006_window_revision_heads.sql");
 const WINDOW_REVISION_HEADS_MIGRATION_VERSION: i64 = 6;
+const DUPLICATE_LOOKUP_INDEX_MIGRATION: &str =
+    include_str!("../migrations/0007_duplicate_lookup_index.sql");
+const DUPLICATE_LOOKUP_INDEX_MIGRATION_VERSION: i64 = 7;
 
 /// Every schema version in ledger order.
 const MIGRATIONS: [(i64, &str); 2] = [(1, SCHEDULING_MIGRATION), (2, FACTS_REVISION_MIGRATION)];
-const SCHEMA_VERSIONS: [i64; 6] = [
+const SCHEMA_VERSIONS: [i64; 7] = [
     1,
     2,
     HOOK_DELIVERY_MIGRATION_VERSION,
     POLICY_DOCUMENT_MIGRATION_VERSION,
     WINDOW_RECORDS_MIGRATION_VERSION,
     WINDOW_REVISION_HEADS_MIGRATION_VERSION,
+    DUPLICATE_LOOKUP_INDEX_MIGRATION_VERSION,
 ];
 
 /// Serializes operator-run migrations on one session lock. A second migrator
@@ -677,6 +681,27 @@ impl PostgresStore {
                 .execute(
                     "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
                     &[&WINDOW_REVISION_HEADS_MIGRATION_VERSION],
+                )
+                .await?;
+        }
+        transaction.commit().await?;
+
+        let transaction = client.transaction().await?;
+        let applied: bool = transaction
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM scheduling_schema_migrations WHERE version=$1)",
+                &[&DUPLICATE_LOOKUP_INDEX_MIGRATION_VERSION],
+            )
+            .await?
+            .get(0);
+        if !applied {
+            transaction
+                .batch_execute(DUPLICATE_LOOKUP_INDEX_MIGRATION)
+                .await?;
+            transaction
+                .execute(
+                    "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
+                    &[&DUPLICATE_LOOKUP_INDEX_MIGRATION_VERSION],
                 )
                 .await?;
         }
@@ -2456,8 +2481,10 @@ async fn lock_and_snapshot(
 
 /// Add the offering-wide duplicate fact that a time-bounded capacity snapshot
 /// may omit. The existing supply lock serializes this read with every writer
-/// for the offering's frozen supply; the supporting partial index keeps the
-/// lookup independent of the age or span of its openings.
+/// for the offering's frozen supply; the supporting partial index carries the
+/// offering and the booking's end beside the key, so the lookup stays
+/// independent of the age or span of its openings and of the elapsed bookings
+/// the party has accumulated under the same key.
 ///
 /// A booking counts while its own time has not passed. The guard is there so
 /// one party holds one live booking per offering, and a booking that has
