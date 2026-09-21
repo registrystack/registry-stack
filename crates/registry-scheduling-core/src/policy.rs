@@ -691,6 +691,21 @@ impl SchedulingPolicy {
                 findings,
             );
         }
+        // A request carries the capabilities and prerequisites that satisfy
+        // these, and the request edge bounds its own lists at the same
+        // maximum. An offering requiring more than that bound publishes
+        // cleanly and refuses every admissible request, so it is refused
+        // here instead.
+        check_collection_bound(
+            &offering.requires_capabilities,
+            &format!("{path}.requiresCapabilities"),
+            findings,
+        );
+        check_collection_bound(
+            &offering.prerequisites,
+            &format!("{path}.prerequisites"),
+            findings,
+        );
         for capability in &offering.requires_capabilities {
             if !valid_identifier(capability) {
                 findings.push(SchedulingDiagnostic::new(
@@ -2433,6 +2448,33 @@ surprise: true
         assert!(rendered.contains(&"services: invalid-bound".to_owned()));
 
         let at_bound = minimal_exact_time_policy();
+        assert!(at_bound.check().is_empty());
+    }
+
+    /// An offering may require no more capabilities or prerequisites than a
+    /// request is allowed to carry. Past that bound the offering publishes
+    /// cleanly and no admissible request can ever satisfy it, so the refusal
+    /// belongs at authoring time where the operator can still name it.
+    #[test]
+    fn offering_requirement_collections_are_bounded() {
+        let mut policy = minimal_exact_time_policy();
+        policy.offerings[0].requires_capabilities = (0..=MAXIMUM_COLLECTION_ENTRIES)
+            .map(|index| format!("capability-{index}"))
+            .collect();
+        policy.offerings[0].prerequisites = (0..=MAXIMUM_COLLECTION_ENTRIES)
+            .map(|index| format!("urn:evidence:residency-{index}"))
+            .collect();
+        let rendered: Vec<String> = policy.check().iter().map(|f| f.to_string()).collect();
+        assert!(rendered.contains(&"offerings[0].requiresCapabilities: invalid-bound".to_owned()));
+        assert!(rendered.contains(&"offerings[0].prerequisites: invalid-bound".to_owned()));
+
+        let mut at_bound = minimal_exact_time_policy();
+        at_bound.offerings[0].requires_capabilities = (1..=MAXIMUM_COLLECTION_ENTRIES)
+            .map(|index| format!("capability-{index}"))
+            .collect();
+        at_bound.offerings[0].prerequisites = (1..=MAXIMUM_COLLECTION_ENTRIES)
+            .map(|index| format!("urn:evidence:residency-{index}"))
+            .collect();
         assert!(at_bound.check().is_empty());
     }
 }
