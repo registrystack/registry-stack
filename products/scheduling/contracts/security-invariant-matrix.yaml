@@ -482,3 +482,21 @@ deferred:
       The configuration reference says so explicitly rather than implying a
       sweep that does not run.
     recordedIn: products/scheduling/RUNTIME-CONFIG.md
+  - id: SCHEDULING-DEF-07
+    subject: Combined policy and records invariants re-checked at the database
+    state: deferred
+    reason: >-
+      The canonical validation of a policy against the published window records
+      it governs runs only in the authoring tooling, against the policy file on
+      the operator's disk. Neither database write repeats it: policy
+      publication fences offerings carrying active claims but never reads the
+      window records, and records replacement never reads the deployed policy.
+      An operator who publishes a policy their own tooling would refuse can
+      therefore back an exact-time offering with a pool that already staffs a
+      published window, and the two modes then draw on the same staffing
+      through separate anchor rows the capacity transaction cannot compare.
+    compensatingControl: >-
+      Every authored path runs the combined check before either document
+      reaches a deployment, and names the offending field in the operator's
+      own vocabulary. Reaching the gap means bypassing that tooling.
+    recordedIn: products/scheduling/SECURITY-REVIEW-NOTES.md

@@ -10,6 +10,11 @@
   appointment is created, moved, or released only inside that transaction, and
   no other product may write the ledger; eligibility stays with the source
   system.
+- Validate a policy against the published window records it governs in the
+  authoring tooling, which refuses a window whose staffing pool also backs an
+  exact-time offering. Policy publication and records replacement do not
+  repeat that combined check at the database, so a deployment that bypasses
+  the authoring tooling can still publish the combination it refuses.
 - Authorize every commitment with a task grant whose scheduling bounds name
   the offering's service, its location, and the action, bounded to 64
   permissions of 32 actions with no wildcard. Only the grant's expiry is

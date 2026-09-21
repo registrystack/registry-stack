@@ -261,8 +261,8 @@ request shapes stay strict. *Tests:*
 
 ## Known deferrals
 
-The matrix records four deferrals with their compensating controls.
-SCHEDULING-DEF-01 is stated in threat 2 above; the other three are
+The matrix records five deferrals with their compensating controls.
+SCHEDULING-DEF-01 is stated in threat 2 above; the other four are
 restated here as the index the matrix's `recordedIn` points at:
 
 - **SCHEDULING-DEF-04, the channel is not bound to the verified caller.**
@@ -277,6 +277,23 @@ restated here as the index the matrix's `recordedIn` points at:
   supporting index is partial rather than unique.
 - **SCHEDULING-DEF-06, retention scope.** Recorded in
   `RUNTIME-CONFIG.md`, which states plainly what the sweeps cover.
+- **SCHEDULING-DEF-07, the combined policy and records invariants are
+  not re-checked at the database.** `SchedulingPolicy::check_window_records`
+  validates a policy against the published window records it governs,
+  and among other rules refuses a window whose staffing pool also backs
+  an exact-time offering: the two modes count that staffing differently,
+  and an exact-time claim locks the pool anchor while an arrival claim
+  locks the window anchor, so the ledger has no row on which to observe
+  the conflict. That check runs only in `schedulingctl`, against the
+  policy file on disk. `apply_policy` locks every supply anchor and
+  fences offerings carrying active claims, but never reads
+  `scheduling_windows`; `replace_facts` swaps the window records without
+  reading the deployed policy. An operator who edits the policy and
+  restarts the runtime can therefore deploy the combination the
+  authoring check refuses. It is an operator path, not a caller-reachable
+  one, and the authoring refusal is the compensating control; closing it
+  means re-checking both directions inside the two transactions that
+  already hold the anchors locked.
 
 A change that closes one of these promotes the matrix entry in the same
 commit and rewrites this section with it.
