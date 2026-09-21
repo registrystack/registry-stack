@@ -75,6 +75,8 @@ entries:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: cancellation_respects_the_cutoff_and_replays_its_verdict}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_concurrent_identical_request_replays_the_winning_receipt}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: concurrent_identical_admissible_requests_replay_one_winning_success}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_retry_replays_its_receipt_after_its_offering_leaves_the_policy}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_retry_replays_its_receipt_after_its_offering_changes_service}
   - id: SCHEDULING-SEC-10
     tests:
       - {path: crates/registry-scheduling-core/src/admission.rs, name: policy_change_outranks_a_window_revision_mismatch}
