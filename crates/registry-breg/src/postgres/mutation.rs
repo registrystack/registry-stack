@@ -1031,7 +1031,18 @@ impl PostgresRecordMutationService {
         // The page carries the binding its effective-status filter ran
         // against, so the rendered runs answer to that same snapshot; a
         // separately fetched binding could already disagree with the rows it
-        // would have rendered.
+        // would have rendered. That snapshot is also the durable identity
+        // check: a page read under a binding this process does not serve
+        // answers an outage instead of run metadata a successor's activation
+        // already retired. An empty page carries no binding and discloses
+        // nothing, so it serves.
+        if let Some((revision, fingerprint)) = &page.active_binding {
+            if revision != &self.expected.package_revision
+                || fingerprint != &self.expected.schema_fingerprint
+            {
+                return Err(IngestionServiceError::Unavailable);
+            }
+        }
         let runs = match &page.active_binding {
             Some((revision, fingerprint)) => page
                 .runs
@@ -1062,26 +1073,48 @@ impl PostgresRecordMutationService {
         entity_id: &str,
         run_id: Uuid,
     ) -> Result<Value, IngestionServiceError> {
-        let client = self.client().await?;
-        let run = self
-            .visible_run(&**client, context, entity_id, run_id)
-            .await?;
         // The read owes the run the same admission chunk submission and
         // receipt recovery owe it: a drifted profile or claim context cannot
         // read a run's binding, digest, counts, and progress it could not
-        // continue.
+        // continue. The load and the rendering take the same guarded
+        // transaction run cancellation takes, so an instance whose package a
+        // successor retired refuses the read with an outage instead of
+        // answering run metadata under an identity the successor already
+        // retired.
         let claims = strict_claim_context(&self.registry, context, entity_id)
             .map_err(|_| IngestionServiceError::RequestInvalid)?;
+        let mut client = self.client().await?;
+        let transaction = begin_record_transaction(
+            &mut client,
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+            &claims,
+        )
+        .await
+        .map_err(|_| IngestionServiceError::Unavailable)?;
+        let tx: &tokio_postgres::Transaction<'_> = transaction.transaction();
+        let run = self.visible_run(tx, context, entity_id, run_id).await?;
         if run.profile_id != claims.access_profile() {
             return Err(IngestionServiceError::ProfileMismatch);
         }
         if run.bound_context_reference != self.ingestion_context_reference(&claims)? {
             return Err(IngestionServiceError::ProfileMismatch);
         }
-        let active = ingestion_store::active_binding(&**client)
+        // The guarded transaction just proved the durable binding equals
+        // this process's identity, so the run renders under it.
+        let response = Self::run_response(
+            &run,
+            (
+                &self.expected.package_revision,
+                &self.expected.schema_fingerprint,
+            ),
+        );
+        transaction
+            .commit()
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
-        Ok(Self::run_response(&run, (&active.0, &active.1)))
+        Ok(response)
     }
 
     /// Cancel an open or blocked run, preserving the committed prefix, the

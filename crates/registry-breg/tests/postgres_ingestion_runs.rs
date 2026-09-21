@@ -2001,10 +2001,11 @@ async fn receipt_releases_fail_closed_without_key_state() {
     assert_receipt_stays_sealed(&harness, &run_id).await;
 }
 
-/// The binding a stale serving instance reports and enforces is the one the
-/// database holds active, not the retired identity the process started
-/// under: reads report the run blocked, and the next chunk submission takes
-/// the blocked transition durably even through the stale instance.
+/// The binding a stale serving instance enforces is the one the database
+/// holds active, not the retired identity the process started under: the
+/// stale instance refuses the read, the successor reports the run blocked,
+/// and the next chunk submission takes the blocked transition durably even
+/// through the stale instance.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stale_instance_reports_and_blocks_runs_against_the_durable_binding() {
     let harness = IngestionHarness::create().await;
@@ -2025,7 +2026,14 @@ async fn a_stale_instance_reports_and_blocks_runs_against_the_durable_binding() 
     // process keeps serving its retired identity.
     let successor = harness.restart_with_revision("package-ingestion-2").await;
 
-    let run = harness.read_run(&claims, &run_id).await;
+    let inspected = successor
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}"),
+            &claims,
+        )
+        .await;
+    assert_eq!(inspected.status(), StatusCode::OK);
+    let run = body_json(inspected).await["run"].clone();
     assert_eq!(run["status"], "blocked");
     assert_eq!(run["blockedReason"], "activePackageChanged");
 
@@ -2210,6 +2218,80 @@ async fn a_stale_instance_cannot_cancel_an_open_run() {
         body_json(successor_cancel).await["run"]["status"],
         "cancelled"
     );
+}
+
+/// A run read and a run listing answer only while the durable identity this
+/// process serves is still active: a successor activation retires the
+/// runtime, so the stale instance refuses both surfaces with an outage
+/// instead of disclosing a run's binding, digests, counts, and progress,
+/// while the successor reads and lists the run normally.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stale_instance_cannot_read_or_list_runs() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("stale-read", 4);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+
+    // The successor revision activates in the database while the original
+    // process keeps serving its retired identity.
+    let successor = harness.restart_with_revision("package-ingestion-2").await;
+
+    let read = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}"),
+            &claims,
+        )
+        .await;
+    assert_eq!(
+        read.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the stale instance cannot read a run"
+    );
+    assert_eq!(body_json(read).await["code"], "service.unavailable");
+    let list = harness
+        .get_json("/v1/records/widgets/ingestion-runs", &claims)
+        .await;
+    assert_eq!(
+        list.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the stale instance cannot list runs"
+    );
+    assert_eq!(body_json(list).await["code"], "service.unavailable");
+
+    // The current instance owes the caller the read and the listing either
+    // way: the committed prefix survives the package change, and its runs
+    // answer against the durable binding.
+    let current = successor
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}"),
+            &claims,
+        )
+        .await;
+    assert_eq!(current.status(), StatusCode::OK);
+    let run = body_json(current).await["run"].clone();
+    assert_eq!(run["status"], "blocked");
+    assert_eq!(run["blockedReason"], "activePackageChanged");
+    assert_eq!(run["committedItems"], 2);
+    let page = successor
+        .get_json("/v1/records/widgets/ingestion-runs", &claims)
+        .await;
+    assert_eq!(page.status(), StatusCode::OK);
+    let runs = body_json(page).await["runs"]
+        .as_array()
+        .expect("the listing carries runs")
+        .clone();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0]["runId"], run_id.as_str());
+    assert_eq!(runs[0]["status"], "blocked");
 }
 
 /// The published ingestion operations carry every problem response their
@@ -2580,7 +2662,14 @@ async fn a_terminal_run_whose_package_changed_answers_run_not_open() {
         .await;
     assert_eq!(stale.status(), StatusCode::CONFLICT);
     assert_eq!(body_json(stale).await["code"], "ingestion.run_not_open");
-    let run = harness.read_run(&claims, &run_id).await;
+    let inspected = changed
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}"),
+            &claims,
+        )
+        .await;
+    assert_eq!(inspected.status(), StatusCode::OK);
+    let run = body_json(inspected).await["run"].clone();
     assert_eq!(run["status"], "cancelled");
     assert_eq!(run["nextChunkIndex"], 1);
     assert_eq!(
