@@ -98,19 +98,19 @@ pub fn request_lifecycle() -> LifecycleDescription {
                 from: "draft",
                 event: "submit",
                 to: "submitted",
-                guard: "the request is in draft and its current version has not already been frozen into a proposal",
+                guard: "the caller is the request owner and the request is in draft and its current version has not already been frozen into a proposal",
             },
             LifecycleTransition {
                 from: "submitted",
                 event: "revise",
                 to: "draft",
-                guard: "the request is submitted; opens the next draft version tagged as a content revision, not a rebase",
+                guard: "the caller is the request owner and the request is submitted; opens the next draft version tagged as a content revision, not a rebase",
             },
             LifecycleTransition {
                 from: "submitted",
                 event: "rebase",
                 to: "draft",
-                guard: "the request is submitted; opens the next draft version tagged as a rebase onto updated context, not a revision",
+                guard: "the caller is the request owner and the request is submitted; opens the next draft version tagged as a rebase onto updated context, not a revision",
             },
             LifecycleTransition {
                 from: "draft",
@@ -144,6 +144,22 @@ pub fn request_lifecycle() -> LifecycleDescription {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// `action_requires_request_owner` gates submit, revise, and cancel, and
+    /// only `apply` is open to another actor. Naming the owner on the cancel
+    /// edges alone read as if submission and revision had no owner
+    /// requirement at all.
+    #[test]
+    fn every_owner_gated_edge_names_the_owner_check() {
+        for edge in &request_lifecycle().transitions {
+            let owner_gated = matches!(edge.event, "submit" | "revise" | "rebase" | "cancel");
+            assert_eq!(
+                edge.guard.contains("the caller is the request owner"),
+                owner_gated,
+                "{edge:?}"
+            );
+        }
+    }
 
     use registry_platform_canonical_json::canonicalize_json;
 
