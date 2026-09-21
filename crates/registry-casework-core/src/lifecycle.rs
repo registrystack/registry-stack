@@ -129,7 +129,8 @@ fn occurrence_guard(event: OccurrenceEvent) -> &'static str {
         OccurrenceEvent::Claim => "Raised by a staff actor with authority over the item's queue, on an item that is unheld and still active, at the caller's expected revision, and only while no attempt is live.",
         OccurrenceEvent::Release => "Raised on two paths that check different things. A human release requires staff authority over the queue or supervisor authority, the item held and still active, the caller's expected revision, and no live attempt. The clock-driven reassignment path carries no actor and checks none of those: it requires the item active and not synchronizing, no live attempt, the source occurrence still current against a fresh read, a served target queue, and an unclaimed clock effect.",
         OccurrenceEvent::AttemptReserved => "Raised by the item's current holder with staff authority over its queue, at the caller's expected revision and against an action binding that still matches, and only while no other attempt is live.",
-        OccurrenceEvent::AttemptUncertain | OccurrenceEvent::AttemptCompleted => "Raised by the actor recorded on the attempt itself, fenced by that attempt's execution token. The item's holder and queue authority are not re-checked here. A completed result additionally requires a receipt naming a positive source revision.",
+        OccurrenceEvent::AttemptUncertain => "Raised by the actor recorded on the attempt itself, fenced by that attempt's execution token. The item's holder and queue authority are not re-checked here.",
+        OccurrenceEvent::AttemptCompleted => "Raised on two mutually exclusive paths. The executing path is raised by the actor recorded on the attempt, fenced by that attempt's execution token, and requires a receipt naming a positive source revision. The operator path settles an uncertain attempt whose lease has already expired: it carries no actor, is fenced by no token, and clears the receipt rather than requiring one. Neither path re-checks the item's holder or queue authority.",
         OccurrenceEvent::AttemptRefused => "Raised on two mutually exclusive paths: by the attempt's own actor under a still-live lease, or by an operator settling an uncertain attempt whose lease has already expired. Neither re-checks the item's holder or queue authority.",
         OccurrenceEvent::ObserveOpen
         | OccurrenceEvent::ObserveWaitingApplicant
@@ -201,7 +202,7 @@ const REVIEW_ADVANCE_EVENT: &str = "advance_stage";
 /// and concatenated onto each of the six rather than drifting six ways.
 macro_rules! review_decision_gate {
     () => {
-        "Raised by the holder of an open task on the active stage, under a deciding profile that both the stage and the task allow, on a request still in reviewing and not already settled, with no earlier decision on that task, no earlier decision by the same reviewer in this stage, and the stage's initiator and previous-stage-reviewer exclusions satisfied."
+        "Raised on a task on the active stage that the reviewer holds, under a deciding profile that both the stage and the task allow, on a request still in reviewing and not already settled, with no earlier decision on that task, no earlier decision by the same reviewer in this stage, and the stage's initiator and previous-stage-reviewer exclusions satisfied."
     };
 }
 
@@ -257,7 +258,7 @@ pub fn review_lifecycle() -> LifecycleDescription {
             to: reviewing,
             guard: concat!(
                 review_decision_gate!(),
-                " An approval that meets the active stage's required approvals while a later stage exists closes that stage's open tasks and opens the next stage's."
+                " An approval that meets the active stage's required approvals while a later stage exists closes that stage's remaining tasks, undecided or unclaimed alike, and opens the next stage's."
             ),
         },
         LifecycleTransition {
@@ -575,6 +576,58 @@ mod tests {
         assert!(reviewing.initial);
         assert!(!reviewing.terminal);
         assert!(!reviewing.unreachable);
+    }
+
+    /// `settle_uncertain_attempt` emits `AttemptCompleted` from an operator
+    /// decision on an expired lease: no original actor, no execution token,
+    /// and it clears the receipt. A guard describing only the executor path
+    /// would report a fence and a receipt that path does not have.
+    #[test]
+    fn attempt_completed_describes_the_operator_path_as_well_as_the_executor() {
+        let description = occurrence_lifecycle();
+        let completed: Vec<&LifecycleTransition> = description
+            .transitions
+            .iter()
+            .filter(|edge| edge.event == "attempt_completed")
+            .collect();
+        assert!(!completed.is_empty());
+        for edge in &completed {
+            assert!(edge.guard.contains("two"), "{edge:?}");
+            assert!(edge.guard.contains("operator"), "{edge:?}");
+            assert!(edge.guard.contains("expired"), "{edge:?}");
+        }
+        let uncertain = description
+            .transitions
+            .iter()
+            .find(|edge| edge.event == "attempt_uncertain")
+            .expect("an attempt_uncertain edge");
+        assert_ne!(uncertain.guard, completed[0].guard);
+        assert!(!uncertain.guard.contains("operator"), "{uncertain:?}");
+    }
+
+    /// `check_task_holder` refuses `ReviewerTaskState::Open` outright. Calling
+    /// the reviewer "the holder of an open task" stated the opposite of the
+    /// task state the engine requires.
+    #[test]
+    fn review_decision_edges_require_a_held_task_not_an_open_one() {
+        for edge in review_lifecycle()
+            .transitions
+            .iter()
+            .filter(|edge| edge.event != "settle" || edge.to != "cancelled")
+        {
+            assert!(!edge.guard.contains("open task"), "{edge:?}");
+        }
+        let recorded = review_lifecycle()
+            .transitions
+            .into_iter()
+            .find(|edge| edge.event == "record_decision")
+            .expect("a record_decision edge");
+        assert!(
+            recorded
+                .guard
+                .contains("a task on the active stage that the reviewer holds"),
+            "{recorded:?}"
+        );
     }
 
     #[test]
