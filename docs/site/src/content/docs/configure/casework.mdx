@@ -425,7 +425,7 @@ Five commands read the project and touch no network and no database, so run them
 
 `caseworkctl check` validates the project and prints the effective policy, including the values you did not write.
 For the standalone project it reports standalone mode, the resolved review kind and producer admission with its schemas and retention, and the inbox defaults.
-For a project that declares a source it reports the request entity, the fallback queue, the routing rule count, and the state of the imported source description, which reads `pending_source_add` before you connect the source and `checked` after.
+For a project that declares sources it reports every one of them, and for each of their requests the entity, the fallback queue, the routing rule count, the clock the request names, and its target; it also reports the state of the imported source descriptions, which reads `pending_source_add` before you connect the source and `checked` after.
 
 ```sh
 caseworkctl check ./decisions

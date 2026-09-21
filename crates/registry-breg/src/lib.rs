@@ -84,6 +84,7 @@ pub mod idempotency;
 pub mod immediate_actions;
 #[cfg(feature = "runtime")]
 mod ingestion_store;
+pub mod lifecycle;
 pub mod logical_names;
 pub mod manifest_adapter;
 pub(crate) mod membership;

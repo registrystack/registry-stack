@@ -415,9 +415,10 @@ struct ExplainArgs {
     #[arg(value_name = "SUBJECT", value_enum)]
     subject: ExplainSubject,
 
-    /// Base Registry Engine project directory.
+    /// Base Registry Engine project directory. Required for every subject
+    /// except `lifecycle`, which reports engine behaviour no project changes.
     #[arg(value_name = "PROJECT")]
-    project: PathBuf,
+    project: Option<PathBuf>,
 
     /// Enforce production-only package closure requirements.
     #[arg(long)]
@@ -988,6 +989,7 @@ enum ExplainSubject {
     Actions,
     ChangeRequests,
     Events,
+    Lifecycle,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -1022,7 +1024,11 @@ struct SuccessReport {
     ok: bool,
     command: &'static str,
     profile: ProfileArg,
-    revision: String,
+    /// Absent only for `explain lifecycle`, the one report no project
+    /// produces. Every other command compiles a project and names its
+    /// revision here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revision: Option<String>,
     findings: Vec<ToolDiagnostic>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     artifacts: Vec<ArtifactReport>,
@@ -1799,7 +1805,7 @@ where
         Command::Generate(args) => generate_requested(&args),
         Command::Explain(args) => explain(
             args.subject,
-            &args.project,
+            args.project.as_deref(),
             profile(args.production),
             args.scenario.as_deref(),
         ),
@@ -4683,7 +4689,7 @@ fn init(destination: &Path) -> Result<SuccessReport, FailureReport> {
         ok: true,
         command: "init",
         profile: ProfileArg::Authoring,
-        revision: compiled.revision().to_owned(),
+        revision: Some(compiled.revision().to_owned()),
         findings: compiler_findings(&compiled),
         artifacts: files
             .iter()
@@ -4739,7 +4745,7 @@ fn check(project_path: &Path, profile: ProfileArg) -> Result<SuccessReport, Fail
         ok: true,
         command: "check",
         profile,
-        revision: compiled.revision().to_owned(),
+        revision: Some(compiled.revision().to_owned()),
         findings,
         artifacts: Vec::new(),
         explanation: None,
@@ -5033,7 +5039,7 @@ fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, 
         ok: true,
         command: "project lock",
         profile: ProfileArg::Authoring,
-        revision: compiled.revision().to_owned(),
+        revision: Some(compiled.revision().to_owned()),
         findings: compiler_findings(&compiled),
         artifacts,
         explanation: Some(json!({
@@ -5108,7 +5114,7 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
         ok: true,
         command: "generate",
         profile,
-        revision: compiled.revision().to_owned(),
+        revision: Some(compiled.revision().to_owned()),
         findings: compiler_findings(&compiled),
         artifacts: export
             .artifacts
@@ -5156,7 +5162,7 @@ fn generate(
         ok: true,
         command: "generate",
         profile,
-        revision: compiled.revision().to_owned(),
+        revision: Some(compiled.revision().to_owned()),
         findings: compiler_findings(&compiled),
         artifacts,
         explanation: None,
@@ -5419,6 +5425,7 @@ fn explain_kind(subject: ExplainSubject, scenario_present: bool) -> &'static str
         ExplainSubject::Actions => "ActionsExplanation",
         ExplainSubject::ChangeRequests => "ChangeRequestsExplanation",
         ExplainSubject::Events => "EventsExplanation",
+        ExplainSubject::Lifecycle => "LifecycleExplanation",
     }
 }
 
@@ -5441,14 +5448,11 @@ fn explain_envelope(kind: &'static str, mut explanation: Value) -> Value {
     explanation
 }
 
-fn explain(
-    subject: ExplainSubject,
-    project_path: &Path,
-    profile: ProfileArg,
-    scenario_path: Option<&Path>,
-) -> Result<SuccessReport, FailureReport> {
-    let compiled = compile(project_path, profile, "explain")?;
-    let scenario_error = |diagnostic| FailureReport {
+/// The refusal every `explain` argument mistake reports: a wrong subject for
+/// `--scenario`, a missing PROJECT, a PROJECT given to the one subject that
+/// takes none, or an unreadable scenario file.
+fn explain_usage_error(diagnostic: Diagnostic) -> FailureReport {
+    FailureReport {
         ok: false,
         command: "explain",
         diagnostics: vec![tool_diagnostic(
@@ -5456,10 +5460,105 @@ fn explain(
             DiagnosticArtifact::CommandArguments,
             SuggestedAction::CorrectCommandUsage,
         )],
-    };
+    }
+}
+
+/// The refusal a payload that will not serialize reports.
+fn explain_render_error() -> FailureReport {
+    FailureReport {
+        ok: false,
+        command: "explain",
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(
+                "explain.render.failed",
+                "explain",
+                "the compiled inventory could not be rendered",
+            ),
+            DiagnosticArtifact::CompiledInventory,
+            SuggestedAction::RetryInventoryExplanation,
+        )],
+    }
+}
+
+/// `explain lifecycle`: the request lifecycle the engine enforces, reported
+/// without compiling anything.
+///
+/// PROJECT is refused rather than ignored here. The lifecycle is engine
+/// behaviour, so accepting a project would teach a reader that some project
+/// could change it, and compiling one would let an unrelated authoring error
+/// refuse an answer that never depended on the project in the first place.
+///
+/// `--production` is refused for the same reason. It selects the production
+/// package-closure check, which runs against a compiled project; a report
+/// that compiled nothing and still named `profile: production` would state
+/// that check had passed when it never ran.
+fn explain_lifecycle(
+    profile: ProfileArg,
+    project_path: Option<&Path>,
+    scenario_path: Option<&Path>,
+) -> Result<SuccessReport, FailureReport> {
+    if project_path.is_some() {
+        return Err(explain_usage_error(diagnostic(
+            "lifecycle.project.unused",
+            "project",
+            "explain lifecycle reports the engine's request lifecycle, which no registry project changes; run it with no PROJECT",
+        )));
+    }
+    if matches!(profile, ProfileArg::Production) {
+        return Err(explain_usage_error(diagnostic(
+            "lifecycle.profile.unused",
+            "production",
+            "explain lifecycle compiles no project, so it enforces no production package closure; run it without --production",
+        )));
+    }
+    if scenario_path.is_some() {
+        return Err(explain_usage_error(diagnostic(
+            "access.scenario.subject",
+            "scenario",
+            "--scenario is available only for explain access",
+        )));
+    }
+    let lifecycle = serde_json::to_value(registry_breg::lifecycle::request_lifecycle())
+        .map_err(|_| explain_render_error())?;
+    let explanation = Value::Object(serde_json::Map::from_iter([(
+        "lifecycles".to_owned(),
+        Value::Array(vec![lifecycle]),
+    )]));
+    Ok(SuccessReport {
+        ok: true,
+        command: "explain",
+        profile,
+        revision: None,
+        findings: Vec::new(),
+        artifacts: Vec::new(),
+        explanation: Some(explain_envelope(
+            explain_kind(ExplainSubject::Lifecycle, false),
+            explanation,
+        )),
+        next_steps: Vec::new(),
+    })
+}
+
+fn explain(
+    subject: ExplainSubject,
+    project_path: Option<&Path>,
+    profile: ProfileArg,
+    scenario_path: Option<&Path>,
+) -> Result<SuccessReport, FailureReport> {
+    if matches!(subject, ExplainSubject::Lifecycle) {
+        return explain_lifecycle(profile, project_path, scenario_path);
+    }
+    let project_path = project_path.ok_or_else(|| {
+        explain_usage_error(diagnostic(
+            "explain.project.missing",
+            "project",
+            "name the registry project directory to explain; only explain lifecycle runs without one",
+        ))
+    })?;
+    let compiled = compile(project_path, profile, "explain")?;
     let scenario = if let Some(path) = scenario_path {
         if !matches!(subject, ExplainSubject::Access) {
-            return Err(scenario_error(diagnostic(
+            return Err(explain_usage_error(diagnostic(
                 "access.scenario.subject",
                 "scenario",
                 "--scenario is available only for explain access",
@@ -5467,13 +5566,13 @@ fn explain(
         }
         let bytes =
             read_bounded_source_file(path, "access.scenario.unavailable", "scenario", 65_536)
-                .map_err(scenario_error)?;
-        let source = parse_json_strict(&bytes).map_err(|_| scenario_error(diagnostic("access.scenario.invalid", "scenario", "provide a strict JSON access scenario with synthetic claims; duplicate keys and malformed JSON are refused")))?;
-        let scenario = serde_json::from_value(source).map_err(|_| scenario_error(diagnostic("access.scenario.invalid", "scenario", "use entity, accessProfile, operation, optional readPath, and claims; claims accepts principalClaim, principal, scopes, purpose, and directClaims")))?;
+                .map_err(explain_usage_error)?;
+        let source = parse_json_strict(&bytes).map_err(|_| explain_usage_error(diagnostic("access.scenario.invalid", "scenario", "provide a strict JSON access scenario with synthetic claims; duplicate keys and malformed JSON are refused")))?;
+        let scenario = serde_json::from_value(source).map_err(|_| explain_usage_error(diagnostic("access.scenario.invalid", "scenario", "use entity, accessProfile, operation, optional readPath, and claims; claims accepts principalClaim, principal, scopes, purpose, and directClaims")))?;
         Some(
             registry_breg::access_preview::preview_access(&compiled, scenario).map_err(
                 |message| {
-                    scenario_error(diagnostic("access.scenario.invalid", "scenario", message))
+                    explain_usage_error(diagnostic("access.scenario.invalid", "scenario", message))
                 },
             )?,
         )
@@ -5495,26 +5594,15 @@ fn explain(
         ExplainSubject::Actions => explain_actions(&compiled),
         ExplainSubject::ChangeRequests => explain_change_requests(&compiled),
         ExplainSubject::Events => serde_json::to_value(compiled.event_deliveries()),
+        ExplainSubject::Lifecycle => unreachable!("lifecycle returns before the project compiles"),
     }
-    .map_err(|_| FailureReport {
-        ok: false,
-        command: "explain",
-        diagnostics: vec![tool_diagnostic(
-            diagnostic(
-                "explain.render.failed",
-                "explain",
-                "the compiled inventory could not be rendered",
-            ),
-            DiagnosticArtifact::CompiledInventory,
-            SuggestedAction::RetryInventoryExplanation,
-        )],
-    })?;
+    .map_err(|_| explain_render_error())?;
     let explanation = explain_envelope(explain_kind(subject, scenario_present), explanation);
     Ok(SuccessReport {
         ok: true,
         command: "explain",
         profile,
-        revision: compiled.revision().to_owned(),
+        revision: Some(compiled.revision().to_owned()),
         findings: compiler_findings(&compiled),
         artifacts: Vec::new(),
         explanation: Some(explanation),
@@ -9203,6 +9291,11 @@ fn success_lead(report: &SuccessReport) -> String {
             report::counted(artifacts, "artifact")
         ),
         "generate" => format!("Generated {}.", report::counted(artifacts, "artifact")),
+        // `explain lifecycle` is the one explain that compiles nothing, and
+        // the absent revision is how the report says so.
+        "explain" if report.revision.is_none() => {
+            "Explained the engine's request lifecycle. No project was compiled.".to_owned()
+        }
         "explain" => "Explained the compiled inventory.".to_owned(),
         other => format!("{other} succeeded."),
     }
@@ -9211,7 +9304,9 @@ fn success_lead(report: &SuccessReport) -> String {
 fn render_success(report: &SuccessReport, stdout: &mut dyn Write) -> io::Result<()> {
     let mut lines = report::Lines::new();
     lines.lead(&success_lead(report));
-    lines.pairs(&[("revision", report.revision.clone())]);
+    if let Some(revision) = &report.revision {
+        lines.pairs(&[("revision", revision.clone())]);
+    }
 
     if !report.artifacts.is_empty() {
         lines.blank();

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod dev;
+mod lifecycle;
 mod policy;
 mod project;
 mod source_add;
@@ -44,6 +45,8 @@ enum Command {
     Check(CheckArgs),
     /// Explain the running policy from validated local inputs.
     Explain(ProjectArgs),
+    /// Report the occurrence and review state machines the runtime enforces.
+    Lifecycle,
     /// Evaluate a fixture using its controlled clock and source facts.
     Simulate(SimulateArgs),
     /// Package validated policy and exact imported descriptions for deployment.
@@ -771,6 +774,7 @@ fn run(cli: Cli) -> Result<Value> {
         },
         Command::Check(args) => project::check(&args.project, args.production, args.deny_findings),
         Command::Explain(args) => project::explain(&args.project),
+        Command::Lifecycle => lifecycle::lifecycle(),
         Command::Package(args) => match args.output {
             Some(output) => project::package(&args.project, &output),
             None => project::package_dry_run(&args.project),

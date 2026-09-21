@@ -18,6 +18,30 @@ pub enum OccurrenceEvent {
     Cancel,
 }
 
+impl OccurrenceEvent {
+    /// Every declared occurrence event, in a fixed order the lifecycle
+    /// description and its tests iterate against.
+    ///
+    /// As with `OccurrenceState::ALL`, a new variant missing from here is
+    /// missing from the published lifecycle. The exhaustive match in
+    /// `lifecycle::occurrence_event_id` fails the build until a new variant
+    /// is handled, and adding it here is the other half of that edit.
+    pub const ALL: [Self; 12] = [
+        Self::Claim,
+        Self::Release,
+        Self::AttemptReserved,
+        Self::AttemptUncertain,
+        Self::AttemptCompleted,
+        Self::AttemptRefused,
+        Self::ObserveOpen,
+        Self::ObserveWaitingApplicant,
+        Self::ObserveWaitingApplication,
+        Self::Complete,
+        Self::Supersede,
+        Self::Cancel,
+    ];
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[error("the occurrence event is invalid for the current state")]
 pub struct InvalidOccurrenceTransition;
@@ -177,31 +201,6 @@ mod tests {
         OccurrenceState::Cancelled
     );
 
-    const STATES: [OccurrenceState; 8] = [
-        OccurrenceState::Open,
-        OccurrenceState::Claimed,
-        OccurrenceState::WaitingApplicant,
-        OccurrenceState::WaitingApplication,
-        OccurrenceState::Synchronizing,
-        OccurrenceState::Completed,
-        OccurrenceState::Superseded,
-        OccurrenceState::Cancelled,
-    ];
-    const EVENTS: [OccurrenceEvent; 12] = [
-        OccurrenceEvent::Claim,
-        OccurrenceEvent::Release,
-        OccurrenceEvent::AttemptReserved,
-        OccurrenceEvent::AttemptUncertain,
-        OccurrenceEvent::AttemptCompleted,
-        OccurrenceEvent::AttemptRefused,
-        OccurrenceEvent::ObserveOpen,
-        OccurrenceEvent::ObserveWaitingApplicant,
-        OccurrenceEvent::ObserveWaitingApplication,
-        OccurrenceEvent::Complete,
-        OccurrenceEvent::Supersede,
-        OccurrenceEvent::Cancel,
-    ];
-
     fn expected(state: OccurrenceState, event: OccurrenceEvent) -> Option<OccurrenceState> {
         use OccurrenceEvent as Event;
         use OccurrenceState as State;
@@ -227,8 +226,8 @@ mod tests {
 
     #[test]
     fn every_state_event_pair_matches_the_transition_table() {
-        for state in STATES {
-            for event in EVENTS {
+        for state in OccurrenceState::ALL {
+            for event in OccurrenceEvent::ALL {
                 assert_eq!(
                     transition(state, event).ok(),
                     expected(state, event),
@@ -245,7 +244,7 @@ mod tests {
             OccurrenceState::Superseded,
             OccurrenceState::Cancelled,
         ] {
-            for event in EVENTS {
+            for event in OccurrenceEvent::ALL {
                 assert_eq!(transition(state, event), Err(InvalidOccurrenceTransition));
             }
         }

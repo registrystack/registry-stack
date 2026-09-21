@@ -170,7 +170,8 @@ An applier's `applyTargets` names the entities the profile may write when it app
 Give the profiles that read the target entity a `requestPresence` entry so they can see that a correction is pending.
 A permission's `requestVisibility: owner` restricts reads of the request entity to the requests the caller's own principal created, which suits a submitter.
 
-The source request record moves through `draft`, `submitted`, `cancelled`, `applied`, and `superseded`.
+The source request record is stored as `draft`, `submitted`, `cancelled`, `applied`, or `superseded`.
+Only the first four are reachable: no transition the engine runs ever targets `superseded`, and `bregctl explain lifecycle` reports it as an unreachable state.
 The external result status is projected separately and never substitutes for the source lifecycle state.
 Applying writes the target the way a direct mutation would, so the target gains a revision and the request moves to `applied`.
 [Base Registry Engine API reference](../../reference/breg-api/#change-requests) describes each action, its route, and the states it accepts.
@@ -183,7 +184,7 @@ bregctl explain change-requests ./my-registry
 
 The JSON report carries a `controlledWrites` list, one entry per target entity with its `requiredFor` operations and `eligibleRequestTypes`, and a `requests` list with the actions and routes of each request entity.
 
-{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml; crates/registry-breg/src/contract.rs, ChangeControlSource and ChangeRequestSource and RequestVisibilitySource; crates/registry-breg/src/request_workflow.rs; crates/registry-breg/src/access.rs. */}
+{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml; crates/registry-breg/src/contract.rs, ChangeControlSource and ChangeRequestSource and RequestVisibilitySource; crates/registry-breg/src/request_workflow.rs; crates/registry-breg/src/lifecycle.rs, request_lifecycle and superseded_is_unreachable_and_non_terminal_while_applied_and_cancelled_are_terminal; crates/registry-breg/src/access.rs. */}
 
 ### Require submitter authority over targets
 

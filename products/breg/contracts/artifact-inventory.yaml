@@ -26,6 +26,7 @@ artifacts:
   - {path: contracts/explain/ActionsExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
   - {path: contracts/explain/ChangeRequestsExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
   - {path: contracts/explain/EventsExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
+  - {path: contracts/explain/LifecycleExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
   - {path: acceptance/asset-site-placement/registry.yaml, kind: authored-fixture, state: authored}
   - {path: acceptance/business-establishments, kind: authored-fixture, state: authored}
   - {path: acceptance/inspection, kind: authored-fixture, state: authored}

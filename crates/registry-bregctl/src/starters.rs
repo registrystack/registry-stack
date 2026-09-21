@@ -389,7 +389,7 @@ pub(crate) fn run(destination: &Path, id: &str) -> Result<SuccessReport, Failure
         ok: true,
         command: "init",
         profile: ProfileArg::Authoring,
-        revision: compiled.revision().to_owned(),
+        revision: Some(compiled.revision().to_owned()),
         findings: compiler_findings(&compiled),
         artifacts: files
             .iter()

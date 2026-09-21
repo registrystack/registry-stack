@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/breg-explain/v1alpha1/LifecycleExplanation.schema.json",
+  "title": "LifecycleExplanation",
+  "description": "Wire shape of `explanation` for `bregctl explain lifecycle`, which reports the request lifecycle the engine enforces. This kind is pinned in full, identifiers included: the request machine does not vary by project, so its own id, its five state ids, its five event names, and the size of its table are constrained here unconditionally, and a rename fails the contract test rather than passing it. `LifecycleDescription` in `registry-breg` exists to be this payload rather than to model anything the engine computes, so a change to its fields is a deliberate change to this contract and not the incidental drift that makes a compiled-model passthrough opaque. `lifecycle` is the one subject that takes no PROJECT: the lifecycle is engine behaviour and does not vary by project, so the report carries no `revision`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "lifecycles"],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/breg-explain/v1alpha1"
+    },
+    "kind": {
+      "const": "LifecycleExplanation"
+    },
+    "lifecycles": {
+      "type": "array",
+      "description": "One entry per state machine reported. `bregctl` reports exactly one, the request lifecycle, and this contract pins that rather than describing it: the array carries exactly one entry and that entry is the request machine. The `LifecycleDescription` shape it is built from is shared with `caseworkctl lifecycle`, a top-level command rather than an `explain` subject, which reports two machines under Casework's own contracts; this schema is `bregctl`'s alone and constrains only what `bregctl` emits.",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "allOf": [
+          { "$ref": "#/$defs/lifecycle" },
+          { "$ref": "#/$defs/requestLifecyclePin" }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "requestLifecyclePin": {
+      "$comment": "Applied unconditionally to the single entry `bregctl explain lifecycle` emits, never behind an `if` on the value being pinned: a condition keyed on `id` goes false the moment the machine is renamed, so the rename the constraint exists to reject would fall through to the generic shape and validate. The request lifecycle is engine behaviour rather than project configuration, so its id, its state ids, its event names, and the size of its table are wire contract in the same way the field names are, and changing any of them is a breaking change for every consumer that must fail here rather than merely update a Rust unit test alongside the rename.",
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "const": "request" },
+        "states": {
+          "minItems": 5,
+          "maxItems": 5,
+          "items": {
+            "properties": {
+              "id": {
+                "enum": ["draft", "submitted", "cancelled", "applied", "superseded"]
+              }
+            }
+          }
+        },
+        "transitions": {
+          "minItems": 7,
+          "maxItems": 7,
+          "items": {
+            "properties": {
+              "from": {
+                "enum": ["draft", "submitted", "cancelled", "applied", "superseded"]
+              },
+              "to": {
+                "enum": ["draft", "submitted", "cancelled", "applied", "superseded"]
+              },
+              "event": {
+                "enum": ["submit", "revise", "rebase", "cancel", "apply"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "states", "transitions"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable identifier for the machine, for example `request`."
+        },
+        "label": {
+          "type": "string",
+          "description": "One line naming the machine for a reader."
+        },
+        "states": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/state" }
+        },
+        "transitions": {
+          "type": "array",
+          "description": "Every edge, in declaration order. An array rather than a map keyed by state, because two distinct transitions may share a `from` and a `to` (the request lifecycle's `revise` and `rebase` both run `submitted` to `draft`) and because a transition may be a self-transition. Keying by state pair would silently drop one of a colliding pair and render a self-transition as a no-op.",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/transition" }
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "initial",
+        "terminal",
+        "unreachable",
+        "incomingTransitions",
+        "outgoingTransitions"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The state's stored spelling, the same value a persisted row and the generated OpenAPI enums carry."
+        },
+        "initial": {
+          "type": "boolean",
+          "description": "True when a record can be created directly in this state. A machine may have more than one: Casework's occurrence machine creates a record in whichever state the first authoritative observation reports. `initial` says nothing about whether transitions also enter the state, so an initial state may report zero incoming transitions without being unreachable, or a non-zero count when it is reachable both ways."
+        },
+        "terminal": {
+          "type": "boolean",
+          "description": "True when no transition leaves this state."
+        },
+        "unreachable": {
+          "type": "boolean",
+          "description": "True when no transition enters this state and it is not an initial state, so nothing the engine does can put a record here. Reported separately from `terminal` because the two are independent: a state the engine stores and whose guards would accept an outgoing transition can still have no way in."
+        },
+        "incomingTransitions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of transitions whose `to` is this state, self-transitions included."
+        },
+        "outgoingTransitions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of transitions whose `from` is this state, self-transitions included."
+        }
+      }
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "event", "to", "guard"],
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "Source state id."
+        },
+        "event": {
+          "type": "string",
+          "description": "The operation that runs the transition. Load-bearing identity, not decoration: it is what distinguishes two edges sharing a `from` and a `to`."
+        },
+        "to": {
+          "type": "string",
+          "description": "Target state id. Equal to `from` for a self-transition."
+        },
+        "guard": {
+          "type": "string",
+          "description": "What the engine checks before it runs this transition. Prose, not a machine-evaluable expression: the guards are procedural code, so this names them rather than reproducing them. Selected by event, and by path where one event is raised on more than one path with different checks, so two edges carry the same text only when the same checks really run for both.",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
