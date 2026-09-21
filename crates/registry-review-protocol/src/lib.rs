@@ -207,8 +207,21 @@ pub struct ReviewCreateRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initiator: Option<HumanIdentity>,
     pub context: ReviewContext,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_value",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub result_constraints: Option<Value>,
+}
+
+/// Preserve an explicitly present JSON `null` so semantic validation can
+/// reject it as a non-object instead of treating it like an omitted field.
+fn deserialize_present_value<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
 }
 
 impl ReviewCreateRequest {
@@ -613,6 +626,33 @@ mod tests {
             snapshot: json!({"scientific": 1e100_f64}),
         };
         assert!(request.check().is_ok());
+    }
+
+    #[test]
+    fn create_request_preserves_explicit_null_result_constraints() {
+        let mut value = serde_json::to_value(request()).expect("serialize review create request");
+        value["resultConstraints"] = Value::Null;
+        let explicit_null: ReviewCreateRequest =
+            serde_json::from_value(value).expect("deserialize explicit null result constraints");
+        assert_eq!(explicit_null.result_constraints, Some(Value::Null));
+
+        let omitted: ReviewCreateRequest = serde_json::from_value(json!({
+            "kind": "registry-correction",
+            "subject": {
+                "source": "registry",
+                "type": "change-request",
+                "id": "proposal-7",
+                "version": "3",
+                "digest": ContentDigest::for_bytes(b"proposal").to_string()
+            },
+            "requesterReference": "source-request-7",
+            "context": {
+                "strategy": "source",
+                "binding": {"reference": "proposal-7"}
+            }
+        }))
+        .expect("deserialize omitted result constraints");
+        assert_eq!(omitted.result_constraints, None);
     }
 
     #[test]

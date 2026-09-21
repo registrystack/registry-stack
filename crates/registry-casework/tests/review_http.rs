@@ -28,13 +28,13 @@ use registry_casework_core::{
     ReviewResult, ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskPage,
     ReviewerDecisionKind, SourceAdapter, SourceAdapterError, SourceBinding, SourceContextBinding,
     SourceReceipt, SubjectBinding, SubjectRef, TransitionHint, CASEWORK_PROFILE_HEADER,
-    SOURCE_PROFILE_HEADER,
+    SOURCE_PROFILE_HEADER, VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::{oidc_verifier_config, MockIdp};
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio_postgres::NoTls;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -1448,6 +1448,46 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
     };
 
     let producer_token = token(&idp);
+    // An explicit JSON null must not be silently treated as an omitted field:
+    // the protocol keeps it present so check() rejects the non-object shape.
+    let mut null_constraints_body =
+        serde_json::to_value(&request).expect("serialize null-constraints request");
+    null_constraints_body["requesterReference"] = json!("answer-null-constraints");
+    null_constraints_body["resultConstraints"] = Value::Null;
+    let null_constraints = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/review-requests")
+                .header("authorization", format!("Bearer {producer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .header(CONTENT_TYPE, "application/json")
+                .header("idempotency-key", "create-null-constraints")
+                .body(Body::from(
+                    serde_json::to_vec(&null_constraints_body)
+                        .expect("serialize explicit-null constraints"),
+                ))
+                .expect("explicit-null constraints request"),
+        )
+        .await
+        .expect("explicit-null constraints response");
+    assert_eq!(null_constraints.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        null_constraints
+            .headers()
+            .get(VALIDATION_PATH_HEADER)
+            .is_none(),
+        "the protocol rejects a non-object shape without structured detail"
+    );
+    let null_constraints_problem: Value = serde_json::from_slice(
+        &to_bytes(null_constraints.into_body(), 32 * 1024)
+            .await
+            .expect("bounded explicit-null constraints problem"),
+    )
+    .expect("explicit-null constraints problem JSON");
+    assert_eq!(null_constraints_problem["code"], "request.invalid");
+
     let created = app
         .clone()
         .oneshot(create_http_request(&request, Some(&producer_token)))
@@ -1632,6 +1672,54 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
         .await
         .expect("claim standalone answer response");
     assert_eq!(claimed.status(), StatusCode::OK);
+
+    let null_result = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/review-tasks/{task_id}/decisions"))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(CONTENT_TYPE, "application/json")
+                .header("if-match", "\"2\"")
+                .header("idempotency-key", "answer-null-result")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "decision": {
+                            "type": "answer",
+                            "outcome": "found",
+                            "result": null
+                        }
+                    }))
+                    .expect("serialize explicit-null result"),
+                ))
+                .expect("explicit-null result request"),
+        )
+        .await
+        .expect("explicit-null result response");
+    assert_eq!(null_result.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        null_result
+            .headers()
+            .get(VALIDATION_PATH_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("$.result")
+    );
+    assert_eq!(
+        null_result
+            .headers()
+            .get(VALIDATION_REASON_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("object_required")
+    );
+    let null_result_problem: Value = serde_json::from_slice(
+        &to_bytes(null_result.into_body(), 32 * 1024)
+            .await
+            .expect("bounded explicit-null result problem"),
+    )
+    .expect("explicit-null result problem JSON");
+    assert_eq!(null_result_problem["code"], "request.invalid");
 
     let decision = ReviewTaskDecisionRequest {
         decision: ReviewerDecisionKind::Answer {

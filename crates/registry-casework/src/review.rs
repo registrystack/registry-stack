@@ -7,14 +7,14 @@ use registry_casework_core::{
     ContentDigest, DelegateRequest, EphemeralCredential, HolidaySetDocument, IssuerPrincipal,
     PolicyBinding, ReminderOccurrence, ReviewAccountabilityRecord, ReviewCancelRequest,
     ReviewCancelResponse, ReviewClockCorrelation, ReviewClockOccurrence, ReviewClockState,
-    ReviewCreateRequest, ReviewHistoryAudience, ReviewHistoryEntry, ReviewHistoryPage,
-    ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewProgress, ReviewRequestAccepted,
-    ReviewRequestLifecycle, ReviewRequestView, ReviewResult, ReviewResultFeedEntry,
-    ReviewResultFeedPage, ReviewResultStatus, ReviewSettlement, ReviewSourceBindingStatus,
-    ReviewSourceProjection, ReviewStagePolicy, ReviewTaskContext, ReviewTaskContextData,
-    ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage, ReviewTransition, ReviewerDecision,
-    ReviewerDecisionKind, ReviewerTask, ReviewerTaskState, SourceAdapterError,
-    SourceContextBinding, StepOccurrence, SubjectBinding, SubjectRef,
+    ReviewCreateRequest, ReviewDecisionError, ReviewDecisionValidationError, ReviewHistoryAudience,
+    ReviewHistoryEntry, ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest,
+    ReviewProgress, ReviewRequestAccepted, ReviewRequestLifecycle, ReviewRequestView, ReviewResult,
+    ReviewResultFeedEntry, ReviewResultFeedPage, ReviewResultStatus, ReviewSettlement,
+    ReviewSourceBindingStatus, ReviewSourceProjection, ReviewStagePolicy, ReviewTaskContext,
+    ReviewTaskContextData, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage, ReviewTransition,
+    ReviewValidationError, ReviewerDecision, ReviewerDecisionKind, ReviewerTask, ReviewerTaskState,
+    SourceAdapterError, SourceContextBinding, StepOccurrence, SubjectBinding, SubjectRef,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -76,6 +76,8 @@ pub enum ReviewRuntimeError {
     IdempotencyExpired,
     #[error("the review input is invalid")]
     Invalid,
+    #[error(transparent)]
+    Validation(ReviewValidationError),
     #[error("stored review state is invalid")]
     Corrupt,
     #[error("a source profile is required for source-context review work")]
@@ -99,6 +101,13 @@ impl From<tokio_postgres::Error> for ReviewRuntimeError {
 impl From<serde_json::Error> for ReviewRuntimeError {
     fn from(error: serde_json::Error) -> Self {
         Self::Store(StoreError::Json(error))
+    }
+}
+
+fn review_validation_error(error: ReviewDecisionValidationError) -> ReviewRuntimeError {
+    match error {
+        ReviewDecisionValidationError::Structured(error) => ReviewRuntimeError::Validation(error),
+        ReviewDecisionValidationError::Policy(_) => ReviewRuntimeError::Corrupt,
     }
 }
 
@@ -220,7 +229,7 @@ impl CaseworkService {
                 registry_casework_core::ReviewContext::Submitted { snapshot: display },
             ) => snapshot
                 .validate_display(display)
-                .map_err(|_| ReviewRuntimeError::Invalid)?,
+                .map_err(review_validation_error)?,
             (
                 registry_casework_core::ReviewContextStrategy::Source,
                 registry_casework_core::ReviewContext::Source { .. },
@@ -230,7 +239,7 @@ impl CaseworkService {
         if let Some(constraints) = &request.result_constraints {
             snapshot
                 .validate_result_constraints(constraints)
-                .map_err(|_| ReviewRuntimeError::Invalid)?;
+                .map_err(review_validation_error)?;
         }
         let initiator = request.initiator.as_ref().map(|person| IssuerPrincipal {
             issuer: person.issuer.clone(),
@@ -3801,16 +3810,15 @@ impl PostgresStore {
         let transition =
             record_review_decision(&record.policy, &mut progress, &task, decision.clone())
                 .map_err(|error| match error {
-                    registry_casework_core::ReviewDecisionError::TaskNotHeld
-                    | registry_casework_core::ReviewDecisionError::HolderMismatch => {
+                    ReviewDecisionError::TaskNotHeld | ReviewDecisionError::HolderMismatch => {
                         ReviewRuntimeError::TaskNotHeld
                     }
-                    registry_casework_core::ReviewDecisionError::DuplicateReviewer
-                    | registry_casework_core::ReviewDecisionError::InitiatorExcluded
-                    | registry_casework_core::ReviewDecisionError::PreviousStageReviewerExcluded
-                    | registry_casework_core::ReviewDecisionError::ProfileNotEligible => {
-                        ReviewRuntimeError::Forbidden
-                    }
+                    ReviewDecisionError::DuplicateReviewer
+                    | ReviewDecisionError::InitiatorExcluded
+                    | ReviewDecisionError::PreviousStageReviewerExcluded
+                    | ReviewDecisionError::ProfileNotEligible => ReviewRuntimeError::Forbidden,
+                    ReviewDecisionError::Validation(error) => review_validation_error(error),
+                    ReviewDecisionError::Policy(_) => ReviewRuntimeError::Corrupt,
                     _ => ReviewRuntimeError::Invalid,
                 })?;
         let (decision_name, outcome, result, reason) = decision_columns(&decision.decision);

@@ -1820,6 +1820,7 @@ impl From<ReviewRuntimeError> for HttpError {
             ReviewRuntimeError::IdempotencyConflict => Self::IdempotencyKeyReused,
             ReviewRuntimeError::IdempotencyExpired => Self::IdempotencyExpired,
             ReviewRuntimeError::Invalid => Self::Invalid,
+            ReviewRuntimeError::Validation(validation) => Self::Validation(validation),
             ReviewRuntimeError::Corrupt => Self::Internal,
             ReviewRuntimeError::Store(error) => error.into(),
         }

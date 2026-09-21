@@ -29,10 +29,10 @@ use registry_casework_core::{
     ReviewHistoryAudience, ReviewKindPolicy, ReviewKindPurpose, ReviewNoteRequest,
     ReviewOutcomePolicy, ReviewOutcomeSettlement, ReviewProducerPolicy, ReviewRequestLifecycle,
     ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskDraftInput,
-    ReviewTransition, ReviewerDecisionKind, ReviewerTaskState, SourceAdapter, SourceAdapterError,
-    SourceBinding, SourceContextBinding, SourceReceipt, SubjectBinding, SubjectClockAnchor,
-    SubjectClockCompletion, SubjectClockPause, SubjectRef, TransitionHint, WorkingDaysAfter,
-    WorkingWeekday, MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES,
+    ReviewTransition, ReviewValidationReason, ReviewerDecisionKind, ReviewerTaskState,
+    SourceAdapter, SourceAdapterError, SourceBinding, SourceContextBinding, SourceReceipt,
+    SubjectBinding, SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause, SubjectRef,
+    TransitionHint, WorkingDaysAfter, WorkingWeekday, MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
@@ -3409,7 +3409,9 @@ async fn prior_stage_identity_and_invalid_structured_result_emit_nothing() {
                 "invalid-correction",
             )
             .await,
-        Err(ReviewRuntimeError::Invalid)
+        Err(ReviewRuntimeError::Validation(error))
+            if error.path == "$.result"
+                && error.reason == ReviewValidationReason::ResultRequired
     ));
     for table in [
         "casework_review_decisions",
