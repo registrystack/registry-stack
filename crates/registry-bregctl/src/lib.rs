@@ -7863,16 +7863,27 @@ fn explain_change_request_planner(
 }
 
 fn explain_routes(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
+    // The explain payload mixes two record shapes in one array (entity routes and
+    // action routes, which share no field), so every record needs an explicit `kind`
+    // discriminator. It is distinct from `actionRouteKind`, which says which action
+    // route a record is rather than which shape it has. The field lives here, not on
+    // `CompiledRoute` or `CompiledActionRoute`: both are `deny_unknown_fields` types
+    // that round-trip through package inventories, and `CompiledActionRoute` is also
+    // byte-compared as the generated `compiled/actions.json`.
     let mut value = serde_json::to_value(compiled.routes())?;
-    if compiled.actions().routes.is_empty() {
-        return Ok(value);
-    }
     let routes = value
         .get_mut("routes")
         .and_then(Value::as_array_mut)
         .expect("compiled routes serialize with a routes array");
+    for route in routes.iter_mut() {
+        route
+            .as_object_mut()
+            .expect("compiled routes serialize as objects")
+            .insert("kind".to_string(), Value::from("entity"));
+    }
     routes.extend(compiled.actions().routes.iter().map(|route| {
         json!({
+            "kind": "action",
             "id": route.id,
             "actionId": route.action_id,
             "actionRouteKind": action_route_kind_wire_name(route.kind),

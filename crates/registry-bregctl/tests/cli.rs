@@ -768,6 +768,59 @@ accessProfiles:
 "#
 }
 
+/// Unlike `action_fixture`, whose access profiles grant only action permissions
+/// (see `explain_access_includes_action_only_grants_and_target_reach`), this project
+/// grants both an entity-level operation and an action invocation, so `explain routes`
+/// serves a genuinely mixed list: entity routes and action routes side by side.
+fn mixed_entity_and_action_route_fixture() -> &'static [u8] {
+    br#"apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: mixed-route-fixture
+  version: 1
+  defaultLanguage: en
+  canonicalBaseIri: https://mixed-route-fixture.example.test
+entities:
+  - id: household
+    primaryDataset: test-dataset
+    route: households
+    mutationMode: mutable
+    fields:
+      - {id: household-code, apiName: householdCode, type: string, required: true, maxLength: 64, classification: internal}
+actions:
+  - id: archive-household
+    inputs:
+      - {id: household, apiName: householdId, type: reference, target: household, required: true, classification: restricted}
+      - {id: household-code, apiName: householdCode, type: string, required: true, maxLength: 64, classification: internal}
+    effects:
+      - id: household
+        target: {fromField: household}
+        operation: patch
+        set:
+          household-code: {fromField: household-code}
+accessProfiles:
+  - id: household-reader
+    default: true
+    principalClaim: registry_principal
+    requiredPurposes: [household-read]
+    permissions:
+      - entity: household
+        rowBoundaries: []
+        operations: [get, list]
+        readableFields: [household-code]
+        writableFields: []
+  - id: household-archiver
+    principalClaim: registry_principal
+    requiredPurposes: [household-archive]
+    permissions:
+      - action: archive-household
+        operations: [invoke]
+        targets:
+          - {entity: household, rowBoundaries: []}
+        results: [household]
+"#
+}
+
 fn packaging_project() -> (TestProject, PrivateJwk, String) {
     let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384)
         .expect("production package signing key generates");
@@ -2717,6 +2770,7 @@ fn explain_routes_preserves_action_free_output_shape() {
     let routes = explanation["routes"].as_array().expect("routes are listed");
     assert!(!routes.is_empty());
     assert!(routes.iter().all(|route| route.get("actionId").is_none()));
+    assert!(routes.iter().all(|route| route["kind"] == "entity"));
 }
 
 #[test]
@@ -2733,9 +2787,19 @@ fn explain_routes_includes_served_immediate_action_routes() {
 
     assert!(output.status.success(), "{output:?}");
     let explanation = json_stdout(&output)["explanation"].clone();
-    let action_routes = explanation["routes"]
-        .as_array()
-        .expect("routes are listed")
+    let all_routes = explanation["routes"].as_array().expect("routes are listed");
+    assert!(!all_routes.is_empty());
+    // Every route must carry a discriminator that matches which shape it actually is:
+    // entity routes carry entityId and no actionId, action routes carry actionId and no
+    // entityId, and no route is missing both or carrying both.
+    assert!(all_routes.iter().all(|route| {
+        match (route.get("entityId"), route.get("actionId")) {
+            (Some(_), None) => route["kind"] == "entity",
+            (None, Some(_)) => route["kind"] == "action",
+            (None, None) | (Some(_), Some(_)) => false,
+        }
+    }));
+    let action_routes = all_routes
         .iter()
         .filter(|route| route["actionId"] == "register-household-contact")
         .collect::<Vec<_>>();
@@ -2744,7 +2808,8 @@ fn explain_routes_includes_served_immediate_action_routes() {
         let profiles = route["accessProfiles"]
             .as_array()
             .expect("action route lists access profiles");
-        route["actionRouteKind"] == "invoke"
+        route["kind"] == "action"
+            && route["actionRouteKind"] == "invoke"
             && route["path"] == "/v1/actions/register-household-contact"
             && route["operation"] == "invoke"
             && route["requiresIdempotencyKey"] == true
@@ -2754,7 +2819,10 @@ fn explain_routes_includes_served_immediate_action_routes() {
             && route["defaultAccessProfile"] == "contact-registrar"
     }));
     assert!(action_routes.iter().any(|route| {
-        route["actionRouteKind"] == "target_conditions"
+        // Pin that `kind` is a record-shape discriminator distinct from `actionRouteKind`:
+        // a target_conditions route is still `kind: "action"`.
+        route["kind"] == "action"
+            && route["actionRouteKind"] == "target_conditions"
             && route["path"] == "/v1/actions/register-household-contact/target-conditions"
             && route["operation"] == "invoke"
             && route["requiresIdempotencyKey"] == false
@@ -2763,6 +2831,46 @@ fn explain_routes_includes_served_immediate_action_routes() {
     assert!(!rendered.contains("private_claim_name"));
     assert!(!rendered.contains("other_private_claim"));
     assert!(!rendered.contains("rowBoundaries"));
+}
+
+#[test]
+fn explain_routes_discriminates_mixed_entity_and_action_route_shapes() {
+    let project = TestProject::from_registry_source(mixed_entity_and_action_route_fixture());
+
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "explain",
+        "routes",
+        project.path().to_str().expect("path is UTF-8"),
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    let explanation = json_stdout(&output)["explanation"].clone();
+    let routes = explanation["routes"].as_array().expect("routes are listed");
+
+    // Prove the fixture actually mixes both record shapes; otherwise the assertions
+    // below would pass vacuously.
+    let entity_routes = routes
+        .iter()
+        .filter(|route| route.get("entityId").is_some())
+        .count();
+    let action_routes = routes
+        .iter()
+        .filter(|route| route.get("actionId").is_some())
+        .count();
+    assert!(entity_routes > 0, "expected at least one entity route");
+    assert!(action_routes > 0, "expected at least one action route");
+    assert_eq!(entity_routes + action_routes, routes.len());
+
+    for route in routes {
+        match (route.get("entityId"), route.get("actionId")) {
+            (Some(_), None) => assert_eq!(route["kind"], "entity", "{route:?}"),
+            (None, Some(_)) => assert_eq!(route["kind"], "action", "{route:?}"),
+            (None, None) => panic!("route has neither entityId nor actionId: {route:?}"),
+            (Some(_), Some(_)) => panic!("route carries both entityId and actionId: {route:?}"),
+        }
+    }
 }
 
 #[test]
