@@ -271,7 +271,7 @@ class IngestionRunTests(unittest.TestCase):
         outcome = self.client.list_ingestion_runs(
             "people",
             limit=25,
-            after="cursor+/=",
+            after=RUN_ID,
             status="open",
             input_digest=INPUT_DIGEST,
             access_profile="importer.v1",
@@ -297,6 +297,11 @@ class IngestionRunTests(unittest.TestCase):
         self.assertEqual(raised.exception.kind, "invalid_request")
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.list_ingestion_runs("people", input_digest="xyz")
+        self.assertEqual(raised.exception.kind, "invalid_request")
+        # The engine parses the after pair as a canonical run id, so a cursor
+        # it could never issue is refused before it is sent.
+        with self.assertRaises(BaseRegistryClientError) as raised:
+            self.client.list_ingestion_runs("people", after="cursor+/=")
         self.assertEqual(raised.exception.kind, "invalid_request")
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.list_ingestion_runs("people", access_profile="x\n")

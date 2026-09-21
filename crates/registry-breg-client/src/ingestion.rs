@@ -53,7 +53,6 @@ pub const MAXIMUM_BREG_INGESTION_CHUNK_ITEMS: usize = 100;
 const SHA256_HEX_LENGTH: usize = 64;
 const MAXIMUM_BOUND_TEXT_BYTES: usize = 256;
 const MAXIMUM_TIMESTAMP_BYTES: usize = 128;
-const MAXIMUM_CURSOR_BYTES: usize = 4096;
 const MAXIMUM_SNAPSHOT_REFERENCE_BYTES: usize = 4 * 1024;
 /// Runs are operator-driven and few; one page stays explicitly bounded.
 const MAXIMUM_RUN_PAGE_LIMIT: u32 = 100;
@@ -550,7 +549,9 @@ impl BRegIngestionRunPage {
         self.has_more
     }
 
-    /// The opaque cursor for the next page, present exactly when more runs remain.
+    /// The cursor for the next page, present exactly when more runs remain:
+    /// a canonical run id the next [`BRegIngestionRunListQuery::after`]
+    /// continues after.
     #[must_use]
     pub fn next_after(&self) -> Option<&str> {
         self.next_after.as_deref()
@@ -568,7 +569,10 @@ impl BRegIngestionRunPage {
         let has_more = take_member(object, "hasMore")?.as_bool().ok_or(refuse)?;
         let next_after = match take_member(object, "nextAfter")? {
             Value::Null => None,
-            value => Some(cursor_text(value.as_str().ok_or(refuse)?)?),
+            value => {
+                let cursor = value.as_str().ok_or(refuse)?;
+                Some(canonical_run_cursor(cursor).ok_or(refuse)?)
+            }
         };
         if has_more != next_after.is_some() || !object.is_empty() {
             return Err(refuse);
@@ -1117,10 +1121,13 @@ impl BRegIngestionRunListQuery {
         Ok(self)
     }
 
-    /// Continue after the opaque cursor a previous page returned.
+    /// Continue after the canonical run-id cursor a previous page returned.
+    /// The engine parses the `after` pair as a canonical lowercase UUID, so
+    /// any other text is refused here rather than encoded into a request the
+    /// endpoint would always refuse.
     pub fn after(mut self, value: impl Into<String>) -> Result<Self, BRegIngestionError> {
         let value = value.into();
-        self.after = Some(cursor_text(&value)?);
+        self.after = Some(canonical_run_cursor(&value).ok_or(BRegIngestionError::InvalidCursor)?);
         Ok(self)
     }
 
@@ -1231,14 +1238,14 @@ fn bounded_text(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
-fn cursor_text(value: &str) -> Result<String, BRegIngestionError> {
-    if value.is_empty()
-        || value.len() > MAXIMUM_CURSOR_BYTES
-        || value.bytes().any(|byte| byte.is_ascii_control())
-    {
-        return Err(BRegIngestionError::InvalidCursor);
-    }
-    Ok(value.to_owned())
+/// One listing cursor in the canonical lowercase run-id form the engine
+/// parses an `after` pair with, so a cursor this client issues is one the
+/// endpoint accepts and a cursor it returns is one this client can reuse.
+fn canonical_run_cursor(value: &str) -> Option<String> {
+    Uuid::parse_str(value)
+        .ok()
+        .filter(|identifier| identifier.to_string() == value)
+        .map(|identifier| identifier.to_string())
 }
 
 fn bound_member(value: impl Into<String>) -> Result<String, BRegIngestionError> {
@@ -1803,12 +1810,12 @@ mod tests {
             .is_err());
         }
 
-        let mut page = json!({"runs": [run_wire()], "hasMore": true, "nextAfter": "cursor+/="});
+        let mut page = json!({"runs": [run_wire()], "hasMore": true, "nextAfter": RUN_ID});
         let decoded = BRegIngestionRunPage::from_members(page.as_object_mut().expect("object"))
             .expect("the page decodes");
         assert_eq!(decoded.runs().len(), 1);
         assert!(decoded.has_more());
-        assert_eq!(decoded.next_after(), Some("cursor+/="));
+        assert_eq!(decoded.next_after(), Some(RUN_ID));
 
         for mutate in [
             |wire: &mut Value| wire["hasMore"] = json!(false),
@@ -2190,7 +2197,7 @@ mod tests {
             .unwrap()
             .limit(25)
             .unwrap()
-            .after("cursor+/=")
+            .after(RUN_ID)
             .unwrap()
             .status(BRegIngestionRunStatus::Open)
             .input_digest(INPUT_DIGEST)
@@ -2200,7 +2207,7 @@ mod tests {
             vec![
                 ("accessProfile".to_owned(), "importer.v1".to_owned()),
                 ("limit".to_owned(), "25".to_owned()),
-                ("after".to_owned(), "cursor+/=".to_owned()),
+                ("after".to_owned(), RUN_ID.to_owned()),
                 ("status".to_owned(), "open".to_owned()),
                 ("inputDigest".to_owned(), INPUT_DIGEST.to_owned()),
             ]
@@ -2230,6 +2237,46 @@ mod tests {
             BRegIngestionRunListQuery::default().access_profile("profile\n"),
             Err(BRegIngestionError::InvalidBinding)
         );
+    }
+
+    #[test]
+    fn list_cursors_are_canonical_run_ids() {
+        // The engine parses an `after` pair as a canonical lowercase run id,
+        // so a cursor it could never issue is refused where the query is
+        // built instead of encoded into a request the endpoint would always
+        // refuse.
+        for cursor in ["cursor+/=", "CURSOR-UPPER", "", "cursor\n"] {
+            assert_eq!(
+                BRegIngestionRunListQuery::default().after(cursor),
+                Err(BRegIngestionError::InvalidCursor),
+                "the cursor {cursor} is not a canonical run id"
+            );
+        }
+        let query = BRegIngestionRunListQuery::default()
+            .after(RUN_ID)
+            .expect("a canonical run id is a valid cursor");
+        assert_eq!(
+            query.query_pairs(),
+            vec![("after".to_owned(), RUN_ID.to_owned())]
+        );
+    }
+
+    #[test]
+    fn page_cursors_are_canonical_run_ids() {
+        // A nextAfter the client could never reuse in a later query is a
+        // body mismatch, never a cursor to persist.
+        for next_after in ["cursor+/=", "CURSOR-UPPER", ""] {
+            let mut page = json!({"runs": [], "hasMore": true, "nextAfter": next_after});
+            assert_eq!(
+                BRegIngestionRunPage::from_members(page.as_object_mut().expect("object")),
+                Err(BRegIngestionError::InvalidResponse),
+                "the cursor {next_after} is not a canonical run id"
+            );
+        }
+        let mut page = json!({"runs": [run_wire()], "hasMore": true, "nextAfter": RUN_ID});
+        let decoded = BRegIngestionRunPage::from_members(page.as_object_mut().expect("object"))
+            .expect("a canonical run id decodes as the page cursor");
+        assert_eq!(decoded.next_after(), Some(RUN_ID));
     }
 
     #[test]

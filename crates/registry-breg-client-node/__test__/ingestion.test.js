@@ -242,7 +242,7 @@ test('listIngestionRuns sends contract filters in order and returns the page', a
   const outcome = await client.listIngestionRuns('people', {
     accessProfile: 'importer.v1',
     limit: 25,
-    after: 'cursor+/=',
+    after: RUN_ID,
     status: 'open',
     inputDigest: INPUT_DIGEST,
   });
@@ -263,6 +263,11 @@ test('listIngestionRuns sends contract filters in order and returns the page', a
     error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
   ));
   await assert.rejects(client.listIngestionRuns('people', { inputDigest: 'xyz' }), (error) => (
+    error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
+  ));
+  // The engine parses the after pair as a canonical run id, so a cursor it
+  // could never issue is refused before it is sent.
+  await assert.rejects(client.listIngestionRuns('people', { after: 'cursor+/=' }), (error) => (
     error instanceof BaseRegistryClientError && error.kind === 'invalid_request'
   ));
   await assert.rejects(client.listIngestionRuns('people', { accessProfile: 'x\n' }), (error) => (
