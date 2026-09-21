@@ -499,6 +499,8 @@ pub(super) fn check(project: &Path, production: bool, deny_findings: bool) -> Re
             "sourceDescription": source_description,
             "queueTarget": {"clock":"first_observed_elapsed", "elapsed": request.target.as_ref().map(|target| target.after.elapsed.as_str()), "worker":false},
             "inbox": inbox,
+            "reviewKinds": policy.review_kinds,
+            "reviewProducers": policy.review_producers,
             "limits": {"sources":policy.sources.len(), "queues":policy.queues.len()}
         },
         "networkAccess": false,
@@ -2069,5 +2071,92 @@ mod tests {
 
         let error = format!("{:#}", explain(&project).unwrap_err());
         assert!(error.contains("missing-review-kind"), "{error}");
+    }
+
+    #[test]
+    fn explain_reports_the_review_model_queues_and_access_profiles() {
+        let (_root, project) = write_offline_project(CASEWORK_YAML, BREG_SOURCE_DESCRIPTION);
+
+        let explained = explain(&project).unwrap();
+
+        assert_eq!(explained["queues"][0]["id"], "corrections");
+        assert_eq!(explained["queues"][0]["label"], "Licence corrections");
+        assert_eq!(
+            explained["accessProfiles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|profile| profile["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "staff",
+                "supervisor",
+                "administrator",
+                "integration-requester"
+            ]
+        );
+        let kind = &explained["reviewKinds"][0];
+        assert_eq!(kind["id"], "scope-correction");
+        assert_eq!(kind["purpose"], "approval");
+        assert_eq!(kind["contextStrategy"], "source");
+        assert_eq!(kind["stages"][0]["queue"], "corrections");
+        assert_eq!(kind["stages"][0]["decidingProfiles"][0], "staff");
+        assert_eq!(kind["stages"][0]["requiredApprovals"], 1);
+    }
+
+    #[test]
+    fn explain_preserves_authored_stage_and_outcome_order() {
+        let two_stage_yaml = CASEWORK_YAML.replace(
+            "        requiredApprovals: 1\n    retention:\n",
+            "        requiredApprovals: 1\n      - id: endorsement\n        queue: corrections\n        decidingProfiles: [supervisor]\n        requiredApprovals: 2\n        excludePreviousStageReviewers: true\n    outcomes:\n      - id: refused\n        label: Refused\n        settlement: rejected\n        reasonRequired: true\n      - id: more-detail\n        label: More detail needed\n        settlement: changes_requested\n        reasonRequired: true\n    retention:\n",
+        );
+        let (_root, project) = write_offline_project(&two_stage_yaml, BREG_SOURCE_DESCRIPTION);
+
+        let kind = explain(&project).unwrap()["reviewKinds"][0].clone();
+
+        assert_eq!(
+            kind["stages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|stage| stage["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["review", "endorsement"],
+            "stage order decides who reviews first and must survive the report"
+        );
+        assert_eq!(kind["stages"][1]["excludePreviousStageReviewers"], true);
+        assert_eq!(
+            kind["outcomes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|outcome| outcome["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["refused", "more-detail"]
+        );
+        assert_eq!(kind["outcomes"][1]["settlement"], "changes_requested");
+    }
+
+    #[test]
+    fn source_backed_check_reports_review_kinds_and_their_producers() {
+        let (_root, project) = write_offline_project(CASEWORK_YAML, BREG_SOURCE_DESCRIPTION);
+
+        let effective = check(&project, false, false).unwrap()["effective"].clone();
+
+        assert_eq!(effective["sourceId"], "professional-licences");
+        assert_eq!(effective["reviewKinds"][0]["id"], "scope-correction");
+        assert_eq!(
+            effective["reviewKinds"][0]["stages"][0]["queue"],
+            "corrections"
+        );
+        assert_eq!(effective["reviewProducers"][0]["id"], "registry-breg");
+        assert_eq!(
+            effective["reviewProducers"][0]["kinds"][0],
+            "scope-correction"
+        );
+        assert_eq!(
+            effective["reviewProducers"][0]["sourceNamespaces"][0],
+            "professional-licences"
+        );
     }
 }
