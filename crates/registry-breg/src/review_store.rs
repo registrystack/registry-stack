@@ -1084,8 +1084,11 @@ impl ReviewWorker {
                             None => false,
                         }
                     };
-                    if housekeeping_worked || application_worked {
-                        true
+                    // Authority recovery keeps a fair turn on every iteration:
+                    // a sustained application backlog must not starve
+                    // submissions, cancellations, result feeds, and polls.
+                    let authority_worked = if housekeeping_worked {
+                        false
                     } else {
                         match &self.authorities {
                             Some(authorities) => {
@@ -1093,7 +1096,8 @@ impl ReviewWorker {
                             }
                             None => false,
                         }
-                    }
+                    };
+                    housekeeping_worked || application_worked || authority_worked
                 }
                 Err(_) => false,
             };

@@ -22,7 +22,7 @@ use registry_breg::review_store::{
     receive_completion, reconcile_result, run_one_cancellation, run_one_submission,
     run_review_application_once_for_test, run_review_authority_once_for_test,
     schedule_cancellation_for_test, verify_retained_bindings, ReviewAuthorityClient,
-    ReviewAuthorityRegistry, ReviewExecutorClient,
+    ReviewAuthorityRegistry, ReviewExecutorClient, ReviewExecutorRegistry, ReviewWorker,
 };
 use registry_review_client::{
     submission_digest, BearerToken, ContentDigest, PolicyBinding, ReviewAuth, ReviewClient,
@@ -4382,5 +4382,168 @@ async fn unavailable_authority_does_not_starve_another_authoritys_result() {
     assert!(retry);
 
     result_server_b.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn sustained_application_backlog_does_not_starve_authority_result_polls() {
+    let database = TestDatabase::create(3).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT USAGE ON SCHEMA registry_internal TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime review schema access");
+
+    // One accepted submission whose result is only discoverable through the
+    // counting authority below.
+    let request_id = Uuid::from_u128(0xe6);
+    seed_submission(
+        &database.admin,
+        request_id,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    let accepting = Arc::new(AuthorityState {
+        producer_id: "producer-a",
+        expected_token: "Bearer token-a",
+        expected_profile: "producer-profile-a",
+        accepted_request_id: Uuid::from_u128(0xe7),
+        requests: AtomicUsize::new(0),
+        gate: None,
+    });
+    let (endpoint, server) = serve_authority(accepting).await;
+    assert!(run_one_submission(
+        &database.admin,
+        "casework-a",
+        &authority_client(endpoint, "producer-profile-a"),
+        "producer-profile-a",
+        &BearerToken::new("token-a").unwrap(),
+        TEST_LEASE_SECONDS,
+    )
+    .await
+    .expect("accept the review submission"));
+    server.abort();
+    let accepted: Value = database
+        .admin
+        .query_one(
+            "SELECT accepted_binding
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("accepted authority binding")
+        .get(0);
+    let (result_endpoint, result_state, result_server) =
+        serve_available_result_authority(accepted).await;
+    let counting = Arc::new(
+        ReviewAuthorityClient::new(
+            "casework-a".to_owned(),
+            authority_client(result_endpoint, "producer-profile-a"),
+            Arc::new(registry_platform_httputil::StaticToken::new("token-a".to_owned()).unwrap()),
+            "producer-profile-a".to_owned(),
+            "producer-a".to_owned(),
+            7,
+            None,
+            None,
+        )
+        .expect("counting review authority"),
+    );
+    let authorities = Arc::new(
+        ReviewAuthorityRegistry::new(BTreeMap::from([("casework-a".to_owned(), counting)]))
+            .expect("authority registry"),
+    );
+
+    // A backlog of distinct due application jobs, each failing slowly, keeps
+    // the application queue continuously due: every worker iteration finds
+    // application work while the backlog drains.
+    const BACKLOG_JOBS: u64 = 30;
+    let mut job_ids = Vec::new();
+    for _ in 0..BACKLOG_JOBS {
+        let job_id = Uuid::new_v4();
+        seed_application_job(&database.admin, Uuid::new_v4(), Uuid::new_v4(), job_id).await;
+        job_ids.push(job_id);
+    }
+    let slow_source = Router::new().route(
+        "/v1/records/requests/{request_id}",
+        get(|| async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            StatusCode::SERVICE_UNAVAILABLE
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+    let slow_endpoint: reqwest::Url = format!("http://{}/", listener.local_addr().unwrap())
+        .parse()
+        .unwrap();
+    let slow_server = tokio::spawn(async move { axum::serve(listener, slow_source).await });
+    let executors = Arc::new(
+        ReviewExecutorRegistry::new(BTreeMap::from([(
+            "registry-automatic".to_owned(),
+            Arc::new(executor(slow_endpoint)),
+        )]))
+        .expect("executor registry"),
+    );
+
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let worker = ReviewWorker::new(pool.clone(), Some(authorities), Some(executors));
+    let worker_task = tokio::spawn(worker.run(shutdown_rx));
+
+    // Wait until the backlog is demonstrably draining, then require that the
+    // authority result poll has already run: interleaving must not wait for
+    // the application queue to empty.
+    let mut attempts = 0;
+    for _ in 0..200 {
+        attempts = database
+            .admin
+            .query_one(
+                "SELECT coalesce(sum(attempt_count),0)
+                   FROM registry_internal.registry_request_application_jobs
+                  WHERE job_id=ANY($1)",
+                &[&job_ids],
+            )
+            .await
+            .expect("backlog application attempts")
+            .get::<_, i64>(0) as i32;
+        if attempts >= 5 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let lookups = result_state.lookups.load(Ordering::SeqCst);
+    shutdown_tx.send(true).expect("signal worker shutdown");
+    worker_task.await.expect("worker joins");
+    slow_server.abort();
+    result_server.abort();
+    assert!(
+        attempts >= 5,
+        "the application backlog must be draining for the observation to count"
+    );
+    assert!(
+        lookups >= 1,
+        "authority result polls were starved while a sustained application backlog drained"
+    );
+
+    drop(pool);
     database.cleanup().await;
 }
