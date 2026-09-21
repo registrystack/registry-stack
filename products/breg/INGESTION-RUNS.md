@@ -43,7 +43,11 @@ written. Every item carries the run's announced operation and the closed
 create-or-patch batch item shape, and the maintained clients refuse an item
 outside that shape before the chunk encodes. The final chunk
 totals the announced item count exactly and binds the whole-input digest, so a
-run never completes on an underrun or a mixed-operation chunk. The ingestion
+run never completes on an underrun or a mixed-operation chunk. Admission keeps
+a run completable: after a chunk commits, the items remaining must fit the
+remaining chunks, at least one per chunk and at most their combined
+`maximumItems`, so a chunk that would strand the run open is refused as a
+chunk mismatch beside the other window checks. The ingestion
 routes take no `Idempotency-Key` header: the server derives the attempt key
 from the run id, input digest, chunk index, and chunk digest, so resubmitting
 the exact chunk replays the original receipt instead of writing again. A
@@ -75,7 +79,11 @@ package or schema binding no longer matches the active package reports
 `blocked` with reason `activePackageChanged`; the report and the blocked
 transition answer to the binding the database holds active, so a serving
 instance a successor activation has left stale reports and blocks the run the
-same way the successor does. A blocked run is retained and inspectable,
+same way the successor does. The blocking transition verifies it changed the
+run row before it records anything: a cancellation that commits while a block
+is parked leaves the run cancelled, answered as `run_not_open` with the
+cancellation's refused marker and no blocked audit record. A blocked run is
+retained and inspectable,
 and a successor run created under the new binding carries the work forward. A
 committed chunk replays its receipt in any run status, including blocked: the
 binding governs only chunks the checkpoint has not covered, and the replay is
@@ -99,13 +107,17 @@ same bound context every per-run operation enforces, so a changed profile,
 purpose, row-boundary, or grant context lists none of another context's runs
 even under the same principal. Reading one run owes the run the same
 admission, so a drifted context is refused with `ingestion.profile_mismatch`
-rather than shown the run's binding, digest, counts, or progress. Its status
+rather than shown the run's binding, digest, counts, or progress, and the
+read-run operation publishes that refusal in its response catalogue. Its status
 filter answers on the status a run document renders: after a successor
 package activation, `status=blocked` finds the stored-open runs the durable
 binding retired, and `status=open` returns only runs that still match the
 active binding. The page renders against the very binding its own filter
 read, so a package activation cannot fall between the filter and the
-rendering. Problem codes are
+rendering. Both surfaces answer only while the serving instance's durable
+identity is still active: a successor activation turns the read and the
+listing into `service.unavailable` until a current instance serves them, the
+same refusal the release and cancellation paths already owe. Problem codes are
 `ingestion.profile_mismatch`,
 `ingestion.run_not_open`, `ingestion.run_blocked`, `ingestion.chunk_mismatch`,
 and `ingestion.receipt_erased`, alongside the ordinary `request.invalid`,
@@ -130,7 +142,10 @@ authorized caller with, and it is erased when the record history it describes
 is erased, through the revision the erasure names: a receipt describing only
 later revisions of the same record survives. A later receipt read answers
 `410 ingestion.receipt_erased`; the chunk and its counts stay visible in the
-run.
+run. The release reads the stored receipt only inside its guarded
+transaction, after the registry lock: an erasure that commits while a release
+is parked on that lock answers `receipt_erased` and never the erased values,
+and writes no disclosure record for them.
 
 Over an entity with encrypted fields, a receipt stores the sealed field
 envelopes exactly as the ordinary batch route stores them, and every release
@@ -148,7 +163,10 @@ successor that revokes or renames a readable field drops that member from
 every later release, and a successor that retires a field while reusing its
 API name inherits none of its stored value, while the members the successor
 still grants keep serving, encrypted ones included. A live receipt whose row
-lost its map is refused as an outage. A member that still parses as a sealed envelope in a receipt
+lost its map is refused as an outage. The stored map's ceiling is derived
+from the compiled bounds rather than assumed: the contract's full per-entity
+field scale of identifier pairs at their 64-byte compiler limits, so a
+projection at the declared field scale commits. A member that still parses as a sealed envelope in a receipt
 stored under a package the database no longer holds active fails the release
 closed with `service.unavailable`, unless the active entity declares that
 member's field encrypted; a successor that retires the encryption itself
