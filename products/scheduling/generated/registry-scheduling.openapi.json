@@ -806,7 +806,7 @@
                 "const": "booking.duplicate-active"
               },
               "detail": {
-                "const": "An active booking already holds this party's duplicate key. Cancel or complete it before booking again."
+                "const": "An active booking already holds this party's duplicate key. Cancel it, or wait until it has passed, before booking again."
               },
               "status": {
                 "const": 409

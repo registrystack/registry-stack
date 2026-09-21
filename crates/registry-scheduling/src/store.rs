@@ -1176,6 +1176,7 @@ impl PostgresStore {
             &mut snapshot,
             offering,
             request.duplicate_key.as_deref(),
+            commitment.now,
         )
         .await?;
         // The caller lock is taken after the supply lock, never before: every
@@ -1288,6 +1289,7 @@ impl PostgresStore {
             &mut snapshot,
             offering,
             request.duplicate_key.as_deref(),
+            commitment.now,
         )
         .await?;
         guard_revisions(&transaction, &commitment).await?;
@@ -1619,6 +1621,7 @@ impl PostgresStore {
             &mut snapshot,
             offering,
             request.duplicate_key.as_deref(),
+            commitment.now,
         )
         .await?;
         let appointment = transaction
@@ -2396,11 +2399,18 @@ async fn lock_and_snapshot(
 /// may omit. The existing supply lock serializes this read with every writer
 /// for the offering's frozen supply; the supporting partial index keeps the
 /// lookup independent of the age or span of its openings.
+///
+/// A booking counts while its own time has not passed. The guard is there so
+/// one party holds one live booking per offering, and a booking that has
+/// already happened is not one: there is no completion transition, and
+/// cancellation closes at the cutoff, so an elapsed booking counted here would
+/// refuse that party the offering permanently.
 async fn include_active_duplicate(
     transaction: &deadpool_postgres::Transaction<'_>,
     snapshot: &mut LedgerSnapshot,
     offering: &registry_scheduling_core::OfferingPolicy,
     duplicate_key: Option<&str>,
+    now: DateTime<Utc>,
 ) -> Result<(), StoreError> {
     if offering.duplicate_active_key.is_none() {
         return Ok(());
@@ -2413,8 +2423,9 @@ async fn include_active_duplicate(
             "SELECT claim_id, offering, supply_id, kind, channel, occupied_start, \
              occupied_end, units, duplicate_key, hold_expires_at \
              FROM scheduling_claims \
-             WHERE state='active' AND kind='booking' AND offering=$1 AND duplicate_key=$2",
-            &[&offering.id, &duplicate_key],
+             WHERE state='active' AND kind='booking' AND offering=$1 AND duplicate_key=$2 \
+               AND occupied_end > $3",
+            &[&offering.id, &duplicate_key, &now],
         )
         .await?;
     for claim in snapshot_from_rows(rows).claims {

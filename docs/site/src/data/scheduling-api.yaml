@@ -3,7 +3,7 @@
   columns: [Code, Status, When]
   rows:
     - ['`authentication.refused`', '401', 'The bearer credential is missing, invalid, or expired. Sign in again.']
-    - ['`booking.duplicate-active`', '409', 'An active booking already holds this party''s duplicate key. Cancel or complete it before booking again.']
+    - ['`booking.duplicate-active`', '409', 'An active booking already holds this party''s duplicate key. Cancel it, or wait until it has passed, before booking again.']
     - ['`cancellation.cutoff-passed`', '409', 'The cancellation cutoff for this appointment has passed.']
     - ['`capability.unmatched`', '422', 'No backing member carries every capability the offering requires.']
     - ['`capacity.exhausted`', '409', 'The supply is fully committed for the requested interval. Choose another time.']
