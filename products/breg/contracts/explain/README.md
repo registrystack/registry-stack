@@ -88,8 +88,7 @@ Opaque nodes, in full:
 - `model.entities`, `model.physicalNames`, `model.package`,
   `model.manifestProjection`
 - `access.routes.entries[].*` other than `entityId`, `access.entities`,
-  `access.actions`, `access.rowReach`, `access.claimContract`,
-  `access.claimContractError`
+  `access.actions`, `access.rowReach`, `access.claimContract`
 - `AccessPreview.effectiveProfile`
 - `RoutesExplanation`'s entity-route half of `routes[]` (every field other
   than the injected `kind`)
@@ -107,13 +106,17 @@ Opaque nodes, in full:
 ## Compatibility promise
 
 `apiVersion` versions the payload as a whole, across all eight kinds. A
-change bumps it when it removes a pinned key, renames a pinned key, or
-changes a pinned key's type or enum member set. A change does not need a new
-`apiVersion` when it adds a new optional key to a pinned object, or when it
-changes content inside a node this contract declares opaque (adding,
-removing, or reshaping fields under `entities`, `application`,
-`fieldType`, and so on), since those nodes are not part of the pinned
-contract to begin with.
+change bumps it when it removes a pinned key, renames a pinned key, changes
+a pinned key's type or enum member set, or **adds any key to a pinned
+object**, optional or not. Adding a key is a breaking change here and
+nowhere else in the stack, because every pinned object seals itself with
+`additionalProperties: false`: a consumer holding this version's schema
+rejects a response carrying tomorrow's new key, so calling that addition
+compatible would be a promise the published schemas refuse to keep. A change
+does not need a new `apiVersion` when it changes content inside a node this
+contract declares opaque (adding, removing, or reshaping fields under
+`entities`, `application`, `fieldType`, and so on), since those nodes are
+not part of the pinned contract to begin with.
 
 Read that second half as a warning, not as a permission. A stable
 `apiVersion` is not a promise that the opaque nodes have not moved, and for a

@@ -58,12 +58,12 @@
       "description": "Compiled physical-name mapping. Passthrough of the compiled model; shape follows the runtime's physical-name projection and is outside this contract version."
     },
     "package": {
-      "type": "object",
-      "description": "Compiled package identity. Passthrough of the compiled model; shape follows the runtime's package projection and is outside this contract version."
+      "type": ["object", "null"],
+      "description": "Compiled package identity, or null when the project declares no package. Passthrough of the compiled model; shape follows the runtime's package projection and is outside this contract version."
     },
     "manifestProjection": {
-      "type": "object",
-      "description": "Registry Manifest projection of this registry. Passthrough of the compiled model; shape follows the runtime's manifest projection and is outside this contract version."
+      "type": ["object", "null"],
+      "description": "Registry Manifest projection of this registry, or null when the project declares none. Passthrough of the compiled model; shape follows the runtime's manifest projection and is outside this contract version."
     }
   }
 }
