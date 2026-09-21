@@ -56,6 +56,8 @@ SHARDS = {
         "registry-linkml",
     ),
     "casework": (
+        "registry-review-protocol",
+        "registry-review-client",
         "registry-casework-core",
         "registry-casework-breg",
         "registry-casework",

@@ -659,7 +659,7 @@ fn write_runtime_config(
     database_id: &str,
     database: &TestDatabase,
     idp: &MockIdp,
-    _registry: &CompiledRegistry,
+    registry: &CompiledRegistry,
 ) -> PathBuf {
     let secrets = root.join("secrets");
     fs::create_dir(&secrets).expect("pilot secret root creates");
@@ -669,6 +669,34 @@ fn write_runtime_config(
     );
     write_secret(&secrets.join("audit-key"), &[0x6b; 32]);
     write_secret(&secrets.join("cursor-key"), &[0x43; 32]);
+    let review_authorities = registry
+        .entities()
+        .values()
+        .filter_map(|entity| entity.change_request.as_ref())
+        .filter_map(|request| match &request.review {
+            registry_breg::model::CompiledChangeRequestReview::Required(requirement) => {
+                Some(requirement.authority.as_str())
+            }
+            registry_breg::model::CompiledChangeRequestReview::None(_) => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let review_authority_config = if review_authorities.is_empty() {
+        String::new()
+    } else {
+        write_secret(
+            &secrets.join("review-authority-token"),
+            b"pilot-review-token",
+        );
+        let bindings = review_authorities
+            .into_iter()
+            .map(|authority| {
+                format!(
+                    "  {authority:?}:\n    endpoint: https://casework.example/reviews/\n    profile: registry-producer\n    producerId: pilot-registry\n    recoveryDays: 91\n    tokenRef: secret:file/review-authority-token\n"
+                )
+            })
+            .collect::<String>();
+        format!("reviewAuthorities:\n{bindings}")
+    };
     let path = root.join("runtime.yaml");
     fs::write(
         &path,
@@ -733,6 +761,7 @@ operationalTimeouts:
   recordLockMilliseconds: 2000
   migrationLockMilliseconds: 2000
   migrationStatementMilliseconds: 5000
+{review_authority_config}
 "#,
             identity.environment,
             identity.instance_id,

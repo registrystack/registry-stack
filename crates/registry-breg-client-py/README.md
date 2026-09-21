@@ -120,9 +120,8 @@ Prepared evidence contains the exact validated request, idempotency key, and
 format, but never serializes metadata authority. Prepared and recovered values
 have redacted representations.
 
-Use `action.with_reason(text)` on a promoted `approve_request`,
-`reject_request`, `request_revision`, or `apply_request` action to add optional
-recorded text. It returns a copy and
+Use `action.with_reason(text)` on a promoted `apply_request` action to add an
+optional application explanation. It returns a copy and
 validates before network effects. The original action omits the reason. Text
 is preserved exactly, allows an empty string, and is limited to 4096 Unicode
 characters with NUL refused. Reuse the same action and idempotency key for an

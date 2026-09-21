@@ -6,7 +6,7 @@ mod support;
 use std::sync::Arc;
 
 use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig, StaticToken};
-use registry_casework_breg::{BregAdapter, BregReviewStage, BregSourceConfig};
+use registry_casework_breg::{BregAdapter, BregSourceConfig};
 use registry_casework_core::{
     EventRequest, RoutingSourceMetadata, SourceAdapter, SourceAdapterError,
 };
@@ -51,16 +51,11 @@ fn adapter_at(
             source_id: source_id.to_owned(),
             entity: "correction".to_owned(),
             route: "corrections".to_owned(),
-            stages: vec![BregReviewStage {
-                id: "review".to_owned(),
-                approvals: 1,
-                exclude_submitter: false,
-                exclude_previous_reviewers: false,
-            }],
             routing_metadata: RoutingSourceMetadata {
-                stages: vec!["review".into()],
+                stages: vec![],
                 fields: vec![],
             },
+            context_projection: Vec::new(),
             display_reference: None,
             expected_registry_revision: REGISTRY_REVISION.to_owned(),
             binding_generation: "generation-1".to_owned(),
@@ -87,9 +82,15 @@ fn record(record_id: &str, entity: &str) -> Value {
             "request": {
                 "bregState": "submitted",
                 "proposalVersion": 1,
+                "effectDigest": REGISTRY_REVISION,
+                "proposal": {
+                    "review": {
+                        "authority": "casework-main",
+                        "policyId": "registry-correction"
+                    }
+                },
                 "editable": false,
-                "actions": [],
-                "decisions": []
+                "actions": []
             }
         },
         "meta": {
@@ -316,16 +317,11 @@ async fn route_target_and_route_segment_are_closed_before_intake() {
                 source_id: "source/a".into(),
                 entity: "correction".into(),
                 route: "corrections".into(),
-                stages: vec![BregReviewStage {
-                    id: "review".into(),
-                    approvals: 1,
-                    exclude_submitter: false,
-                    exclude_previous_reviewers: false,
-                }],
                 routing_metadata: RoutingSourceMetadata {
-                    stages: vec!["review".into()],
+                    stages: vec![],
                     fields: vec![],
                 },
+                context_projection: Vec::new(),
                 display_reference: None,
                 expected_registry_revision: REGISTRY_REVISION.into(),
                 binding_generation: "generation-1".into(),

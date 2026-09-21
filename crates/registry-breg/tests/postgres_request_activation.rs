@@ -80,16 +80,9 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
     let app = change_request_router(&database, base.clone(), active.clone());
     let steward = claims("steward", "unrelated-steward", None);
     let submitter = claims("submitter", "unrelated-submitter", None);
-    let reviewer = claims("reviewer", "unrelated-reviewer", Some("review"));
     let applier = claims("applier", "unrelated-applier", Some("apply"));
-    let approved = create_approved_correction(
-        &app,
-        steward.clone(),
-        submitter.clone(),
-        reviewer,
-        "unrelated",
-    )
-    .await;
+    let approved =
+        create_approved_correction(&app, steward.clone(), submitter.clone(), "unrelated").await;
 
     let unrelated = Arc::new(compiled_registry(Variant::UnrelatedOptionalField, 2));
     assert_eq!(
@@ -120,7 +113,7 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
     .await;
     assert_eq!(
         before_apply.body["data"]["request"]["bregState"],
-        "approved"
+        "submitted"
     );
     let apply = action(&before_apply.body, "apply_request", None);
     assert_eq!(apply.proposal_version, Some(1));
@@ -286,9 +279,7 @@ async fn relevant_package_activation_waits_for_explicit_cancellation_then_starts
     let app = change_request_router(&database, base.clone(), active.clone());
     let steward = claims("steward", "relevant-steward", None);
     let submitter = claims("submitter", "relevant-submitter", None);
-    let reviewer = claims("reviewer", "relevant-reviewer", Some("review"));
-    let approved =
-        create_approved_correction(&app, steward, submitter.clone(), reviewer, "relevant").await;
+    let approved = create_approved_correction(&app, steward, submitter.clone(), "relevant").await;
 
     let relevant = Arc::new(compiled_registry(Variant::RelevantOptionalRequestSchema, 2));
     assert_ne!(
@@ -341,7 +332,7 @@ async fn relevant_package_activation_waits_for_explicit_cancellation_then_starts
         |_| json!({}),
     )
     .await;
-    assert_eq!(canceled["request"]["bregState"], "canceled");
+    assert_eq!(canceled["request"]["bregState"], "cancelled");
 
     let successor_active = apply_package(
         &database,
@@ -429,7 +420,6 @@ async fn create_approved_correction(
     app: &axum::Router,
     steward: VerifiedRequestClaims,
     submitter: VerifiedRequestClaims,
-    reviewer: VerifiedRequestClaims,
     key_prefix: &str,
 ) -> ApprovedCorrection {
     let old_site = create_record(
@@ -485,18 +475,6 @@ async fn create_approved_correction(
         .as_str()
         .expect("submission freezes an effect digest")
         .to_owned();
-    run_action(
-        app,
-        &request.id,
-        "correction-requests",
-        "reviewer",
-        reviewer,
-        &format!("{key_prefix}-approve"),
-        "approve_request",
-        Some("review"),
-        |_| json!({"proposalVersion": 1, "effectDigest": effect_digest}),
-    )
-    .await;
     ApprovedCorrection {
         request_id: request.id,
         placement_id: placement.id,
@@ -1068,7 +1046,8 @@ fn project_bytes_for_variant(variant: Variant, sequence: u64) -> Vec<u8> {
               "changeRequest":{{
                 "retention":{{"mode":"operator_erase"}},
                 "effects":[{{"target":{{"fromField":"placement"}},"operation":"patch","set":{{"site":{{"fromField":"proposed-site"}}}}}}],
-                "review":{{"stages":[{{"id":"review","approvals":1,"excludeSubmitter":true}}]}}
+                "review":{{"mode":"none"}},
+                "onApproved":{{"mode":"manual"}}
               }}
             }}
           ],
@@ -1106,10 +1085,9 @@ fn project_bytes_for_variant(variant: Variant, sequence: u64) -> Vec<u8> {
               "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],
               "permissions":[{{
                 "entity":"correction-request",
-                "operations":["get","list","approve_request","reject_request","request_revision"],
+                "operations":["get","list"],
                 "readableFields":["tenant","placement","proposed-site","reason"{request_extra_read_write}],
-                "rowBoundaries":[{{"field":"tenant","claim":"tenant_claim","operator":"equals"}}],
-                "reviewStages":[{{"stage":"review","targets":[{{"entity":"asset-placement","readableFields":["site"],"rowBoundaries":[{{"field":"tenant","claim":"tenant_claim","operator":"equals"}}]}}]}}]
+                "rowBoundaries":[{{"field":"tenant","claim":"tenant_claim","operator":"equals"}}]
               }}]
             }},
             {{

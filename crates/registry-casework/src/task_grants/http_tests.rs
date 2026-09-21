@@ -9,10 +9,12 @@ use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use registry_casework_core::*;
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
+use std::collections::BTreeMap;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
+use tokio::sync::Notify;
 use tower::ServiceExt;
 
 const ISSUER: &str = "https://task-token.test";
@@ -22,12 +24,14 @@ fn binding() -> SourceBinding {
     SourceBinding {
         source_revision: "1".into(),
         version: "proposal-1".into(),
-        integrity: None,
+        integrity: Some(ContentDigest::for_bytes(b"request-1").to_string()),
         generation: "generation-1".into(),
     }
 }
 struct Source {
     mode: Arc<AtomicUsize>,
+    read_started: Arc<Notify>,
+    read_continue: Arc<Notify>,
 }
 #[async_trait]
 impl SourceAdapter for Source {
@@ -65,6 +69,10 @@ impl SourceAdapter for Source {
         if self.mode.load(Ordering::SeqCst) == 5 {
             return Err(SourceAdapterError::Unavailable);
         }
+        if self.mode.load(Ordering::SeqCst) == 7 {
+            self.read_started.notify_one();
+            self.read_continue.notified().await;
+        }
         Ok(CallerSubjectView {
             display_reference: None,
             subject: subject.clone(),
@@ -85,6 +93,10 @@ impl SourceAdapter for Source {
             3 if caller.is_some() => return Err(SourceAdapterError::Denied),
             4 if caller.is_none() => {
                 tokio::time::sleep(std::time::Duration::from_millis(1250)).await
+            }
+            6 if caller.is_some() => {
+                self.read_started.notify_one();
+                self.read_continue.notified().await;
             }
             _ => (),
         }
@@ -130,7 +142,10 @@ fn token_claims(mut claims: Value) -> String {
 struct Fixture {
     app: Router,
     mode: Arc<AtomicUsize>,
+    read_started: Arc<Notify>,
+    read_continue: Arc<Notify>,
     item: Uuid,
+    review_task: Uuid,
     profile_id: &'static str,
     template: TaskTemplate,
     project: CaseworkProject,
@@ -175,7 +190,8 @@ async fn fixture_for_role(lifetime: u64, role: CaseworkRole) -> Fixture {
     store.migrate().await.unwrap();
     std::env::remove_var(name);
     let template:TaskTemplate=serde_json::from_value(json!({"id":"summary","version":"1","label":"Prepare summary","eligibleTeams":["team"],"eligibleProfiles":[profile_id],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":ISSUER,"subject":"agent"},"client":"agent-client","resource":"urn:breg:test","purpose":"prepare-summary","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},"subjects":{"person_reference":"person-reference"},"lifetimeSeconds":lifetime})).unwrap();
-    let project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"casework":{"id":"tasks","version":"1"},"accessProfiles":[{"id":profile_id,"principalClaim":"sub","requiredScopes":[scope],"role":profile_id}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Test source","requests":[{"entity":"request","queue":"review"}]}],"taskTemplates":[template]})).unwrap();
+    let review_template:TaskTemplate=serde_json::from_value(json!({"id":"review-summary","version":"1","label":"Prepare review summary","eligibleTeams":["team"],"eligibleProfiles":[profile_id],"source":"source","reviewKinds":["external-review"],"agent":{"issuer":ISSUER,"subject":"agent"},"client":"agent-client","resource":"urn:breg:test","purpose":"prepare-review-summary","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},"subjects":{"person_reference":"person-reference"},"lifetimeSeconds":lifetime})).unwrap();
+    let project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"casework":{"id":"tasks","version":"1"},"accessProfiles":[{"id":profile_id,"principalClaim":"sub","requiredScopes":[scope],"role":profile_id},{"id":"producer","principalClaim":"sub","requiredScopes":["casework:producer"],"role":"requester"}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Test source","requests":[{"entity":"request","queue":"review"}]}],"reviewKinds":[{"id":"external-review","version":"1","purpose":"approval","contextStrategy":"source","stages":[{"id":"review","queue":"review","decidingProfiles":[profile_id],"requiredApprovals":1,"excludeInitiator":true,"excludePreviousStageReviewers":false}],"retention":{"terminalDays":30,"accountabilityDays":90},"displaySchema":{"type":"object","additionalProperties":false,"properties":{}},"outcomes":[]}],"reviewProducers":[{"id":"producer","profile":"producer","issuer":ISSUER,"subject":"producer","trustedInitiatorIssuer":ISSUER,"sourceNamespaces":["source"],"kinds":["external-review"],"recoveryDays":30}],"taskTemplates":[template,review_template]})).unwrap();
     let template = project.task_templates[0].clone();
     store
         .activate_task_templates(&project.task_templates)
@@ -197,12 +213,58 @@ async fn fixture_for_role(lifetime: u64, role: CaseworkRole) -> Fixture {
     .unwrap();
     let item = Uuid::new_v4();
     db.execute("INSERT INTO casework_items(item_id,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,binding,state,queue_id,holder_issuer,holder_subject,revision,first_observed_at,updated_at) VALUES($1,'source','request','request-1','review','review-1',$2,'claimed','review',$3,'human',1,now(),now())",&[&item,&serde_json::to_value(binding()).unwrap(),&ISSUER]).await.unwrap();
+    let review_request = Uuid::new_v4();
+    let review_task = Uuid::new_v4();
+    let snapshot = project.review_kinds[0].snapshot().unwrap();
+    db.execute(
+        "INSERT INTO casework_review_requests(
+            request_id,producer_id,producer_issuer,producer_subject,source_namespace,
+            subject_source,subject_type,subject_id,subject_version,subject_digest,
+            requester_reference,initiator_issuer,initiator_subject,context_strategy,context,
+            policy_id,policy_version,policy_digest,policy_snapshot,submission_digest,
+            lifecycle,active_stage_index,revision,created_at,updated_at)
+         VALUES($1,'producer',$2,'producer','source','source','request','request-1',
+            'proposal-1',$3,'task-grant-review',$2,'initiator','source',$4,
+            'external-review','1',$5,$6,$7,'reviewing',0,1,now(),now())",
+        &[
+            &review_request,
+            &ISSUER,
+            &ContentDigest::for_bytes(b"request-1").to_string(),
+            &json!({"reference":"source:request:request-1"}),
+            &snapshot.identity.digest.to_string(),
+            &serde_json::to_value(&snapshot).unwrap(),
+            &ContentDigest::for_bytes(b"submission").to_string(),
+        ],
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO casework_review_tasks(
+            task_id,request_id,stage_index,stage_id,slot,queue_id,state,
+            holder_issuer,holder_subject,assignment_kind,assignment_owner_issuer,
+            assignment_owner_subject,revision,created_at,updated_at)
+         VALUES($1,$2,0,'review',0,'review','claimed',$3,'human','claim',$3,'human',1,now(),now())",
+        &[&review_task, &review_request, &ISSUER],
+    )
+    .await
+    .unwrap();
     let mode = Arc::new(AtomicUsize::new(0));
-    let app = test_app(&store, &project, mode.clone());
+    let read_started = Arc::new(Notify::new());
+    let read_continue = Arc::new(Notify::new());
+    let app = test_app(
+        &store,
+        &project,
+        mode.clone(),
+        read_started.clone(),
+        read_continue.clone(),
+    );
     Fixture {
         app,
         mode,
+        read_started,
+        read_continue,
         item,
+        review_task,
         profile_id,
         template,
         project,
@@ -212,7 +274,13 @@ async fn fixture_for_role(lifetime: u64, role: CaseworkRole) -> Fixture {
     }
 }
 
-fn test_app(store: &PostgresStore, project: &CaseworkProject, mode: Arc<AtomicUsize>) -> Router {
+fn test_app(
+    store: &PostgresStore,
+    project: &CaseworkProject,
+    mode: Arc<AtomicUsize>,
+    read_started: Arc<Notify>,
+    read_continue: Arc<Notify>,
+) -> Router {
     let mut key = registry_platform_crypto::generate_private_jwk(
         registry_platform_crypto::GeneratedKeyAlgorithm::Rs384,
     )
@@ -234,7 +302,11 @@ fn test_app(store: &PostgresStore, project: &CaseworkProject, mode: Arc<AtomicUs
     let service = crate::CaseworkService::new(
         store.clone(),
         project.clone(),
-        [Arc::new(Source { mode: mode.clone() }) as Arc<dyn SourceAdapter>],
+        [Arc::new(Source {
+            mode: mode.clone(),
+            read_started,
+            read_continue,
+        }) as Arc<dyn SourceAdapter>],
     )
     .unwrap()
     .with_task_authority(Some(authority));
@@ -279,14 +351,58 @@ async fn request(
     body: Option<Value>,
     key: Option<&str>,
 ) -> (StatusCode, Value) {
+    request_with_profiles(f, method, path, token, human, human, body, key).await
+}
+
+async fn start_blocked_get(
+    f: &Fixture,
+    path: &str,
+    token: &str,
+    mode: usize,
+) -> tokio::task::JoinHandle<(StatusCode, Value)> {
+    f.mode.store(mode, Ordering::SeqCst);
+    let app = f.app.clone();
+    let path = path.to_owned();
+    let token = token.to_owned();
+    let profile_id = f.profile_id.to_owned();
+    let request = tokio::spawn(async move {
+        let request = Request::builder()
+            .method("GET")
+            .uri(path)
+            .header("authorization", format!("Bearer {token}"))
+            .header(CASEWORK_PROFILE_HEADER, profile_id)
+            .header(SOURCE_PROFILE_HEADER, "source-reader")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 65_536).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    });
+    f.read_started.notified().await;
+    request
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn request_with_profiles(
+    f: &Fixture,
+    method: &str,
+    path: &str,
+    token: &str,
+    casework_profile: bool,
+    source_profile: bool,
+    body: Option<Value>,
+    key: Option<&str>,
+) -> (StatusCode, Value) {
     let mut req = Request::builder()
         .method(method)
         .uri(path)
         .header("authorization", format!("Bearer {token}"));
-    if human {
-        req = req
-            .header(CASEWORK_PROFILE_HEADER, f.profile_id)
-            .header(SOURCE_PROFILE_HEADER, "source-reader");
+    if casework_profile {
+        req = req.header(CASEWORK_PROFILE_HEADER, f.profile_id);
+    }
+    if source_profile {
+        req = req.header(SOURCE_PROFILE_HEADER, "source-reader");
     }
     if let Some(key) = key {
         req = req
@@ -332,6 +448,25 @@ async fn replace_membership(store: &PostgresStore, kind: &str) {
         .await
         .unwrap();
     transaction.commit().await.unwrap();
+}
+
+async fn replace_task_holder(store: &PostgresStore, task_id: Uuid, review: bool, subject: &str) {
+    let db = store.client().await.unwrap();
+    let table = if review {
+        "casework_review_tasks"
+    } else {
+        "casework_items"
+    };
+    db.execute(
+        &format!(
+            "UPDATE {table} SET holder_subject=$2,revision=revision+1,updated_at=now() \
+             WHERE {}=$1",
+            if review { "task_id" } else { "item_id" }
+        ),
+        &[&task_id, &subject],
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -587,6 +722,85 @@ async fn task_http_approval_assertion_status_and_revocation_enforce_current_auth
 }
 
 #[tokio::test]
+async fn task_grant_previews_and_lists_recheck_eligibility_after_source_reads() {
+    let f = fixture(900).await;
+    let human = token("human", "human-client", "human", "casework:staff");
+    let item_grants = format!("/v1/work-items/{}/task-grants", f.item);
+    let review_grants = format!("/v1/review-tasks/{}/task-grants", f.review_task);
+    assert_eq!(
+        request(
+            &f,
+            "POST",
+            &item_grants,
+            &human,
+            true,
+            Some(json!({"templateId":"summary","templateVersion":"1"})),
+            Some("race-item-grant"),
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(
+            &f,
+            "POST",
+            &review_grants,
+            &human,
+            true,
+            Some(json!({"templateId":"review-summary","templateVersion":"1"})),
+            Some("race-review-grant"),
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+
+    let pending = start_blocked_get(&f, &item_grants, &human, 7).await;
+    f.store.activate_task_templates(&[]).await.unwrap();
+    f.read_continue.notify_one();
+    let (status, _) = pending.await.unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    f.store
+        .activate_task_templates(&f.project.task_templates)
+        .await
+        .unwrap();
+
+    let item_preview = format!("/v1/work-items/{}/task-templates", f.item);
+    let pending = start_blocked_get(&f, &item_preview, &human, 6).await;
+    f.store.activate_task_templates(&[]).await.unwrap();
+    f.read_continue.notify_one();
+    let (status, body) = pending.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["templates"], json!([]));
+    f.store
+        .activate_task_templates(&f.project.task_templates)
+        .await
+        .unwrap();
+
+    let review_preview = format!("/v1/review-tasks/{}/task-templates", f.review_task);
+    let pending = start_blocked_get(&f, &review_preview, &human, 6).await;
+    replace_task_holder(&f.store, f.review_task, true, "other").await;
+    f.read_continue.notify_one();
+    let (status, body) = pending.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["itemRevision"], 0);
+    assert_eq!(body["templates"], json!([]));
+    replace_task_holder(&f.store, f.review_task, true, "human").await;
+
+    let pending = start_blocked_get(&f, &review_grants, &human, 6).await;
+    replace_task_holder(&f.store, f.review_task, true, "other").await;
+    f.read_continue.notify_one();
+    let (status, _) = pending.await.unwrap();
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn task_grants_do_not_survive_an_approver_profile_role_change() {
     let mut f = fixture(900).await;
     let human = token("human", "human-client", "human", "casework:staff");
@@ -639,7 +853,13 @@ async fn task_grants_do_not_survive_an_approver_profile_role_change() {
     changed_project
         .check()
         .expect("the changed project is valid");
-    f.app = test_app(&f.store, &changed_project, f.mode.clone());
+    f.app = test_app(
+        &f.store,
+        &changed_project,
+        f.mode.clone(),
+        f.read_started.clone(),
+        f.read_continue.clone(),
+    );
 
     let assertion_path = format!("/v1/task-grants/{assertion_id}/assertion");
     let status_path = format!("/v1/task-grants/{status_id}/status");
@@ -866,6 +1086,642 @@ async fn eligible_officer_can_revoke_without_holding_the_item_or_reading_the_sou
     let (status, body) = request(&f, "POST", &revoke, &revoker, true, None, None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["invalidated"], true);
+
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn review_task_grants_bind_holder_revision_subject_and_revocation() {
+    let f = fixture(900).await;
+    let human = token("human", "human-client", "human", "casework:staff");
+    let agent = token("agent", "agent-client", "agent", "casework:grants:assert");
+    let resource = token(
+        "resource",
+        "breg-status",
+        "service",
+        "casework:grants:status",
+    );
+    let preview = format!("/v1/review-tasks/{}/task-templates", f.review_task);
+    let grants = format!("/v1/review-tasks/{}/task-grants", f.review_task);
+    let (status, body) = request(&f, "GET", &preview, &human, true, None, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["itemRevision"], 1);
+    assert_eq!(body["templates"].as_array().unwrap().len(), 1);
+    assert_eq!(body["templates"][0]["id"], "review-summary");
+
+    let approval = json!({"templateId":"review-summary","templateVersion":"1"});
+    let (status, first) = request(
+        &f,
+        "POST",
+        &grants,
+        &human,
+        true,
+        Some(approval.clone()),
+        Some("review-grant"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let first_id = first["id"].as_str().unwrap();
+    let (_, replay) = request(
+        &f,
+        "POST",
+        &grants,
+        &human,
+        true,
+        Some(approval.clone()),
+        Some("review-grant"),
+    )
+    .await;
+    assert_eq!(replay, first);
+    let assertion = format!("/v1/task-grants/{first_id}/assertion");
+    let status_path = format!("/v1/task-grants/{first_id}/status");
+    assert_eq!(
+        request(&f, "POST", &assertion, &agent, false, None, None)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(&f, "GET", &status_path, &resource, false, None, None)
+            .await
+            .1["active"],
+        true
+    );
+    f.mode.store(1, Ordering::SeqCst);
+    assert_eq!(
+        request(&f, "POST", &assertion, &agent, false, None, None)
+            .await
+            .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    f.mode.store(0, Ordering::SeqCst);
+    assert_eq!(
+        request(&f, "POST", &assertion, &agent, false, None, None)
+            .await
+            .0,
+        StatusCode::OK,
+        "temporary source outage must not revoke a review task grant"
+    );
+
+    let (_, revoked) = request(
+        &f,
+        "POST",
+        &grants,
+        &human,
+        true,
+        Some(approval.clone()),
+        Some("review-revoke"),
+    )
+    .await;
+    let revoked_id = revoked["id"].as_str().unwrap();
+    let revoke_path = format!(
+        "/v1/review-tasks/{}/task-grants/{revoked_id}/revoke",
+        f.review_task
+    );
+    let db = f.store.client().await.unwrap();
+    db.execute(
+        "INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
+             VALUES('team',$1,'revoker','staff')",
+        &[&ISSUER],
+    )
+    .await
+    .unwrap();
+    let revoker = token("revoker", "human-client", "human", "casework:staff");
+    let (status, body) =
+        request_with_profiles(&f, "POST", &revoke_path, &revoker, true, false, None, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        request(
+            &f,
+            "GET",
+            &format!("/v1/task-grants/{revoked_id}/status"),
+            &resource,
+            false,
+            None,
+            None,
+        )
+        .await
+        .1["active"],
+        false
+    );
+
+    let revocations: i64 = db
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE task_id=$1 AND kind='task_grant_revoked'
+               AND detail->>'grantId'=$2 AND detail->>'reason'='revoked'
+               AND actor_ref IS NOT NULL",
+            &[&f.review_task, &revoked_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(revocations, 1, "the first revocation is recorded once");
+    let audited: i64 = db
+        .query_one(
+            "SELECT count(*) FROM casework_audit_outbox
+             WHERE audit_record->>'grantId'=$1
+               AND audit_record->>'event'='casework.task_grant_revoked'",
+            &[&revoked_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(audited, 1, "the revocation is audited");
+    assert_eq!(
+        request_with_profiles(&f, "POST", &revoke_path, &revoker, true, false, None, None)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let repeated: i64 = db
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE kind='task_grant_revoked' AND detail->>'grantId'=$1",
+            &[&revoked_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(repeated, 1, "a repeated revocation is not recorded again");
+
+    let (_, source_changed) = request(
+        &f,
+        "POST",
+        &grants,
+        &human,
+        true,
+        Some(approval.clone()),
+        Some("review-source-change"),
+    )
+    .await;
+    let source_changed_id = source_changed["id"].as_str().unwrap();
+    let source_changed_status = format!("/v1/task-grants/{source_changed_id}/status");
+    f.mode.store(2, Ordering::SeqCst);
+    assert_eq!(
+        request(
+            &f,
+            "GET",
+            &source_changed_status,
+            &resource,
+            false,
+            None,
+            None,
+        )
+        .await
+        .1["active"],
+        false
+    );
+    f.mode.store(0, Ordering::SeqCst);
+    assert_eq!(
+        request(
+            &f,
+            "GET",
+            &source_changed_status,
+            &resource,
+            false,
+            None,
+            None,
+        )
+        .await
+        .1["active"],
+        false,
+        "restored source disclosure must not revive an invalidated review task grant"
+    );
+
+    let existing: i64 = db
+        .query_one(
+            "SELECT count(*) FROM casework_review_task_grants WHERE task_id=$1",
+            &[&f.review_task],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    db.execute(
+        "INSERT INTO casework_review_task_grants(
+                grant_id,task_id,request_id,task_revision,holder_issuer,holder_subject,
+                approver_profile,approver_role,idempotency_key,request_hash,record,
+                approved_at,expires_at)
+             SELECT md5($1::text||'-'||n::text)::uuid,task_id,request_id,task_revision,
+                    holder_issuer,holder_subject,approver_profile,approver_role,
+                    'capacity-'||n::text,request_hash,record,approved_at,expires_at
+             FROM (
+                 SELECT * FROM casework_review_task_grants WHERE task_id=$1 LIMIT 1
+             ) seed CROSS JOIN generate_series(1,$2::integer) n",
+        &[&f.review_task, &i32::try_from(128 - existing).unwrap()],
+    )
+    .await
+    .unwrap();
+    let (status, body) = request(
+        &f,
+        "POST",
+        &grants,
+        &human,
+        true,
+        Some(approval),
+        Some("review-capacity-overflow"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    f.store
+        .client()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE casework_review_tasks SET revision=revision+1 WHERE task_id=$1",
+            &[&f.review_task],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        request(&f, "POST", &assertion, &agent, false, None, None)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(&f, "GET", &status_path, &resource, false, None, None)
+            .await
+            .1["active"],
+        false
+    );
+    let eligibility_history: i64 = db
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE task_id=$1 AND kind='task_grant_invalidated'
+               AND detail->>'grantId'=$2 AND detail->>'reason'='eligibility'
+               AND actor_ref IS NULL",
+            &[&f.review_task, &first_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        eligibility_history, 1,
+        "the first eligibility invalidation is recorded like every other loss of authority"
+    );
+    let eligibility_audited: i64 = db
+        .query_one(
+            "SELECT count(*) FROM casework_audit_outbox
+             WHERE audit_record->>'grantId'=$1
+               AND audit_record->>'event'='casework.task_grant_invalidated'
+               AND audit_record->>'reason'='eligibility'
+               AND audit_record->>'profileId'='system:task-grants'",
+            &[&first_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        eligibility_audited, 1,
+        "the eligibility invalidation reaches the external audit stream"
+    );
+    assert_eq!(
+        request(&f, "GET", &status_path, &resource, false, None, None)
+            .await
+            .1["active"],
+        false
+    );
+    let eligibility_repeat: i64 = db
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE kind='task_grant_invalidated' AND detail->>'grantId'=$1",
+            &[&first_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        eligibility_repeat, 1,
+        "a repeated eligibility check is not recorded again"
+    );
+
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn review_task_grant_approval_reaches_history_and_audit() {
+    let f = fixture(900).await;
+    let human = token("human", "human-client", "human", "casework:staff");
+    let grants = format!("/v1/review-tasks/{}/task-grants", f.review_task);
+    let approval = json!({"templateId":"review-summary","templateVersion":"1"});
+    let (status, granted) = request(
+        &f,
+        "POST",
+        &grants,
+        &human,
+        true,
+        Some(approval.clone()),
+        Some("review-approval-audit"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{granted}");
+    let grant_id = granted["id"].as_str().unwrap();
+
+    let db = f.store.client().await.unwrap();
+    let approvals: i64 = db
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE task_id=$1 AND kind='task_grant_approved'
+               AND detail->>'grantId'=$2 AND actor_ref IS NOT NULL",
+            &[&f.review_task, &grant_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        approvals, 1,
+        "the approval is recorded once, bound to the approving actor"
+    );
+    let audited: i64 = db
+        .query_one(
+            "SELECT count(*) FROM casework_audit_outbox
+             WHERE audit_record->>'grantId'=$1
+               AND audit_record->>'event'='casework.task_grant_approved'
+               AND audit_record->>'profileId'=$2
+               AND audit_record->'actor'->>'issuer'=$3
+               AND audit_record->'actor'->>'subject'='human'",
+            &[&grant_id, &f.profile_id, &ISSUER],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        audited, 1,
+        "the approval reaches the external audit stream under the approver's profile"
+    );
+
+    let (_, replay) = request(
+        &f,
+        "POST",
+        &grants,
+        &human,
+        true,
+        Some(approval),
+        Some("review-approval-audit"),
+    )
+    .await;
+    assert_eq!(replay, granted);
+    let replays: i64 = db
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE kind='task_grant_approved' AND detail->>'grantId'=$1",
+            &[&grant_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(replays, 1, "an idempotent replay is not recorded again");
+
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn review_task_grants_do_not_survive_an_approver_profile_role_change() {
+    let mut f = fixture(900).await;
+    let human = token("human", "human-client", "human", "casework:staff");
+    let agent = token("agent", "agent-client", "agent", "casework:grants:assert");
+    let resource = token(
+        "resource",
+        "breg-status",
+        "service",
+        "casework:grants:status",
+    );
+    let grants = format!("/v1/review-tasks/{}/task-grants", f.review_task);
+    let approval = json!({"templateId":"review-summary","templateVersion":"1"});
+    let (_, granted) = request(
+        &f,
+        "POST",
+        &grants,
+        &human,
+        true,
+        Some(approval),
+        Some("review-role-change"),
+    )
+    .await;
+    let grant_id = granted["id"].as_str().unwrap();
+
+    let original_app = f.app.clone();
+    let mut changed_project = f.project.clone();
+    changed_project.access_profiles[0].role = CaseworkRole::Supervisor;
+    let mut replacement_staff = changed_project.access_profiles[0].clone();
+    replacement_staff.id = "replacement-staff".into();
+    replacement_staff.role = CaseworkRole::Staff;
+    replacement_staff.required_scopes = vec!["casework:replacement-staff".into()];
+    let mut administrator = replacement_staff.clone();
+    administrator.id = "administrator".into();
+    administrator.role = CaseworkRole::Administrator;
+    administrator.required_scopes = vec!["casework:admin".into()];
+    changed_project
+        .access_profiles
+        .extend([replacement_staff, administrator]);
+    changed_project
+        .check()
+        .expect("the changed project is valid");
+    f.app = test_app(
+        &f.store,
+        &changed_project,
+        f.mode.clone(),
+        f.read_started.clone(),
+        f.read_continue.clone(),
+    );
+
+    let assertion = format!("/v1/task-grants/{grant_id}/assertion");
+    let status_path = format!("/v1/task-grants/{grant_id}/status");
+    assert_eq!(
+        request(&f, "POST", &assertion, &agent, false, None, None)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(&f, "GET", &status_path, &resource, false, None, None)
+            .await
+            .1["active"],
+        false
+    );
+
+    let db = f.store.client().await.unwrap();
+    let invalidations: i64 = db
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE task_id=$1 AND kind='task_grant_invalidated'
+               AND detail->>'grantId'=$2 AND detail->>'reason'='eligibility'",
+            &[&f.review_task, &grant_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        invalidations, 1,
+        "the role change invalidates the grant through the eligibility path"
+    );
+
+    f.app = original_app;
+    assert_eq!(
+        request(&f, "GET", &status_path, &resource, false, None, None)
+            .await
+            .1["active"],
+        false,
+        "restoring the former role must not revive the grant"
+    );
+
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn review_task_grant_database_bound_allows_postgres_jsonb_rendering_overhead() {
+    let f = fixture(900).await;
+    let actor = ActorContext {
+        principal: IssuerPrincipal {
+            issuer: ISSUER.into(),
+            subject: "human".into(),
+        },
+        profile_id: "staff".into(),
+        role: CaseworkRole::Staff,
+    };
+    let mut template = f.project.task_templates[1].clone();
+    template.id = "review-jsonb-boundary".into();
+    template.bounds = TaskGrantBounds::Breg {
+        permissions: (0..64)
+            .map(|permission| TaskPermission {
+                collection: format!("collection_{permission}"),
+                operations: (0..32)
+                    .map(|operation| {
+                        let suffix = if operation < 26 {
+                            char::from(b'a' + operation).to_string()
+                        } else {
+                            format!("a{}", char::from(b'a' + operation - 26))
+                        };
+                        format!("operation_{suffix}")
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
+
+    let database = f.store.client().await.unwrap();
+    let base_document = serde_json::to_value(&template).unwrap();
+    let base_rendered: i32 = database
+        .query_one("SELECT octet_length($1::jsonb::text)", &[&base_document])
+        .await
+        .unwrap()
+        .get(0);
+    let target_document_bytes = 65_400_i32;
+    assert!(base_rendered < target_document_bytes);
+    let TaskGrantBounds::Breg { permissions } = &mut template.bounds else {
+        unreachable!("the test template uses BREG bounds")
+    };
+    let padding = usize::try_from(target_document_bytes - base_rendered).unwrap();
+    let operation_count = permissions.len() * permissions[0].operations.len();
+    for (index, operation) in permissions
+        .iter_mut()
+        .flat_map(|permission| permission.operations.iter_mut())
+        .enumerate()
+    {
+        let extra = padding / operation_count + usize::from(index < padding % operation_count);
+        operation.insert_str(0, &"x".repeat(extra));
+    }
+    template.check(&f.project).unwrap();
+    let document = serde_json::to_value(&template).unwrap();
+    assert!(serde_json::to_vec(&document).unwrap().len() <= 65_536);
+    let rendered_document: i32 = database
+        .query_one("SELECT octet_length($1::jsonb::text)", &[&document])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(rendered_document, target_document_bytes);
+    f.store
+        .activate_task_templates(&[template.clone()])
+        .await
+        .unwrap();
+
+    let request_id: Uuid = database
+        .query_one(
+            "SELECT request_id FROM casework_review_tasks WHERE task_id=$1",
+            &[&f.review_task],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let now = u64::try_from(Utc::now().timestamp()).unwrap();
+    let grant = ReviewTaskGrant {
+        id: Uuid::new_v4(),
+        task_id: f.review_task,
+        request_id,
+        task_revision: 1,
+        holder: actor.principal.clone(),
+        template: template.clone(),
+        template_digest: template_digest(&template).unwrap(),
+        source_issuer: "https://task-authority.test".into(),
+        approver_profile: actor.profile_id.clone(),
+        subject: SubjectBinding {
+            source: "source".into(),
+            subject_type: "request".into(),
+            id: "request-1".into(),
+            version: "proposal-1".into(),
+            digest: ContentDigest::for_bytes(b"request-1"),
+        },
+        source_subject: SubjectRef {
+            source_id: "source".into(),
+            kind: "request".into(),
+            id: "request-1".into(),
+        },
+        proposal: TaskProposalIdentity::from(&binding()),
+        subjects: BTreeMap::from([("person_reference".into(), json!("synthetic-person"))]),
+        approved_at: now,
+        expires_at: now + 900,
+    };
+    let record = serde_json::to_value(&grant).unwrap();
+    let admitted_bytes = serde_json::to_vec(&record).unwrap().len();
+    assert!(admitted_bytes <= 65_536);
+    let rendered_record: i32 = database
+        .query_one("SELECT octet_length($1::jsonb::text)", &[&record])
+        .await
+        .unwrap()
+        .get(0);
+    assert!(rendered_record > 65_536);
+    assert!(rendered_record <= 131_072);
+
+    f.store
+        .approve_review_task_grant(&actor, "jsonb-boundary", grant.clone())
+        .await
+        .unwrap();
+    let stored_bytes: i32 = database
+        .query_one(
+            "SELECT octet_length(record::text) FROM casework_review_task_grants WHERE grant_id=$1",
+            &[&grant.id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(stored_bytes, rendered_record);
+
+    let mut oversized = grant;
+    oversized.id = Uuid::new_v4();
+    oversized
+        .subjects
+        .insert("oversized".into(), json!("x".repeat(65_536)));
+    assert!(serde_json::to_vec(&oversized).unwrap().len() > 65_536);
+    assert!(matches!(
+        f.store
+            .approve_review_task_grant(&actor, "jsonb-boundary-oversized", oversized)
+            .await,
+        Err(StoreError::Invalid)
+    ));
 
     f.admin
         .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))

@@ -24,7 +24,6 @@ sources:
             because: The request's governed region is north.
             when:
               activity: review
-              stage: technical
               fields: {region: {equals: north}}
             queue: northern-review
   - id: response-register

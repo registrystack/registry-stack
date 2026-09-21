@@ -17,12 +17,11 @@ use crate::manifest_adapter::project_manifest_artifacts;
 use crate::model::{
     ActionRouteKind, CompiledAccessInventory, CompiledAction, CompiledActionInput,
     CompiledActionInventory, CompiledActionRoute, CompiledActionTargetUseSource,
-    CompiledChangeRequestApplication, CompiledChangeRequestApplicationMode,
-    CompiledChangeRequestDisposition, CompiledChangeRequestMutation, CompiledChangeRequestPlanner,
-    CompiledChangeRequestRetentionMode, CompiledChangeRequestReviewMode,
-    CompiledChangeRequestTargetBinding, CompiledChangeRequestValue, CompiledEntity,
-    CompiledEventDeliveryInventory, CompiledManifestProjection, CompiledMetadataInventory,
-    CompiledModuleIdentity, CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
+    CompiledChangeRequestMutation, CompiledChangeRequestPlanner,
+    CompiledChangeRequestRetentionMode, CompiledChangeRequestTargetBinding,
+    CompiledChangeRequestValue, CompiledEntity, CompiledEventDeliveryInventory,
+    CompiledManifestProjection, CompiledMetadataInventory, CompiledModuleIdentity,
+    CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
     CompiledQueryTemporalValueKind, CompiledRevisionKind, CompiledRoute, CompiledRouteInventory,
     HttpMethod,
 };
@@ -608,22 +607,14 @@ pub(crate) fn openapi_entity_input_schema(
     })
 }
 
-fn review_stage_id_schema() -> Value {
-    json!({
-        "type": "string", "minLength": 1, "maxLength": 64,
-        "pattern": "^[a-z]", "not": {"pattern": "[^a-z0-9_-]"}
-    })
-}
-
 fn request_lifecycle_event_schema(event: &HookSource) -> Value {
     let mut transition =
         json!({"type": "string", "enum": crate::compiler::REQUEST_LIFECYCLE_TRANSITIONS});
     let mut to_state = request_state_schema();
-    let mut stage = json!({"anyOf": [review_stage_id_schema(), {"type": "null"}]});
     if let Some(EventConditionSource::RequestLifecycle {
         transitions,
         to_states,
-        stages,
+        ..
     }) = &event.when
     {
         if !transitions.is_empty() {
@@ -631,9 +622,6 @@ fn request_lifecycle_event_schema(event: &HookSource) -> Value {
         }
         if !to_states.is_empty() {
             to_state = json!({"type": "string", "enum": to_states});
-        }
-        if !stages.is_empty() {
-            stage = json!({"type": "string", "enum": stages});
         }
     }
     json!({
@@ -645,34 +633,33 @@ fn request_lifecycle_event_schema(event: &HookSource) -> Value {
             "transition": transition,
             "fromState": request_state_schema(),
             "toState": to_state,
-            "stage": stage,
-            "effectDigest": {"type": ["string", "null"]},
-            "deduplicationKey": {"type": "string"},
             "reasonPresent": {"type": "boolean"},
-            "reason": review_reason_schema()
+            "reason": application_reason_schema(),
+            "effectDigest": {"type": ["string", "null"]},
+            "deduplicationKey": {"type": "string"}
         },
         "required": [
             "proposalVersion", "workflowRevision", "transition", "fromState", "toState",
-            "stage", "effectDigest", "deduplicationKey", "reasonPresent"
+            "reasonPresent", "effectDigest", "deduplicationKey"
         ],
         "if": {"properties": {"reasonPresent": {"const": true}}},
         "then": {
             "required": ["reason"],
-            "oneOf": [
-                {"properties": {"transition": {"const": "reject"}, "toState": {"const": "rejected"}}},
-                {"properties": {"transition": {"const": "request_revision"}, "toState": {"const": "needs_changes"}}}
-            ]
+            "properties": {
+                "transition": {"const": "apply"},
+                "toState": {"const": "applied"}
+            }
         },
         "else": {"not": {"required": ["reason"]}}
     })
 }
 
-fn review_reason_schema() -> Value {
+fn application_reason_schema() -> Value {
     json!({
         "type": "string",
-        "maxLength": crate::request_workflow::MAX_REVIEW_REASON_CHARS,
+        "maxLength": crate::request_workflow::MAX_APPLICATION_REASON_CHARS,
         "pattern": "^[^\\u0000]*$",
-        "description": "Optional reviewer explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."
+        "description": "Optional application explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."
     })
 }
 
@@ -685,20 +672,11 @@ pub(crate) fn openapi_request_action_input_schema(operation: Operation) -> Value
             "description": "Digest of the immutable proposal effects displayed to the actor."
         }
     });
-    if matches!(
-        operation,
-        Operation::ApproveRequest
-            | Operation::RejectRequest
-            | Operation::RequestRevision
-            | Operation::ApplyRequest
-    ) {
-        proposal_binding["reason"] = review_reason_schema();
+    if operation == Operation::ApplyRequest {
+        proposal_binding["reason"] = application_reason_schema();
     }
     match operation {
-        Operation::ApproveRequest
-        | Operation::RejectRequest
-        | Operation::RequestRevision
-        | Operation::ApplyRequest => json!({
+        Operation::ApplyRequest => json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
             "additionalProperties": false,
@@ -785,8 +763,9 @@ fn render_change_request(
         "requestEntity": request.request_entity_id,
         "contractFingerprint": request.contract_fingerprint,
         "planner": render_request_planner(request.planner.as_ref(), request),
-        "reviewMode": render_request_review_mode(request.review_mode),
-        "application": render_request_application(&request.application),
+        "review": request.review,
+        "onApproved": request.on_approved,
+        "application": request.application,
         "retention": render_request_retention(request.retention_mode),
         "bounds": {
             "maximumTargets": request.maximum_targets,
@@ -794,7 +773,7 @@ fn render_change_request(
             "maximumSnapshotBytes": request.maximum_snapshot_bytes,
         },
         "stateEnvelope": {
-            "states": ["draft", "submitted", "approved", "needs_changes", "rejected", "canceled", "applied"],
+            "states": ["draft", "submitted", "cancelled", "superseded", "applied"],
             "proposalBinding": ["proposalVersion", "effectDigest", "contractFingerprint"],
             "actionAvailability": "advisory_rechecked_on_use",
         },
@@ -813,17 +792,14 @@ fn render_change_request(
                 "dependsOn": effect.depends_on.iter().collect::<Vec<_>>(),
             })
         }).collect::<Vec<_>>(),
-        "stages": request.stages,
         "actions": request.actions.iter().map(|action| json!({
             "operation": operation_name(action.operation.access_operation()),
-            "stage": action.review_stage,
             "method": "POST",
             "requiresIdempotencyKey": true,
             "requiresRecordPrecondition": true,
             "inputSchema": openapi_input_schema_id(&entity.id, action.operation.access_operation()),
             "responseSchema": "ChangeRequestActionResponse",
         })).collect::<Vec<_>>(),
-        "reviewPermissions": request.review_permissions,
         "applyPermissions": request.apply_permissions,
         "presencePermissions": request.presence_permissions,
         "targetEntities": request.target_entities,
@@ -858,9 +834,9 @@ pub(crate) fn request_capability_metadata(
     };
     json!({
         "planner": planner,
-        "reviewMode": render_request_review_mode(request.review_mode),
-        "stages": request.stages,
-        "application": render_request_application(&request.application),
+        "review": request.review,
+        "onApproved": request.on_approved,
+        "application": request.application,
     })
 }
 
@@ -899,43 +875,6 @@ fn render_request_planner(
             }).collect::<Vec<_>>(),
         }),
     }
-}
-
-fn render_request_review_mode(mode: CompiledChangeRequestReviewMode) -> &'static str {
-    match mode {
-        CompiledChangeRequestReviewMode::None => "none",
-        CompiledChangeRequestReviewMode::Stages => "staged",
-    }
-}
-
-fn render_request_application(application: &CompiledChangeRequestApplication) -> Value {
-    let mode = match application.mode {
-        CompiledChangeRequestApplicationMode::Manual => "manual",
-        CompiledChangeRequestApplicationMode::Automatic => "automatic",
-        CompiledChangeRequestApplicationMode::Planner => "planner",
-    };
-    let allowed_dispositions = match application.mode {
-        CompiledChangeRequestApplicationMode::Manual => vec!["queue"],
-        CompiledChangeRequestApplicationMode::Automatic => vec!["apply"],
-        CompiledChangeRequestApplicationMode::Planner => application
-            .allowed_dispositions
-            .iter()
-            .map(|disposition| match disposition {
-                CompiledChangeRequestDisposition::Apply => "apply",
-                CompiledChangeRequestDisposition::Queue => "queue",
-            })
-            .collect::<Vec<_>>(),
-    };
-    let queue_reasons = application
-        .queue_reasons
-        .iter()
-        .map(|(code, label)| json!({"code": code, "label": label}))
-        .collect::<Vec<_>>();
-    json!({
-        "mode": mode,
-        "allowedDispositions": allowed_dispositions,
-        "queueReasons": queue_reasons,
-    })
 }
 
 fn render_request_retention(mode: CompiledChangeRequestRetentionMode) -> Value {
@@ -1982,6 +1921,7 @@ fn openapi_document(
         .map(|(id, schema)| (id.clone(), schema.clone()))
         .collect();
     component_schemas.extend(input_schemas);
+    append_review_completion_openapi(&mut paths, &mut component_schemas);
     let has_request_actions = routes
         .routes
         .iter()
@@ -1992,6 +1932,68 @@ fn openapi_document(
         "paths": paths,
         "components": openapi_components(component_schemas, has_request_actions, has_immediate_actions)
     })
+}
+
+pub(crate) fn append_review_completion_openapi(
+    paths: &mut Map<String, Value>,
+    schemas: &mut Map<String, Value>,
+) {
+    schemas.insert(
+        "ReviewCompletion".to_owned(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "type": {"const": "review.completed"},
+                "eventId": {"type": "string", "format": "uuid"},
+                "requestId": {"type": "string", "format": "uuid"},
+                "resultId": {"type": "string", "format": "uuid"},
+                "completedAt": {"type": "string", "format": "date-time"}
+            },
+            "required": ["type", "eventId", "requestId", "resultId", "completedAt"]
+        }),
+    );
+    paths.insert(
+        "/v1/review-completions".to_owned(),
+        json!({
+            "post": {
+                "operationId": "receiveReviewCompletion",
+                "summary": "Receive a Casework review completion",
+                "description": "Available when a review authority configures a completion token and recipient binding.",
+                "security": [{"bearerAuth": []}],
+                "parameters": [
+                    {
+                        "name": "Registry-Recipient-Binding",
+                        "in": "header",
+                        "required": true,
+                        "schema": {"type": "string", "minLength": 1, "maxLength": 256}
+                    },
+                    {
+                        "name": "Idempotency-Key",
+                        "in": "header",
+                        "required": true,
+                        "description": "Must equal eventId.",
+                        "schema": {"type": "string", "format": "uuid"}
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/ReviewCompletion"}
+                        }
+                    }
+                },
+                "responses": {
+                    "204": {"description": "Completion accepted or already recorded."},
+                    "400": {"description": "The completion or idempotency binding is invalid."},
+                    "401": {"description": "The completion authority could not be authenticated."},
+                    "415": {"description": "The request is not application/json."},
+                    "503": {"description": "The completion could not be durably recorded."}
+                }
+            }
+        }),
+    );
 }
 
 #[derive(Clone, Copy)]
@@ -2212,9 +2214,6 @@ fn operation_response_shape(spec: OpenApiOperationSpec<'_>) -> &'static str {
         Operation::Batch => "BRegAtomicBatchMutationResponseV1",
         Operation::Invoke => "BRegImmediateActionResponseV1",
         Operation::SubmitRequest
-        | Operation::ApproveRequest
-        | Operation::RejectRequest
-        | Operation::RequestRevision
         | Operation::ReviseRequest
         | Operation::CancelRequest
         | Operation::ApplyRequest => "BRegChangeRequestActionResponseV1",
@@ -2232,7 +2231,6 @@ fn geojson_operation_response_shape(spec: OpenApiOperationSpec<'_>) -> &'static 
 fn render_request_action(spec: OpenApiOperationSpec<'_>) -> Value {
     json!({
         "operation": operation_name(spec.route.operation),
-        "stage": spec.route.request_stage,
         "method": method_name(spec.route.method),
         "path": spec.route.path,
         "requestEntity": spec.route.entity_id,
@@ -2261,19 +2259,6 @@ fn request_action_target_entities(spec: OpenApiOperationSpec<'_>) -> Vec<String>
         OpenApiAccessProfiles::Selected(profile) => {
             let mut targets = BTreeSet::new();
             match spec.route.operation {
-                Operation::ApproveRequest
-                | Operation::RejectRequest
-                | Operation::RequestRevision => {
-                    if let Some(stage) = spec.route.request_stage.as_deref() {
-                        targets.extend(
-                            request
-                                .review_permissions
-                                .iter()
-                                .filter(|grant| grant.profile_id == profile && grant.stage == stage)
-                                .map(|grant| grant.target_entity_id.clone()),
-                        );
-                    }
-                }
                 Operation::ApplyRequest => {
                     targets.extend(
                         request
@@ -2304,13 +2289,7 @@ fn request_action_target_entities(spec: OpenApiOperationSpec<'_>) -> Vec<String>
 
 fn request_action_preconditions(operation: Operation) -> Vec<&'static str> {
     let mut preconditions = vec!["Idempotency-Key", "If-Match"];
-    if matches!(
-        operation,
-        Operation::ApproveRequest
-            | Operation::RejectRequest
-            | Operation::RequestRevision
-            | Operation::ApplyRequest
-    ) {
+    if operation == Operation::ApplyRequest {
         preconditions.push("proposalVersion");
         preconditions.push("effectDigest");
     }
@@ -2444,9 +2423,6 @@ fn operation_parameters(
         Operation::Revisions => {}
         Operation::Invoke => {}
         Operation::SubmitRequest
-        | Operation::ApproveRequest
-        | Operation::RejectRequest
-        | Operation::RequestRevision
         | Operation::ReviseRequest
         | Operation::CancelRequest
         | Operation::ApplyRequest => {
@@ -2666,9 +2642,6 @@ fn operation_request_body(spec: OpenApiOperationSpec<'_>) -> Option<Value> {
         | Operation::Snapshot => None,
         Operation::Invoke => None,
         Operation::SubmitRequest
-        | Operation::ApproveRequest
-        | Operation::RejectRequest
-        | Operation::RequestRevision
         | Operation::ReviseRequest
         | Operation::CancelRequest
         | Operation::ApplyRequest => Some(json_request_body(json!({
@@ -2913,9 +2886,6 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
             json!({"type": "object"}),
         ),
         Operation::SubmitRequest
-        | Operation::ApproveRequest
-        | Operation::RejectRequest
-        | Operation::RequestRevision
         | Operation::ReviseRequest
         | Operation::CancelRequest
         | Operation::ApplyRequest => success_response(
@@ -3269,8 +3239,6 @@ fn request_record_metadata_schema() -> Value {
             "applierReference": {"type": "string", "minLength": 1, "maxLength": 512},
             "effectDigest": nullable_effect_digest_schema(),
             "proposal": request_proposal_schema(),
-            "review": request_review_metadata_schema(),
-            "reviewTiming": request_review_timing_metadata_schema(),
             "editable": {"type": "boolean"},
             "detailErased": {"const": true},
             "actions": {
@@ -3279,8 +3247,8 @@ fn request_record_metadata_schema() -> Value {
                 "items": request_action_link_schema(),
             },
             "application": request_application_metadata_schema(false),
+            "review": request_review_metadata_schema(),
             "history": retained_request_history_schema(),
-            "decisions": request_decisions_schema(),
         }
     })
 }
@@ -3289,40 +3257,84 @@ fn request_review_metadata_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["stages", "submittedAt", "pendingStage", "stageEnteredAt"],
+        "required": ["submission", "result", "delivery", "application", "recovery"],
         "properties": {
-            "stages": {
-                "type": "array",
-                "maxItems": 32,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["id", "approvals", "excludeSubmitter"],
-                    "properties": {
-                        "id": review_stage_id_schema(),
-                        "approvals": {"type": "integer", "minimum": 1, "maximum": 32},
-                        "excludeSubmitter": {"type": "boolean"},
-                        "excludePreviousReviewers": {"type": "boolean"}
+            "submission": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state", "authority"],
+                "properties": {
+                    "state": {"type": "string", "enum": ["pending", "accepted", "uncertain", "cancelling", "cancelled", "failed"]},
+                    "authority": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "requestId": {"type": "string", "format": "uuid"},
+                    "submissionDigest": effect_digest_schema(),
+                    "recoveryDeadline": {"type": "string", "format": "date-time", "maxLength": 128},
+                    "policy": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["id", "version", "digest"],
+                        "properties": {
+                            "id": {"type": "string", "minLength": 1, "maxLength": 128},
+                            "version": {"type": "string", "minLength": 1, "maxLength": 128},
+                            "digest": effect_digest_schema()
+                        }
                     }
                 }
             },
-            "submittedAt": {"type": "string", "format": "date-time", "maxLength": 128},
-            "pendingStage": {"anyOf": [review_stage_id_schema(), {"type": "null"}]},
-            "stageEnteredAt": {"type": ["string", "null"], "format": "date-time", "maxLength": 128}
-        }
-    })
-}
-
-fn request_review_timing_metadata_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["firstSubmittedAt", "pausedMilliseconds", "pauseStartedAt", "completedAt"],
-        "properties": {
-            "firstSubmittedAt": {"type": "string", "format": "date-time", "maxLength": 128},
-            "pausedMilliseconds": {"type": "integer", "format": "int64", "minimum": 0, "maximum": 9_007_199_254_740_991_i64},
-            "pauseStartedAt": {"type": ["string", "null"], "format": "date-time", "maxLength": 128},
-            "completedAt": {"type": ["string", "null"], "format": "date-time", "maxLength": 128}
+            "result": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state"],
+                "properties": {
+                    "state": {"type": "string", "enum": ["pending", "approved", "rejected", "changesRequested", "answered", "cancelled", "superseded"]},
+                    "resultId": {"type": "string", "format": "uuid"},
+                    "completedAt": {"type": "string", "format": "date-time", "maxLength": 128},
+                    "availableUntil": {"type": "string", "format": "date-time", "maxLength": 128}
+                }
+            },
+            "delivery": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state"],
+                "properties": {
+                    "state": {"type": "string", "enum": ["polling", "received", "reconciled", "unmatched", "exhausted"]},
+                    "eventId": {"type": "string", "format": "uuid"},
+                    "receivedAt": {"type": "string", "format": "date-time", "maxLength": 128}
+                }
+            },
+            "application": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["mode", "state"],
+                "allOf": [{
+                    "if": {"required": ["receiptRecovered"]},
+                    "then": {
+                        "properties": {
+                            "mode": {"const": "automatic"},
+                            "state": {"const": "applied"}
+                        },
+                        "required": ["applicationId"]
+                    }
+                }],
+                "properties": {
+                    "mode": {"type": "string", "enum": ["manual", "automatic"]},
+                    "state": {"type": "string", "enum": ["awaitingReview", "ready", "queued", "applying", "applied", "blocked"]},
+                    "executor": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "applicationId": {"type": "string", "format": "uuid"},
+                    "attempts": {"type": "integer", "minimum": 0, "maximum": 1000},
+                    "nextAttemptAt": {"type": "string", "format": "date-time", "maxLength": 128},
+                    "receiptRecovered": {"const": true}
+                }
+            },
+            "recovery": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["state"],
+                "properties": {
+                    "state": {"type": "string", "enum": ["none", "operatorAttention"]},
+                    "code": {"type": "string", "minLength": 1, "maxLength": 128}
+                }
+            }
         }
     })
 }
@@ -3335,51 +3347,14 @@ fn request_action_link_schema() -> Value {
         "properties": {
             "operation": {
                 "type": "string",
-                "enum": ["submit_request", "approve_request", "reject_request", "request_revision", "revise_request", "cancel_request", "apply_request"]
+                "enum": ["submit_request", "revise_request", "cancel_request", "apply_request"]
             },
             "method": {"const": "POST"},
             "href": {"type": "string", "maxLength": 2048},
             "ifMatch": {"type": "string", "pattern": "^\\\"breg-[\\x21\\x23-\\x7E]+\\\"$"},
-            "stage": {"type": "string", "minLength": 1},
             "rebase": {"type": "boolean"},
             "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
-            "effectDigest": effect_digest_schema(),
-            "review": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["targets"],
-                "properties": {
-                    "targets": {
-                        "type": "array",
-                        "maxItems": 16,
-                        "items": request_review_target_schema(),
-                    }
-                }
-            }
-        }
-    })
-}
-
-fn request_review_target_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["entityId", "recordId", "operation", "baseRevision", "before", "after"],
-        "properties": {
-            "entityId": {"type": "string"},
-            "recordId": {"type": "string", "format": "uuid"},
-            "operation": {"type": "string", "enum": ["create", "patch"]},
-            "baseRevision": {"type": ["integer", "null"], "format": "int64", "minimum": 1},
-            "before": {
-                "type": ["object", "null"],
-                "maxProperties": 128,
-                "additionalProperties": true,
-            },
-            "after": {
-                "type": "object",
-                "maxProperties": 128,
-                "additionalProperties": true,
-            }
+            "effectDigest": effect_digest_schema()
         }
     })
 }
@@ -3407,33 +3382,7 @@ fn request_application_metadata_schema(require_receipt_fields: bool) -> Value {
             "effectDigest": effect_digest_schema(),
             "appliedAt": {"type": "string", "format": "date-time"},
             "reasonPresent": {"type": "boolean"},
-            "reason": review_reason_schema()
-        }
-    })
-}
-
-fn request_decisions_schema() -> Value {
-    json!({
-        "type": "array",
-        "maxItems": 1024,
-        "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["stageId", "kind", "decidedAt", "reasonPresent"],
-            "allOf": [
-                {
-                    "if": {"properties": {"reasonPresent": {"const": false}}},
-                    "then": {"not": {"required": ["reason"]}}
-                }
-            ],
-            "properties": {
-                "stageId": review_stage_id_schema(),
-                "kind": {"enum": ["approve", "reject", "request_revision"]},
-                "decidedAt": {"type": "string", "format": "date-time", "maxLength": 128},
-                "reasonPresent": {"type": "boolean"},
-                "actorReference": {"type": "string", "minLength": 1, "maxLength": 512},
-                "reason": review_reason_schema()
-            }
+            "reason": application_reason_schema()
         }
     })
 }
@@ -3486,8 +3435,7 @@ fn retained_request_history_schema() -> Value {
                                 }
                             }
                         },
-                        "effectDigest": effect_digest_schema(),
-                        "decisions": request_decisions_schema()
+                        "effectDigest": effect_digest_schema()
                     }
                 }
             },
@@ -3520,7 +3468,7 @@ fn request_presence_metadata_schema() -> Value {
 }
 
 fn request_state_schema() -> Value {
-    json!({"type": "string", "enum": ["draft", "submitted", "approved", "needs_changes", "rejected", "canceled", "applied"]})
+    json!({"type": "string", "enum": ["draft", "submitted", "cancelled", "applied", "superseded"]})
 }
 
 fn effect_digest_schema() -> Value {
@@ -3836,27 +3784,26 @@ fn request_proposal_schema() -> Value {
             {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["reviewMode", "applicationDisposition"],
+                "required": ["review"],
                 "properties": {
-                    "reviewMode": {"type": "string", "enum": ["none", "staged"]},
-                    "applicationDisposition": {"const": "apply"}
-                }
-            },
-            {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["reviewMode", "applicationDisposition"],
-                "properties": {
-                    "reviewMode": {"type": "string", "enum": ["none", "staged"]},
-                    "applicationDisposition": {"const": "queue"},
-                    "queueReason": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["code", "label"],
-                        "properties": {
-                            "code": {"type": "string", "maxLength": 128},
-                            "label": {"type": "string", "minLength": 1, "maxLength": 160}
-                        }
+                    "review": {
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["authority", "policyId"],
+                                "properties": {
+                                    "authority": {"type": "string", "minLength": 1, "maxLength": 512},
+                                    "policyId": {"type": "string", "minLength": 1, "maxLength": 512}
+                                }
+                            },
+                            {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["mode"],
+                                "properties": {"mode": {"const": "none"}}
+                            }
+                        ]
                     }
                 }
             },
@@ -4471,9 +4418,6 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::Revisions => "revisions",
         Operation::Snapshot => "snapshot",
         Operation::SubmitRequest => "submit_request",
-        Operation::ApproveRequest => "approve_request",
-        Operation::RejectRequest => "reject_request",
-        Operation::RequestRevision => "request_revision",
         Operation::ReviseRequest => "revise_request",
         Operation::CancelRequest => "cancel_request",
         Operation::ApplyRequest => "apply_request",
@@ -4485,9 +4429,6 @@ fn is_request_action(operation: Operation) -> bool {
     matches!(
         operation,
         Operation::SubmitRequest
-            | Operation::ApproveRequest
-            | Operation::RejectRequest
-            | Operation::RequestRevision
             | Operation::ReviseRequest
             | Operation::CancelRequest
             | Operation::ApplyRequest
@@ -4544,13 +4485,8 @@ mod problem_contract_tests {
     use super::*;
 
     #[test]
-    fn review_action_reason_contract_is_optional_bounded_and_closed() {
-        for operation in [
-            Operation::RejectRequest,
-            Operation::RequestRevision,
-            Operation::ApproveRequest,
-            Operation::ApplyRequest,
-        ] {
+    fn application_reason_contract_is_optional_bounded_and_closed() {
+        for operation in [Operation::ApplyRequest] {
             let schema = openapi_request_action_input_schema(operation);
             let validator = jsonschema::JSONSchema::options()
                 .with_draft(jsonschema::Draft::Draft202012)
@@ -4583,21 +4519,24 @@ mod problem_contract_tests {
     }
 
     #[test]
-    fn decision_schema_preserves_presence_without_exposing_private_fields() {
-        let schema = request_decisions_schema();
+    fn proposal_schema_exposes_only_the_frozen_review_binding() {
+        let schema = request_proposal_schema();
         let validator = jsonschema::JSONSchema::options()
             .with_draft(jsonschema::Draft::Draft202012)
             .compile(&schema)
             .unwrap();
-        let mut decisions = json!([{"stageId":"review", "kind":"reject", "decidedAt":"2026-09-09T00:00:00Z", "reasonPresent":true}]);
-        assert!(validator.is_valid(&decisions));
-        decisions[0]["reason"] = json!(" Please clarify. ");
-        assert!(validator.is_valid(&decisions));
-        for field in ["actor", "reasonDigest"] {
-            decisions[0][field] = json!("private");
-            assert!(!validator.is_valid(&decisions));
-            decisions[0].as_object_mut().unwrap().remove(field);
-        }
+        assert!(validator.is_valid(&json!({
+            "review": {"authority": "casework-main", "policyId": "request-review"}
+        })));
+        assert!(validator.is_valid(&json!({"review": {"mode": "none"}})));
+        assert!(validator.is_valid(&Value::Null));
+        assert!(!validator.is_valid(&json!({
+            "review": {"authority": "casework-main"}
+        })));
+        assert!(!validator.is_valid(&json!({
+            "review": {"mode": "none"},
+            "unexpected": "value"
+        })));
     }
 
     #[test]

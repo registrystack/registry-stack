@@ -640,8 +640,9 @@ fn change_request_project() -> Value {
             ],
             "changeRequest":{
                 "effects":[{"id":"release","target":{"fromField":"lot"}, "operation":"patch", "set":{"release-state":{"fromField":"release-state"}}}],
-                "review":{"stages":[{"id":"review","approvals":1}]},
-                "application":{"mode":"manual","preconditions":{
+                "review":{"authority":"casework-main","policyId":"lot-release"},
+                "onApproved":{"mode":"manual"},
+                "application":{"preconditions":{
                     "request":[
                         {"field":"valid-from","currentDate":"on_or_before"},
                         {"field":"valid-through","currentDate":"on_or_after"}
@@ -667,9 +668,8 @@ fn change_request_project() -> Value {
         }],
         "accessProfiles":[{"id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
             "entity":"release-request",
-            "operations":["get","submit_request","approve_request","reject_request","request_revision","apply_request"],
+            "operations":["get","submit_request","apply_request"],
             "readableFields":["lot","owner-reference","report-reference","release-state","valid-from","valid-through"],
-            "reviewStages":[{"stage":"review","targets":[{"entity":"lot","readableFields":["release-state"],"rowBoundaries":[]}]}],
             "applyTargets":[{"entity":"lot","rowBoundaries":[]}],"rowBoundaries":[]
         }]}]
     })
@@ -811,12 +811,6 @@ fn change_request_targets_and_value_sources_refuse_encrypted_fields() {
         .push(json!({
             "id":"clear-notes","target":{"fromField":"lot"},"operation":"patch","clear":["notes"]
         }));
-    // The review projection must cover every changed target field.
-    clear_base["accessProfiles"][0]["permissions"][0]["reviewStages"][0]["targets"][0]
-        ["readableFields"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!("notes"));
     compile_request(&clear_base).expect("the plaintext clear compiles");
     let mut clear_target = clear_base.clone();
     clear_target["entities"][0]["fields"][4]["encrypted"] = json!(true);

@@ -2,7 +2,7 @@ apiVersion: registry.registrystack.org/casework-fixture/v1alpha1
 kind: CaseworkFixture
 name: professional-review-offline
 source:
-  id: professional-register
+  id: professional-licences
   requestEntity: scope-correction
   reviewStage: review
 expect:

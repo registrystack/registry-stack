@@ -12,18 +12,15 @@ use crate::change_request::MAX_CHANGE_REQUEST_SNAPSHOT_BYTES;
 use crate::contract::Operation;
 use crate::data::{validate_field_value, FieldValue as DataFieldValue};
 use crate::model::{
-    CompiledChangeRequestApplicationMode, CompiledChangeRequestDisposition,
-    CompiledChangeRequestMutation, CompiledChangeRequestReviewMode,
-    CompiledChangeRequestTargetBinding, CompiledChangeRequestValue, CompiledEntity,
-    CompiledRegistry,
+    CompiledChangeRequestMutation, CompiledChangeRequestTargetBinding, CompiledChangeRequestValue,
+    CompiledEntity, CompiledRegistry,
 };
 use crate::mutation::MutationError;
 use crate::request_workflow::{
     ContractFingerprint, EffectId, EntityId, FieldId, FieldValue, FrozenApplicationPreconditions,
-    FrozenGuardTargetSnapshot, FrozenPlannerDisposition, FrozenPlannerKind, FrozenPlanningBinding,
-    FrozenQueueReason, FrozenReviewPolicy, PackageFingerprint, PreparedEffect, PreparedFieldChange,
-    PreparedProposal, PreparedTarget, ProposalDigest, RecordId, RecordRevision,
-    MAX_REQUEST_SNAPSHOT_BYTES,
+    FrozenGuardTargetSnapshot, FrozenPlannerKind, FrozenPlanningBinding, PackageFingerprint,
+    PreparedEffect, PreparedFieldChange, PreparedProposal, PreparedTarget, ProposalDigest,
+    RecordId, RecordRevision, MAX_REQUEST_SNAPSHOT_BYTES,
 };
 use crate::rhai_planner::{
     CandidateChangeRequestEffect, CandidateChangeRequestMutation,
@@ -304,20 +301,16 @@ pub(crate) fn prepare(
         return Err(MutationError::InvalidRequest);
     }
     let planning = frozen_planning_binding(&resolved.candidate)?;
-    let review = match plan.review_mode {
-        CompiledChangeRequestReviewMode::None => FrozenReviewPolicy::None,
-        CompiledChangeRequestReviewMode::Stages => FrozenReviewPolicy::Stages,
-    };
     let mut proposal = workflow(PreparedProposal::new_with_binding(
         workflow(RecordRevision::new(request_record_revision))?,
         workflow(ContractFingerprint::new(&plan.contract_fingerprint))?,
         workflow(PackageFingerprint::new(package_fingerprint))?,
-        review,
+        plan.review.clone(),
         planning,
-        plan.stages.clone(),
         effects,
         bytes,
     ))?;
+    proposal = workflow(proposal.with_on_approved(plan.on_approved.clone()))?;
     if !plan.application.preconditions.is_empty() {
         let expected_guards = plan
             .application
@@ -523,35 +516,6 @@ fn verify_candidate(
             > usize::from(plan.maximum_field_mutations)
     {
         return Err(MutationError::InvalidRequest);
-    }
-    match plan.application.mode {
-        CompiledChangeRequestApplicationMode::Manual
-            if candidate.disposition != CompiledChangeRequestDisposition::Queue =>
-        {
-            return Err(MutationError::InvalidRequest);
-        }
-        CompiledChangeRequestApplicationMode::Automatic
-            if candidate.disposition != CompiledChangeRequestDisposition::Apply =>
-        {
-            return Err(MutationError::InvalidRequest);
-        }
-        CompiledChangeRequestApplicationMode::Planner
-            if !plan
-                .application
-                .allowed_dispositions
-                .contains(&candidate.disposition) =>
-        {
-            return Err(MutationError::InvalidRequest);
-        }
-        _ => {}
-    }
-    match (&candidate.disposition, &candidate.queue_reason) {
-        (CompiledChangeRequestDisposition::Apply, None) => {}
-        (CompiledChangeRequestDisposition::Queue, None)
-            if plan.application.mode == CompiledChangeRequestApplicationMode::Manual => {}
-        (CompiledChangeRequestDisposition::Queue, Some(reason))
-            if plan.application.queue_reasons.get(&reason.code) == Some(&reason.label) => {}
-        _ => return Err(MutationError::InvalidRequest),
     }
     let binding = &candidate.planner_binding;
     if binding.abi_identifier != crate::contract::CHANGE_REQUEST_PLAN_ABI_V1 {
@@ -818,22 +782,7 @@ fn frozen_planning_binding(
         .as_ref()
         .map(|digest| workflow(ProposalDigest::new(digest)))
         .transpose()?;
-    let disposition = match candidate.disposition {
-        CompiledChangeRequestDisposition::Apply => FrozenPlannerDisposition::Apply,
-        CompiledChangeRequestDisposition::Queue => FrozenPlannerDisposition::Queue,
-    };
-    let queue_reason = candidate
-        .queue_reason
-        .as_ref()
-        .map(|reason| workflow(FrozenQueueReason::new(&reason.code, &reason.label)))
-        .transpose()?;
-    workflow(FrozenPlanningBinding::new(
-        kind,
-        abi,
-        script,
-        disposition,
-        queue_reason,
-    ))
+    workflow(FrozenPlanningBinding::new(kind, abi, script))
 }
 
 fn canonical_size(data: &Map<String, Value>) -> Result<usize, MutationError> {

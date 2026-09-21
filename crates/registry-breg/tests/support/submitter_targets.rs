@@ -9,6 +9,8 @@ fn starter_source() -> Value {
         "../../../../products/breg/starters/professional-licences/core/registry.yaml"
     ))
     .expect("starter parses");
+    source["entities"][1]["changeRequest"]["review"] = json!({"mode":"none"});
+    source["entities"][1]["changeRequest"]["onApproved"] = json!({"mode":"manual"});
     let reviewer = source["accessProfiles"]
         .as_array_mut()
         .expect("starter access profiles")
@@ -37,6 +39,8 @@ fn create_only_guard_starter() -> registry_breg::CompiledRegistry {
         "../../../../products/breg/starters/professional-licences/core/registry.yaml"
     ))
     .expect("starter source parses");
+    source["entities"][1]["changeRequest"]["review"] = json!({"mode":"none"});
+    source["entities"][1]["changeRequest"]["onApproved"] = json!({"mode":"manual"});
     source["entities"].as_array_mut().unwrap().push(json!({
         "id":"enrolment", "primaryDataset":"directory", "route":"enrolments",
         "mutationMode":"create_only", "classification":"restricted",
@@ -51,7 +55,6 @@ fn create_only_guard_starter() -> registry_breg::CompiledRegistry {
         "set":{"supporting-reference":{"fromField":"supporting-reference"}}
     }]);
     source["entities"][1]["changeRequest"]["application"] = json!({
-        "mode":"manual",
         "preconditions":{"targets":[{
             "id":"licence-guard", "entity":"professional-license", "fromField":"record",
             "requires":[{"field":"person-reference", "equals":"person:a"}]
@@ -63,13 +66,10 @@ fn create_only_guard_starter() -> registry_breg::CompiledRegistry {
         .iter_mut()
         .find(|profile| profile["id"] == "reviewer")
         .unwrap();
-    reviewer["permissions"][1]["reviewStages"][0]["targets"] = json!([{
-        "entity":"enrolment", "readableFields":["supporting-reference"], "rowBoundaries":[]
-    }]);
-    reviewer["permissions"][1]["applyTargets"] = json!([
-        {"entity":"enrolment", "rowBoundaries":[]},
-        {"entity":"professional-license", "rowBoundaries":[]}
-    ]);
+    reviewer["permissions"][1]["applyTargets"]
+        .as_array_mut()
+        .expect("reviewer apply targets")
+        .push(json!({"entity":"enrolment", "rowBoundaries":[]}));
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).expect("source parses");
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("create-only request with guarded owner target compiles")
@@ -281,24 +281,8 @@ async fn native_reference_submitter_admission_is_live_and_atomic() {
     assert_eq!(submitted.status, StatusCode::OK, "{}", submitted.body);
     let submitted_retry = send_action(&app, &submit, "own-submit", first.clone(), json!({})).await;
     assert_eq!(submitted_retry.body, submitted.body);
-    let approved_page = get_record(
-        &app,
-        &format!("/v1/records/scope-corrections/{id}?accessProfile=reviewer"),
-        actor("reviewer", "reviewer", None),
-    )
-    .await;
-    let approve = action(&approved_page.body, "approve_request", Some("review"));
-    let approved = send_action(
-        &app,
-        &approve,
-        "review-own",
-        actor("reviewer", "reviewer", None),
-        json!({"proposalVersion":approve.proposal_version,"effectDigest":approve.effect_digest}),
-    )
-    .await;
-    assert_eq!(approved.status, StatusCode::OK, "{}", approved.body);
-    let approved_owner = get_record(&app, &uri, first.clone()).await;
-    let rebase = action(&approved_owner.body, "revise_request", None);
+    let submitted_owner = get_record(&app, &uri, first.clone()).await;
+    let rebase = action(&submitted_owner.body, "revise_request", None);
     // A trusted administrative ownership change must stop fresh intake and preparation.
     let entity = &registry.entities()["professional-license"];
     database
@@ -435,7 +419,7 @@ async fn native_reference_submitter_admission_is_live_and_atomic() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn review_snapshots_require_current_target_authority() {
+async fn submitted_source_context_requires_current_target_authority() {
     let mut source = starter_source();
     let reviewer = source["accessProfiles"]
         .as_array_mut()
@@ -443,8 +427,9 @@ async fn review_snapshots_require_current_target_authority() {
         .iter_mut()
         .find(|profile| profile["id"] == "reviewer")
         .unwrap();
-    reviewer["permissions"][1]["reviewStages"][0]["targets"][0]["rowBoundaries"] =
-        json!([{"field":"person-reference","claim":"person_reference","operator":"equals"}]);
+    reviewer["permissions"][0]["rowBoundaries"] = json!([{
+        "field":"person-reference", "claim":"person_reference", "operator":"equals"
+    }]);
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
     let database = TestDatabase::create(8).await;
@@ -488,7 +473,10 @@ async fn review_snapshots_require_current_target_authority() {
     );
     let reviewer_uri = format!("/v1/records/scope-corrections/{id}?accessProfile=reviewer");
     let before = get_record(&app, &reviewer_uri, reviewer_claims.clone()).await;
-    assert!(before.body.to_string().contains("prior scope canary"));
+    assert!(
+        !before.body.to_string().contains("prior scope canary"),
+        "a read-only request profile does not inherit frozen target disclosure"
+    );
     let entity = &registry.entities()["professional-license"];
     database
         .admin

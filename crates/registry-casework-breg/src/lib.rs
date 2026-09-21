@@ -23,24 +23,16 @@ use std::{
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use zeroize::Zeroizing;
 
-/// One stage imported from the source's governed request description. It is
-/// routing metadata only and does not grant source access or decision authority.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BregReviewStage {
-    pub id: String,
-    pub approvals: u64,
-    pub exclude_submitter: bool,
-    pub exclude_previous_reviewers: bool,
-}
-
 /// One imported request entry. This does not grant source access.
 #[derive(Clone, Debug)]
 pub struct BregSourceConfig {
     pub source_id: String,
     pub entity: String,
     pub route: String,
-    pub stages: Vec<BregReviewStage>,
     pub routing_metadata: RoutingSourceMetadata,
+    /// Imported source descriptors for the exact fields a current human read
+    /// may disclose through the unified review-task context endpoint.
+    pub context_projection: Vec<RoutingFieldDescriptor>,
     pub display_reference: Option<RoutingFieldDescriptor>,
     pub binding_generation: String,
     pub expected_registry_revision: String,
@@ -83,22 +75,7 @@ impl BregAdapter {
         .iter()
         .any(|v| v.is_empty() || v.len() > 512)
             || webhook_key.len() < MIN_HMAC_SHA256_KEY_BYTES
-            || config.stages.is_empty()
-            || config.stages.len() > MAX_BREG_REVIEW_STAGES
-            || config.stages.iter().any(|stage| {
-                !valid_stage_identifier(&stage.id) || !(1..=32).contains(&stage.approvals)
-            })
-            || config.stages.iter().enumerate().any(|(index, stage)| {
-                config.stages[..index]
-                    .iter()
-                    .any(|prior| prior.id == stage.id)
-            })
-            || config.routing_metadata.stages
-                != config
-                    .stages
-                    .iter()
-                    .map(|stage| stage.id.clone())
-                    .collect::<Vec<_>>()
+            || !config.routing_metadata.stages.is_empty()
             || config.routing_metadata.fields.iter().any(|field| {
                 field.field.is_empty()
                     || field.field.len() > 512
@@ -113,6 +90,24 @@ impl BregAdapter {
                 .enumerate()
                 .any(|(index, field)| {
                     config.routing_metadata.fields[..index]
+                        .iter()
+                        .any(|prior| prior.field == field.field || prior.api_name == field.api_name)
+                })
+            || config.context_projection.len() > 32
+            || config.context_projection.iter().any(|field| {
+                field.field.is_empty()
+                    || field.field.len() > 128
+                    || field.api_name.is_empty()
+                    || field.api_name.len() > 128
+                    || !matches!(&field.schema, Value::Object(_) | Value::Bool(_))
+                    || !check_source_field_descriptor(field)
+            })
+            || config
+                .context_projection
+                .iter()
+                .enumerate()
+                .any(|(index, field)| {
+                    config.context_projection[..index]
                         .iter()
                         .any(|prior| prior.field == field.field || prior.api_name == field.api_name)
                 })
@@ -171,9 +166,7 @@ impl BregAdapter {
             .options(Self::options(&self.config.reader_profile)?)
             .top(1)
             .map_err(|_| SourceAdapterError::Invalid)?
-            .filter(
-                "bregState eq 'submitted' or bregState eq 'approved' or bregState eq 'needs_changes'",
-            )
+            .filter("bregState eq 'submitted'")
             .map_err(|_| SourceAdapterError::Invalid)?;
         let listed = self.reader.list_records(&self.config.route, &request).await;
         self.read_result(ReadClient::SourceReader, listed)?;
@@ -218,8 +211,9 @@ impl BregAdapter {
                     .iter()
                     .any(|readable| readable == required)
             })
-            // Observation keys each occurrence by the source review stage, so a
-            // reader whose grant conceals review_state cannot run the adapter.
+            // The adapter derives application eligibility and recovery state
+            // from the caller-filtered request projection. A reader whose
+            // grant conceals that projection cannot run the adapter.
             || !operation
                 .readable_request_fields()
                 .iter()
@@ -375,68 +369,38 @@ impl BregAdapter {
         }
     }
 
-    fn observation_review_metadata(
-        &self,
+    fn occurrence_state(
         request: &BRegRequestMetadata,
-    ) -> Result<ObservationReviewMetadata, SourceAdapterError> {
-        let review_timing = request
-            .review_timing()
-            .map(import_review_timing)
-            .transpose()?;
-        let Some(review) = request.review() else {
-            // The review stage is a source fact, never a Casework guess. A
-            // reader whose grant conceals review_state cannot observe it, so
-            // every state that carries a stage is refused rather than keyed
-            // under a stage the granted read would not agree with.
-            if matches!(
-                request.breg_state(),
-                BRegRequestState::Submitted
-                    | BRegRequestState::NeedsChanges
-                    | BRegRequestState::Rejected
-            ) {
-                return Err(SourceAdapterError::Invalid);
+    ) -> Result<OccurrenceState, SourceAdapterError> {
+        match request.breg_state() {
+            BRegRequestState::Draft | BRegRequestState::Superseded => {
+                Ok(OccurrenceState::Superseded)
             }
-            return Ok(ObservationReviewMetadata {
-                stage: None,
-                submitted_at: None,
-                stage_entered_at: None,
-                review_timing,
-            });
-        };
-        // The description is the current policy while this list is frozen to
-        // the proposal. Do not make a compatible source-policy update rewrite
-        // or strand an already-submitted occurrence.
-        if request.decisions().iter().any(|decision| {
-            !review
-                .stages()
-                .iter()
-                .any(|stage| stage.identifier() == decision.stage_id())
-        }) {
-            return Err(SourceAdapterError::Invalid);
+            BRegRequestState::Cancelled => Ok(OccurrenceState::Cancelled),
+            BRegRequestState::Applied => Ok(OccurrenceState::Completed),
+            BRegRequestState::Submitted => match request
+                .review()
+                .map(|review| review.application().state())
+            {
+                Some(BRegExternalReviewApplicationState::AwaitingReview)
+                | Some(BRegExternalReviewApplicationState::Blocked) => {
+                    Ok(OccurrenceState::WaitingApplication)
+                }
+                Some(BRegExternalReviewApplicationState::Ready) => Ok(OccurrenceState::Open),
+                Some(BRegExternalReviewApplicationState::Queued)
+                | Some(BRegExternalReviewApplicationState::Applying) => {
+                    Ok(OccurrenceState::Synchronizing)
+                }
+                Some(BRegExternalReviewApplicationState::Applied) => Ok(OccurrenceState::Completed),
+                None if request
+                    .advertised_operations()
+                    .any(|operation| operation == BRegLifecycleOperation::ApplyRequest) =>
+                {
+                    Ok(OccurrenceState::Open)
+                }
+                None => Ok(OccurrenceState::WaitingApplication),
+            },
         }
-
-        let submitted_at = review.submitted_at().to_owned();
-        let stage_entered_at = review.stage_entered_at().map(str::to_owned);
-        let stage = match request.breg_state() {
-            BRegRequestState::Submitted => review
-                .pending_stage()
-                .map(str::to_owned)
-                .ok_or(SourceAdapterError::Invalid)?,
-            BRegRequestState::NeedsChanges => {
-                terminal_decision_stage(request, BRegRequestDecisionKind::RequestRevision)?
-            }
-            BRegRequestState::Rejected => {
-                terminal_decision_stage(request, BRegRequestDecisionKind::Reject)?
-            }
-            _ if review.pending_stage().is_some() => return Err(SourceAdapterError::Invalid),
-            _ => String::new(),
-        };
-        Ok(ObservationReviewMetadata {
-            stage: (!stage.is_empty()).then_some(stage),
-            submitted_at: Some(submitted_at),
-            stage_entered_at,
-            review_timing,
-        })
     }
 
     fn routing_context(
@@ -452,7 +416,6 @@ impl BregAdapter {
         let activity = match kind {
             OccurrenceKind::Review => RoutingActivity::Review,
             OccurrenceKind::Application => RoutingActivity::Apply,
-            OccurrenceKind::Hosted => return Err(SourceAdapterError::Invalid),
         };
         let fields = self
             .config
@@ -496,71 +459,12 @@ impl BregAdapter {
     }
 }
 
-struct ObservationReviewMetadata {
-    stage: Option<String>,
-    submitted_at: Option<String>,
-    stage_entered_at: Option<String>,
-    review_timing: Option<ReviewTiming>,
-}
-
-fn import_review_timing(
-    timing: &BRegRequestReviewTiming,
-) -> Result<ReviewTiming, SourceAdapterError> {
-    let first_submitted_at = timing
-        .first_submitted_at()
-        .parse()
-        .map_err(|_| SourceAdapterError::Invalid)?;
-    let pause_started_at = timing
-        .pause_started_at()
-        .map(str::parse)
-        .transpose()
-        .map_err(|_| SourceAdapterError::Invalid)?;
-    let completed_at = timing
-        .completed_at()
-        .map(str::parse)
-        .transpose()
-        .map_err(|_| SourceAdapterError::Invalid)?;
-    if pause_started_at.is_some_and(|started| started < first_submitted_at)
-        || completed_at.is_some_and(|completed| completed < first_submitted_at)
-    {
-        return Err(SourceAdapterError::Invalid);
-    }
-    Ok(ReviewTiming {
-        first_submitted_at,
-        paused_milliseconds: i64::try_from(timing.paused_milliseconds())
-            .map_err(|_| SourceAdapterError::Invalid)?,
-        pause_started_at,
-        completed_at,
-    })
-}
-
-fn terminal_decision_stage(
-    request: &BRegRequestMetadata,
-    expected: BRegRequestDecisionKind,
-) -> Result<String, SourceAdapterError> {
-    request
-        .decisions()
-        .last()
-        .filter(|decision| decision.kind() == expected)
-        .map(|decision| decision.stage_id().to_owned())
-        .ok_or(SourceAdapterError::Invalid)
-}
-
 fn valid_source_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 512
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-}
-
-fn valid_stage_identifier(value: &str) -> bool {
-    let mut bytes = value.bytes();
-    value.len() <= 64
-        && bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
-        && bytes.all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
-        })
 }
 
 /// BReg record revisions are canonical positive int64 decimals. This ordering
@@ -606,20 +510,19 @@ fn source_operation(
     operation: &OperationName,
 ) -> Result<BRegLifecycleOperation, SourceAdapterError> {
     match operation.as_str() {
-        "approve" => Ok(BRegLifecycleOperation::ApproveRequest),
-        "reject" => Ok(BRegLifecycleOperation::RejectRequest),
-        "request_correction" => Ok(BRegLifecycleOperation::RequestRevision),
+        "submit" => Ok(BRegLifecycleOperation::SubmitRequest),
+        "revise" => Ok(BRegLifecycleOperation::ReviseRequest),
+        "cancel" => Ok(BRegLifecycleOperation::CancelRequest),
         "apply" => Ok(BRegLifecycleOperation::ApplyRequest),
         _ => Err(SourceAdapterError::Denied),
     }
 }
 fn operation(operation: BRegLifecycleOperation) -> Option<OperationName> {
     match operation {
-        BRegLifecycleOperation::ApproveRequest => OperationName::parse("approve").ok(),
-        BRegLifecycleOperation::RejectRequest => OperationName::parse("reject").ok(),
-        BRegLifecycleOperation::RequestRevision => OperationName::parse("request_correction").ok(),
+        BRegLifecycleOperation::SubmitRequest => OperationName::parse("submit").ok(),
+        BRegLifecycleOperation::ReviseRequest => OperationName::parse("revise").ok(),
+        BRegLifecycleOperation::CancelRequest => OperationName::parse("cancel").ok(),
         BRegLifecycleOperation::ApplyRequest => OperationName::parse("apply").ok(),
-        _ => None,
     }
 }
 
@@ -632,7 +535,6 @@ fn occurrence_key(
         match kind {
             OccurrenceKind::Review => "review",
             OccurrenceKind::Application => "application",
-            OccurrenceKind::Hosted => return Err(SourceAdapterError::Invalid),
         },
         stage,
         binding.version.as_str(),
@@ -653,11 +555,9 @@ fn state_name(state: BRegRequestState) -> &'static str {
     match state {
         BRegRequestState::Draft => "draft",
         BRegRequestState::Submitted => "submitted",
-        BRegRequestState::Approved => "approved",
-        BRegRequestState::NeedsChanges => "needs_changes",
-        BRegRequestState::Rejected => "rejected",
-        BRegRequestState::Canceled => "canceled",
+        BRegRequestState::Cancelled => "cancelled",
         BRegRequestState::Applied => "applied",
+        BRegRequestState::Superseded => "superseded",
     }
 }
 
@@ -820,46 +720,28 @@ impl SourceAdapter for BregAdapter {
             .await?;
         let request = Self::request(&record)?;
         let binding = self.binding(&record, &request)?;
-        let review = self.observation_review_metadata(&request)?;
-        let (kind, state) = match request.breg_state() {
-            BRegRequestState::Draft => (OccurrenceKind::Review, OccurrenceState::Superseded),
-            BRegRequestState::Submitted => (OccurrenceKind::Review, OccurrenceState::Open),
-            BRegRequestState::NeedsChanges => {
-                (OccurrenceKind::Review, OccurrenceState::WaitingApplicant)
-            }
-            BRegRequestState::Approved => (OccurrenceKind::Application, OccurrenceState::Open),
-            BRegRequestState::Rejected | BRegRequestState::Applied => {
-                (OccurrenceKind::Review, OccurrenceState::Completed)
-            }
-            BRegRequestState::Canceled => (OccurrenceKind::Review, OccurrenceState::Cancelled),
-        };
-        let stage = (kind == OccurrenceKind::Review)
-            .then_some(review.stage)
-            .flatten();
-        let routing_context = self.routing_context(&record, kind, state, stage.as_deref())?;
+        let kind = OccurrenceKind::Application;
+        let state = Self::occurrence_state(&request)?;
+        let routing_context = self.routing_context(&record, kind, state, None)?;
+        let remaining_actions = request
+            .advertised_operations()
+            .filter_map(operation)
+            .collect();
         Ok(AuthoritativeObservation {
             subject: subject.clone(),
-            occurrence_key: occurrence_key(kind, stage.as_deref(), &binding)?,
+            occurrence_key: occurrence_key(kind, None, &binding)?,
             ordered_revision: ordered_revision(&record.data.revision_identifier)?,
             representation_etag,
             binding,
             display_reference: self.display_reference(&record)?,
             occurrence_kind: kind,
-            stage,
-            submitted_at: review
-                .submitted_at
-                .map(|value| value.parse())
-                .transpose()
-                .map_err(|_| SourceAdapterError::Invalid)?,
-            stage_entered_at: review
-                .stage_entered_at
-                .map(|value| value.parse())
-                .transpose()
-                .map_err(|_| SourceAdapterError::Invalid)?,
-            review_timing: review.review_timing,
+            stage: None,
+            submitted_at: None,
+            stage_entered_at: None,
+            review_timing: None,
             routing_context,
             state,
-            remaining_actions: vec![],
+            remaining_actions,
         })
     }
 
@@ -884,9 +766,15 @@ impl SourceAdapter for BregAdapter {
                 self.reader.continue_list(&continuation).await
             }
             None => {
-                let request = BRegListRequest::default().options(Self::options(&self.config.reader_profile)?)
-                    .top(u32::try_from(limit.clamp(1,100)).map_err(|_| SourceAdapterError::Invalid)?).map_err(|_| SourceAdapterError::Invalid)?
-                    .filter("bregState eq 'submitted' or bregState eq 'approved' or bregState eq 'needs_changes'").map_err(|_| SourceAdapterError::Invalid)?;
+                let request = BRegListRequest::default()
+                    .options(Self::options(&self.config.reader_profile)?)
+                    .top(
+                        u32::try_from(limit.clamp(1, 100))
+                            .map_err(|_| SourceAdapterError::Invalid)?,
+                    )
+                    .map_err(|_| SourceAdapterError::Invalid)?
+                    .filter("bregState eq 'submitted'")
+                    .map_err(|_| SourceAdapterError::Invalid)?;
                 self.reader.list_records(&self.config.route, &request).await
             }
         };
@@ -949,9 +837,9 @@ impl SourceAdapter for BregAdapter {
         if matches!(
             request.breg_state(),
             BRegRequestState::Draft
-                | BRegRequestState::Rejected
                 | BRegRequestState::Applied
-                | BRegRequestState::Canceled
+                | BRegRequestState::Cancelled
+                | BRegRequestState::Superseded
         ) {
             return Err(SourceAdapterError::Denied);
         }
@@ -988,42 +876,21 @@ impl SourceAdapter for BregAdapter {
             .read(ReadClient::Caller(&caller), subject, profile)
             .await?;
         let request = Self::request(&record)?;
-        let mut reasons: Vec<_> = request
-            .decisions()
-            .iter()
-            .filter_map(|d| d.reason())
-            .map(|s| Value::String(s.to_owned()))
-            .collect();
-        if let Some(history) = request.retained_history() {
-            for proposal in history.proposals() {
-                reasons.extend(
-                    proposal
-                        .decisions()
-                        .iter()
-                        .filter_map(|decision| decision.reason())
-                        .map(|reason| Value::String(reason.to_owned())),
-                );
-            }
-        }
         let mut disclosed = BTreeMap::new();
-        if !reasons.is_empty() {
-            disclosed.insert("reasons".into(), Value::Array(reasons));
+        for field in &self.config.context_projection {
+            let Some(value) = record.data.domain_data.get(&field.api_name) else {
+                // Caller-filtered BReg reads omit fields this exact human and
+                // profile cannot see. Omission must never be widened with the
+                // source reader's service credential.
+                continue;
+            };
+            if validate_source_field_value(field, value).is_err() {
+                return Err(SourceAdapterError::Invalid);
+            }
+            disclosed.insert(field.api_name.clone(), value.clone());
         }
-        if !record.data.domain_data.is_empty() {
-            // Names are used only to filter Casework's routing flags. Values
-            // stay in the caller's direct BReg read and are never copied here.
-            disclosed.insert(
-                "readableFields".into(),
-                Value::Array(
-                    record
-                        .data
-                        .domain_data
-                        .keys()
-                        .cloned()
-                        .map(Value::String)
-                        .collect(),
-                ),
-            );
+        if !serde_json::to_vec(&disclosed).is_ok_and(|bytes| bytes.len() <= 16 * 1024) {
+            return Err(SourceAdapterError::Invalid);
         }
         Ok(CallerSubjectView {
             subject: subject.clone(),
@@ -1253,7 +1120,6 @@ mod tests {
         };
         let review = occurrence_key(OccurrenceKind::Review, Some("review"), &binding)
             .expect("review occurrence key");
-        assert!(occurrence_key(OccurrenceKind::Hosted, None, &binding).is_err());
         let mut changed = binding.clone();
         changed.version = "proposal-2".into();
         assert_ne!(

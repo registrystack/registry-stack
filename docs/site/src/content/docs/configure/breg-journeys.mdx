@@ -209,7 +209,7 @@ journeys:
 | Step member | Meaning |
 |---|---|
 | `claims` | `principal`, `scopes`, `purpose`, and the `directClaims` row boundaries and claim lookups read. Values are synthetic. |
-| `request.operation` | `create`, `get`, `list`, `query`, `lookup`, `read_path`, `patch`, `batch`, `target_conditions`, `invoke`, or a change-request action: `submit_request`, `approve_request`, `reject_request`, and `request_revision` with a `stage`, `revise_request`, `cancel_request`, or `apply_request`. |
+| `request.operation` | `create`, `get`, `list`, `query`, `lookup`, `read_path`, `patch`, `batch`, `target_conditions`, `invoke`, or a source-owned change-request action: `submit_request`, `revise_request`, `cancel_request`, or `apply_request`. External review decisions are tested in Casework, not as BReg fixture operations. |
 | `recordRef`, `etagRef` | A record and ETag captured by an earlier step. `etagRef` sends the ETag as `If-Match`, so a patch fails rather than overwrite a concurrent change. |
 | `data`, `changes`, `items`, `selector` and `values`, `path`, `select`, `top`, `count`, `bbox`, `input`, `preconditions` | The request body or query for the operation. |
 | `expect` | `outcome` is `success` or `refusal`; `status` is the HTTP status; `fields` asserts returned values; `count` asserts the item count; `problemCode` asserts the problem code of a refusal. |

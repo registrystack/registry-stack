@@ -135,7 +135,6 @@ pub struct SourceBinding {
 pub enum OccurrenceKind {
     Review,
     Application,
-    Hosted,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -188,10 +187,6 @@ pub struct WorkItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub passive_due_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
-    /// Hosted context safe for a deciding person's inbox. Requester ownership
-    /// and accountable actor identity are retained outside this projection.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hosted: Option<crate::HostedWorkItemContext>,
     /// The routing decision recorded when this item was first observed. This
     /// contains policy-authored explanation only, never source predicate data.
     #[serde(default, skip_serializing_if = "Option::is_none")]

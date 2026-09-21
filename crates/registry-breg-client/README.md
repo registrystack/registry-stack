@@ -150,17 +150,14 @@ whole-field JSON Patch paths, operation counts, I-JSON values, and encoded body
 size before token acquisition or HTTP I/O. The client never generates an
 idempotency key and never retries a mutation.
 
-For every decision and the apply step, `action.with_reason("Please correct the submitted values.")?`
-returns a copy carrying optional recorded text. Node uses `action.withReason(text)`
-and Python uses `action.with_reason(text)`. Text is preserved exactly, including
-empty strings and whitespace; the limit is 4096 Unicode characters and NUL is
-refused. Submit, revise, and cancel refuse reasons. Existing actions omit `reason`.
-Persist the prepared action after adding its reason, and reuse the same action
-and idempotency key for an explicit retry.
+The lifecycle is source-owned and exposes only Submit, Revise, Cancel, and
+Apply. `action.with_reason("Applied after external approval.")?` returns a copy
+of an Apply action carrying optional recorded text. Text is preserved exactly,
+including empty strings and whitespace; the limit is 4096 Unicode characters
+and NUL is refused. Submit, Revise, and Cancel refuse reasons. Persist the
+prepared action after adding its reason, and reuse the same action and
+idempotency key for an explicit retry.
 
-`BRegRequestMetadata::decisions()` exposes typed current-proposal decisions.
-`reason_present()` distinguishes an absent reason from one whose text is
-withheld or erased; `reason()` returns only disclosed retained text.
 `retained_history()` returns one strict typed `BRegRetainedRequestHistoryPage`.
 Each proposal carries its exact request identity, proposal version, optional
 application identity, caller-visible result count, and inert result references.
@@ -173,6 +170,12 @@ Result references grant no target authority. Read a target through an ordinary
 authorized `get_record`; the retained target revision is application provenance,
 not the target's current revision, ETag, or a write precondition. Debug output
 redacts request and target identifiers.
+
+`BRegRequestMetadata::proposal()` exposes the strict frozen review requirement.
+When external review is required, `BRegRequestMetadata::review()` exposes the
+bounded submission, result, delivery, application, and recovery status needed
+for correlation and operations. It carries no reviewer, decision reason, or
+review payload, and cannot grant Apply authority.
 
 Lifecycle action ETags are not interchangeable with record ETags. After a
 success or refusal, refetch the record before deciding which transition is
@@ -204,8 +207,8 @@ selectors, response bodies, header values, URLs, or transport error chains.
 with `as_bytes()` and `from_slice()`. Persist it in an owner-only file before
 sending the mutation. Create evidence contains the request values. Lifecycle
 evidence contains only the authority, record and action binding needed to
-reconstruct the exact request; it omits record fields, proposal and review
-previews, history, and decisions. Both forms contain the caller's idempotency
+reconstruct the exact request; it omits record fields, proposal, external-review
+status, and history. Both forms contain the caller's idempotency
 key, have redacted Debug representations, and contain no tokens.
 
 After restart, fetch caller-filtered `registry_contract` again under the same
@@ -216,9 +219,8 @@ request against that authority before returning the request/action and original
 key for an explicitly initiated send. Never replace an uncertain action with a
 newly advertised action. Lifecycle recovery retains the original record and
 action binding, so an applied request whose current record no longer advertises
-Apply can still replay the original precondition and body. A recovered action
-does not retain the descriptive review preview; use a current authorized read
-for display. The runtime remains responsible for current authorization,
+Apply can still replay the original precondition and body. Use a current
+authorized read for external-review status. The runtime remains responsible for current authorization,
 preconditions, and exact idempotency replay.
 
 For immediate actions, Rust callers use `prepare_action` before the first

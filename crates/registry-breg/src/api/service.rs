@@ -193,21 +193,6 @@ pub struct BatchMutationInput<'a> {
 #[derive(Clone, Eq, PartialEq)]
 pub enum RequestActionBody {
     Submit,
-    Approve {
-        proposal_version: u32,
-        effect_digest: String,
-        reason: Option<String>,
-    },
-    Reject {
-        proposal_version: u32,
-        effect_digest: String,
-        reason: Option<String>,
-    },
-    RequestRevision {
-        proposal_version: u32,
-        effect_digest: String,
-        reason: Option<String>,
-    },
     Revise {
         rebase: bool,
     },
@@ -222,10 +207,7 @@ pub enum RequestActionBody {
 impl RequestActionBody {
     pub fn reason(&self) -> Option<&str> {
         match self {
-            Self::Approve { reason, .. }
-            | Self::Reject { reason, .. }
-            | Self::RequestRevision { reason, .. }
-            | Self::Apply { reason, .. } => reason.as_deref(),
+            Self::Apply { reason, .. } => reason.as_deref(),
             _ => None,
         }
     }
@@ -235,9 +217,6 @@ impl std::fmt::Debug for RequestActionBody {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let operation = match self {
             Self::Submit => "Submit",
-            Self::Approve { .. } => "Approve",
-            Self::Reject { .. } => "Reject",
-            Self::RequestRevision { .. } => "RequestRevision",
             Self::Revise { .. } => "Revise",
             Self::Cancel => "Cancel",
             Self::Apply { .. } => "Apply",
@@ -276,9 +255,6 @@ pub struct RequestActionInput<'a> {
     pub action: RequestActionBody,
     pub response_fields: BTreeSet<String>,
     pub target_authority: Vec<RequestActionTargetAuthority>,
-    /// Independently verified same-profile ApplyRequest authority. Lifecycle
-    /// execution may consume this only after a frozen proposal selects apply.
-    pub automatic_apply_authority: Option<Vec<RequestActionTargetAuthority>>,
     pub correlation: &'a RequestCorrelation,
 }
 
@@ -905,6 +881,7 @@ pub struct HttpService {
     pub(crate) snapshots: Option<Arc<dyn SnapshotReadService>>,
     pub(crate) cursors: Arc<CursorCodec>,
     pub(crate) mutations: Option<Arc<PostgresRecordMutationService>>,
+    pub(crate) review_completions: Option<Arc<crate::review_store::ReviewCompletionReceiver>>,
     pub(crate) readiness: Arc<dyn ReadinessProbe>,
     pub(crate) public_origin: Option<crate::runtime_config::PublicOrigin>,
     /// Active field-encryption key state. `None` is acceptable only while the
@@ -945,6 +922,7 @@ impl HttpService {
             snapshots: None,
             cursors,
             mutations: None,
+            review_completions: None,
             readiness,
             public_origin: None,
             field_encryption: None,
@@ -983,6 +961,15 @@ impl HttpService {
         mutations: Arc<PostgresRecordMutationService>,
     ) -> Self {
         self.mutations = Some(mutations);
+        self
+    }
+
+    #[must_use]
+    pub fn with_review_completions(
+        mut self,
+        receiver: Arc<crate::review_store::ReviewCompletionReceiver>,
+    ) -> Self {
+        self.review_completions = Some(receiver);
         self
     }
 

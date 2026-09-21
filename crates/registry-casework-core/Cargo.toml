@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 registry-platform-httputil.workspace = true
+registry-review-protocol.workspace = true
 async-trait.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 chrono-tz.workspace = true

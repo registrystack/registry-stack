@@ -74,6 +74,12 @@ pub(crate) const MAXIMUM_ASSERTION_ISSUER_CLIENTS: usize = 64;
 pub(crate) const MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES: usize = 128;
 pub(crate) const MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT: usize = 16;
 pub(crate) const MAXIMUM_ASSERTION_ISSUER_BYTES: usize = 512;
+pub(crate) const MINIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS: u64 = 100;
+pub(crate) const MAXIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS: u64 = 30_000;
+pub(crate) const MINIMUM_REVIEW_COMPLETION_ATTEMPTS: u32 = 1;
+pub(crate) const MAXIMUM_REVIEW_COMPLETION_ATTEMPTS: u32 = 100;
+pub(crate) const MINIMUM_REVIEW_COMPLETION_RETRY_SECONDS: u64 = 1;
+pub(crate) const MAXIMUM_REVIEW_COMPLETION_RETRY_SECONDS: u64 = 86_400;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -317,6 +323,53 @@ pub struct RuntimeConfig {
     pub task_authority: Option<TaskAuthorityConfig>,
     #[serde(default)]
     pub sources: BTreeMap<String, registry_casework_breg::BregBinding>,
+    #[serde(default)]
+    pub review_completion_destinations: BTreeMap<String, ReviewCompletionRuntimeConfig>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewCompletionRuntimeConfig {
+    pub url: String,
+    pub bearer_token_ref: String,
+    #[serde(default = "default_review_completion_timeout_ms")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(
+            min = MINIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS,
+            max = MAXIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS
+        ))
+    )]
+    pub timeout_milliseconds: u64,
+    #[serde(default = "default_review_completion_attempts")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(
+            min = MINIMUM_REVIEW_COMPLETION_ATTEMPTS,
+            max = MAXIMUM_REVIEW_COMPLETION_ATTEMPTS
+        ))
+    )]
+    pub maximum_attempts: u32,
+    #[serde(default = "default_review_completion_retry_seconds")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(
+            min = MINIMUM_REVIEW_COMPLETION_RETRY_SECONDS,
+            max = MAXIMUM_REVIEW_COMPLETION_RETRY_SECONDS
+        ))
+    )]
+    pub retry_seconds: u64,
+}
+
+fn default_review_completion_timeout_ms() -> u64 {
+    5_000
+}
+fn default_review_completion_attempts() -> u32 {
+    12
+}
+fn default_review_completion_retry_seconds() -> u64 {
+    30
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -648,6 +701,57 @@ impl RuntimeConfig {
         if self.sources.keys().any(String::is_empty) || configured_sources != declared_sources {
             return Err(RuntimeConfigError::InvalidSourceBindings);
         }
+        let source_context_kinds = project
+            .review_kinds
+            .iter()
+            .filter(|kind| {
+                kind.context_strategy == registry_casework_core::ReviewContextStrategy::Source
+            })
+            .map(|kind| kind.id.as_str())
+            .collect::<BTreeSet<_>>();
+        if project.review_producers.iter().any(|producer| {
+            producer
+                .kinds
+                .iter()
+                .any(|kind| source_context_kinds.contains(kind.as_str()))
+                && producer
+                    .source_namespaces
+                    .iter()
+                    .any(|namespace| !configured_sources.contains(namespace.as_str()))
+        }) {
+            return Err(RuntimeConfigError::InactiveReviewSourceNamespace);
+        }
+        let declared_destinations = project
+            .review_producers
+            .iter()
+            .filter_map(|producer| producer.completion.as_ref())
+            .map(|completion| completion.destination_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let configured_destinations = self
+            .review_completion_destinations
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if !declared_destinations.is_subset(&configured_destinations)
+            || self
+                .review_completion_destinations
+                .iter()
+                .any(|(id, destination)| {
+                    id.is_empty()
+                        || !valid_review_completion_url(&destination.url)
+                        || !(MINIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS
+                            ..=MAXIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS)
+                            .contains(&destination.timeout_milliseconds)
+                        || !(MINIMUM_REVIEW_COMPLETION_ATTEMPTS
+                            ..=MAXIMUM_REVIEW_COMPLETION_ATTEMPTS)
+                            .contains(&destination.maximum_attempts)
+                        || !(MINIMUM_REVIEW_COMPLETION_RETRY_SECONDS
+                            ..=MAXIMUM_REVIEW_COMPLETION_RETRY_SECONDS)
+                            .contains(&destination.retry_seconds)
+                })
+        {
+            return Err(RuntimeConfigError::InvalidSourceBindings);
+        }
         self.validate_source_bindings()?;
         #[cfg(not(feature = "postgres-test"))]
         if self.database.test_only_plaintext {
@@ -699,6 +803,12 @@ impl RuntimeConfig {
                     reference,
                 ));
             }
+        }
+        for (destination_id, destination) in &self.review_completion_destinations {
+            references.push((
+                format!("reviewCompletionDestinations.{destination_id}.bearerTokenRef"),
+                &destination.bearer_token_ref,
+            ));
         }
         for (path, raw) in references {
             let reference = SecretReference::parse(raw.clone())
@@ -814,6 +924,24 @@ impl RuntimeConfig {
     }
 }
 
+fn valid_review_completion_url(raw: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(raw) else {
+        return false;
+    };
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return false;
+    }
+    match url.scheme() {
+        "https" => url.host_str().is_some(),
+        "http" => matches!(url.host_str(), Some("127.0.0.1" | "::1" | "[::1]")),
+        _ => false,
+    }
+}
+
 fn validate_project_source_inputs(
     project_path: &Path,
     project: &CaseworkProject,
@@ -904,6 +1032,26 @@ mod tests {
     use super::*;
     use registry_platform_oidc::is_access_token_typ_pair;
 
+    #[test]
+    fn completion_destination_requires_a_complete_credential_free_url() {
+        for valid in [
+            "https://casework.example.test/v1/completions",
+            "http://127.0.0.1:8080/completions",
+            "http://[::1]:8080/completions",
+        ] {
+            assert!(valid_review_completion_url(valid), "{valid}");
+        }
+        for invalid in [
+            "https://",
+            "https://user@casework.example.test/completions",
+            "https://casework.example.test/completions?token=secret",
+            "https://casework.example.test/completions#fragment",
+            "http://casework.example.test/completions",
+        ] {
+            assert!(!valid_review_completion_url(invalid), "{invalid}");
+        }
+    }
+
     const SOURCE_PROJECT: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
 kind: CaseworkProject
 casework: {id: packaged-review, version: "1"}
@@ -919,6 +1067,43 @@ sources:
     requests: [{entity: correction, queue: review}]
 "#;
 
+    const SOURCE_CONTEXT_REVIEW_PROJECT: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
+kind: CaseworkProject
+casework: {id: packaged-review, version: "1"}
+accessProfiles:
+  - {id: staff, principalClaim: sub, requiredScopes: [staff], role: staff}
+  - {id: supervisor, principalClaim: sub, requiredScopes: [supervisor], role: supervisor}
+  - {id: administrator, principalClaim: sub, requiredScopes: [admin], role: administrator}
+  - {id: requester, principalClaim: sub, requiredScopes: [requester], role: requester}
+queues: [{id: review, label: Review}]
+sources:
+  - id: professional
+    adapter: breg
+    description: sources/professional.json
+    requests: [{entity: correction, queue: review}]
+reviewKinds:
+  - id: correction
+    version: "1"
+    purpose: approval
+    contextStrategy: source
+    stages:
+      - {id: review, queue: review, decidingProfiles: [staff], requiredApprovals: 1}
+    retention: {terminalDays: 30, accountabilityDays: 90}
+    displaySchema:
+      type: object
+      additionalProperties: false
+      required: [summary]
+      properties: {summary: {type: string, maxLength: 160}}
+reviewProducers:
+  - id: registry
+    profile: requester
+    issuer: https://registry.example.test
+    subject: registry-service
+    sourceNamespaces: [professional]
+    kinds: [correction]
+    recoveryDays: 7
+"#;
+
     const SOURCE_DESCRIPTION: &str = r#"{
   "apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1",
   "kind":"BRegCaseworkSourceDescription",
@@ -929,24 +1114,21 @@ sources:
   "request":{
     "requestEntity":"correction",
     "requestRoute":"corrections",
-    "reviewMode":"staged",
-    "stages":[{"id":"review","approvals":1,"excludeSubmitter":true,"excludePreviousReviewers":false}],
+    "review":{"authority":"casework-main","policyId":"registry-correction"},
+    "onApproved":{"mode":"manual"},
     "fields":[],
     "contractFingerprint":"sha256:contract",
-    "application":{"mode":"manual"}
+    "application":{}
   }
 }
 "#;
 
-    fn write_package(root: &Path) -> PolicyPackageManifest {
+    fn write_package_with_project(root: &Path, project: &str) -> PolicyPackageManifest {
         std::fs::create_dir_all(root.join("sources")).unwrap();
-        std::fs::write(root.join("casework.yaml"), SOURCE_PROJECT).unwrap();
+        std::fs::write(root.join("casework.yaml"), project).unwrap();
         std::fs::write(root.join("sources/professional.json"), SOURCE_DESCRIPTION).unwrap();
         let manifest = PolicyPackageManifest::build([
-            (
-                "casework.yaml".to_owned(),
-                SOURCE_PROJECT.as_bytes().to_vec(),
-            ),
+            ("casework.yaml".to_owned(), project.as_bytes().to_vec()),
             (
                 "sources/professional.json".to_owned(),
                 SOURCE_DESCRIPTION.as_bytes().to_vec(),
@@ -957,6 +1139,10 @@ sources:
         bytes.push(b'\n');
         std::fs::write(root.join(POLICY_PACKAGE_MANIFEST_FILE), bytes).unwrap();
         manifest
+    }
+
+    fn write_package(root: &Path) -> PolicyPackageManifest {
+        write_package_with_project(root, SOURCE_PROJECT)
     }
 
     fn operator_document(package: &Path, tls: &str) -> String {
@@ -1364,6 +1550,73 @@ sources:
     }
 
     #[test]
+    fn source_context_review_namespaces_require_activated_adapters() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("source-context");
+        std::fs::create_dir(&package).unwrap();
+        write_package_with_project(&package, SOURCE_CONTEXT_REVIEW_PROJECT);
+        let runtime = root.path().join("source-context.yaml");
+        std::fs::write(
+            &runtime,
+            operator_document(&package, "operator-controlled-upstream"),
+        )
+        .unwrap();
+        RuntimeConfig::load(&runtime).expect("the source namespace has an activated adapter");
+
+        let canary = "UNACTIVATED_SOURCE_NAMESPACE_CANARY";
+        let project =
+            SOURCE_CONTEXT_REVIEW_PROJECT.replace("[professional]", &format!("[{canary}]"));
+        let package = root.path().join("missing-source-context-adapter");
+        std::fs::create_dir(&package).unwrap();
+        write_package_with_project(&package, &project);
+        let runtime = root.path().join("missing-source-context-adapter.yaml");
+        std::fs::write(
+            &runtime,
+            operator_document(&package, "operator-controlled-upstream"),
+        )
+        .unwrap();
+        let error = RuntimeConfig::load(&runtime).expect_err("the absent adapter is refused");
+        assert!(matches!(
+            &error,
+            RuntimeConfigError::InactiveReviewSourceNamespace
+        ));
+        assert_eq!(error.path(), "package.root/casework.yaml");
+        assert!(!error.to_string().contains(canary));
+
+        let project = project.replace("contextStrategy: source", "contextStrategy: submitted");
+        let package = root.path().join("submitted-context");
+        std::fs::create_dir(&package).unwrap();
+        write_package_with_project(&package, &project);
+        let runtime = root.path().join("submitted-context.yaml");
+        std::fs::write(
+            &runtime,
+            operator_document(&package, "operator-controlled-upstream"),
+        )
+        .unwrap();
+        RuntimeConfig::load(&runtime)
+            .expect("submitted context does not require a source adapter for its namespace");
+    }
+
+    #[test]
+    fn retained_completion_destinations_may_remain_configured_after_policy_removal() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("source-context");
+        std::fs::create_dir(&package).unwrap();
+        write_package_with_project(&package, SOURCE_CONTEXT_REVIEW_PROJECT);
+        let runtime = root.path().join("source-context.yaml");
+        let mut document = operator_value(&package, "operator-controlled-upstream");
+        document["reviewCompletionDestinations"] = serde_json::json!({
+            "retained-destination": {
+                "url": "https://completion.example.test/v1/reviews",
+                "bearerTokenRef": "secret:file/completion-token"
+            }
+        });
+        std::fs::write(&runtime, serde_norway::to_string(&document).unwrap()).unwrap();
+        RuntimeConfig::load(&runtime)
+            .expect("an undeclared retained destination stays operable during drain");
+    }
+
+    #[test]
     fn runtime_envelope_listener_and_operated_paths_are_strict() {
         let root = tempfile::tempdir().unwrap();
         let package = root.path().join("package");
@@ -1656,6 +1909,10 @@ pub enum RuntimeConfigError {
     InvalidAuditReference,
     #[error("sources must exactly match the source ids declared by package.root/casework.yaml")]
     InvalidSourceBindings,
+    #[error(
+        "each source namespace admitted for source-context review work must have an activated source adapter"
+    )]
+    InactiveReviewSourceNamespace,
     #[error("{path} is not a valid Casework source binding")]
     InvalidSourceBinding { path: String },
     #[error("plaintext PostgreSQL is test-only")]
@@ -1686,6 +1943,7 @@ impl RuntimeConfigError {
             Self::InvalidDatabaseReference | Self::PlaintextDatabase => "database",
             Self::InvalidAuditReference => "audit.hashKeyRef",
             Self::InvalidSourceBindings | Self::SourceDescription => "sources",
+            Self::InactiveReviewSourceNamespace => "package.root/casework.yaml",
             Self::Project(_) => "package.root/casework.yaml",
             Self::PolicyPackage(_) | Self::ProductionPolicyPackageRequired => "package.root",
             Self::Invalid => "/",

@@ -794,36 +794,11 @@
       },
       "type": "object"
     },
-    "ChangeRequestApplicationModeSource": {
-      "enum": [
-        "manual",
-        "automatic",
-        "planner"
-      ],
-      "type": "string"
-    },
     "ChangeRequestApplicationSource": {
       "additionalProperties": false,
       "properties": {
-        "allowedDispositions": {
-          "items": {
-            "$ref": "#/$defs/ChangeRequestDispositionSource"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "mode": {
-          "$ref": "#/$defs/ChangeRequestApplicationModeSource",
-          "default": "manual"
-        },
         "preconditions": {
           "$ref": "#/$defs/ChangeRequestPreconditionsSource"
-        },
-        "queueReasons": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "type": "object"
         }
       },
       "type": "object"
@@ -832,13 +807,6 @@
       "enum": [
         "on_or_after",
         "on_or_before"
-      ],
-      "type": "string"
-    },
-    "ChangeRequestDispositionSource": {
-      "enum": [
-        "apply",
-        "queue"
       ],
       "type": "string"
     },
@@ -997,6 +965,47 @@
         "entity",
         "fromField"
       ],
+      "type": "object"
+    },
+    "ChangeRequestNoReviewModeSource": {
+      "enum": [
+        "none"
+      ],
+      "type": "string"
+    },
+    "ChangeRequestNoReviewSource": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/ChangeRequestNoReviewModeSource"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
+    },
+    "ChangeRequestOnApprovedModeSource": {
+      "enum": [
+        "manual",
+        "automatic"
+      ],
+      "type": "string"
+    },
+    "ChangeRequestOnApprovedSource": {
+      "additionalProperties": false,
+      "properties": {
+        "executor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/ChangeRequestOnApprovedModeSource",
+          "default": "manual"
+        }
+      },
       "type": "object"
     },
     "ChangeRequestPlannerKindSource": {
@@ -1169,62 +1178,31 @@
       },
       "type": "object"
     },
-    "ChangeRequestReviewModeSource": {
-      "enum": [
-        "none"
-      ],
-      "type": "string"
-    },
-    "ChangeRequestReviewSource": {
+    "ChangeRequestReviewRequirementSource": {
       "additionalProperties": false,
       "properties": {
-        "mode": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ChangeRequestReviewModeSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "authority": {
+          "type": "string"
         },
-        "stages": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ChangeRequestReviewStageSource"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
-    "ChangeRequestReviewStageSource": {
-      "additionalProperties": false,
-      "properties": {
-        "approvals": {
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "excludePreviousReviewers": {
-          "default": false,
-          "description": "Refuse an actor who already decided another stage of this proposal version.",
-          "type": "boolean"
-        },
-        "excludeSubmitter": {
-          "default": false,
-          "type": "boolean"
-        },
-        "id": {
+        "policyId": {
           "type": "string"
         }
       },
       "required": [
-        "id",
-        "approvals"
+        "authority",
+        "policyId"
       ],
       "type": "object"
+    },
+    "ChangeRequestReviewSource": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ChangeRequestReviewRequirementSource"
+        },
+        {
+          "$ref": "#/$defs/ChangeRequestNoReviewSource"
+        }
+      ]
     },
     "ChangeRequestSelectorSource": {
       "oneOf": [
@@ -1273,9 +1251,7 @@
       "properties": {
         "application": {
           "$ref": "#/$defs/ChangeRequestApplicationSource",
-          "default": {
-            "mode": "manual"
-          }
+          "default": {}
         },
         "effects": {
           "default": [],
@@ -1283,6 +1259,12 @@
             "$ref": "#/$defs/ChangeRequestEffectSource"
           },
           "type": "array"
+        },
+        "onApproved": {
+          "$ref": "#/$defs/ChangeRequestOnApprovedSource",
+          "default": {
+            "mode": "manual"
+          }
         },
         "planner": {
           "anyOf": [
@@ -2174,13 +2156,6 @@
           ],
           "default": null
         },
-        "reviewStages": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ReviewStagePermissionSource"
-          },
-          "type": "array"
-        },
         "revisionAccess": {
           "default": false,
           "type": "boolean"
@@ -2428,14 +2403,6 @@
             "kind": {
               "const": "request_lifecycle",
               "type": "string"
-            },
-            "stages": {
-              "default": [],
-              "items": {
-                "type": "string"
-              },
-              "type": "array",
-              "uniqueItems": true
             },
             "toStates": {
               "default": [],
@@ -3546,9 +3513,6 @@
         "revisions",
         "snapshot",
         "submit_request",
-        "approve_request",
-        "reject_request",
-        "request_revision",
         "revise_request",
         "cancel_request",
         "apply_request",
@@ -3848,53 +3812,6 @@
           "type": "string"
         }
       ]
-    },
-    "ReviewStagePermissionSource": {
-      "additionalProperties": false,
-      "properties": {
-        "stage": {
-          "type": "string"
-        },
-        "targets": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ReviewStageTargetPermissionSource"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "stage"
-      ],
-      "type": "object"
-    },
-    "ReviewStageTargetPermissionSource": {
-      "additionalProperties": false,
-      "properties": {
-        "entity": {
-          "type": "string"
-        },
-        "readableFields": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "rowBoundaries": {
-          "description": "Explicit row reach; an empty array intentionally permits all rows.",
-          "items": {
-            "$ref": "#/$defs/RowBoundarySource"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "entity",
-        "rowBoundaries"
-      ],
-      "type": "object"
     },
     "RowBoundarySource": {
       "additionalProperties": false,

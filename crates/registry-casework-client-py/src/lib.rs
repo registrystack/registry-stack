@@ -14,10 +14,11 @@ use casework_client_sdk::{
     CaseworkClient as RustClient, CaseworkClientConfig, CaseworkClientError as RustClientError,
     CaseworkComplete, CaseworkProblemCode, CaseworkProtocolFailure, ClockRecomputeApplyRequest,
     ClockRecomputeRequest, DecideRequest, DelegateRequest, DirectoryTargetsQuery,
-    DirectoryTeamUpdateRequest, HoldingsQuery, HolidaySetRevisionInput, HostedCancelRequest,
-    HostedCreateRequest, HostedDecisionRequest, HostedNoteRequest, HostedPageQuery,
-    HostedTerminalQuery, ListWorkItemsQuery, NextWorkItemQuery, RecoverAttemptRequest,
-    SaveDraftRequest,
+    DirectoryTeamUpdateRequest, HoldingsQuery, HolidaySetRevisionInput, ListWorkItemsQuery,
+    NextWorkItemQuery, RecoverAttemptRequest, ReviewCancelRequest, ReviewCreateRequest,
+    ReviewNoteRequest, ReviewPageQuery, ReviewRequestAccepted, ReviewResultResponse,
+    ReviewTaskDecisionRequest, ReviewTaskDraftInput, ReviewTaskQuery, SaveDraftRequest,
+    SubmissionDigest, WorkItemHistoryQuery,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
@@ -242,6 +243,37 @@ fn complete<'py, T: Serialize>(
     Ok(value.into_any())
 }
 
+fn review_result_complete<'py>(
+    py: Python<'py>,
+    result: Result<ReviewResultResponse, RustClientError>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let result = result.map_err(|error| client_error(py, error))?;
+    let value = PyDict::new(py);
+    match result {
+        ReviewResultResponse::Available(complete) => {
+            value.set_item("kind", "available")?;
+            value.set_item("value", serialize_to_python(py, &complete.value)?)?;
+            value.set_item("trace_id", complete.trace_id)?;
+        }
+        ReviewResultResponse::Pending { trace_id } => {
+            value.set_item("kind", "pending")?;
+            value.set_item("value", py.None())?;
+            value.set_item("trace_id", trace_id)?;
+        }
+        ReviewResultResponse::ConcealedOrUnknown { trace_id } => {
+            value.set_item("kind", "concealed_or_unknown")?;
+            value.set_item("value", py.None())?;
+            value.set_item("trace_id", trace_id)?;
+        }
+        ReviewResultResponse::Expired { trace_id } => {
+            value.set_item("kind", "expired")?;
+            value.set_item("value", py.None())?;
+            value.set_item("trace_id", trace_id)?;
+        }
+    }
+    Ok(value.into_any())
+}
+
 fn auth<'a>(
     token: &'a BearerToken,
     profile: &'a str,
@@ -256,33 +288,43 @@ fn auth<'a>(
 /// Every validation reason the binding can answer, in the order the mapping
 /// below names them. A reason the client adds stops that mapping compiling, so
 /// a new reason is named here before it can reach a caller.
-const VALIDATION_REASONS: [casework_client_sdk::HostedValidationReason; 9] = {
-    use casework_client_sdk::HostedValidationReason;
+const VALIDATION_REASONS: [casework_client_sdk::ReviewValidationReason; 14] = {
+    use casework_client_sdk::ReviewValidationReason;
     [
-        HostedValidationReason::KindNotAllowed,
-        HostedValidationReason::ReferenceInvalid,
-        HostedValidationReason::ObjectRequired,
-        HostedValidationReason::MaximumBytesExceeded,
-        HostedValidationReason::MaximumDepthExceeded,
-        HostedValidationReason::SchemaMismatch,
-        HostedValidationReason::OutcomeNotDeclared,
-        HostedValidationReason::ReasonRequired,
-        HostedValidationReason::TextInvalid,
+        ReviewValidationReason::KindNotAllowed,
+        ReviewValidationReason::ReferenceInvalid,
+        ReviewValidationReason::ObjectRequired,
+        ReviewValidationReason::MaximumBytesExceeded,
+        ReviewValidationReason::MaximumDepthExceeded,
+        ReviewValidationReason::SchemaMismatch,
+        ReviewValidationReason::OutcomeNotDeclared,
+        ReviewValidationReason::ReasonRequired,
+        ReviewValidationReason::TextInvalid,
+        ReviewValidationReason::ResultNotDeclared,
+        ReviewValidationReason::ResultRequired,
+        ReviewValidationReason::FieldNotDeclared,
+        ReviewValidationReason::ConstraintInvalid,
+        ReviewValidationReason::ConstraintViolated,
     ]
 };
 
-fn validation_reason(value: casework_client_sdk::HostedValidationReason) -> &'static str {
-    use casework_client_sdk::HostedValidationReason;
+fn validation_reason(value: casework_client_sdk::ReviewValidationReason) -> &'static str {
+    use casework_client_sdk::ReviewValidationReason;
     match value {
-        HostedValidationReason::KindNotAllowed => "kind_not_allowed",
-        HostedValidationReason::ReferenceInvalid => "reference_invalid",
-        HostedValidationReason::ObjectRequired => "object_required",
-        HostedValidationReason::MaximumBytesExceeded => "maximum_bytes_exceeded",
-        HostedValidationReason::MaximumDepthExceeded => "maximum_depth_exceeded",
-        HostedValidationReason::SchemaMismatch => "schema_mismatch",
-        HostedValidationReason::OutcomeNotDeclared => "outcome_not_declared",
-        HostedValidationReason::ReasonRequired => "reason_required",
-        HostedValidationReason::TextInvalid => "text_invalid",
+        ReviewValidationReason::KindNotAllowed => "kind_not_allowed",
+        ReviewValidationReason::ReferenceInvalid => "reference_invalid",
+        ReviewValidationReason::ObjectRequired => "object_required",
+        ReviewValidationReason::MaximumBytesExceeded => "maximum_bytes_exceeded",
+        ReviewValidationReason::MaximumDepthExceeded => "maximum_depth_exceeded",
+        ReviewValidationReason::SchemaMismatch => "schema_mismatch",
+        ReviewValidationReason::OutcomeNotDeclared => "outcome_not_declared",
+        ReviewValidationReason::ReasonRequired => "reason_required",
+        ReviewValidationReason::TextInvalid => "text_invalid",
+        ReviewValidationReason::ResultNotDeclared => "result_not_declared",
+        ReviewValidationReason::ResultRequired => "result_required",
+        ReviewValidationReason::FieldNotDeclared => "field_not_declared",
+        ReviewValidationReason::ConstraintInvalid => "constraint_invalid",
+        ReviewValidationReason::ConstraintViolated => "constraint_violated",
     }
 }
 
@@ -357,21 +399,115 @@ impl CaseworkClient {
         )
     }
 
-    fn create_hosted_item<'py>(
+    #[allow(clippy::too_many_arguments)]
+    fn create_or_recover_review_request<'py>(
         &self,
         py: Python<'py>,
         token: &str,
         profile: &str,
         idempotency_key: &str,
         request: &Bound<'_, PyAny>,
+        expected_submission_digest: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let request: HostedCreateRequest = input(py, request)?;
         let token = bearer(py, token)?;
+        let request: ReviewCreateRequest = input(py, request)?;
+        let digest = SubmissionDigest::parse(expected_submission_digest).map_err(|_| {
+            binding_error(py, "invalid_request", "the submission digest is invalid")
+        })?;
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(self.inner.create_hosted_item(
+                self.runtime
+                    .block_on(self.inner.create_or_recover_review_request(
+                        auth(&token, profile, None),
+                        idempotency_key,
+                        &request,
+                        &digest,
+                    ))
+            }),
+        )
+    }
+
+    fn review_request<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        request_id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let request_id = uuid(py, request_id)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .review_request(auth(&token, profile, None), request_id),
+                )
+            }),
+        )
+    }
+
+    fn review_result<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        accepted: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let accepted = input(py, accepted)?;
+        review_result_complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .review_result(auth(&token, profile, None), &accepted),
+                )
+            }),
+        )
+    }
+
+    #[pyo3(signature = (token, profile, query=None))]
+    fn review_results<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        query: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let query: ReviewPageQuery = optional_input(py, query)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .review_results(auth(&token, profile, None), &query),
+                )
+            }),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn cancel_review_request<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        accepted: &Bound<'_, PyAny>,
+        idempotency_key: &str,
+        request: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let accepted: ReviewRequestAccepted = input(py, accepted)?;
+        let request: ReviewCancelRequest = input(py, request)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.cancel_review_request(
                     auth(&token, profile, None),
+                    &accepted,
                     idempotency_key,
                     &request,
                 ))
@@ -379,47 +515,469 @@ impl CaseworkClient {
         )
     }
 
-    fn get_hosted_item<'py>(
+    fn review_kinds<'py>(
         &self,
         py: Python<'py>,
         token: &str,
         profile: &str,
-        item_id: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
         let token = bearer(py, token)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime
+                    .block_on(self.inner.review_kinds(auth(&token, profile, None)))
+            }),
+        )
+    }
+
+    fn review_kind<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        kind_id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime
+                    .block_on(self.inner.review_kind(auth(&token, profile, None), kind_id))
+            }),
+        )
+    }
+
+    #[pyo3(signature = (token, profile, query=None, source_profile=None))]
+    fn review_tasks<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        query: Option<&Bound<'_, PyAny>>,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let query: ReviewTaskQuery = optional_input(py, query)?;
         complete(
             py,
             py.detach(|| {
                 self.runtime.block_on(
                     self.inner
-                        .get_hosted_item(auth(&token, profile, None), item_id),
+                        .review_tasks(auth(&token, profile, source_profile), &query),
+                )
+            }),
+        )
+    }
+
+    #[pyo3(signature = (token, profile, task_id, source_profile=None))]
+    fn review_task<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        task_id: &str,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .review_task(auth(&token, profile, source_profile), task_id),
+                )
+            }),
+        )
+    }
+
+    #[pyo3(signature = (token, profile, task_id, source_profile=None))]
+    fn review_task_context<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        task_id: &str,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .review_task_context(auth(&token, profile, source_profile), task_id),
+                )
+            }),
+        )
+    }
+
+    fn preview_review_task_templates<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        source_profile: &str,
+        task_id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime
+                    .block_on(self.inner.preview_review_task_templates(
+                        auth(&token, profile, Some(source_profile)),
+                        task_id,
+                    ))
+            }),
+        )
+    }
+
+    fn list_review_task_grants<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        source_profile: &str,
+        task_id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner.list_review_task_grants(
+                        auth(&token, profile, Some(source_profile)),
+                        task_id,
+                    ),
                 )
             }),
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn add_hosted_note<'py>(
+    fn approve_review_task_grant<'py>(
         &self,
         py: Python<'py>,
         token: &str,
         profile: &str,
-        item_id: &str,
+        source_profile: &str,
+        task_id: &str,
         expected_revision: i64,
         idempotency_key: &str,
-        note: &Bound<'_, PyAny>,
+        approval: &Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let note: HostedNoteRequest = input(py, note)?;
         let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        let approval: casework_client_sdk::TaskApprovalRequest = input(py, approval)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(self.inner.add_hosted_note(
-                    auth(&token, profile, None),
-                    item_id,
+                self.runtime.block_on(self.inner.approve_review_task_grant(
+                    auth(&token, profile, Some(source_profile)),
+                    task_id,
                     expected_revision,
+                    idempotency_key,
+                    &approval,
+                ))
+            }),
+        )
+    }
+
+    fn revoke_review_task_grant<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        task_id: &str,
+        grant_id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        let grant_id = uuid(py, grant_id)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.revoke_review_task_grant(
+                    auth(&token, profile, None),
+                    task_id,
+                    grant_id,
+                ))
+            }),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, source_profile=None))]
+    fn claim_review_task<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        task_id: &str,
+        expected_revision: i64,
+        idempotency_key: &str,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.claim_review_task(
+                    auth(&token, profile, source_profile),
+                    task_id,
+                    expected_revision,
+                    idempotency_key,
+                ))
+            }),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn release_review_task<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        task_id: &str,
+        expected_revision: i64,
+        idempotency_key: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.release_review_task(
+                    auth(&token, profile, None),
+                    task_id,
+                    expected_revision,
+                    idempotency_key,
+                ))
+            }),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, request, source_profile=None))]
+    fn assign_review_task<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        task_id: &str,
+        expected_revision: i64,
+        idempotency_key: &str,
+        request: &Bound<'_, PyAny>,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        let request: AssignmentRequest = input(py, request)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.assign_review_task(
+                    auth(&token, profile, source_profile),
+                    task_id,
+                    expected_revision,
+                    idempotency_key,
+                    &request,
+                ))
+            }),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, request, source_profile=None))]
+    fn delegate_review_task<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        task_id: &str,
+        expected_revision: i64,
+        idempotency_key: &str,
+        request: &Bound<'_, PyAny>,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        let request: DelegateRequest = input(py, request)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.delegate_review_task(
+                    auth(&token, profile, source_profile),
+                    task_id,
+                    expected_revision,
+                    idempotency_key,
+                    &request,
+                ))
+            }),
+        )
+    }
+
+    #[pyo3(signature = (token, profile, task_id, source_profile=None))]
+    fn review_task_draft<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        task_id: &str,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .review_task_draft(auth(&token, profile, source_profile), task_id),
+                )
+            }),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, draft, source_profile=None))]
+    fn save_review_task_draft<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        task_id: &str,
+        expected_revision: i64,
+        idempotency_key: &str,
+        draft: &Bound<'_, PyAny>,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        let draft: ReviewTaskDraftInput = input(py, draft)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.save_review_task_draft(
+                    auth(&token, profile, source_profile),
+                    task_id,
+                    expected_revision,
+                    idempotency_key,
+                    &draft,
+                ))
+            }),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, source_profile=None))]
+    fn delete_review_task_draft<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        task_id: &str,
+        expected_revision: i64,
+        idempotency_key: &str,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.delete_review_task_draft(
+                    auth(&token, profile, source_profile),
+                    task_id,
+                    expected_revision,
+                    idempotency_key,
+                ))
+            }),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, decision, source_profile=None))]
+    fn decide_review_task<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        task_id: &str,
+        expected_revision: i64,
+        idempotency_key: &str,
+        decision: &Bound<'_, PyAny>,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let task_id = uuid(py, task_id)?;
+        let decision: ReviewTaskDecisionRequest = input(py, decision)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.decide_review_task(
+                    auth(&token, profile, source_profile),
+                    task_id,
+                    expected_revision,
+                    idempotency_key,
+                    &decision,
+                ))
+            }),
+        )
+    }
+
+    #[pyo3(signature = (token, profile, request_id, query=None, source_profile=None))]
+    fn review_history<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        request_id: &str,
+        query: Option<&Bound<'_, PyAny>>,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let request_id = uuid(py, request_id)?;
+        let query: ReviewPageQuery = optional_input(py, query)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.review_history(
+                    auth(&token, profile, source_profile),
+                    request_id,
+                    &query,
+                ))
+            }),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (token, profile, request_id, idempotency_key, note, source_profile=None))]
+    fn add_review_note<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        request_id: &str,
+        idempotency_key: &str,
+        note: &Bound<'_, PyAny>,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let request_id = uuid(py, request_id)?;
+        let note: ReviewNoteRequest = input(py, note)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.add_review_note(
+                    auth(&token, profile, source_profile),
+                    request_id,
                     idempotency_key,
                     &note,
                 ))
@@ -427,229 +985,44 @@ impl CaseworkClient {
         )
     }
 
-    #[pyo3(signature = (token, profile, item_id, query=None))]
-    fn requester_hosted_notes<'py>(
+    #[pyo3(signature = (token, profile, request_id, source_profile=None))]
+    fn review_clocks<'py>(
         &self,
         py: Python<'py>,
         token: &str,
         profile: &str,
-        item_id: &str,
-        query: Option<&Bound<'_, PyAny>>,
+        request_id: &str,
+        source_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let query: HostedPageQuery = optional_input(py, query)?;
         let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.requester_hosted_notes(
-                    auth(&token, profile, None),
-                    item_id,
-                    &query,
-                ))
-            }),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn cancel_hosted_item<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        item_id: &str,
-        expected_revision: i64,
-        idempotency_key: &str,
-        cancellation: &Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let cancellation: HostedCancelRequest = input(py, cancellation)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.cancel_hosted_item(
-                    auth(&token, profile, None),
-                    item_id,
-                    expected_revision,
-                    idempotency_key,
-                    &cancellation,
-                ))
-            }),
-        )
-    }
-
-    #[pyo3(signature = (token, profile, query=None))]
-    fn hosted_terminal_items<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        query: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let query: HostedTerminalQuery = optional_input(py, query)?;
-        let token = bearer(py, token)?;
+        let request_id = uuid(py, request_id)?;
         complete(
             py,
             py.detach(|| {
                 self.runtime.block_on(
                     self.inner
-                        .hosted_terminal_items(auth(&token, profile, None), &query),
+                        .review_clocks(auth(&token, profile, source_profile), request_id),
                 )
             }),
         )
     }
 
-    fn list_hosted_work_items<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        query: &Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let query: ListWorkItemsQuery = input(py, query)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .list_hosted_work_items(auth(&token, profile, None), &query),
-                )
-            }),
-        )
-    }
-
-    fn get_hosted_work_item<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        item_id: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .get_hosted_work_item(auth(&token, profile, None), item_id),
-                )
-            }),
-        )
-    }
-
-    #[pyo3(signature = (token, profile, item_id, query=None))]
-    fn hosted_work_item_history<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        item_id: &str,
-        query: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let item_id = uuid(py, item_id)?;
-        let query: HostedPageQuery = optional_input(py, query)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.hosted_work_item_history(
-                    auth(&token, profile, None),
-                    item_id,
-                    &query,
-                ))
-            }),
-        )
-    }
-
-    fn hosted_accountability_record<'py>(
+    fn review_accountability<'py>(
         &self,
         py: Python<'py>,
         token: &str,
         profile: &str,
         event_id: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let event_id = uuid(py, event_id)?;
         let token = bearer(py, token)?;
+        let event_id = uuid(py, event_id)?;
         complete(
             py,
             py.detach(|| {
                 self.runtime.block_on(
                     self.inner
-                        .hosted_accountability_record(auth(&token, profile, None), event_id),
+                        .review_accountability(auth(&token, profile, None), event_id),
                 )
-            }),
-        )
-    }
-
-    fn claim_hosted_work_item<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        action: &Bound<'_, PyAny>,
-        idempotency_key: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let action: CaseworkAction = input(py, action)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.claim_hosted_work_item(
-                    auth(&token, profile, None),
-                    &action,
-                    idempotency_key,
-                ))
-            }),
-        )
-    }
-
-    fn release_hosted_work_item<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        action: &Bound<'_, PyAny>,
-        idempotency_key: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let action: CaseworkAction = input(py, action)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.release_hosted_work_item(
-                    auth(&token, profile, None),
-                    &action,
-                    idempotency_key,
-                ))
-            }),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn decide_hosted_work_item<'py>(
-        &self,
-        py: Python<'py>,
-        token: &str,
-        profile: &str,
-        action: &Bound<'_, PyAny>,
-        idempotency_key: &str,
-        decision: &Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let action: CaseworkAction = input(py, action)?;
-        let decision: HostedDecisionRequest = input(py, decision)?;
-        let token = bearer(py, token)?;
-        complete(
-            py,
-            py.detach(|| {
-                self.runtime.block_on(self.inner.decide_hosted_work_item(
-                    auth(&token, profile, None),
-                    &action,
-                    idempotency_key,
-                    &decision,
-                ))
             }),
         )
     }
@@ -1068,7 +1441,7 @@ impl CaseworkClient {
         query: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let item_id = uuid(py, item_id)?;
-        let query: HostedPageQuery = optional_input(py, query)?;
+        let query: WorkItemHistoryQuery = optional_input(py, query)?;
         let token = bearer(py, token)?;
         complete(
             py,

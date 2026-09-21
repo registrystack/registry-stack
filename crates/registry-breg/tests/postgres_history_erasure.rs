@@ -461,9 +461,8 @@ async fn erasure_preserves_change_request_target_and_proposal_payloads() {
             .execute(
                 "INSERT INTO registry_internal.registry_request_state
                      (request_entity_id, request_id, owner_reference, state,
-                      proposal_version, workflow_revision, review_completed_at)
-                 VALUES ('membership-request', $1, 'owner:hash', 'applied', 1, 1,
-                         transaction_timestamp())",
+                      proposal_version, workflow_revision)
+                 VALUES ('membership-request', $1, 'owner:hash', 'applied', 1, 1)",
                 &[&request_id],
             )
             .await
@@ -604,9 +603,8 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
         .execute(
             "INSERT INTO registry_internal.registry_request_state
                  (request_entity_id, request_id, owner_reference, state,
-                  proposal_version, workflow_revision, review_completed_at)
-             VALUES ('membership-request', $1, 'owner:hash', 'canceled', 1, 1,
-                     transaction_timestamp())",
+                  proposal_version, workflow_revision)
+             VALUES ('membership-request', $1, 'owner:hash', 'cancelled', 1, 1)",
             &[&request_id],
         )
         .await
@@ -665,9 +663,8 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
         .execute(
             "INSERT INTO registry_internal.registry_request_state
                  (request_entity_id, request_id, owner_reference, state,
-                  proposal_version, workflow_revision, review_completed_at)
-             VALUES ('membership-request', $1, 'owner:hash', 'canceled', 1, 1,
-                     transaction_timestamp())",
+                  proposal_version, workflow_revision)
+             VALUES ('membership-request', $1, 'owner:hash', 'cancelled', 1, 1)",
             &[&guard_request_id],
         )
         .await
@@ -1162,9 +1159,8 @@ async fn field_encryption_erasure_resumes_rebaseline_after_final_erase_crash() {
         .execute(
             "INSERT INTO registry_internal.registry_request_state
                  (request_entity_id, request_id, owner_reference, state,
-                  proposal_version, workflow_revision, review_completed_at)
-             VALUES ('membership-request', $1, 'owner:hash', 'canceled', 1, 1,
-                     transaction_timestamp())",
+                  proposal_version, workflow_revision)
+             VALUES ('membership-request', $1, 'owner:hash', 'cancelled', 1, 1)",
             &[&request_id],
         )
         .await

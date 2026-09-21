@@ -172,9 +172,10 @@ entities:
           set:
             contact-person: {fromEffect: person}
       review:
-        stages:
-          - {id: review, approvals: 1, excludeSubmitter: true}
-          - {id: final-approval, approvals: 1, excludeSubmitter: true}
+        authority: casework
+        policyId: household-contact-registration
+      onApproved:
+        mode: manual
 modules:
   - id: publicschema-household-core
     version: 0.1.0
@@ -219,6 +220,7 @@ accessProfiles:
         rowBoundaries: []
         operations: [create, get, patch, submit_request, revise_request, cancel_request]
         readableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
+        readableRequestFields: [reason, review_state]
         writableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
   - id: household-contact-reviewer
     default: true
@@ -228,29 +230,9 @@ accessProfiles:
     permissions:
       - entity: register-household-contact-request
         rowBoundaries: []
-        operations: [get, list, approve_request, reject_request, request_revision]
+        operations: [get, list]
         readableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
-        reviewStages:
-          - stage: review
-            targets:
-              - {entity: person, readableFields: [person-code, legal-name, family-name, person-sex, residency-status], rowBoundaries: []}
-              - {entity: group-membership, readableFields: [person, household, relationship, valid-from], rowBoundaries: []}
-              - {entity: household, readableFields: [contact-person], rowBoundaries: []}
-  - id: household-contact-supervisor
-    principalClaim: registry_principal
-    requiredScopes: [registry:household-contact:supervise]
-    requiredPurposes: [household-contact-review]
-    permissions:
-      - entity: register-household-contact-request
-        rowBoundaries: []
-        operations: [get, approve_request, reject_request, request_revision]
-        readableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
-        reviewStages:
-          - stage: final-approval
-            targets:
-              - {entity: person, readableFields: [person-code, legal-name, family-name, person-sex, residency-status], rowBoundaries: []}
-              - {entity: group-membership, readableFields: [person, household, relationship, valid-from], rowBoundaries: []}
-              - {entity: household, readableFields: [contact-person], rowBoundaries: []}
+        readableRequestFields: [reason, review_state]
   - id: household-contact-applier
     principalClaim: registry_principal
     requiredScopes: [registry:household-contact:apply]
@@ -260,6 +242,7 @@ accessProfiles:
         rowBoundaries: []
         operations: [get, apply_request]
         readableFields: [household, person-code, legal-name, family-name, person-sex, residency-status, relationship, valid-from, reason]
+        readableRequestFields: [reason, review_state]
         applyTargets:
           - {entity: person, rowBoundaries: []}
           - {entity: group-membership, rowBoundaries: []}

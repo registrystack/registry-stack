@@ -138,7 +138,8 @@ The remaining permission members:
 | `revisionAccess` | With the `revisions` operation, lets the profile read a record's revision history. `check` reports `access.profile.revision_history`, because history can disclose values removed from the current record. |
 | `allowDataExport` | Enables bulk export through the profile. `check` reports `access.profile.data_export`, because disabling it later cannot recall downloaded data. |
 | `requestPresence` | Lets a reader of a target entity see that a change request of the named `requestType` is pending against a record. |
-| `reviewStages`, `applyTargets` | Which review stages a reviewer may decide, and which target entities an applier may write. |
+| `readableRequestFields` | Which engine-owned request metadata the selected profile may receive, including external `review_state`, application `reason`, and actor references. |
+| `applyTargets` | Which target entities an applier may write when using the ordinary `apply_request` action. |
 | `submitterTargets` | Requires the submitter to currently hold same-profile `get` authority over every native-reference target a change request names. |
 | `action`, `targets`, `results` | An action permission instead of an entity permission. |
 
@@ -152,8 +153,7 @@ The operations a permission may list:
 | `lookup` | Selector lookups declared under `lookups`. |
 | `revisions`, `snapshot` | Reading revision history and snapshot or effective-time reads. |
 | `submit_request`, `revise_request`, `cancel_request` | Submitter actions on a change-request entity. |
-| `approve_request`, `reject_request`, `request_revision` | Reviewer actions, limited by `reviewStages`. |
-| `apply_request` | Applying an approved request, limited by `applyTargets`. |
+| `apply_request` | Applying a request with exactly correlated approved external-review evidence, or an explicit no-review proposal, limited by `applyTargets`. |
 | `invoke` | Invoking an immediate action. |
 
 {/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml; products/breg/acceptance/business-establishments/registry.yaml; products/breg/starters/professional-licences/core/registry.yaml; crates/registry-breg/src/auth.rs; crates/registry-breg/src/contract.rs, AccessProfileSource and AccessPermissionSource; crates/registry-breg/src/access.rs; crates/registry-breg/src/change_request.rs. */}

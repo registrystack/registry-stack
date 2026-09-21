@@ -556,15 +556,10 @@
           }
         ],
         "review": {
-          "stages": [
-            {
-              "id": "review",
-              "approvals": 1,
-              "excludeSubmitter": true
-            }
-          ]
+          "authority": "casework",
+          "policyId": "name-correction"
         },
-        "application": {
+        "onApproved": {
           "mode": "manual"
         },
         "retention": {
@@ -784,7 +779,11 @@
             "supporting-reference"
           ],
           "requestVisibility": "owner",
-          "rowBoundaries": []
+          "rowBoundaries": [],
+          "readableRequestFields": [
+            "reason",
+            "review_state"
+          ]
         }
       ]
     },
@@ -907,9 +906,6 @@
           "entity": "name-correction",
           "operations": [
             "get",
-            "approve_request",
-            "reject_request",
-            "request_revision",
             "apply_request"
           ],
           "readableFields": [
@@ -919,26 +915,15 @@
             "supporting-reference"
           ],
           "rowBoundaries": [],
-          "reviewStages": [
-            {
-              "stage": "review",
-              "targets": [
-                {
-                  "entity": "farm",
-                  "readableFields": [
-                    "local-identifier",
-                    "name"
-                  ],
-                  "rowBoundaries": []
-                }
-              ]
-            }
-          ],
           "applyTargets": [
             {
               "entity": "farm",
               "rowBoundaries": []
             }
+          ],
+          "readableRequestFields": [
+            "reason",
+            "review_state"
           ]
         }
       ]

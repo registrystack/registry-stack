@@ -12,11 +12,12 @@ use registry_breg::{
         CHANGE_REQUEST_PLAN_ABI_V1,
     },
     model::{
-        CompiledChangeRequest, CompiledChangeRequestApplication,
-        CompiledChangeRequestApplicationMode, CompiledChangeRequestDisposition,
-        CompiledChangeRequestPlanner, CompiledChangeRequestPlannerKind,
-        CompiledChangeRequestPlannerLimits, CompiledChangeRequestPlannerWrite,
-        CompiledChangeRequestRetentionMode, CompiledChangeRequestReviewMode,
+        CompiledChangeRequest, CompiledChangeRequestApplication, CompiledChangeRequestNoReview,
+        CompiledChangeRequestNoReviewMode, CompiledChangeRequestOnApproved,
+        CompiledChangeRequestOnApprovedMode, CompiledChangeRequestPlanner,
+        CompiledChangeRequestPlannerKind, CompiledChangeRequestPlannerLimits,
+        CompiledChangeRequestPlannerWrite, CompiledChangeRequestRetentionMode,
+        CompiledChangeRequestReview,
     },
     rhai_planner::{
         plan_change_request_effects, CandidateChangeRequestMutation, CandidateChangeRequestValue,
@@ -27,31 +28,19 @@ use registry_breg::{
 };
 use serde_json::{json, Map, Value};
 
-fn plan(script: &str, mode: CompiledChangeRequestApplicationMode) -> CompiledChangeRequest {
-    let allowed_dispositions = if mode == CompiledChangeRequestApplicationMode::Planner {
-        [
-            CompiledChangeRequestDisposition::Apply,
-            CompiledChangeRequestDisposition::Queue,
-        ]
-        .into_iter()
-        .collect()
-    } else {
-        BTreeSet::new()
-    };
-    let queue_reasons = if mode == CompiledChangeRequestApplicationMode::Planner {
-        BTreeMap::from([("needs_review".to_owned(), "Needs review".to_owned())])
-    } else {
-        BTreeMap::new()
-    };
+fn plan(script: &str, _application_policy: ()) -> CompiledChangeRequest {
     CompiledChangeRequest {
         request_entity_id: "request".to_owned(),
         contract_fingerprint: "sha256:test".to_owned(),
         retention_mode: CompiledChangeRequestRetentionMode::Retain,
-        review_mode: CompiledChangeRequestReviewMode::None,
+        review: CompiledChangeRequestReview::None(CompiledChangeRequestNoReview {
+            mode: CompiledChangeRequestNoReviewMode::None,
+        }),
+        on_approved: CompiledChangeRequestOnApproved {
+            mode: CompiledChangeRequestOnApprovedMode::Manual,
+            executor: None,
+        },
         application: CompiledChangeRequestApplication {
-            mode,
-            allowed_dispositions,
-            queue_reasons,
             preconditions: Default::default(),
         },
         planner: Some(CompiledChangeRequestPlanner {
@@ -94,9 +83,7 @@ fn plan(script: &str, mode: CompiledChangeRequestApplicationMode) -> CompiledCha
             }],
         }),
         effects: Vec::new(),
-        stages: Vec::new(),
         actions: Vec::new(),
-        review_permissions: Vec::new(),
         apply_permissions: Vec::new(),
         presence_permissions: Vec::new(),
         target_entities: BTreeSet::from(["record".to_owned()]),
@@ -122,7 +109,7 @@ fn request() -> Map<String, Value> {
 }
 
 fn plan_with_field_type(script: &str, field_type: FieldTypeSource) -> CompiledChangeRequest {
-    let mut plan = plan(script, CompiledChangeRequestApplicationMode::Automatic);
+    let mut plan = plan(script, ());
     plan.planner.as_mut().expect("test planner exists").writes[0]
         .field_types
         .insert("label".to_owned(), field_type);
@@ -401,20 +388,6 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
         "entities[id=person-name-change-request].changeRequest.planner.writes[0].fields[field=ambient-field]"
     );
 
-    let mut forbidden_application_policy = base.clone();
-    forbidden_application_policy["entities"][1]["changeRequest"]["application"]["mode"] =
-        json!("manual");
-    let application_diagnostics =
-        compile_diagnostics(&forbidden_application_policy, vec![owned_asset()]);
-    let forbidden_policy = application_diagnostics
-        .iter()
-        .find(|diagnostic| diagnostic.code == "change_request.application.policy_forbidden")
-        .expect("manual application policy cannot declare planner dispositions");
-    assert_eq!(
-        forbidden_policy.path,
-        "entities[id=person-name-change-request].changeRequest.application"
-    );
-
     let mut escaping_path = base.clone();
     escaping_path["entities"][1]["changeRequest"]["planner"]["script"] = json!("../outside.rhai");
     let escaping_codes = compile_codes(
@@ -455,19 +428,14 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
 
     for (path, value) in [
         ("planner kind", json!("javascript")),
-        ("application mode", json!("background")),
-        ("disposition", json!("defer")),
+        ("approval mode", json!("background")),
         ("write operation", json!("delete")),
     ] {
         let mut unknown = base.clone();
         match path {
             "planner kind" => unknown["entities"][1]["changeRequest"]["planner"]["kind"] = value,
-            "application mode" => {
-                unknown["entities"][1]["changeRequest"]["application"]["mode"] = value
-            }
-            "disposition" => {
-                unknown["entities"][1]["changeRequest"]["application"]["allowedDispositions"] =
-                    json!([value])
+            "approval mode" => {
+                unknown["entities"][1]["changeRequest"]["onApproved"]["mode"] = value
             }
             "write operation" => {
                 unknown["entities"][1]["changeRequest"]["planner"]["writes"][0]["operation"] = value
@@ -547,12 +515,8 @@ fn rhai_planner_contract_fingerprint_binds_governed_meaning_only() {
     );
 
     let mut application_policy = base.clone();
-    application_policy["entities"][1]["changeRequest"]["application"]["allowedDispositions"] =
-        json!(["apply"]);
-    application_policy["entities"][1]["changeRequest"]["application"]
-        .as_object_mut()
-        .expect("application is an object")
-        .remove("queueReasons");
+    application_policy["entities"][1]["changeRequest"]["onApproved"] =
+        json!({"mode":"automatic", "executor":"registry-applier"});
     assert_ne!(
         original,
         fingerprint(
@@ -562,33 +526,9 @@ fn rhai_planner_contract_fingerprint_binds_governed_meaning_only() {
         )
     );
 
-    let mut queue_reason = base.clone();
-    queue_reason["entities"][1]["changeRequest"]["application"]["queueReasons"]
-        ["assisted-review"] = json!("A revised reviewed label");
-    assert_ne!(
-        original,
-        fingerprint(
-            &queue_reason,
-            "scripts/person-name-change.rhai",
-            script.clone()
-        )
-    );
-
     let mut review_policy = base.clone();
     review_policy["entities"][1]["changeRequest"]["review"] =
-        json!({"stages": [{"id": "review", "approvals": 1}]});
-    let submitter_grant = &mut review_policy["accessProfiles"][1]["permissions"][0];
-    submitter_grant["operations"] = json!([
-        "create",
-        "get",
-        "submit_request",
-        "approve_request",
-        "apply_request"
-    ]);
-    submitter_grant["reviewStages"] = json!([{
-        "stage": "review",
-        "targets": [{"entity": "person", "readableFields": ["display-name"], "rowBoundaries": []}]
-    }]);
+        json!({"authority":"casework-main", "policyId":"person-name-review"});
     assert_ne!(
         original,
         fingerprint(
@@ -642,7 +582,7 @@ fn rhai_planner_output_abi_is_closed_and_symbolic() {
     for script in invalid_scripts {
         assert!(
             plan_change_request_effects(
-                &plan(&script, CompiledChangeRequestApplicationMode::Automatic),
+                &plan(&script, ()),
                 &request(),
                 Instant::now() + Duration::from_secs(1),
             )
@@ -657,7 +597,7 @@ fn rhai_planner_output_abi_is_closed_and_symbolic() {
         )
     };
     let reference_plan = |script: &str| {
-        let mut candidate = plan(script, CompiledChangeRequestApplicationMode::Automatic);
+        let mut candidate = plan(script, ());
         let write = &mut candidate
             .planner
             .as_mut()
@@ -698,10 +638,7 @@ fn rhai_planner_output_abi_is_closed_and_symbolic() {
     }
 
     let required_clear = "fn plan(ctx) { #{effects: [#{target: #{fromField: `subject`}, operation: `patch`, clear: [`label`]}]} }";
-    let mut required_plan = plan(
-        required_clear,
-        CompiledChangeRequestApplicationMode::Automatic,
-    );
+    let mut required_plan = plan(required_clear, ());
     required_plan
         .planner
         .as_mut()
@@ -716,96 +653,6 @@ fn rhai_planner_output_abi_is_closed_and_symbolic() {
             Instant::now() + Duration::from_secs(1),
         ),
         Err(ChangeRequestPlannerError::Ceiling)
-    );
-}
-
-#[test]
-fn rhai_planner_application_disposition_truth_table_is_exact() {
-    let effect = "#{target: #{fromField: `subject`}, operation: `patch`, set: #{label: `safe`}}";
-    let script = |members: &str| format!("fn plan(ctx) {{ #{{{members}effects: [{effect}]}} }}");
-    let run = |mode, members: &str| {
-        plan_change_request_effects(
-            &plan(&script(members), mode),
-            &request(),
-            Instant::now() + Duration::from_secs(1),
-        )
-    };
-
-    let manual = run(CompiledChangeRequestApplicationMode::Manual, "")
-        .expect("manual policy queues a complete plan");
-    assert_eq!(manual.disposition, CompiledChangeRequestDisposition::Queue);
-    assert!(manual.queue_reason.is_none());
-    assert_eq!(
-        run(
-            CompiledChangeRequestApplicationMode::Manual,
-            "disposition: `apply`, "
-        ),
-        Err(ChangeRequestPlannerError::Disposition)
-    );
-
-    let automatic = run(CompiledChangeRequestApplicationMode::Automatic, "")
-        .expect("automatic policy applies a complete plan");
-    assert_eq!(
-        automatic.disposition,
-        CompiledChangeRequestDisposition::Apply
-    );
-    assert_eq!(
-        run(
-            CompiledChangeRequestApplicationMode::Automatic,
-            "disposition: `queue`, reasonCode: `needs_review`, "
-        ),
-        Err(ChangeRequestPlannerError::Disposition)
-    );
-
-    let apply = run(
-        CompiledChangeRequestApplicationMode::Planner,
-        "disposition: `apply`, ",
-    )
-    .expect("allowed apply disposition is accepted");
-    assert_eq!(apply.disposition, CompiledChangeRequestDisposition::Apply);
-    assert!(apply.queue_reason.is_none());
-
-    let queue = run(
-        CompiledChangeRequestApplicationMode::Planner,
-        "disposition: `queue`, reasonCode: `needs_review`, ",
-    )
-    .expect("allowed queue disposition and declared reason are accepted");
-    assert_eq!(queue.disposition, CompiledChangeRequestDisposition::Queue);
-    assert_eq!(
-        queue
-            .queue_reason
-            .as_ref()
-            .map(|reason| reason.code.as_str()),
-        Some("needs_review")
-    );
-
-    for members in [
-        "",
-        "disposition: `queue`, ",
-        "disposition: `apply`, reasonCode: `needs_review`, ",
-        "disposition: `queue`, reasonCode: `dynamic-secret`, ",
-        "reasonCode: `needs_review`, ",
-    ] {
-        assert_eq!(
-            run(CompiledChangeRequestApplicationMode::Planner, members),
-            Err(ChangeRequestPlannerError::Disposition),
-            "invalid planner application result was accepted: {members}"
-        );
-    }
-
-    let mut apply_only = plan(
-        &script("disposition: `queue`, reasonCode: `needs_review`, "),
-        CompiledChangeRequestApplicationMode::Planner,
-    );
-    apply_only.application.allowed_dispositions =
-        BTreeSet::from([CompiledChangeRequestDisposition::Apply]);
-    assert_eq!(
-        plan_change_request_effects(
-            &apply_only,
-            &request(),
-            Instant::now() + Duration::from_secs(1),
-        ),
-        Err(ChangeRequestPlannerError::Disposition)
     );
 }
 
@@ -863,28 +710,21 @@ fn anonymous_presence_rejects_a_non_public_rhai_target_link() {
 }
 
 #[test]
-fn automatic_apply_requires_same_profile_trigger_and_target_authority() {
+fn automatic_apply_keeps_the_executor_separate_from_source_profiles() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/breg/acceptance/person-name-change-rhai");
     let project_bytes = std::fs::read(root.join("registry.yaml")).expect("fixture project reads");
     let mut project: serde_json::Value =
         serde_norway::from_slice(&project_bytes).expect("fixture YAML converts");
-    let submitter = project["accessProfiles"]
-        .as_array_mut()
-        .expect("profiles are an array")
-        .iter_mut()
-        .find(|profile| profile["id"] == "name-change-submitter")
-        .expect("submitter profile exists");
-    submitter["permissions"][0]["operations"] = json!(["create", "get", "submit_request"]);
-    submitter["permissions"][0]
-        .as_object_mut()
-        .expect("grant is an object")
-        .remove("applyTargets");
+    project["entities"][1]["changeRequest"]["review"] =
+        json!({"authority":"casework-main","policyId":"person-name-change"});
+    project["entities"][1]["changeRequest"]["onApproved"] =
+        json!({"mode":"automatic","executor":"person-name-change-executor"});
     let project = registry_breg::contract::parse_project_json(
         &serde_json::to_vec(&project).expect("test project serializes"),
     )
     .expect("strict project parses");
-    let failure = compile_project_with_assets(
+    let compiled = compile_project_with_assets(
         &project,
         &[],
         &[ModuleAssetSource {
@@ -895,22 +735,19 @@ fn automatic_apply_requires_same_profile_trigger_and_target_authority() {
         }],
         CompileProfile::Authoring,
     )
-    .expect_err("split submit and apply profiles cannot satisfy apply-on-ready");
-    let diagnostic = failure
-        .diagnostics()
-        .iter()
-        .find(|diagnostic| {
-            diagnostic.code == "change_request.application.automatic_apply_profile_missing"
-        })
-        .expect("automatic application requires one complete triggering profile");
+    .expect("automatic application uses an independently configured logical executor");
+    let request = compiled.entities()["person-name-change-request"]
+        .change_request
+        .as_ref()
+        .expect("request compiles");
     assert_eq!(
-        diagnostic.path,
-        "entities[id=person-name-change-request].accessProfiles"
+        request.on_approved.executor.as_deref(),
+        Some("person-name-change-executor")
     );
 }
 
 #[test]
-fn staged_planner_final_review_cannot_borrow_a_separate_apply_profile() {
+fn reviewed_planner_allows_a_separate_manual_apply_profile() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/breg/acceptance/person-name-change-rhai");
     let project_bytes = std::fs::read(root.join("registry.yaml")).expect("fixture project reads");
@@ -922,28 +759,24 @@ fn staged_planner_final_review_cannot_borrow_a_separate_apply_profile() {
         .iter_mut()
         .find(|entity| entity["id"] == "person-name-change-request")
         .expect("request entity exists");
-    request["changeRequest"]["review"] = json!({
-        "stages": [{"id": "final", "approvals": 1}]
-    });
+    request["changeRequest"]["review"] =
+        json!({"authority":"casework-main", "policyId":"person-name-change"});
+    request["changeRequest"]["onApproved"] = json!({"mode":"manual"});
     let profiles = project["accessProfiles"]
         .as_array_mut()
         .expect("profiles are an array");
     profiles.push(json!({
-        "id": "final-reviewer-without-apply",
+        "id": "source-reader-without-apply",
         "principalClaim": "registry_principal",
         "permissions": [{
             "entity": "person-name-change-request",
-            "operations": ["get", "approve_request"],
+            "operations": ["get"],
             "readableFields": ["person", "given-name", "family-name", "handling"],
-            "reviewStages": [{
-                "stage": "final",
-                "targets": [{"entity": "person", "readableFields": ["display-name"], "rowBoundaries": []}]
-            }],
           "rowBoundaries": []
         }]
     }));
     profiles.push(json!({
-        "id": "separate-staged-applier",
+        "id": "separate-manual-applier",
         "principalClaim": "registry_principal",
         "permissions": [{
             "entity": "person-name-change-request",
@@ -957,7 +790,7 @@ fn staged_planner_final_review_cannot_borrow_a_separate_apply_profile() {
         &serde_json::to_vec(&project).expect("test project serializes"),
     )
     .expect("strict project parses");
-    let failure = compile_project_with_assets(
+    compile_project_with_assets(
         &project,
         &[],
         &[ModuleAssetSource {
@@ -968,10 +801,7 @@ fn staged_planner_final_review_cannot_borrow_a_separate_apply_profile() {
         }],
         CompileProfile::Authoring,
     )
-    .expect_err("final review cannot borrow a separate profile's apply authority");
-    assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "change_request.application.automatic_apply_profile_missing"
-    }));
+    .expect("external review and current manual application authority stay separate");
 }
 
 #[test]
@@ -987,7 +817,7 @@ fn rhai_planner_source_byte_limit_is_exact_and_defensive() {
         Err(ChangeRequestPlannerError::Source)
     ));
     let error = plan_change_request_effects(
-        &plan(&oversized, CompiledChangeRequestApplicationMode::Automatic),
+        &plan(&oversized, ()),
         &request(),
         Instant::now() + Duration::from_secs(1),
     )
@@ -1011,7 +841,7 @@ fn rhai_planner_call_depth_limit_is_enforced() {
         MAXIMUM_CALL_DEPTH * 2
     );
     let error = plan_change_request_effects(
-        &plan(&script, CompiledChangeRequestApplicationMode::Automatic),
+        &plan(&script, ()),
         &request(),
         Instant::now() + Duration::from_secs(1),
     )
@@ -1037,7 +867,7 @@ fn rhai_planner_expression_depth_limit_is_enforced() {
 #[test]
 fn rhai_planner_string_limit_is_enforced_for_input_and_output() {
     let script = healthy_script("string-bound");
-    let input_plan = plan(&script, CompiledChangeRequestApplicationMode::Automatic);
+    let input_plan = plan(&script, ());
     let mut exact_input = request();
     exact_input.insert(
         "optional".to_owned(),
@@ -1070,7 +900,7 @@ fn rhai_planner_string_limit_is_enforced_for_input_and_output() {
         }
     "#;
     plan_change_request_effects(
-        &plan(output, CompiledChangeRequestApplicationMode::Automatic),
+        &plan(output, ()),
         &request(),
         Instant::now() + Duration::from_secs(1),
     )
@@ -1079,7 +909,7 @@ fn rhai_planner_string_limit_is_enforced_for_input_and_output() {
     let oversized = output.replace("#{effects:", "text += `x`; #{effects:");
     assert_eq!(
         plan_change_request_effects(
-            &plan(&oversized, CompiledChangeRequestApplicationMode::Automatic),
+            &plan(&oversized, ()),
             &request(),
             Instant::now() + Duration::from_secs(1),
         ),
@@ -1095,10 +925,7 @@ fn rhai_planner_array_limit_is_enforced_for_input_and_output() {
         Value::Array(vec![Value::Null; MAXIMUM_ARRAY_ITEMS]),
     );
     plan_change_request_effects(
-        &plan(
-            &healthy_script("array-input"),
-            CompiledChangeRequestApplicationMode::Automatic,
-        ),
+        &plan(&healthy_script("array-input"), ()),
         &input,
         Instant::now() + Duration::from_secs(1),
     )
@@ -1109,10 +936,7 @@ fn rhai_planner_array_limit_is_enforced_for_input_and_output() {
     );
     assert_eq!(
         plan_change_request_effects(
-            &plan(
-                &healthy_script("array-input"),
-                CompiledChangeRequestApplicationMode::Automatic,
-            ),
+            &plan(&healthy_script("array-input"), (),),
             &input,
             Instant::now() + Duration::from_secs(1),
         ),
@@ -1125,10 +949,7 @@ fn rhai_planner_array_limit_is_enforced_for_input_and_output() {
         )
     };
     plan_change_request_effects(
-        &plan(
-            &array_script(MAXIMUM_ARRAY_ITEMS),
-            CompiledChangeRequestApplicationMode::Automatic,
-        ),
+        &plan(&array_script(MAXIMUM_ARRAY_ITEMS), ()),
         &request(),
         Instant::now() + Duration::from_secs(1),
     )
@@ -1169,10 +990,7 @@ fn rhai_planner_map_limit_is_enforced_for_input_and_output() {
     let mut input = request();
     input.insert("optional".to_owned(), Value::Object(exact_map));
     plan_change_request_effects(
-        &plan(
-            &healthy_script("map-input"),
-            CompiledChangeRequestApplicationMode::Automatic,
-        ),
+        &plan(&healthy_script("map-input"), ()),
         &input,
         Instant::now() + Duration::from_secs(1),
     )
@@ -1183,10 +1001,7 @@ fn rhai_planner_map_limit_is_enforced_for_input_and_output() {
     input.insert("optional".to_owned(), Value::Object(oversized_map));
     assert_eq!(
         plan_change_request_effects(
-            &plan(
-                &healthy_script("map-input"),
-                CompiledChangeRequestApplicationMode::Automatic,
-            ),
+            &plan(&healthy_script("map-input"), (),),
             &input,
             Instant::now() + Duration::from_secs(1),
         ),
@@ -1199,10 +1014,7 @@ fn rhai_planner_map_limit_is_enforced_for_input_and_output() {
         )
     };
     plan_change_request_effects(
-        &plan(
-            &map_script(MAXIMUM_MAP_ENTRIES),
-            CompiledChangeRequestApplicationMode::Automatic,
-        ),
+        &plan(&map_script(MAXIMUM_MAP_ENTRIES), ()),
         &request(),
         Instant::now() + Duration::from_secs(1),
     )
@@ -1237,10 +1049,7 @@ fn rhai_planner_map_limit_is_enforced_for_input_and_output() {
 
 #[test]
 fn rhai_planner_module_limit_is_zero_and_imports_never_resolve() {
-    let plan = plan(
-        &healthy_script("no-modules"),
-        CompiledChangeRequestApplicationMode::Automatic,
-    );
+    let plan = plan(&healthy_script("no-modules"), ());
     assert_eq!(
         plan.planner
             .as_ref()
@@ -1262,10 +1071,7 @@ fn rhai_planner_recursive_input_and_output_conversion_is_bounded() {
     let mut input = request();
     input.insert("optional".to_owned(), nested_array(MAXIMUM_VALUE_DEPTH));
     plan_change_request_effects(
-        &plan(
-            &healthy_script("nested-input"),
-            CompiledChangeRequestApplicationMode::Automatic,
-        ),
+        &plan(&healthy_script("nested-input"), ()),
         &input,
         Instant::now() + Duration::from_secs(1),
     )
@@ -1273,10 +1079,7 @@ fn rhai_planner_recursive_input_and_output_conversion_is_bounded() {
     input.insert("optional".to_owned(), nested_array(MAXIMUM_VALUE_DEPTH + 1));
     assert_eq!(
         plan_change_request_effects(
-            &plan(
-                &healthy_script("nested-input"),
-                CompiledChangeRequestApplicationMode::Automatic,
-            ),
+            &plan(&healthy_script("nested-input"), (),),
             &input,
             Instant::now() + Duration::from_secs(1),
         ),
@@ -1326,7 +1129,7 @@ fn rhai_planner_deterministic_language_surface_is_usable() {
     let mut input = request();
     input.insert("label".to_owned(), json!(" Alpha | BETA "));
     let candidate = plan_change_request_effects(
-        &plan(script, CompiledChangeRequestApplicationMode::Automatic),
+        &plan(script, ()),
         &input,
         Instant::now() + Duration::from_secs(1),
     )
@@ -1342,7 +1145,7 @@ fn rhai_planner_runs_have_fresh_state_and_failures_leave_runtime_healthy() {
             #{effects: [#{target: #{fromField: "subject"}, operation: "patch", set: #{label: ctx.request.label}}]}
         }
     "#;
-    let fresh_plan = plan(script, CompiledChangeRequestApplicationMode::Automatic);
+    let fresh_plan = plan(script, ());
     for _ in 0..2 {
         let candidate = plan_change_request_effects(
             &fresh_plan,
@@ -1353,10 +1156,7 @@ fn rhai_planner_runs_have_fresh_state_and_failures_leave_runtime_healthy() {
         assert_eq!(literal(&candidate), "bounded-once");
     }
     let failure = plan_change_request_effects(
-        &plan(
-            "fn plan(ctx) { while true {} }",
-            CompiledChangeRequestApplicationMode::Automatic,
-        ),
+        &plan("fn plan(ctx) { while true {} }", ()),
         &request(),
         Instant::now() + Duration::from_secs(1),
     )
@@ -1396,7 +1196,7 @@ fn rhai_planner_input_and_engine_capabilities_are_closed() {
         );
         assert_eq!(
             plan_change_request_effects(
-                &plan(&source, CompiledChangeRequestApplicationMode::Automatic),
+                &plan(&source, ()),
                 &request(),
                 Instant::now() + Duration::from_secs(1),
             ),
@@ -1419,7 +1219,7 @@ fn rhai_planner_input_and_engine_capabilities_are_closed() {
         }
     "#;
     let candidate = plan_change_request_effects(
-        &plan(script, CompiledChangeRequestApplicationMode::Automatic),
+        &plan(script, ()),
         &request(),
         Instant::now() + Duration::from_secs(1),
     )
@@ -1440,10 +1240,7 @@ fn rhai_planner_resource_limits_and_deadline_leave_runtime_healthy() {
         )
     };
     let exact_effects = plan_change_request_effects(
-        &plan(
-            &effects_script(16),
-            CompiledChangeRequestApplicationMode::Automatic,
-        ),
+        &plan(&effects_script(16), ()),
         &request(),
         Instant::now() + Duration::from_secs(1),
     )
@@ -1451,10 +1248,7 @@ fn rhai_planner_resource_limits_and_deadline_leave_runtime_healthy() {
     assert_eq!(exact_effects.effects.len(), 16);
     assert_eq!(
         plan_change_request_effects(
-            &plan(
-                &effects_script(17),
-                CompiledChangeRequestApplicationMode::Automatic,
-            ),
+            &plan(&effects_script(17), (),),
             &request(),
             Instant::now() + Duration::from_secs(1),
         ),
@@ -1462,10 +1256,7 @@ fn rhai_planner_resource_limits_and_deadline_leave_runtime_healthy() {
     );
 
     let exhausted = plan_change_request_effects(
-        &plan(
-            "fn plan(ctx) { while true {} }",
-            CompiledChangeRequestApplicationMode::Automatic,
-        ),
+        &plan("fn plan(ctx) { while true {} }", ()),
         &request(),
         Instant::now() + Duration::from_secs(5),
     )
@@ -1473,10 +1264,7 @@ fn rhai_planner_resource_limits_and_deadline_leave_runtime_healthy() {
     assert_eq!(exhausted, ChangeRequestPlannerError::Resource);
 
     let deadline = plan_change_request_effects(
-        &plan(
-            "fn plan(ctx) { #{} }",
-            CompiledChangeRequestApplicationMode::Automatic,
-        ),
+        &plan("fn plan(ctx) { #{} }", ()),
         &request(),
         Instant::now(),
     )
@@ -1486,28 +1274,10 @@ fn rhai_planner_resource_limits_and_deadline_leave_runtime_healthy() {
     let healthy = plan_change_request_effects(
         &plan(
             "fn plan(ctx) { #{effects: [#{target: #{fromField: `subject`}, operation: `patch`, set: #{label: `healthy`}}]} }",
-            CompiledChangeRequestApplicationMode::Automatic,
+            (),
         ),
         &request(),
         Instant::now() + Duration::from_secs(1),
     );
     assert!(healthy.is_ok());
-}
-
-#[test]
-fn rhai_planner_errors_and_queue_reasons_are_value_free() {
-    let script = r#"
-        fn plan(ctx) {
-            #{disposition: "queue", reasonCode: "secret-canary", effects: [#{target: #{fromField: "subject"}, operation: "patch", set: #{label: ctx.request.label}}]}
-        }
-    "#;
-    let error = plan_change_request_effects(
-        &plan(script, CompiledChangeRequestApplicationMode::Planner),
-        &request(),
-        Instant::now() + Duration::from_secs(1),
-    )
-    .expect_err("undeclared reason is refused");
-    assert_eq!(error.code(), "change_request.planner.disposition");
-    assert!(!error.to_string().contains("secret-canary"));
-    assert!(!format!("{error:?}").contains("secret-canary"));
 }

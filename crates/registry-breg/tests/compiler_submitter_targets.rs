@@ -27,7 +27,6 @@ fn create_only_guard_source() -> Value {
         "set":{"supporting-reference":{"fromField":"supporting-reference"}}
     }]);
     candidate["entities"][1]["changeRequest"]["application"] = json!({
-        "mode":"manual",
         "preconditions":{"targets":[{
             "id":"licence-guard", "entity":"professional-license", "fromField":"record",
             "requires":[{"field":"person-reference", "equals":"person:holder"}]
@@ -39,13 +38,10 @@ fn create_only_guard_source() -> Value {
         .iter_mut()
         .find(|profile| profile["id"] == "reviewer")
         .unwrap();
-    reviewer["permissions"][1]["reviewStages"][0]["targets"] = json!([{
-        "entity":"enrolment", "readableFields":["supporting-reference"], "rowBoundaries":[]
-    }]);
-    reviewer["permissions"][1]["applyTargets"] = json!([
-        {"entity":"enrolment", "rowBoundaries":[]},
-        {"entity":"professional-license", "rowBoundaries":[]}
-    ]);
+    reviewer["permissions"][1]["applyTargets"]
+        .as_array_mut()
+        .expect("reviewer apply targets")
+        .push(json!({"entity":"enrolment", "rowBoundaries":[]}));
     candidate
 }
 
@@ -88,8 +84,8 @@ fn native_reference_admission_requires_complete_manual_same_profile_authority() 
                 ])
             }
             "automatic" => {
-                candidate["entities"][1]["changeRequest"]["application"]["mode"] =
-                    json!("automatic")
+                candidate["entities"][1]["changeRequest"]["onApproved"] =
+                    json!({"mode":"automatic", "executor":"scope-correction-executor"})
             }
             "request-target" => {
                 holder["permissions"][1]["submitterTargets"] = json!(["scope-correction"]);

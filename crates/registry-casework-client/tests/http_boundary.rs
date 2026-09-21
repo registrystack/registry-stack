@@ -1,21 +1,1624 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::Router;
 use registry_casework_client::{
-    AbsencesQuery, BearerToken, CaseworkAction, CaseworkAuth, CaseworkClient, CaseworkClientConfig,
-    CaseworkClientError, CaseworkProblemCode, CaseworkProtocolFailure, DecideRequest,
-    DirectoryTargetPurpose, DirectoryTargetsQuery, HoldingsQuery, HostedDecisionRequest,
-    HostedValidationReason, RecoverAttemptRequest, SourceBinding,
+    AbsencesQuery, AssignmentRequest, BearerToken, CaseworkAction, CaseworkAuth, CaseworkClient,
+    CaseworkClientConfig, CaseworkClientError, CaseworkProblemCode, CaseworkProtocolFailure,
+    ContentDigest, DecideRequest, DelegateRequest, DirectoryTargetPurpose, DirectoryTargetsQuery,
+    HoldingsQuery, IssuerPrincipal, RecoverAttemptRequest, ReviewCancelRequest,
+    ReviewCancelResponse, ReviewContext, ReviewCreateRequest, ReviewHistoryAudience,
+    ReviewNoteRequest, ReviewRequestAccepted, ReviewTaskContextData, ReviewTaskDraftInput,
+    ReviewValidationReason, SourceBinding, SourceContextBinding,
 };
+use registry_casework_core::{
+    ReviewContextStrategy, ReviewKindPolicy, ReviewKindPurpose, ReviewRetentionPolicy,
+    ReviewStagePolicy, SubjectBinding, TaskApprovalRequest,
+};
+use serde_json::{json, Value};
 use url::Url;
 use uuid::Uuid;
 
 const TRACEPARENT: &str = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
 type HistoryObservations = Arc<Mutex<Vec<(String, HeaderMap)>>>;
+
+#[tokio::test]
+async fn review_kind_refuses_a_valid_snapshot_for_another_identifier() {
+    let snapshot = ReviewKindPolicy {
+        id: "returned-kind".to_owned(),
+        version: "1".to_owned(),
+        purpose: ReviewKindPurpose::Approval,
+        context_strategy: ReviewContextStrategy::Submitted,
+        stages: vec![ReviewStagePolicy {
+            id: "review".to_owned(),
+            queue: "reviews".to_owned(),
+            deciding_profiles: vec!["staff".to_owned()],
+            required_approvals: 1,
+            exclude_initiator: false,
+            exclude_previous_stage_reviewers: false,
+        }],
+        clocks: Vec::new(),
+        retention: ReviewRetentionPolicy {
+            terminal_days: 30,
+            accountability_days: 30,
+        },
+        display_schema: json!({
+            "type":"object",
+            "additionalProperties":false,
+            "properties":{}
+        }),
+        result_schema: None,
+        outcomes: Vec::new(),
+    }
+    .snapshot()
+    .expect("fixture snapshot");
+    let app = Router::new()
+        .route(
+            "/v1/review-kinds/requested-kind",
+            get(review_kind_fixture_response),
+        )
+        .with_state(serde_json::to_value(snapshot).expect("snapshot JSON"));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .review_kind(CaseworkAuth::new(&token, "staff"), "requested-kind")
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+async fn review_kind_fixture_response(State(response): State<Value>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        response.to_string(),
+    )
+}
+
+#[tokio::test]
+async fn review_create_refuses_an_accepted_binding_for_another_policy() {
+    let digest = ContentDigest::for_bytes(b"submission");
+    let request = ReviewCreateRequest {
+        kind: "registry-correction".to_owned(),
+        subject: SubjectBinding {
+            source: "registry".to_owned(),
+            subject_type: "change-request".to_owned(),
+            id: "proposal-7".to_owned(),
+            version: "3".to_owned(),
+            digest: ContentDigest::for_bytes(b"proposal-7"),
+        },
+        requester_reference: "proposal-7".to_owned(),
+        initiator: None,
+        context: ReviewContext::Source {
+            binding: SourceContextBinding {
+                reference: "proposal-7".to_owned(),
+            },
+        },
+        result_constraints: None,
+    };
+    let response = json!({
+        "requestId": Uuid::from_u128(7),
+        "subject": request.subject.clone(),
+        "policy": {
+            "id": "another-review-kind",
+            "version": "1",
+            "digest": ContentDigest::for_bytes(b"another-review-kind")
+        },
+        "submissionDigest": digest.clone(),
+    });
+    let app = Router::new()
+        .route("/v1/review-requests", post(review_create_fixture_response))
+        .with_state(response);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .create_or_recover_review_request(
+                CaseworkAuth::new(&token, "requester"),
+                "submission-7",
+                &request,
+                &digest,
+            )
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 201,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+async fn review_create_fixture_response(State(response): State<Value>) -> impl IntoResponse {
+    (
+        StatusCode::CREATED,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        response.to_string(),
+    )
+}
+
+#[tokio::test]
+async fn review_result_feed_refuses_unbounded_or_invalid_continuations() {
+    let entry = json!({
+        "eventId": Uuid::from_u128(8),
+        "requestId": Uuid::from_u128(7),
+        "resultId": Uuid::from_u128(99),
+        "completedAt": "2026-09-19T00:00:00Z"
+    });
+    let cursor = Uuid::from_u128(8).to_string();
+    let responses = Arc::new(Mutex::new(VecDeque::from([
+        json!({"items": vec![entry.clone(); 100], "nextCursor": cursor}),
+        json!({"items": vec![entry.clone(); 101]}),
+        json!({"items": [], "nextCursor": ""}),
+        json!({"items": [], "nextCursor": "x".repeat(4097)}),
+        json!({"items": [], "nextCursor": "cursor\n8"}),
+        json!({"items": [], "nextCursor": "not-an-event-uuid"}),
+    ])));
+    let app = Router::new()
+        .route(
+            "/v1/review-results",
+            get(review_result_feed_fixture_response),
+        )
+        .with_state(responses);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let query = registry_casework_client::ReviewPageQuery {
+        cursor: None,
+        limit: Some(100),
+    };
+
+    let boundary = client
+        .review_results(CaseworkAuth::new(&token, "requester"), &query)
+        .await
+        .expect("bounded result feed page");
+    assert_eq!(boundary.value.items.len(), 100);
+    assert_eq!(
+        boundary.value.next_cursor,
+        Some(Uuid::parse_str(&cursor).unwrap())
+    );
+
+    for _ in 0..5 {
+        assert!(matches!(
+            client
+                .review_results(CaseworkAuth::new(&token, "requester"), &query)
+                .await,
+            Err(CaseworkClientError::Protocol {
+                status: 200,
+                failure: CaseworkProtocolFailure::Body,
+                trace_id: Some(ref trace_id),
+            }) if trace_id == "0123456789abcdef0123456789abcdef"
+        ));
+    }
+    server.abort();
+}
+
+async fn review_result_feed_fixture_response(
+    State(responses): State<Arc<Mutex<VecDeque<Value>>>>,
+) -> impl IntoResponse {
+    let response = responses
+        .lock()
+        .expect("responses")
+        .pop_front()
+        .expect("fixture response");
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        response.to_string(),
+    )
+}
+
+#[tokio::test]
+async fn review_tasks_refuses_an_oversized_response_page() {
+    let task = json!({
+        "taskId": Uuid::from_u128(7),
+        "requestId": Uuid::from_u128(9),
+        "stageIndex": 0,
+        "stageId": "review",
+        "queue": "reviews",
+        "revision": 1,
+        "eligibleProfiles": ["staff"],
+        "state": "open",
+    });
+    let app = Router::new()
+        .route("/v1/review-tasks", get(review_task_fixture_response))
+        .with_state(json!({"items": vec![task; 101]}));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .review_tasks(
+                CaseworkAuth::new(&token, "staff"),
+                &registry_casework_client::ReviewTaskQuery {
+                    queue: None,
+                    cursor: None,
+                    limit: Some(100),
+                },
+            )
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn review_tasks_refuses_a_page_outside_the_requested_inbox() {
+    let foreign_queue = json!({
+        "taskId": Uuid::from_u128(7),
+        "requestId": Uuid::from_u128(9),
+        "stageIndex": 0,
+        "stageId": "review",
+        "queue": "intake",
+        "revision": 1,
+        "eligibleProfiles": ["staff"],
+        "state": "open",
+    });
+    let foreign_profile = json!({
+        "taskId": Uuid::from_u128(10),
+        "requestId": Uuid::from_u128(9),
+        "stageIndex": 0,
+        "stageId": "review",
+        "queue": "reviews",
+        "revision": 1,
+        "eligibleProfiles": ["supervisor"],
+        "state": "open",
+    });
+    let app = Router::new()
+        .route("/v1/review-tasks", get(review_task_fixture_response))
+        .with_state(json!({"items": [foreign_queue, foreign_profile]}));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .review_tasks(
+                CaseworkAuth::new(&token, "staff"),
+                &registry_casework_client::ReviewTaskQuery {
+                    queue: Some("reviews".to_owned()),
+                    cursor: None,
+                    limit: Some(100),
+                },
+            )
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn review_note_refuses_a_response_for_another_request() {
+    let requested_id = Uuid::from_u128(7);
+    let app = Router::new()
+        .route(
+            "/v1/review-requests/{request}/notes",
+            post(review_task_fixture_response),
+        )
+        .with_state(json!({
+            "eventId": Uuid::from_u128(8),
+            "requestId": Uuid::from_u128(9),
+            "kind": "note",
+            "detail": {"audience": "reviewers", "note": "Review note"},
+            "occurredAt": "2026-09-20T00:00:00Z",
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .add_review_note(
+                CaseworkAuth::new(&token, "staff"),
+                requested_id,
+                "note-7",
+                &ReviewNoteRequest {
+                    audience: ReviewHistoryAudience::Reviewers,
+                    note: "Review note".to_owned(),
+                },
+            )
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn review_note_refuses_a_response_whose_event_is_not_a_note() {
+    let requested_id = Uuid::from_u128(7);
+    let app = Router::new()
+        .route(
+            "/v1/review-requests/{request}/notes",
+            post(review_task_fixture_response),
+        )
+        .with_state(json!({
+            "eventId": Uuid::from_u128(8),
+            "requestId": requested_id,
+            "taskId": Uuid::from_u128(11),
+            "kind": "stage_advanced",
+            "detail": {"audience": "reviewers", "note": "Review note"},
+            "occurredAt": "2026-09-20T00:00:00Z",
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .add_review_note(
+                CaseworkAuth::new(&token, "staff"),
+                requested_id,
+                "note-7",
+                &ReviewNoteRequest {
+                    audience: ReviewHistoryAudience::Reviewers,
+                    note: "Review note".to_owned(),
+                },
+            )
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn review_note_refuses_a_response_whose_note_detail_was_substituted() {
+    let requested_id = Uuid::from_u128(7);
+    let app = Router::new()
+        .route(
+            "/v1/review-requests/{request}/notes",
+            post(review_task_fixture_response),
+        )
+        .with_state(json!({
+            "eventId": Uuid::from_u128(8),
+            "requestId": requested_id,
+            "kind": "note",
+            "detail": {"audience": "requester", "note": "Substituted note"},
+            "occurredAt": "2026-09-20T00:00:00Z",
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .add_review_note(
+                CaseworkAuth::new(&token, "staff"),
+                requested_id,
+                "note-7",
+                &ReviewNoteRequest {
+                    audience: ReviewHistoryAudience::Reviewers,
+                    note: "Review note".to_owned(),
+                },
+            )
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn review_accountability_refuses_a_response_for_another_event() {
+    let requested_id = Uuid::from_u128(7);
+    let app = Router::new()
+        .route(
+            "/v1/review-accountability/{event}",
+            get(review_task_fixture_response),
+        )
+        .with_state(json!({
+            "eventId": Uuid::from_u128(8),
+            "requestId": Uuid::from_u128(9),
+            "taskId": Uuid::from_u128(10),
+            "actorRef": "actor_fixture",
+            "actor": {"issuer": "https://issuer.example", "subject": "reviewer"},
+            "profileId": "staff",
+            "decision": "approve",
+            "occurredAt": "2026-09-20T00:00:00Z",
+            "retainedUntil": "2026-10-20T00:00:00Z",
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .review_accountability(CaseworkAuth::new(&token, "staff"), requested_id)
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn review_task_grant_revocation_requires_the_selected_invalidated_grant() {
+    let task_id = Uuid::from_u128(7);
+    let grant_id = Uuid::from_u128(8);
+    let responses = Arc::new(Mutex::new(VecDeque::from([
+        json!({"id": Uuid::from_u128(9), "invalidated": true}),
+        json!({"id": grant_id, "invalidated": false}),
+    ])));
+    let app = Router::new()
+        .route(
+            "/v1/review-tasks/{task}/task-grants/{grant}/revoke",
+            post(review_result_feed_fixture_response),
+        )
+        .with_state(responses);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    for _ in 0..2 {
+        assert!(matches!(
+            client
+                .revoke_review_task_grant(CaseworkAuth::new(&token, "staff"), task_id, grant_id,)
+                .await,
+            Err(CaseworkClientError::Protocol {
+                status: 200,
+                failure: CaseworkProtocolFailure::Body,
+                ..
+            })
+        ));
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn review_task_grant_approval_requires_the_selected_active_template() {
+    let task_id = Uuid::from_u128(7);
+    let approval = TaskApprovalRequest {
+        template_id: "verify-status".into(),
+        template_version: "1".into(),
+    };
+    let grant = |template_id: &str, template_version: &str, invalidated: bool| {
+        json!({
+            "id": Uuid::from_u128(8),
+            "templateId": template_id,
+            "templateVersion": template_version,
+            "agent": {"issuer": "https://issuer.example", "subject": "agent-one"},
+            "client": "agent-client",
+            "resource": "urn:evidence",
+            "scopes": ["evidence:invoke"],
+            "purpose": "verify-status",
+            "bounds": {"type": "evidence", "requirement": "status"},
+            "expiresAt": 2_000_000_900_u64,
+            "invalidated": invalidated,
+        })
+    };
+    let responses = Arc::new(Mutex::new(VecDeque::from([
+        grant("other-template", "1", false),
+        grant("verify-status", "2", false),
+        grant("verify-status", "1", true),
+        grant("verify-status", "1", false),
+    ])));
+    let app = Router::new()
+        .route(
+            "/v1/review-tasks/{task}/task-grants",
+            post(review_result_feed_fixture_response),
+        )
+        .with_state(responses);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    for index in 0..3 {
+        assert!(matches!(
+            client
+                .approve_review_task_grant(
+                    CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+                    task_id,
+                    index,
+                    &format!("approve-{index}"),
+                    &approval,
+                )
+                .await,
+            Err(CaseworkClientError::Protocol {
+                status: 200,
+                failure: CaseworkProtocolFailure::Body,
+                ..
+            })
+        ));
+    }
+    let approved = client
+        .approve_review_task_grant(
+            CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+            task_id,
+            3,
+            "approve-3",
+            &approval,
+        )
+        .await
+        .expect("matching active grant");
+    assert_eq!(approved.value.template_id, approval.template_id);
+    assert_eq!(approved.value.template_version, approval.template_version);
+    assert!(!approved.value.invalidated);
+    server.abort();
+}
+
+#[tokio::test]
+async fn review_result_refuses_a_non_object_payload() {
+    let request_id = Uuid::from_u128(7);
+    let digest = ContentDigest::for_bytes(b"fixture");
+    let accepted: registry_casework_client::ReviewRequestAccepted = serde_json::from_value(json!({
+        "requestId": request_id,
+        "subject": {
+            "source": "registry",
+            "type": "change-request",
+            "id": "proposal-7",
+            "version": "3",
+            "digest": digest,
+        },
+        "policy": {"id": "registry-correction", "version": "1", "digest": digest},
+        "submissionDigest": digest,
+    }))
+    .expect("accepted binding fixture");
+    let response = json!({
+        "resultId": Uuid::from_u128(99),
+        "requestId": request_id,
+        "subject": accepted.subject,
+        "policy": accepted.policy,
+        "submissionDigest": accepted.submission_digest,
+        "status": "changes_requested",
+        "outcome": "needs-correction",
+        "result": ["not", "an", "object"],
+        "completedAt": "2026-09-19T00:00:00Z",
+        "availableUntil": "2026-10-19T00:00:00Z",
+    });
+    let app = Router::new()
+        .route(
+            "/v1/review-requests/{request}/result",
+            get(review_result_fixture_response),
+        )
+        .with_state(response);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .review_result(CaseworkAuth::new(&token, "requester"), &accepted)
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+async fn review_result_fixture_response(State(response): State<Value>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        response.to_string(),
+    )
+}
+
+#[tokio::test]
+async fn exact_claim_and_release_refuse_a_response_for_another_task() {
+    let requested_task_id = Uuid::from_u128(7);
+    let returned_task_id = Uuid::from_u128(8);
+    let response = json!({
+        "taskId": returned_task_id,
+        "requestId": Uuid::from_u128(9),
+        "stageIndex": 0,
+        "stageId": "review",
+        "queue": "reviews",
+        "revision": 2,
+        "eligibleProfiles": ["staff"],
+        "state": "open",
+    });
+    let app = Router::new()
+        .route("/v1/review-tasks/{task}", get(review_task_fixture_response))
+        .route(
+            "/v1/review-tasks/{task}/claim",
+            post(review_task_fixture_response),
+        )
+        .route(
+            "/v1/review-tasks/{task}/release",
+            post(review_task_fixture_response),
+        )
+        .with_state(response);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    let responses = [
+        client
+            .review_task(CaseworkAuth::new(&token, "staff"), requested_task_id)
+            .await,
+        client
+            .claim_review_task(
+                CaseworkAuth::new(&token, "staff"),
+                requested_task_id,
+                1,
+                "claim-7",
+            )
+            .await,
+        client
+            .release_review_task(
+                CaseworkAuth::new(&token, "staff"),
+                requested_task_id,
+                1,
+                "release-7",
+            )
+            .await,
+    ];
+    for response in responses {
+        assert!(matches!(
+            response,
+            Err(CaseworkClientError::Protocol {
+                status: 200,
+                failure: CaseworkProtocolFailure::Body,
+                ..
+            })
+        ));
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn claim_refuses_a_response_that_left_the_task_open() {
+    let task_id = Uuid::from_u128(7);
+    let response = json!({
+        "taskId": task_id,
+        "requestId": Uuid::from_u128(9),
+        "stageIndex": 0,
+        "stageId": "review",
+        "queue": "reviews",
+        "revision": 2,
+        "eligibleProfiles": ["staff"],
+        "state": "open",
+    });
+    let app = Router::new()
+        .route(
+            "/v1/review-tasks/{task}/claim",
+            post(review_task_fixture_response),
+        )
+        .with_state(response);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .claim_review_task(CaseworkAuth::new(&token, "staff"), task_id, 1, "claim-7")
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn release_refuses_a_response_that_left_the_task_held() {
+    let task_id = Uuid::from_u128(7);
+    let response = json!({
+        "taskId": task_id,
+        "requestId": Uuid::from_u128(9),
+        "stageIndex": 0,
+        "stageId": "review",
+        "queue": "reviews",
+        "revision": 2,
+        "eligibleProfiles": ["staff"],
+        "state": {"held": {"holder": {"issuer": "https://issuer.example.test", "subject": "someone"}}},
+    });
+    let app = Router::new()
+        .route(
+            "/v1/review-tasks/{task}/release",
+            post(review_task_fixture_response),
+        )
+        .with_state(response);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .release_review_task(CaseworkAuth::new(&token, "staff"), task_id, 1, "release-7")
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn exact_assignment_and_delegation_refuse_a_response_for_another_task() {
+    let requested_task_id = Uuid::from_u128(7);
+    let response = json!({
+        "taskId": Uuid::from_u128(8),
+        "requestId": Uuid::from_u128(9),
+        "stageIndex": 0,
+        "stageId": "review",
+        "queue": "reviews",
+        "revision": 2,
+        "eligibleProfiles": ["staff"],
+        "state": "open",
+    });
+    let app = Router::new()
+        .route(
+            "/v1/review-tasks/{task}/assign",
+            post(review_task_fixture_response),
+        )
+        .route(
+            "/v1/review-tasks/{task}/delegate",
+            post(review_task_fixture_response),
+        )
+        .with_state(response);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let assignee = IssuerPrincipal {
+        issuer: "https://issuer.example".to_owned(),
+        subject: "reviewer".to_owned(),
+    };
+
+    let responses = [
+        client
+            .assign_review_task(
+                CaseworkAuth::new(&token, "supervisor"),
+                requested_task_id,
+                1,
+                "assign-7",
+                &AssignmentRequest {
+                    assignee: assignee.clone(),
+                    reason: Some("reassign".to_owned()),
+                },
+            )
+            .await,
+        client
+            .delegate_review_task(
+                CaseworkAuth::new(&token, "staff"),
+                requested_task_id,
+                1,
+                "delegate-7",
+                &DelegateRequest {
+                    delegate: assignee,
+                    reason: Some("coverage".to_owned()),
+                },
+            )
+            .await,
+    ];
+    for response in responses {
+        assert!(matches!(
+            response,
+            Err(CaseworkClientError::Protocol {
+                status: 200,
+                failure: CaseworkProtocolFailure::Body,
+                ..
+            })
+        ));
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn assignment_and_delegation_refuse_a_response_that_did_not_advance_the_revision() {
+    let task_id = Uuid::from_u128(7);
+    let response = json!({
+        "taskId": task_id,
+        "requestId": Uuid::from_u128(9),
+        "stageIndex": 0,
+        "stageId": "review",
+        "queue": "reviews",
+        "revision": 1,
+        "eligibleProfiles": ["staff"],
+        "state": "open",
+    });
+    let app = Router::new()
+        .route(
+            "/v1/review-tasks/{task}/assign",
+            post(review_task_fixture_response),
+        )
+        .route(
+            "/v1/review-tasks/{task}/delegate",
+            post(review_task_fixture_response),
+        )
+        .with_state(response);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let assignee = IssuerPrincipal {
+        issuer: "https://issuer.example".to_owned(),
+        subject: "reviewer".to_owned(),
+    };
+
+    let responses = [
+        client
+            .assign_review_task(
+                CaseworkAuth::new(&token, "supervisor"),
+                task_id,
+                1,
+                "assign-7",
+                &AssignmentRequest {
+                    assignee: assignee.clone(),
+                    reason: Some("reassign".to_owned()),
+                },
+            )
+            .await,
+        client
+            .delegate_review_task(
+                CaseworkAuth::new(&token, "staff"),
+                task_id,
+                1,
+                "delegate-7",
+                &DelegateRequest {
+                    delegate: assignee,
+                    reason: Some("coverage".to_owned()),
+                },
+            )
+            .await,
+    ];
+    for response in responses {
+        assert!(matches!(
+            response,
+            Err(CaseworkClientError::Protocol {
+                status: 200,
+                failure: CaseworkProtocolFailure::Body,
+                ..
+            })
+        ));
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn exact_draft_read_refuses_a_response_for_another_task() {
+    let requested_task_id = Uuid::from_u128(7);
+    let response = json!({
+        "taskId": Uuid::from_u128(8),
+        "author": {
+            "issuer": "https://issuer.example",
+            "subject": "reviewer",
+        },
+        "body": {"note": "bounded draft"},
+        "revision": 2,
+        "updatedAt": "2026-09-20T00:00:00Z",
+    });
+    let app = Router::new()
+        .route(
+            "/v1/review-tasks/{task}/draft",
+            get(review_task_fixture_response),
+        )
+        .with_state(response);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .review_task_draft(
+                CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+                requested_task_id,
+            )
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn exact_draft_save_refuses_a_response_for_another_task() {
+    let requested_task_id = Uuid::from_u128(7);
+    let response = json!({
+        "taskId": Uuid::from_u128(8),
+        "author": {
+            "issuer": "https://issuer.example",
+            "subject": "reviewer",
+        },
+        "body": {"note": "bounded draft"},
+        "revision": 2,
+        "updatedAt": "2026-09-20T00:00:00Z",
+    });
+    let app = Router::new()
+        .route(
+            "/v1/review-tasks/{task}/draft",
+            put(review_task_fixture_response),
+        )
+        .with_state(response);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .save_review_task_draft(
+                CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+                requested_task_id,
+                1,
+                "draft-7",
+                &ReviewTaskDraftInput {
+                    body: json!({"note": "bounded draft"}),
+                },
+            )
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn draft_save_refuses_a_response_echoing_a_different_body() {
+    let requested_task_id = Uuid::from_u128(7);
+    let response = json!({
+        "taskId": requested_task_id,
+        "author": {
+            "issuer": "https://issuer.example",
+            "subject": "reviewer",
+        },
+        "body": {"note": "substituted draft"},
+        "revision": 2,
+        "updatedAt": "2026-09-20T00:00:00Z",
+    });
+    let app = Router::new()
+        .route(
+            "/v1/review-tasks/{task}/draft",
+            put(review_task_fixture_response),
+        )
+        .with_state(response);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .save_review_task_draft(
+                CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+                requested_task_id,
+                1,
+                "draft-7",
+                &ReviewTaskDraftInput {
+                    body: json!({"note": "bounded draft"}),
+                },
+            )
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn draft_save_refuses_a_response_without_a_valid_draft_revision() {
+    let requested_task_id = Uuid::from_u128(7);
+    let response = json!({
+        "taskId": requested_task_id,
+        "author": {
+            "issuer": "https://issuer.example",
+            "subject": "reviewer",
+        },
+        "body": {"note": "bounded draft"},
+        "revision": 0,
+        "updatedAt": "2026-09-20T00:00:00Z",
+    });
+    let app = Router::new()
+        .route(
+            "/v1/review-tasks/{task}/draft",
+            put(review_task_fixture_response),
+        )
+        .with_state(response);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    assert!(matches!(
+        client
+            .save_review_task_draft(
+                CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+                requested_task_id,
+                1,
+                "draft-7",
+                &ReviewTaskDraftInput {
+                    body: json!({"note": "bounded draft"}),
+                },
+            )
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+async fn review_task_fixture_response(State(response): State<Value>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        response.to_string(),
+    )
+}
+
+#[tokio::test]
+async fn review_task_context_preserves_the_frozen_source_neutral_shape() {
+    let task_id = Uuid::nil();
+    let app = Router::new().route(
+        "/v1/review-tasks/{task}/context",
+        get(task_context_response),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let context = client
+        .review_task_context(CaseworkAuth::new(&token, "staff"), task_id)
+        .await
+        .expect("review task context");
+    assert_eq!(context.value.task_id, task_id);
+    assert_eq!(context.value.requester_reference, "requester-reference");
+    assert!(matches!(
+        context.value.context,
+        ReviewTaskContextData::Submitted { snapshot }
+            if snapshot == serde_json::json!({"summary":"Frozen review"})
+    ));
+    server.abort();
+}
+
+fn context_body(strategy: ReviewContextStrategy, display_schema: Value, context: Value) -> Value {
+    let snapshot = ReviewKindPolicy {
+        id: "standalone-answer".to_owned(),
+        version: "1".to_owned(),
+        purpose: ReviewKindPurpose::Approval,
+        context_strategy: strategy,
+        stages: vec![ReviewStagePolicy {
+            id: "answer".to_owned(),
+            queue: "answers".to_owned(),
+            deciding_profiles: vec!["staff".to_owned()],
+            required_approvals: 1,
+            exclude_initiator: false,
+            exclude_previous_stage_reviewers: false,
+        }],
+        clocks: Vec::new(),
+        retention: ReviewRetentionPolicy {
+            terminal_days: 30,
+            accountability_days: 30,
+        },
+        display_schema,
+        result_schema: None,
+        outcomes: Vec::new(),
+    }
+    .snapshot()
+    .expect("fixture policy snapshot");
+    json!({
+        "taskId": Uuid::nil(),
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "subject": {
+            "source": "registry", "type": "record", "id": "record-1", "version": "1",
+            "digest": ContentDigest::for_bytes(b"record-1")
+        },
+        "requesterReference": "requester-reference",
+        "policy": snapshot.identity.clone(),
+        "policySnapshot": snapshot,
+        "context": context,
+    })
+}
+
+async fn task_context_fixture_response(State(body): State<Value>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        body.to_string(),
+    )
+}
+
+async fn serve_context(
+    body: Value,
+) -> Result<
+    registry_casework_client::CaseworkComplete<registry_casework_core::ReviewTaskContext>,
+    CaseworkClientError,
+> {
+    let app = Router::new()
+        .route(
+            "/v1/review-tasks/{task}/context",
+            get(task_context_fixture_response),
+        )
+        .with_state(body);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let outcome = client
+        .review_task_context(CaseworkAuth::new(&token, "staff"), Uuid::nil())
+        .await;
+    server.abort();
+    outcome
+}
+
+async fn serve_context_rejection(body: Value) -> CaseworkClientError {
+    serve_context(body)
+        .await
+        .expect_err("context rejection fixture returns a protocol error")
+}
+
+#[tokio::test]
+async fn review_task_context_refuses_a_submitted_context_that_violates_the_display_schema() {
+    let error = serve_context_rejection(context_body(
+        ReviewContextStrategy::Submitted,
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+        }),
+        json!({"strategy": "submitted", "snapshot": {"summary": "undisclosed"}}),
+    ))
+    .await;
+    assert!(matches!(
+        error,
+        CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn review_task_context_refuses_a_context_for_another_strategy() {
+    let error = serve_context_rejection(context_body(
+        ReviewContextStrategy::Source,
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+        }),
+        json!({"strategy": "submitted", "snapshot": {}}),
+    ))
+    .await;
+    assert!(matches!(
+        error,
+        CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn review_task_context_refuses_a_binding_changed_context_that_still_carries_a_projection() {
+    let error = serve_context_rejection(context_body(
+        ReviewContextStrategy::Source,
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+        }),
+        json!({
+            "strategy": "source",
+            "reference": "registry/record-1",
+            "bindingStatus": "binding_changed",
+            "projection": {
+                "binding": {
+                    "sourceRevision": "source-revision-1",
+                    "version": "1",
+                    "generation": "review-source-generation"
+                },
+                "display": {}
+            }
+        }),
+    ))
+    .await;
+    assert!(matches!(
+        error,
+        CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        }
+    ));
+}
+
+fn source_context(binding_status: &str, projection: Option<Value>) -> Value {
+    let mut context = json!({
+        "strategy": "source",
+        "reference": "registry/record-1",
+        "bindingStatus": binding_status,
+    });
+    if let Some(projection) = projection {
+        context["projection"] = projection;
+    }
+    context
+}
+
+fn matching_projection(version: &str, integrity: Value) -> Value {
+    json!({
+        "binding": {
+            "sourceRevision": "source-revision-1",
+            "version": version,
+            "integrity": integrity,
+            "generation": "review-source-generation"
+        },
+        "display": {}
+    })
+}
+
+fn empty_display_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+    })
+}
+
+#[tokio::test]
+async fn review_task_context_accepts_a_current_binding_with_a_matching_projection() {
+    let complete = serve_context(context_body(
+        ReviewContextStrategy::Source,
+        empty_display_schema(),
+        source_context(
+            "current",
+            Some(matching_projection(
+                "1",
+                json!(ContentDigest::for_bytes(b"record-1")),
+            )),
+        ),
+    ))
+    .await
+    .expect("a current projection of the pinned occurrence is the reviewable context");
+    assert!(matches!(
+        complete.value.context,
+        ReviewTaskContextData::Source {
+            binding_status: registry_casework_core::ReviewSourceBindingStatus::Current,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn review_task_context_refuses_a_current_binding_without_a_projection() {
+    let error = serve_context_rejection(context_body(
+        ReviewContextStrategy::Source,
+        empty_display_schema(),
+        source_context("current", None),
+    ))
+    .await;
+    assert!(matches!(
+        error,
+        CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn review_task_context_refuses_a_current_projection_that_does_not_match_the_pinned_subject() {
+    for projection in [
+        matching_projection("2", json!(ContentDigest::for_bytes(b"record-1"))),
+        matching_projection("1", Value::Null),
+        matching_projection("1", json!(ContentDigest::for_bytes(b"another-occurrence"))),
+    ] {
+        let error = serve_context_rejection(context_body(
+            ReviewContextStrategy::Source,
+            empty_display_schema(),
+            source_context("current", Some(projection)),
+        ))
+        .await;
+        assert!(
+            matches!(
+                error,
+                CaseworkClientError::Protocol {
+                    status: 200,
+                    failure: CaseworkProtocolFailure::Body,
+                    ..
+                }
+            ),
+            "a projection of another occurrence must not present itself as current"
+        );
+    }
+}
+
+#[tokio::test]
+async fn review_task_context_refuses_a_current_projection_that_violates_the_display_schema() {
+    let error = serve_context_rejection(context_body(
+        ReviewContextStrategy::Source,
+        empty_display_schema(),
+        source_context(
+            "current",
+            Some(json!({
+                "binding": {
+                    "sourceRevision": "source-revision-1",
+                    "version": "1",
+                    "integrity": ContentDigest::for_bytes(b"record-1"),
+                    "generation": "review-source-generation"
+                },
+                "display": {"undisclosed": true}
+            })),
+        ),
+    ))
+    .await;
+    assert!(matches!(
+        error,
+        CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        }
+    ));
+}
 
 #[tokio::test]
 async fn mutation_forwards_one_call_token_profile_revision_and_key_once() {
@@ -181,12 +1784,12 @@ async fn decision_forwards_the_selected_source_profile() {
 }
 
 #[tokio::test]
-async fn hosted_decision_uses_the_offered_outcome_without_a_source_profile() {
+async fn review_note_forwards_the_selected_source_profile() {
     let observations = Arc::new(Mutex::new(Vec::<HeaderMap>::new()));
     let app = Router::new()
         .route(
-            "/v1/work-items/{item}/hosted-decisions",
-            post(capture_headers),
+            "/v1/review-requests/{request}/notes",
+            post(capture_review_note),
         )
         .with_state(observations.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -202,38 +1805,297 @@ async fn hosted_decision_uses_the_offered_outcome_without_a_source_profile() {
     ))
     .expect("client");
     let token = BearerToken::new("one-call-secret").expect("fixture token");
-    let action = CaseworkAction {
-        operation: "confirmed".into(),
-        href: format!("/v1/work-items/{}/hosted-decisions", Uuid::nil()),
-        if_match: "\"3\"".into(),
-    };
-    let result = client
-        .decide_hosted_work_item(
-            CaseworkAuth::new(&token, "staff"),
-            &action,
-            "hosted-attempt-3",
-            &HostedDecisionRequest {
-                outcome: "confirmed".into(),
-                reason: None,
+    let response = client
+        .add_review_note(
+            CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+            Uuid::nil(),
+            "note-1",
+            &ReviewNoteRequest {
+                audience: ReviewHistoryAudience::Reviewers,
+                note: "Review note".to_owned(),
             },
         )
-        .await;
+        .await
+        .expect("source-context review note");
+
+    assert_eq!(response.value.kind, "note");
+    let observations = observations.lock().expect("observations");
+    assert_eq!(observations.len(), 1, "a review note is never retried");
+    assert_eq!(observations[0]["authorization"], "Bearer one-call-secret");
+    assert_eq!(observations[0]["registry-casework-profile"], "staff");
+    assert_eq!(observations[0]["registry-source-profile"], "reviewer");
+    assert_eq!(observations[0]["idempotency-key"], "note-1");
+    server.abort();
+}
+
+async fn capture_review_note(
+    State(observations): State<Arc<Mutex<Vec<HeaderMap>>>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    observations.lock().expect("observations").push(headers);
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        r#"{"eventId":"10000000-0000-4000-8000-000000000001","requestId":"00000000-0000-0000-0000-000000000000","kind":"note","detail":{"audience":"reviewers","note":"Review note"},"occurredAt":"2026-09-20T00:00:00Z"}"#,
+    )
+}
+
+#[tokio::test]
+async fn review_clocks_forward_the_selected_source_profile() {
+    let observations = Arc::new(Mutex::new(Vec::<HeaderMap>::new()));
+    let app = Router::new()
+        .route(
+            "/v1/review-requests/{request}/clocks",
+            get(capture_review_clocks),
+        )
+        .with_state(observations.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let response = client
+        .review_clocks(
+            CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+            Uuid::nil(),
+        )
+        .await
+        .expect("source-context review clocks");
+
+    assert_eq!(response.value.len(), 1);
+    assert_eq!(response.value[0].request_id, Uuid::nil());
+    let observations = observations.lock().expect("observations");
+    assert_eq!(observations.len(), 1, "review clocks are never retried");
+    assert_eq!(observations[0]["authorization"], "Bearer one-call-secret");
+    assert_eq!(observations[0]["registry-casework-profile"], "staff");
+    assert_eq!(observations[0]["registry-source-profile"], "reviewer");
+    server.abort();
+}
+
+async fn capture_review_clocks(
+    State(observations): State<Arc<Mutex<Vec<HeaderMap>>>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    observations.lock().expect("observations").push(headers);
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        r#"[{"clockOccurrenceId":"10000000-0000-4000-8000-000000000001","clockId":"review-deadline","requestId":"00000000-0000-0000-0000-000000000000","correlation":{"scope":"subject","source":"registry","subjectType":"record","id":"record-1"},"state":"running","policyDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","anchorAt":"2026-09-20T00:00:00Z"}]"#,
+    )
+}
+
+#[tokio::test]
+async fn review_clocks_refuse_occurrences_for_another_request() {
+    let request_id = Uuid::from_u128(7);
+    let response = json!([{
+        "clockOccurrenceId": Uuid::from_u128(8),
+        "clockId": "review-deadline",
+        "requestId": Uuid::from_u128(9),
+        "correlation": {
+            "scope": "subject",
+            "source": "registry",
+            "subjectType": "record",
+            "id": "record-1",
+        },
+        "state": "running",
+        "policyDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "anchorAt": "2026-09-20T00:00:00Z",
+    }]);
+    let app = Router::new()
+        .route(
+            "/v1/review-requests/{request}/clocks",
+            get(review_task_fixture_response),
+        )
+        .with_state(response);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
 
     assert!(matches!(
-        result,
+        client
+            .review_clocks(CaseworkAuth::new(&token, "requester"), request_id)
+            .await,
         Err(CaseworkClientError::Protocol {
+            status: 200,
             failure: CaseworkProtocolFailure::Body,
             ..
         })
     ));
-    let observations = observations.lock().expect("observations");
-    assert_eq!(observations.len(), 1);
-    let headers = &observations[0];
-    assert_eq!(headers["registry-casework-profile"], "staff");
-    assert_eq!(headers["if-match"], "\"3\"");
-    assert_eq!(headers["idempotency-key"], "hosted-attempt-3");
-    assert!(!headers.contains_key("registry-source-profile"));
     server.abort();
+}
+
+#[tokio::test]
+async fn cancellation_accepts_only_a_result_bound_to_the_full_accepted_binding() {
+    let request_id = Uuid::from_u128(7);
+    let subject = SubjectBinding {
+        source: "registry".to_owned(),
+        subject_type: "change-request".to_owned(),
+        id: "proposal-7".to_owned(),
+        version: "3".to_owned(),
+        digest: ContentDigest::parse(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .expect("fixture digest"),
+    };
+    let cancellation = ReviewCancelRequest {
+        subject: subject.clone(),
+        reason: "source proposal withdrawn".to_owned(),
+    };
+
+    let valid = cancel_response(request_id, "proposal-7", "cancelled", "cancelled");
+    let complete = cancel_with_response(request_id, &cancellation, valid)
+        .await
+        .expect("valid cancellation response");
+    assert!(matches!(
+        complete.value,
+        ReviewCancelResponse::Cancelled { .. }
+    ));
+
+    let mut wrong_policy = cancel_response(request_id, "proposal-7", "cancelled", "cancelled");
+    wrong_policy["result"]["policy"]["version"] = json!("2");
+    let mut wrong_submission = cancel_response(request_id, "proposal-7", "cancelled", "cancelled");
+    wrong_submission["result"]["submissionDigest"] =
+        json!("sha256:1111111111111111111111111111111111111111111111111111111111111111");
+    for invalid in [
+        cancel_response(Uuid::from_u128(8), "proposal-7", "cancelled", "cancelled"),
+        cancel_response(request_id, "other-proposal", "cancelled", "cancelled"),
+        wrong_policy,
+        wrong_submission,
+        cancel_response(request_id, "proposal-7", "cancelled", "approved"),
+        cancel_response(request_id, "proposal-7", "cancelled", "invalid_window"),
+    ] {
+        assert!(matches!(
+            cancel_with_response(request_id, &cancellation, invalid).await,
+            Err(CaseworkClientError::Protocol {
+                status: 200,
+                failure: CaseworkProtocolFailure::Body,
+                ..
+            })
+        ));
+    }
+
+    let already_terminal =
+        cancel_response(request_id, "proposal-7", "already_terminal", "approved");
+    let complete = cancel_with_response(request_id, &cancellation, already_terminal)
+        .await
+        .expect("a correlated valid prior terminal result");
+    assert!(matches!(
+        complete.value,
+        ReviewCancelResponse::AlreadyTerminal { .. }
+    ));
+}
+
+async fn cancel_with_response(
+    request_id: Uuid,
+    cancellation: &ReviewCancelRequest,
+    response: Value,
+) -> Result<registry_casework_client::CaseworkComplete<ReviewCancelResponse>, CaseworkClientError> {
+    let app = Router::new()
+        .route(
+            "/v1/review-requests/{request}/cancel",
+            post(cancel_fixture_response),
+        )
+        .with_state(response);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let expected: ReviewRequestAccepted = serde_json::from_value(json!({
+        "requestId": request_id,
+        "subject": cancellation.subject,
+        "policy": {
+            "id": "registry-correction",
+            "version": "1",
+            "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "submissionDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }))
+    .expect("accepted binding fixture");
+    let result = client
+        .cancel_review_request(
+            CaseworkAuth::new(&token, "requester"),
+            &expected,
+            "cancel-7",
+            cancellation,
+        )
+        .await;
+    server.abort();
+    result
+}
+
+async fn cancel_fixture_response(State(response): State<Value>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        response.to_string(),
+    )
+}
+
+fn cancel_response(request_id: Uuid, subject_id: &str, outcome: &str, status: &str) -> Value {
+    let available_until = if status == "invalid_window" {
+        "2026-09-19T00:00:00Z"
+    } else {
+        "2026-10-19T00:00:00Z"
+    };
+    let status = if status == "invalid_window" {
+        "cancelled"
+    } else {
+        status
+    };
+    json!({"outcome": outcome, "result": {
+        "resultId": Uuid::from_u128(99),
+        "requestId": request_id,
+        "subject": {
+            "source": "registry",
+            "type": "change-request",
+            "id": subject_id,
+            "version": "3",
+            "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "policy": {
+            "id": "registry-correction",
+            "version": "1",
+            "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "submissionDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "status": status,
+        "completedAt": "2026-09-19T00:00:00Z",
+        "availableUntil": available_until
+    }})
 }
 
 async fn capture_headers(
@@ -256,6 +2118,10 @@ async fn source_history_forwards_the_bounded_page_query_and_source_profile() {
     let observations = Arc::new(Mutex::new(Vec::<(String, HeaderMap)>::new()));
     let app = Router::new()
         .route("/v1/work-items/{item}/history", get(capture_history_query))
+        .route(
+            "/v1/review-requests/{request}/history",
+            get(capture_history_query),
+        )
         .with_state(observations.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -274,7 +2140,7 @@ async fn source_history_forwards_the_bounded_page_query_and_source_profile() {
         .work_item_history(
             CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
             Uuid::nil(),
-            &registry_casework_client::HostedPageQuery {
+            &registry_casework_client::WorkItemHistoryQuery {
                 cursor: None,
                 limit: Some(1),
             },
@@ -286,7 +2152,7 @@ async fn source_history_forwards_the_bounded_page_query_and_source_profile() {
         .work_item_history(
             CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
             Uuid::nil(),
-            &registry_casework_client::HostedPageQuery {
+            &registry_casework_client::WorkItemHistoryQuery {
                 cursor: Some(next_cursor),
                 limit: Some(1),
             },
@@ -296,20 +2162,48 @@ async fn source_history_forwards_the_bounded_page_query_and_source_profile() {
 
     assert_eq!(
         second_page.value.next_cursor.as_deref(),
-        Some("next-cursor")
+        Some("10000000-0000-4000-8000-000000000001")
     );
-    let observations = observations.lock().expect("observations");
-    assert_eq!(observations.len(), 2);
+    {
+        let observed = observations.lock().expect("observations");
+        assert_eq!(observed.len(), 2);
+        assert_eq!(
+            observed[0].0,
+            "/v1/work-items/00000000-0000-0000-0000-000000000000/history?limit=1"
+        );
+        assert_eq!(observed[0].1["registry-source-profile"], "reviewer");
+        assert_eq!(
+            observed[1].0,
+            "/v1/work-items/00000000-0000-0000-0000-000000000000/history?cursor=10000000-0000-4000-8000-000000000001&limit=1"
+        );
+        assert_eq!(observed[1].1["registry-source-profile"], "reviewer");
+    }
+
+    let review_page = client
+        .review_history(
+            CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+            Uuid::nil(),
+            &registry_casework_client::ReviewPageQuery {
+                cursor: None,
+                limit: Some(1),
+            },
+        )
+        .await
+        .expect("source-context review history");
     assert_eq!(
-        observations[0].0,
-        "/v1/work-items/00000000-0000-0000-0000-000000000000/history?limit=1"
+        review_page.value.next_cursor,
+        Some(
+            Uuid::parse_str("10000000-0000-4000-8000-000000000001")
+                .expect("fixture review history cursor")
+        )
     );
-    assert_eq!(observations[0].1["registry-source-profile"], "reviewer");
+    let observed = observations.lock().expect("observations");
+    assert_eq!(observed.len(), 3);
     assert_eq!(
-        observations[1].0,
-        "/v1/work-items/00000000-0000-0000-0000-000000000000/history?cursor=next-cursor&limit=1"
+        observed[2].0,
+        "/v1/review-requests/00000000-0000-0000-0000-000000000000/history?limit=1"
     );
-    assert_eq!(observations[1].1["registry-source-profile"], "reviewer");
+    assert_eq!(observed[2].1["registry-source-profile"], "reviewer");
     server.abort();
 }
 
@@ -322,14 +2216,82 @@ async fn capture_history_query(
         .lock()
         .expect("observations")
         .push((uri.to_string(), headers));
+    let body = if uri.path().starts_with("/v1/review-requests/") {
+        // Review history pages bind a present cursor to the final returned
+        // event, so the fixture serves the one entry the cursor names.
+        r#"{"items":[{"eventId":"10000000-0000-4000-8000-000000000001","requestId":"00000000-0000-0000-0000-000000000000","kind":"note","detail":{},"occurredAt":"2026-09-20T00:00:00Z"}],"nextCursor":"10000000-0000-4000-8000-000000000001"}"#
+    } else {
+        r#"{"items":[],"nextCursor":"10000000-0000-4000-8000-000000000001","status":"complete"}"#
+    };
     (
         StatusCode::OK,
         [
             ("content-type", "application/json"),
             ("traceparent", TRACEPARENT),
         ],
-        r#"{"items":[],"nextCursor":"next-cursor","status":"complete"}"#,
+        body,
     )
+}
+
+#[tokio::test]
+async fn review_history_refuses_oversized_or_cross_request_pages() {
+    let requested_request_id = Uuid::from_u128(7);
+    let matching_entry = json!({
+        "eventId": Uuid::from_u128(8),
+        "requestId": requested_request_id,
+        "kind": "note",
+        "detail": {},
+        "occurredAt": "2026-09-20T00:00:00Z",
+    });
+    let cases = [
+        json!({"items": vec![matching_entry; 101]}),
+        json!({
+            "items": [{
+                "eventId": Uuid::from_u128(9),
+                "requestId": Uuid::from_u128(10),
+                "kind": "note",
+                "detail": {},
+                "occurredAt": "2026-09-20T00:00:00Z",
+            }],
+        }),
+    ];
+
+    for response in cases {
+        let app = Router::new()
+            .route(
+                "/v1/review-requests/{request}/history",
+                get(review_task_fixture_response),
+            )
+            .with_state(response);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fixture");
+        let address = listener.local_addr().expect("fixture address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve fixture");
+        });
+        let client = CaseworkClient::new(CaseworkClientConfig::new(
+            Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+        ))
+        .expect("client");
+        let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+        assert!(matches!(
+            client
+                .review_history(
+                    CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+                    requested_request_id,
+                    &registry_casework_client::ReviewPageQuery::default(),
+                )
+                .await,
+            Err(CaseworkClientError::Protocol {
+                status: 200,
+                failure: CaseworkProtocolFailure::Body,
+                ..
+            })
+        ));
+        server.abort();
+    }
 }
 
 #[tokio::test]
@@ -707,27 +2669,11 @@ async fn invalid_subject_selectors_fail_before_network_io() {
         Err(CaseworkClientError::InvalidRequest { .. })
     ));
 
-    let complete = registry_casework_client::ListWorkItemsQuery {
-        view: registry_casework_client::InboxView::MyTeams,
-        sort: registry_casework_client::InboxSort::Due,
-        queue: None,
-        source_id: Some("source-one".into()),
-        subject_kind: Some("resident-record".into()),
-        subject_id: Some("human-reference-42".into()),
-        reference: None,
-        cursor: None,
-        limit: Some(10),
-    };
-    assert!(matches!(
-        client
-            .list_hosted_work_items(CaseworkAuth::new(&token, "staff"), &complete)
-            .await,
-        Err(CaseworkClientError::InvalidRequest { .. })
-    ));
-
     let reference_and_subject = registry_casework_client::ListWorkItemsQuery {
         reference: Some("CASE-42".into()),
-        ..complete.clone()
+        subject_kind: Some("resident-record".into()),
+        subject_id: Some("human-reference-42".into()),
+        ..partial
     };
     assert!(matches!(
         client
@@ -735,34 +2681,6 @@ async fn invalid_subject_selectors_fail_before_network_io() {
                 CaseworkAuth::new(&token, "staff").with_source_profile("reader"),
                 &reference_and_subject,
             )
-            .await,
-        Err(CaseworkClientError::InvalidRequest { .. })
-    ));
-
-    let hosted_reference = registry_casework_client::ListWorkItemsQuery {
-        source_id: None,
-        subject_kind: None,
-        subject_id: None,
-        reference: Some("CASE-42".into()),
-        ..complete.clone()
-    };
-    assert!(matches!(
-        client
-            .list_hosted_work_items(CaseworkAuth::new(&token, "staff"), &hosted_reference)
-            .await,
-        Err(CaseworkClientError::InvalidRequest { .. })
-    ));
-
-    let hosted_sort = registry_casework_client::ListWorkItemsQuery {
-        source_id: None,
-        subject_kind: None,
-        subject_id: None,
-        sort: registry_casework_client::InboxSort::Age,
-        ..complete
-    };
-    assert!(matches!(
-        client
-            .list_hosted_work_items(CaseworkAuth::new(&token, "staff"), &hosted_sort)
             .await,
         Err(CaseworkClientError::InvalidRequest { .. })
     ));
@@ -825,67 +2743,6 @@ async fn invalid_directory_target_queries_fail_before_network_io() {
 }
 
 #[tokio::test]
-async fn hosted_client_refuses_a_source_profile_before_network_io() {
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
-        Url::parse("http://127.0.0.1:1/").expect("fixture URL"),
-    ))
-    .expect("client");
-    let token = BearerToken::new("one-call-secret").expect("fixture token");
-    let result = client
-        .list_hosted_work_items(
-            CaseworkAuth::new(&token, "staff").with_source_profile("reader"),
-            &registry_casework_client::ListWorkItemsQuery {
-                view: registry_casework_client::InboxView::MyTeams,
-                sort: registry_casework_client::InboxSort::Due,
-                queue: None,
-                source_id: None,
-                subject_kind: None,
-                subject_id: None,
-                reference: None,
-                cursor: None,
-                limit: Some(10),
-            },
-        )
-        .await;
-    assert!(matches!(
-        result,
-        Err(CaseworkClientError::InvalidRequest { .. })
-    ));
-    let requester_notes = client
-        .requester_hosted_notes(
-            CaseworkAuth::new(&token, "requester").with_source_profile("reader"),
-            Uuid::nil(),
-            &registry_casework_client::HostedPageQuery::default(),
-        )
-        .await;
-    assert!(matches!(
-        requester_notes,
-        Err(CaseworkClientError::InvalidRequest { .. })
-    ));
-    let staff_history = client
-        .hosted_work_item_history(
-            CaseworkAuth::new(&token, "staff").with_source_profile("reader"),
-            Uuid::nil(),
-            &registry_casework_client::HostedPageQuery::default(),
-        )
-        .await;
-    assert!(matches!(
-        staff_history,
-        Err(CaseworkClientError::InvalidRequest { .. })
-    ));
-    let accountability = client
-        .hosted_accountability_record(
-            CaseworkAuth::new(&token, "supervisor").with_source_profile("reader"),
-            Uuid::nil(),
-        )
-        .await;
-    assert!(matches!(
-        accountability,
-        Err(CaseworkClientError::InvalidRequest { .. })
-    ));
-}
-
-#[tokio::test]
 async fn exact_problem_document_maps_to_the_typed_runtime_code() {
     let app = Router::new().route("/v1/casework", get(problem_response));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -919,7 +2776,7 @@ async fn exact_problem_document_maps_to_the_typed_runtime_code() {
 }
 
 #[tokio::test]
-async fn hosted_validation_headers_preserve_only_path_and_closed_reason() {
+async fn review_validation_headers_preserve_only_path_and_closed_reason() {
     let app = Router::new().route("/v1/casework", get(validation_problem_response));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -943,7 +2800,7 @@ async fn hosted_validation_headers_preserve_only_path_and_closed_reason() {
             validation: Some(ref validation),
             ..
         }) if validation.path == "$.display/summary"
-            && validation.reason == HostedValidationReason::SchemaMismatch
+            && validation.reason == ReviewValidationReason::SchemaMismatch
     ));
     server.abort();
 }
@@ -1064,6 +2921,152 @@ async fn problem_response() -> impl IntoResponse {
             "\"code\":\"authentication.refused\",",
             "\"traceId\":\"0123456789abcdef0123456789abcdef\"}"
         ),
+    )
+}
+
+#[tokio::test]
+async fn draft_read_maps_a_problem_bearing_404_to_the_typed_problem() {
+    let app = Router::new().route(
+        "/v1/review-tasks/{task}/draft",
+        get(not_found_problem_response),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    let error = client
+        .review_task_draft(
+            CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+            Uuid::from_u128(7),
+        )
+        .await
+        .expect_err("a problem-bearing 404 names the refusal, not an absent draft");
+    assert!(
+        matches!(
+            error,
+            CaseworkClientError::Problem {
+                status: 404,
+                code: CaseworkProblemCode::RequestNotFound,
+                ..
+            }
+        ),
+        "unexpected error: {error:?}"
+    );
+    server.abort();
+}
+
+async fn not_found_problem_response() -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        [
+            ("content-type", "application/problem+json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        concat!(
+            "{\"type\":\"https://id.registrystack.org/problems/registry-casework/",
+            "request/not-found\",\"title\":\"Route not found\",",
+            "\"status\":404,\"detail\":\"The requested Casework route does not exist.\",",
+            "\"code\":\"request.not-found\",",
+            "\"traceId\":\"0123456789abcdef0123456789abcdef\"}"
+        ),
+    )
+}
+
+#[tokio::test]
+async fn draft_read_keeps_an_empty_404_as_an_absent_draft() {
+    let app = Router::new().route(
+        "/v1/review-tasks/{task}/draft",
+        get(empty_not_found_response),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    let complete = client
+        .review_task_draft(
+            CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+            Uuid::from_u128(7),
+        )
+        .await
+        .expect("an empty 404 means no draft exists yet");
+    assert!(complete.value.is_none());
+    server.abort();
+}
+
+async fn empty_not_found_response() -> axum::http::Response<axum::body::Body> {
+    axum::http::Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .header("traceparent", TRACEPARENT)
+        .body(axum::body::Body::empty())
+        .expect("fixture response")
+}
+
+async fn task_context_response() -> impl IntoResponse {
+    let snapshot = ReviewKindPolicy {
+        id: "standalone-answer".to_owned(),
+        version: "1".to_owned(),
+        purpose: ReviewKindPurpose::Approval,
+        context_strategy: ReviewContextStrategy::Submitted,
+        stages: vec![ReviewStagePolicy {
+            id: "answer".to_owned(),
+            queue: "answers".to_owned(),
+            deciding_profiles: vec!["staff".to_owned()],
+            required_approvals: 1,
+            exclude_initiator: false,
+            exclude_previous_stage_reviewers: false,
+        }],
+        clocks: Vec::new(),
+        retention: ReviewRetentionPolicy {
+            terminal_days: 30,
+            accountability_days: 30,
+        },
+        display_schema: json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {"summary": {"type": "string"}}
+        }),
+        result_schema: None,
+        outcomes: Vec::new(),
+    }
+    .snapshot()
+    .expect("fixture policy snapshot");
+    let body = json!({
+        "taskId": Uuid::nil(),
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "subject": {
+            "source": "registry", "type": "record", "id": "record-1", "version": "1",
+            "digest": ContentDigest::for_bytes(b"record-1")
+        },
+        "requesterReference": "requester-reference",
+        "policy": snapshot.identity.clone(),
+        "policySnapshot": snapshot,
+        "context": {"strategy": "submitted", "snapshot": {"summary": "Frozen review"}}
+    });
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        body.to_string(),
     )
 }
 

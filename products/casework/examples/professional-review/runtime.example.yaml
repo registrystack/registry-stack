@@ -40,7 +40,7 @@ audit:
   path: /var/lib/registry-casework/audit.ndjson
   hashKeyRef: secret:file/casework-audit-key
 sources:
-  professional-register:
+  professional-licences:
     baseUrl: https://registry.example.test
     readerProfile: casework-reader
     tokenEndpoint: https://identity.example.test/oauth2/token

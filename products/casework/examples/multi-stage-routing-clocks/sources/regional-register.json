@@ -8,21 +8,10 @@
   "request": {
     "requestEntity": "regional-correction",
     "requestRoute": "regional-corrections",
-    "reviewMode": "staged",
-    "stages": [
-      {
-        "id": "technical",
-        "approvals": 2,
-        "excludeSubmitter": true,
-        "excludePreviousReviewers": false
-      },
-      {
-        "id": "authorization",
-        "approvals": 1,
-        "excludeSubmitter": true,
-        "excludePreviousReviewers": true
-      }
-    ],
+    "review": {
+      "authority": "casework-main",
+      "policyId": "regional-review"
+    },
     "fields": [
       {
         "field": "region",
@@ -33,7 +22,8 @@
         }
       }
     ],
-    "application": {"mode": "manual"},
+    "onApproved": {"mode": "manual"},
+    "application": {},
     "contractFingerprint": "sha256:regional-correction-contract"
   }
 }

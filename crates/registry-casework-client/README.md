@@ -2,7 +2,9 @@
 
 `registry-casework-client` is the canonical bounded Rust client for Registry
 Casework. It exposes Casework's source-neutral work-item and directory HTTP
-contract. It does not contain Base Registry Engine routes or protocol types.
+contract, including unified review request, result, task, draft, history,
+accountability, and kind discovery routes. It does not contain Base Registry
+Engine routes or policy authority.
 
 The client takes a bearer token and explicit Casework profile for each call.
 Source-reading calls also take an explicit source profile. It never retains a

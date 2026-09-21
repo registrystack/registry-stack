@@ -9,10 +9,7 @@ use registry_breg::{
     },
     compiler::{compile_project_with_assets, CompileProfile},
     contract::{parse_project_json, parse_project_yaml, ModuleAssetSource},
-    model::{
-        CompiledAction, CompiledActionMutation, CompiledActionValue, CompiledChangeRequest,
-        CompiledChangeRequestDisposition,
-    },
+    model::{CompiledAction, CompiledActionMutation, CompiledActionValue, CompiledChangeRequest},
     rhai_planner::{
         plan_change_request_effects, CandidateChangeRequestMutation, CandidateChangeRequestValue,
         ChangeRequestPlannerError, ChangeRequestPlannerRuntime,
@@ -279,7 +276,7 @@ fn planner_supports_helpers_numeric_expressions_and_null_request_values() {
             let label = clean(ctx.request["given-name"]);
             if ctx.request["family-name"] != () { label += " " + ctx.request["family-name"]; }
             label += " " + (7 / 2).to_string() + " " + (7.0 / 2.0).to_string();
-            #{disposition:"apply",effects:[#{target:#{fromField:"person"},operation:"patch",set:#{"display-name":label}}]}
+            #{effects:[#{target:#{fromField:"person"},operation:"patch",set:#{"display-name":label}}]}
         }"#,
     );
     for (family_name, expected) in [
@@ -289,11 +286,6 @@ fn planner_supports_helpers_numeric_expressions_and_null_request_values() {
         let mut request = request();
         request.insert("family-name".into(), family_name);
         let candidate = plan_change_request_effects(&plan, &request, deadline()).unwrap();
-        assert_eq!(
-            candidate.disposition,
-            CompiledChangeRequestDisposition::Apply
-        );
-        assert_eq!(candidate.queue_reason, None);
         assert_eq!(candidate.effects.len(), 1);
         assert_eq!(candidate.effects[0].target.entity_id, "person");
         assert_eq!(

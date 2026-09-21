@@ -119,6 +119,9 @@ pub mod request_retention;
 #[cfg(feature = "runtime")]
 mod request_store;
 pub mod request_workflow;
+pub mod review_integration;
+#[cfg(feature = "runtime")]
+pub mod review_store;
 #[cfg(feature = "runtime")]
 pub mod revision;
 pub mod rhai_planner;

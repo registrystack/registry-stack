@@ -4,10 +4,153 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 
+const POLICY_DIGEST =
+  'sha256:38ea436942f78766fc2db332c18e3ed545ec4e907d3386ec41b0c2eeb60e7f6c';
+
 test('facade exports the maintained client and mapped error', () => {
   const client = require('../client');
   assert.equal(typeof client.CaseworkClient, 'function');
   assert.equal(typeof client.CaseworkClientError, 'function');
+});
+
+test('review task context uses the exact route and forwards the optional source profile', async (context) => {
+  let observed;
+  const server = http.createServer((request, response) => {
+    observed = { path: request.url, headers: request.headers };
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end(JSON.stringify({
+        taskId: '00000000-0000-0000-0000-000000000000',
+        requestId: '10000000-0000-4000-8000-000000000001',
+        subject: {
+          source: 'professional-licences', type: 'change-request', id: 'correction-42', version: '1',
+          digest: `sha256:${'a'.repeat(64)}`,
+        },
+        requesterReference: 'correction-42',
+        policy: { id: 'registry-correction', version: '1', digest: POLICY_DIGEST },
+        policySnapshot: {
+          identity: { id: 'registry-correction', version: '1', digest: POLICY_DIGEST },
+          purpose: 'approval', contextStrategy: 'source',
+          stages: [{ id: 'review', queue: 'review', decidingProfiles: ['staff'], requiredApprovals: 1, excludeInitiator: false, excludePreviousStageReviewers: false }],
+          retention: { terminalDays: 30, accountabilityDays: 30 },
+          displaySchema: { type: 'object', additionalProperties: false, properties: {} },
+        },
+        context: {
+          strategy: 'source', reference: 'correction-42', bindingStatus: 'current',
+          projection: {
+            binding: { sourceRevision: 'revision-42', version: '1', generation: 'generation-42' },
+            displayReference: 'Correction 42', display: {},
+          },
+        },
+      }));
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { port } = server.address();
+  const { CaseworkClient } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${port}/` });
+  const result = await client.reviewTaskContext(
+    'one-call-secret',
+    'staff',
+    '00000000-0000-0000-0000-000000000000',
+    'reviewer',
+  );
+
+  assert.equal(result.value.context.projection.displayReference, 'Correction 42');
+  assert.equal(observed.path, '/v1/review-tasks/00000000-0000-0000-0000-000000000000/context');
+  assert.equal(observed.headers.authorization, 'Bearer one-call-secret');
+  assert.equal(observed.headers['registry-casework-profile'], 'staff');
+  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
+});
+
+test('review note forwards the optional source profile and idempotency key', async (context) => {
+  let observed;
+  const server = http.createServer((request, response) => {
+    observed = { path: request.url, headers: request.headers };
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end(JSON.stringify({
+        eventId: '10000000-0000-4000-8000-000000000001',
+        requestId: '00000000-0000-0000-0000-000000000000',
+        kind: 'note',
+        detail: { audience: 'reviewers', note: 'Review note' },
+        occurredAt: '2026-09-20T00:00:00Z',
+      }));
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { port } = server.address();
+  const { CaseworkClient } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${port}/` });
+  const result = await client.addReviewNote(
+    'one-call-secret',
+    'staff',
+    '00000000-0000-0000-0000-000000000000',
+    'note-1',
+    { audience: 'reviewers', note: 'Review note' },
+    'reviewer',
+  );
+
+  assert.equal(result.value.kind, 'note');
+  assert.equal(observed.path, '/v1/review-requests/00000000-0000-0000-0000-000000000000/notes');
+  assert.equal(observed.headers.authorization, 'Bearer one-call-secret');
+  assert.equal(observed.headers['registry-casework-profile'], 'staff');
+  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
+  assert.equal(observed.headers['idempotency-key'], 'note-1');
+});
+
+test('review clocks forward the optional source profile', async (context) => {
+  let observed;
+  const server = http.createServer((request, response) => {
+    observed = { path: request.url, headers: request.headers };
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end('[]');
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { port } = server.address();
+  const { CaseworkClient } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${port}/` });
+  const result = await client.reviewClocks(
+    'one-call-secret',
+    'staff',
+    '00000000-0000-0000-0000-000000000000',
+    'reviewer',
+  );
+
+  assert.deepEqual(result.value, []);
+  assert.equal(observed.path, '/v1/review-requests/00000000-0000-0000-0000-000000000000/clocks');
+  assert.equal(observed.headers.authorization, 'Bearer one-call-secret');
+  assert.equal(observed.headers['registry-casework-profile'], 'staff');
+  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
 });
 
 test('decision forwards the selected source profile with mutation headers', async (context) => {
@@ -71,7 +214,21 @@ test('source history forwards cursor and limit and returns the continuation', as
         'content-type': 'application/json',
         traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
       });
-      response.end(JSON.stringify({ items: [], nextCursor: 'next-cursor', status: 'complete' }));
+      const reviewHistory = request.url.startsWith('/v1/review-requests/');
+      response.end(JSON.stringify(reviewHistory
+        ? {
+            // Review history pages bind a present cursor to the final
+            // returned event, so the fixture serves the entry it names.
+            items: [{
+              eventId: '10000000-0000-4000-8000-000000000001',
+              requestId: '00000000-0000-0000-0000-000000000000',
+              kind: 'note',
+              detail: {},
+              occurredAt: '2026-09-20T00:00:00Z',
+            }],
+            nextCursor: '10000000-0000-4000-8000-000000000001',
+          }
+        : { items: [], nextCursor: 'next-cursor', status: 'complete' }));
     });
   });
   await new Promise((resolve, reject) => {
@@ -95,6 +252,20 @@ test('source history forwards cursor and limit and returns the continuation', as
   assert.equal(
     observed.path,
     '/v1/work-items/00000000-0000-0000-0000-000000000000/history?cursor=opaque-cursor&limit=25',
+  );
+  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
+
+  const reviewPage = await client.reviewHistory(
+    'one-call-secret',
+    'staff',
+    '00000000-0000-0000-0000-000000000000',
+    { limit: 25 },
+    'reviewer',
+  );
+  assert.equal(reviewPage.value.nextCursor, '10000000-0000-4000-8000-000000000001');
+  assert.equal(
+    observed.path,
+    '/v1/review-requests/00000000-0000-0000-0000-000000000000/history?limit=25',
   );
   assert.equal(observed.headers['registry-source-profile'], 'reviewer');
 });
@@ -541,30 +712,75 @@ test('native client refuses nested unsafe integers before HTTP and preserves saf
     client.createHolidayRevision('synthetic-token', 'administrator', 'unsafe-revision', { document }),
     (error) => JSON.parse(error.message).kind === 'invalid_request',
   );
-  assert.equal(requests.length, 0);
-
-  for (const unsafeInteger of [1e20, -1e20]) {
-    await assert.rejects(
-      client.createHostedItem('synthetic-token', 'administrator', 'unsafe-display', {
-        kind: 'review', requesterReference: 'requester', display: { nested: unsafeInteger },
-      }),
-      (error) => JSON.parse(error.message).kind === 'invalid_request',
-    );
-  }
-  assert.equal(requests.length, 0);
-
-  const display = {
-    positiveBoundary: Number.MAX_SAFE_INTEGER,
-    negativeBoundary: Number.MIN_SAFE_INTEGER,
-    fraction: 1.25,
+  const digest = `sha256:${'a'.repeat(64)}`;
+  const review = {
+    kind: 'decision',
+    subject: { source: 'standalone', type: 'batch', id: 'batch-1', version: '1', digest },
+    requesterReference: 'batch-1',
+    context: { strategy: 'submitted', snapshot: { count: 1 } },
+    resultConstraints: [],
   };
-  const outcome = await client.createHostedItem('synthetic-token', 'administrator', 'safe-display', {
-    kind: 'review', requesterReference: 'requester', display,
+  await assert.rejects(
+    client.createOrRecoverReviewRequest('synthetic-token', 'requester', 'review-array', review, digest),
+    (error) => JSON.parse(error.message).kind === 'invalid_request',
+  );
+  await assert.rejects(
+    client.createOrRecoverReviewRequest(
+      'synthetic-token',
+      'requester',
+      'review-unsafe',
+      { ...review, resultConstraints: { maximum: Number.MAX_SAFE_INTEGER + 1 } },
+      digest,
+    ),
+    (error) => JSON.parse(error.message).kind === 'invalid_request',
+  );
+  assert.equal(requests.length, 0);
+});
+
+test('review cancellation sends the full accepted binding', async (context) => {
+  let observed;
+  const digest = `sha256:${'a'.repeat(64)}`;
+  const requestId = '00000000-0000-4000-8000-000000000001';
+  const accepted = {
+    requestId,
+    subject: { source: 'standalone', type: 'batch', id: 'batch-1', version: '1', digest },
+    policy: { id: 'decision', version: '1', digest },
+    submissionDigest: digest,
+  };
+  const server = http.createServer((request, response) => {
+    let bytes = '';
+    request.on('data', (chunk) => { bytes += chunk; });
+    request.on('end', () => {
+      observed = { path: request.url, body: JSON.parse(bytes) };
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end(JSON.stringify({
+        outcome: 'cancelled',
+        result: {
+          resultId: '10000000-0000-4000-8000-000000000001',
+          ...accepted,
+          status: 'cancelled',
+          completedAt: '2026-09-20T00:00:00Z',
+          availableUntil: '2026-10-20T00:00:00Z',
+        },
+      }));
+    });
   });
-  assert.deepEqual(outcome.value.display, display);
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].path, '/v1/hosted-items');
-  assert.deepEqual(requests[0].body.display, display);
+  await listen(server);
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { CaseworkClient } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${server.address().port}/` });
+  const cancellation = { subject: accepted.subject, reason: 'No longer needed' };
+  const result = await client.cancelReviewRequest(
+    'synthetic-token', 'requester', accepted, 'cancel-1', cancellation,
+  );
+
+  assert.equal(result.value.outcome, 'cancelled');
+  assert.equal(observed.path, `/v1/review-requests/${requestId}/cancel`);
+  assert.deepEqual(observed.body, cancellation);
 });
 
 function listen(server) {

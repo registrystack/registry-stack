@@ -23,7 +23,7 @@ use registry_breg::request_retention::{
     RetainedHistoryQuery,
 };
 use registry_platform_audit::AuditProfile;
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -83,7 +83,7 @@ async fn active_request_upgrade_guard_allows_unrelated_changes_and_refuses_relev
     assert_eq!(
         guard_successor_activation(&migration, &changed_pattern).await,
         Err(RequestRetentionError::ActiveProposalRequiresRebase),
-        "a changed native pattern cannot silently apply an approved frozen proposal"
+        "a changed native pattern cannot silently reinterpret a submitted frozen proposal"
     );
 
     migration_task.abort();
@@ -100,10 +100,7 @@ async fn active_current_request_details_are_pinned_before_terminal_state() {
         .await
         .expect("compiled schema installs");
 
-    for (index, state) in ["draft", "needs_changes", "submitted", "approved"]
-        .into_iter()
-        .enumerate()
-    {
+    for (index, state) in ["draft", "submitted"].into_iter().enumerate() {
         let request_id = Uuid::from_u128(0x0000000000000000000000000000d000 + index as u128);
         migration
             .execute(
@@ -130,6 +127,160 @@ async fn active_current_request_details_are_pinned_before_terminal_state() {
             "current {state} detail remains pinned"
         );
     }
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn request_detail_erasure_retains_nonterminal_review_recovery_bindings() {
+    load_postgres_env();
+    let registry = compiled_registry(false, "internal");
+    let fingerprint = request_fingerprint(&registry);
+    let database = TestDatabase::create(1).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("compiled schema installs");
+
+    let uncertain_id = Uuid::from_u128(0xd101);
+    let cancelling_id = Uuid::from_u128(0xd102);
+    let cancelling_binding = json!({
+        "requestId": Uuid::from_u128(0xd103),
+        "recoveryCanary": "cancelling-binding"
+    });
+    for (request_id, state, accepted_binding) in [
+        (uncertain_id, "uncertain", None),
+        (
+            cancelling_id,
+            "cancelling",
+            Some(cancelling_binding.clone()),
+        ),
+    ] {
+        migration
+            .execute(
+                "INSERT INTO registry_internal.registry_request_state
+                     (request_entity_id,request_id,owner_reference,state,
+                      proposal_version,workflow_revision)
+                 VALUES ($1,$2,'owner-ref','draft',2,2)",
+                &[&REQUEST_ENTITY, &request_id],
+            )
+            .await
+            .expect("request state inserts");
+        migration
+            .execute(
+                "INSERT INTO registry_internal.registry_request_proposals
+                     (request_entity_id,request_id,proposal_version,request_record_revision,
+                      contract_fingerprint,effect_digest,snapshot)
+                 VALUES ($1,$2,1,1,$3,$4,$5)",
+                &[
+                    &REQUEST_ENTITY,
+                    &request_id,
+                    &fingerprint,
+                    &EFFECT_DIGEST,
+                    &json!({"recoveryCanary": state}),
+                ],
+            )
+            .await
+            .expect("historical proposal inserts");
+        migration
+            .execute(
+                "INSERT INTO registry_internal.registry_request_review_submissions
+                     (request_entity_id,request_id,proposal_version,proposal_digest,job_id,
+                      authority,producer_id,policy_id,idempotency_key,create_request,
+                      expected_submission_digest,on_approved_mode,state,accepted_binding)
+                 VALUES ($1,$2,1,$3,$4,'casework-a','registry-a','policy-a',$5,$6,
+                         $3,'manual',$7,$8)",
+                &[
+                    &REQUEST_ENTITY,
+                    &request_id,
+                    &EFFECT_DIGEST,
+                    &Uuid::new_v4(),
+                    &format!("retention-{request_id}"),
+                    &json!({"recoveryCanary": state}),
+                    &state,
+                    &accepted_binding,
+                ],
+            )
+            .await
+            .expect("nonterminal review submission inserts");
+    }
+
+    for request_id in [uncertain_id, cancelling_id] {
+        let erased = erase_request_detail(
+            &mut migration,
+            &registry,
+            RequestDetailErasureScope {
+                request_entity_id: REQUEST_ENTITY,
+                request_id,
+                proposal_version: 1,
+            },
+        )
+        .await
+        .expect("unrelated historical detail erases");
+        assert_eq!(erased.review_submission_requests, 0);
+        assert_eq!(erased.review_accepted_bindings, 0);
+    }
+    let retained = migration
+        .query(
+            "SELECT request_id,create_request,accepted_binding
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=ANY($1) ORDER BY request_id",
+            &[&vec![uncertain_id, cancelling_id]],
+        )
+        .await
+        .expect("review recovery bindings remain readable");
+    assert_eq!(
+        retained[0].get::<_, Value>(1),
+        json!({"recoveryCanary":"uncertain"})
+    );
+    assert_eq!(retained[0].get::<_, Option<Value>>(2), None);
+    assert_eq!(
+        retained[1].get::<_, Value>(1),
+        json!({"recoveryCanary":"cancelling"})
+    );
+    assert_eq!(
+        retained[1].get::<_, Option<Value>>(2),
+        Some(cancelling_binding)
+    );
+
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state=CASE WHEN request_id=$1 THEN 'failed' ELSE 'cancelled' END
+              WHERE request_id=ANY($2)",
+            &[&uncertain_id, &vec![uncertain_id, cancelling_id]],
+        )
+        .await
+        .expect("external submissions become terminal");
+    for (request_id, accepted_count) in [(uncertain_id, 0), (cancelling_id, 1)] {
+        let erased = erase_request_detail(
+            &mut migration,
+            &registry,
+            RequestDetailErasureScope {
+                request_entity_id: REQUEST_ENTITY,
+                request_id,
+                proposal_version: 1,
+            },
+        )
+        .await
+        .expect("terminal review recovery detail erases");
+        assert_eq!(erased.review_submission_requests, 1);
+        assert_eq!(erased.review_accepted_bindings, accepted_count);
+    }
+    let tombstones = migration
+        .query(
+            "SELECT create_request,accepted_binding
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=ANY($1) ORDER BY request_id",
+            &[&vec![uncertain_id, cancelling_id]],
+        )
+        .await
+        .expect("terminal review tombstones remain readable");
+    assert_eq!(tombstones[0].get::<_, Value>(0), json!({}));
+    assert_eq!(tombstones[0].get::<_, Option<Value>>(1), None);
+    assert_eq!(tombstones[1].get::<_, Value>(0), json!({}));
+    assert_eq!(tombstones[1].get::<_, Option<Value>>(1), Some(json!({})));
 
     migration_task.abort();
     database.cleanup().await;
@@ -350,7 +501,7 @@ async fn attachment_verification_quarantines_exact_mime_retries_leases_and_erase
     let pending = store::claim(&tx, policy).await.unwrap().unwrap();
     assert_eq!(pending.content_type(), "application/pdf");
     tx.commit().await.unwrap();
-    migration.execute("UPDATE registry_internal.registry_request_state SET state='canceled' WHERE request_id=$1", &[&request_id]).await.unwrap();
+    migration.execute("UPDATE registry_internal.registry_request_state SET state='cancelled' WHERE request_id=$1", &[&request_id]).await.unwrap();
     erase_request_detail(
         &mut migration,
         &registry,
@@ -492,7 +643,7 @@ async fn first_attachment_write_pins_backend_across_concurrent_distinct_hashes_a
         .unwrap()
         .get(0);
     assert_eq!(backend, "database");
-    migration.execute("UPDATE registry_internal.registry_request_state SET state='canceled' WHERE request_id=$1", &[&request_id]).await.unwrap();
+    migration.execute("UPDATE registry_internal.registry_request_state SET state='cancelled' WHERE request_id=$1", &[&request_id]).await.unwrap();
     erase_request_detail(
         &mut migration,
         &registry,
@@ -767,7 +918,7 @@ async fn attachment_retention_preserves_shared_bytes_until_last_request_erasure(
         .await,
         Err(RequestRetentionError::ActiveDetailPinned)
     );
-    migration.execute("UPDATE registry_internal.registry_request_state SET state='canceled' WHERE request_id=$1", &[&second]).await.unwrap();
+    migration.execute("UPDATE registry_internal.registry_request_state SET state='cancelled' WHERE request_id=$1", &[&second]).await.unwrap();
     let erased = erase_request_detail(
         &mut migration,
         &registry,
@@ -948,7 +1099,6 @@ async fn exact_request_retention_erases_all_bound_payload_copies_and_keeps_prove
             request_id: Uuid::parse_str(REQUEST_ID).unwrap(),
             after_proposal_version: None,
             limit: 1,
-            include_decision_reasons: false,
             authorized_target_entities: &authorized_targets,
         },
     )
@@ -976,7 +1126,6 @@ async fn exact_request_retention_erases_all_bound_payload_copies_and_keeps_prove
             request_id: Uuid::parse_str(REQUEST_ID).unwrap(),
             after_proposal_version: None,
             limit: 1,
-            include_decision_reasons: false,
             authorized_target_entities: &BTreeSet::new(),
         },
     )
@@ -1025,6 +1174,7 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
     seed_submitted_request(&migration, &fingerprint).await;
     seed_request_intake_and_revisions(&migration, &registry).await;
     seed_application_provenance_and_receipts(&migration).await;
+    seed_external_review_payloads(&migration).await;
     seed_second_retention_list_row(&migration, &fingerprint).await;
     seed_active_draft_without_proposal(&migration).await;
     restore_row_level_security(&migration, &registry).await;
@@ -1114,19 +1264,15 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
         .expect("separate proposal version fixture inserts");
     migration
         .execute(
-            "INSERT INTO registry_internal.registry_request_decisions
-             (request_entity_id, request_id, proposal_version, decision_index, stage_id,
-              actor_reference, decision, effect_digest, decided_at, reason, reason_present)
-         SELECT request_entity_id, request_id, proposal_version, 0, 'review',
-                'reviewer-ref', 'request_revision', effect_digest, transaction_timestamp(), $3, true
-           FROM registry_internal.registry_request_proposals
-          WHERE request_entity_id = $1 AND request_id = $2",
+            "UPDATE registry_internal.registry_request_applications
+                SET reason = $3, reason_present = true
+              WHERE request_entity_id = $1 AND request_id = $2 AND proposal_version = 1",
             &[&REQUEST_ENTITY, &request_id, &reason_canary],
         )
         .await
-        .expect("decision reasons for both proposal versions insert");
+        .expect("application reason fixture updates");
     let event_payload = serde_json::to_vec(&json!({
-        "review": {"stageId": "review", "decision": "request_revision", "reason": reason_canary}
+        "application": {"reason": reason_canary}
     }))
     .expect("review event fixture serializes");
     let event_rows = migration
@@ -1160,36 +1306,17 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
     assert!(planned.eligible_for_erasure);
     assert_eq!(planned.erasure.proposal_snapshots, 1);
     assert_eq!(planned.erasure.target_snapshots, 1);
+    assert_eq!(planned.erasure.review_submission_requests, 1);
+    assert_eq!(planned.erasure.review_accepted_bindings, 1);
+    assert_eq!(planned.erasure.review_result_payloads, 1);
     assert_eq!(planned.erasure.idempotency_results, 3);
     assert_eq!(planned.erasure.request_revision_snapshots, 4);
     assert_eq!(planned.erasure.outbox_payloads, 4);
     assert_eq!(planned.erasure.current_intake_rows, 1);
-    assert_eq!(planned.erasure.decision_reasons, 1);
+    assert_eq!(planned.erasure.application_reasons, 1);
     assert!(!serde_json::to_string(&planned)
         .unwrap()
         .contains(reason_canary));
-    let hidden_decisions = registry_breg::request_retention::load_retained_decisions(
-        &migration,
-        REQUEST_ENTITY,
-        request_id,
-        1,
-        false,
-    )
-    .await
-    .expect("decision facts read without reasons");
-    assert!(hidden_decisions[0].reason_present);
-    assert!(hidden_decisions[0].reason.is_none());
-    let visible_decisions = registry_breg::request_retention::load_retained_decisions(
-        &migration,
-        REQUEST_ENTITY,
-        request_id,
-        1,
-        true,
-    )
-    .await
-    .expect("authorized reason reads");
-    assert_eq!(visible_decisions[0].reason.as_deref(), Some(reason_canary));
-
     let before_history = history_commit_counts(&migration).await;
     let erased = service
         .erase(scope)
@@ -1199,20 +1326,6 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
     assert!(!serde_json::to_string(&erased)
         .unwrap()
         .contains(reason_canary));
-    let retained_decisions = registry_breg::request_retention::load_retained_decisions(
-        &migration,
-        REQUEST_ENTITY,
-        request_id,
-        1,
-        true,
-    )
-    .await
-    .expect("erased decision facts remain readable");
-    assert_eq!(retained_decisions.len(), 1);
-    assert_eq!(retained_decisions[0].stage_id, "review");
-    assert_eq!(retained_decisions[0].kind, "request_revision");
-    assert!(retained_decisions[0].reason_present);
-    assert!(retained_decisions[0].reason.is_none());
     let erased_event = migration
         .query_one(
             "SELECT payload IS NULL FROM registry_internal.registry_outbox
@@ -1226,16 +1339,31 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
         erased_event,
         "the selected proposal's reviewer reason event is erased"
     );
-    let other_version = registry_breg::request_retention::load_retained_decisions(
-        &migration,
-        REQUEST_ENTITY,
-        request_id,
-        2,
-        true,
-    )
-    .await
-    .expect("other proposal version remains retained");
-    assert_eq!(other_version[0].reason.as_deref(), Some(reason_canary));
+    let erased_review_payloads = migration
+        .query_one(
+            "SELECT s.create_request, s.accepted_binding, r.result
+               FROM registry_internal.registry_request_review_submissions s
+               JOIN registry_internal.registry_request_review_results r
+                 USING (request_entity_id, request_id, proposal_version)
+              WHERE s.request_entity_id = $1
+                AND s.request_id = $2
+                AND s.proposal_version = 1",
+            &[&REQUEST_ENTITY, &request_id],
+        )
+        .await
+        .expect("review retention payloads remain as empty tombstones");
+    assert_eq!(
+        erased_review_payloads.get::<_, serde_json::Value>(0),
+        json!({})
+    );
+    assert_eq!(
+        erased_review_payloads.get::<_, serde_json::Value>(1),
+        json!({})
+    );
+    assert_eq!(
+        erased_review_payloads.get::<_, serde_json::Value>(2),
+        json!({})
+    );
     let after_history = history_commit_counts(&migration).await;
     assert_eq!(
         after_history.commits - before_history.commits,
@@ -1378,8 +1506,8 @@ async fn seed_canceled_draft_without_proposal(
             "INSERT INTO registry_internal.registry_request_state
                  (request_entity_id, request_id, owner_reference, state,
                   proposal_version, workflow_revision)
-             VALUES ($1, $2, 'owner-ref', 'canceled', 1, 4),
-                    ('other-request-entity', $2, 'other-owner', 'canceled', 1, 4)",
+             VALUES ($1, $2, 'owner-ref', 'cancelled', 1, 4),
+                    ('other-request-entity', $2, 'other-owner', 'cancelled', 1, 4)",
             &[&REQUEST_ENTITY, &request_id],
         )
         .await
@@ -1548,6 +1676,54 @@ async fn seed_submitted_request(client: &Client, contract_fingerprint: &str) {
         .expect("target snapshots insert");
 }
 
+async fn seed_external_review_payloads(client: &Client) {
+    let request_id = Uuid::parse_str(REQUEST_ID).expect("request id parses");
+    let review_request_id =
+        Uuid::parse_str("00000000-0000-0000-0000-00000000c031").expect("review request id parses");
+    let result_id =
+        Uuid::parse_str("00000000-0000-0000-0000-00000000c032").expect("review result id parses");
+    client
+        .execute(
+            "INSERT INTO registry_internal.registry_request_review_submissions
+                 (request_entity_id, request_id, proposal_version, proposal_digest,
+                  job_id, authority, producer_id, policy_id, idempotency_key,
+                  create_request, expected_submission_digest, on_approved_mode,
+                  state, accepted_binding)
+             VALUES ($1, $2, 1, $3,
+                     '00000000-0000-0000-0000-00000000c033'::uuid,
+                     'casework-a', 'registry-a', 'policy-a', 'review-retention-key',
+                     $4::jsonb, $3, 'manual', 'accepted', $5::jsonb)",
+            &[
+                &REQUEST_ENTITY,
+                &request_id,
+                &EFFECT_DIGEST,
+                &json!({"context": "review-create-request-retention-canary"}),
+                &json!({
+                    "requestId": review_request_id,
+                    "context": "review-accepted-binding-retention-canary"
+                }),
+            ],
+        )
+        .await
+        .expect("external review submission payload inserts");
+    client
+        .execute(
+            "INSERT INTO registry_internal.registry_request_review_results
+                 (request_entity_id, request_id, proposal_version, authority,
+                  result_id, result, status, completed_at, available_until)
+             VALUES ($1, $2, 1, 'casework-a', $3, $4::jsonb, 'approved',
+                     transaction_timestamp(), transaction_timestamp() + interval '1 day')",
+            &[
+                &REQUEST_ENTITY,
+                &request_id,
+                &result_id,
+                &json!({"context": "review-result-retention-canary"}),
+            ],
+        )
+        .await
+        .expect("external review result payload inserts");
+}
+
 async fn seed_second_retention_list_row(client: &Client, contract_fingerprint: &str) {
     let request_id = Uuid::parse_str(SECOND_RETENTION_LIST_REQUEST_ID).expect("request id parses");
     client
@@ -1555,7 +1731,7 @@ async fn seed_second_retention_list_row(client: &Client, contract_fingerprint: &
             "INSERT INTO registry_internal.registry_request_state
                  (request_entity_id, request_id, owner_reference, state,
                   proposal_version, workflow_revision, detail_erased_at)
-             VALUES ($1, $2, 'owner-ref', 'canceled', 1, 2, transaction_timestamp())",
+             VALUES ($1, $2, 'owner-ref', 'cancelled', 1, 2, transaction_timestamp())",
             &[&REQUEST_ENTITY, &request_id],
         )
         .await
@@ -2072,16 +2248,16 @@ fn change_request_project(
                 "set":{{"site":{{"fromField":"proposed-site"}}}},
                 "clear":["label"]
               }}],
-              "review":{{"stages":[{{"id":"review","approvals":1,"excludeSubmitter":true}}]}}
+              "review":{{"authority":"casework-main","policyId":"placement-correction"}},
+              "onApproved":{{"mode":"manual"}}
             }}
           }}{extra_entity}],
           "accessProfiles":[{{
             "id":"request-reviewer","default":true,"principalClaim":"principal","permissions":[{{
               "entity":"placement-correction-request",
-              "operations":["get","list","submit_request","approve_request","reject_request","request_revision"],
+              "operations":["get","list","submit_request"],
               "readableFields":["tenant","placement","proposed-site","reason"],
-              "rowBoundaries":[{{"field":"tenant","claim":"tenant","operator":"equals"}}],
-              "reviewStages":[{{"stage":"review","targets":[{{"rowBoundaries": [], "entity":"placement","readableFields":["site","label"]}}]}}]
+              "rowBoundaries":[{{"field":"tenant","claim":"tenant","operator":"equals"}}]
             }}]
           }},{{
             "id":"request-applier","principalClaim":"principal","permissions":[{{

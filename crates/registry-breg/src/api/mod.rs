@@ -20,7 +20,9 @@ use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
 use axum::extract::{Path, RawQuery, State};
-use axum::http::header::{ACCEPT, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, LINK, VARY};
+use axum::http::header::{
+    ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, LINK, VARY,
+};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
@@ -62,11 +64,10 @@ use crate::cursor::{
 use crate::idempotency::{HeldResponse, PermittedResponseHeader};
 use crate::metrics::{AnonymousRefusal, AnonymousRefusalReason};
 use crate::model::{
-    request_query_field_id_for_api, request_query_field_type, CompiledChangeRequest,
-    CompiledChangeRequestApplicationMode, CompiledChangeRequestDisposition,
-    CompiledChangeRequestReviewMode, CompiledEntity, CompiledMetadataEntity, CompiledMetadataEntry,
-    CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection, CompiledReadPath,
-    CompiledRevisionKind, CompiledRoute, MAX_REVISION_HISTORY_RECORDS,
+    request_query_field_id_for_api, request_query_field_type, CompiledEntity,
+    CompiledMetadataEntity, CompiledMetadataEntry, CompiledQueryKind, CompiledQueryOperation,
+    CompiledQuerySortDirection, CompiledReadPath, CompiledRevisionKind, CompiledRoute,
+    MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::mutation::{parse_json_patch_document, BatchMutationItem, MutationError};
 use crate::query as strict_query;
@@ -85,6 +86,9 @@ const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 const MAX_RAW_QUERY_BYTES: usize = 16 * 1024;
 const MAX_FILTER_CLAUSES: usize = 32;
 const MAX_IN_VALUES: usize = 100;
+const MAX_REVIEW_COMPLETION_BODY_BYTES: usize = 2048;
+const REVIEW_COMPLETION_RECIPIENT_HEADER: &str = "registry-recipient-binding";
+const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 
 /// Construct the low-level route set for callers that already hold verified
 /// claims. Production network listeners must use [`authenticated_router`].
@@ -165,9 +169,6 @@ fn route_set(service: Arc<HttpService>) -> Router {
                 )
             }
             Operation::SubmitRequest
-            | Operation::ApproveRequest
-            | Operation::RejectRequest
-            | Operation::RequestRevision
             | Operation::ReviseRequest
             | Operation::CancelRequest
             | Operation::ApplyRequest
@@ -212,14 +213,112 @@ pub fn authenticated_router(
     service: Arc<HttpService>,
     authenticator: Arc<RegistryAuthenticator>,
 ) -> Router {
-    route_set(service)
-        .layer(middleware::from_fn_with_state(
-            authenticator,
-            authenticate_request,
-        ))
-        .layer(middleware::from_fn(metadata::no_store))
+    let completion_receiver = service.review_completions.is_some();
+    let authenticated = route_set(Arc::clone(&service)).layer(middleware::from_fn_with_state(
+        authenticator,
+        authenticate_request,
+    ));
+    let app = if completion_receiver {
+        authenticated.merge(
+            Router::new()
+                .route("/v1/review-completions", post(review_completion))
+                .with_state(service),
+        )
+    } else {
+        authenticated
+    };
+    app.layer(middleware::from_fn(metadata::no_store))
         .layer(middleware::from_fn(crate::correlation::observe))
         .layer(security_headers(CspBuilder::restrictive()))
+}
+
+async fn review_completion(
+    State(service): State<Arc<HttpService>>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    let Some(receiver) = service.review_completions.as_ref() else {
+        return not_found().await;
+    };
+    let Some(authorization) = single_header(&headers, AUTHORIZATION.as_str()) else {
+        return review_completion_refused();
+    };
+    let Ok(token) = registry_platform_authcommon::parse_bearer_token(authorization) else {
+        return review_completion_refused();
+    };
+    let Some(recipient) = single_header(&headers, REVIEW_COMPLETION_RECIPIENT_HEADER) else {
+        return review_completion_refused();
+    };
+    let Some((authority, recovery_days)) = receiver.authority(token, recipient) else {
+        return review_completion_refused();
+    };
+    if !single_content_type(&headers, "application/json") {
+        return unsupported_media_type();
+    }
+    let Some(idempotency_key) = single_header(&headers, IDEMPOTENCY_KEY_HEADER) else {
+        return invalid_request();
+    };
+    let Ok(body) = bounded_body_to(body, MAX_REVIEW_COMPLETION_BODY_BYTES).await else {
+        return invalid_request();
+    };
+    let Ok(value) = parse_json_strict(&body) else {
+        return invalid_request();
+    };
+    let Ok(completion) = serde_json::from_value::<registry_review_client::ReviewCompletion>(value)
+    else {
+        return invalid_request();
+    };
+    if idempotency_key != completion.event_id.to_string()
+        || completion.event_id.is_nil()
+        || completion.request_id.is_nil()
+        || completion.result_id.is_nil()
+    {
+        return invalid_request();
+    }
+    let now = chrono::Utc::now();
+    if !completion_timestamp_is_acceptable(completion.completed_at, now, recovery_days) {
+        return invalid_request();
+    }
+    match receiver.receive(&authority, &completion).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(MutationError::InvalidRequest | MutationError::PreconditionFailed) => invalid_request(),
+        Err(_) => unavailable(),
+    }
+}
+
+fn completion_timestamp_is_acceptable(
+    completed_at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+    recovery_days: u32,
+) -> bool {
+    completed_at >= now - chrono::Duration::days(i64::from(recovery_days))
+        && completed_at <= now + chrono::Duration::minutes(5)
+}
+
+#[cfg(test)]
+mod review_completion_tests {
+    use super::completion_timestamp_is_acceptable;
+
+    #[test]
+    fn completion_age_uses_the_configured_authority_recovery_window() {
+        let now = chrono::Utc::now();
+        let retained = now - chrono::Duration::days(120);
+        assert!(completion_timestamp_is_acceptable(retained, now, 365));
+        assert!(!completion_timestamp_is_acceptable(retained, now, 90));
+        assert!(!completion_timestamp_is_acceptable(
+            now + chrono::Duration::minutes(6),
+            now,
+            365,
+        ));
+    }
+}
+
+fn review_completion_refused() -> Response {
+    fixed_problem(
+        StatusCode::UNAUTHORIZED,
+        "review_completion.authentication_refused",
+        "The review completion sender was refused.",
+    )
 }
 
 async fn health() -> Response {
@@ -334,6 +433,9 @@ async fn openapi(
     let has_request_actions = !action_input_schemas.is_empty();
     schemas.extend(action_input_schemas);
     actions::append_openapi(&visible_actions, &mut paths, &mut schemas);
+    if service.review_completions.is_some() {
+        crate::artifacts::append_review_completion_openapi(&mut paths, &mut schemas);
+    }
     ingestion::append_openapi(&service, &visible, &mut paths, &mut schemas);
     Json(json!({
         "openapi": "3.1.0",
@@ -1999,9 +2101,7 @@ async fn request_action_dispatch(
         )
         .await;
     };
-    let Ok(action) =
-        parse_request_action_body(route.operation, route.request_stage.as_deref(), &body)
-    else {
+    let Ok(action) = parse_request_action_body(route.operation, &body) else {
         return audited_mutation_refusal(
             mutations,
             &route,
@@ -2025,9 +2125,6 @@ async fn request_action_dispatch(
         )
         .await;
     };
-    let automatic_apply_authority = surface.entity.change_request.as_ref().and_then(|plan| {
-        request_automatic_apply_authority(plan, surface.context.selected_profile(), &claims)
-    });
     match mutations
         .request_action(RequestActionInput {
             route_id: &route.id,
@@ -2039,7 +2136,6 @@ async fn request_action_dispatch(
             action,
             response_fields: surface.readable_fields,
             target_authority,
-            automatic_apply_authority,
             correlation: &correlation,
         })
         .await
@@ -2064,35 +2160,14 @@ fn request_action_target_authority(
         return Some(Vec::new());
     }
     let plan = entity.change_request.as_ref()?;
-    if !plan.actions.iter().any(|action| {
-        action.operation.access_operation() == route.operation
-            && action.review_stage.as_deref() == route.request_stage.as_deref()
-    }) {
+    if !plan
+        .actions
+        .iter()
+        .any(|action| action.operation.access_operation() == route.operation)
+    {
         return None;
     }
     match route.operation {
-        Operation::ApproveRequest | Operation::RejectRequest | Operation::RequestRevision => {
-            let stage = route.request_stage.as_deref()?;
-            plan.target_entities
-                .iter()
-                .cloned()
-                .map(|target_entity_id| {
-                    let grant = plan.review_permissions.iter().find(|grant| {
-                        grant.profile_id == context.selected_profile()
-                            && grant.stage == stage
-                            && grant.target_entity_id == target_entity_id
-                    })?;
-                    Some(RequestActionTargetAuthority {
-                        target_entity_id,
-                        readable_fields: grant.readable_fields.clone(),
-                        row_boundaries: verified_row_boundaries_from_sources(
-                            &grant.row_boundaries,
-                            claims,
-                        )?,
-                    })
-                })
-                .collect()
-        }
         Operation::ApplyRequest => plan
             .application_target_entities()
             .into_iter()
@@ -2115,55 +2190,6 @@ fn request_action_target_authority(
             Some(Vec::new())
         }
         _ => None,
-    }
-}
-
-fn request_automatic_apply_authority(
-    plan: &crate::model::CompiledChangeRequest,
-    selected_profile: &str,
-    claims: &VerifiedRequestClaims,
-) -> Option<Vec<RequestActionTargetAuthority>> {
-    plan.application_target_entities()
-        .into_iter()
-        .map(|target_entity_id| {
-            let grant = plan.apply_permissions.iter().find(|grant| {
-                grant.profile_id == selected_profile && grant.target_entity_id == target_entity_id
-            })?;
-            Some(RequestActionTargetAuthority {
-                target_entity_id,
-                readable_fields: BTreeSet::new(),
-                row_boundaries: verified_row_boundaries_from_sources(
-                    &grant.row_boundaries,
-                    claims,
-                )?,
-            })
-        })
-        .collect()
-}
-
-fn request_action_requires_automatic_apply_if_ready(
-    plan: &CompiledChangeRequest,
-    route: &CompiledRoute,
-) -> bool {
-    let may_apply = match plan.application.mode {
-        CompiledChangeRequestApplicationMode::Automatic => true,
-        CompiledChangeRequestApplicationMode::Planner => plan
-            .application
-            .allowed_dispositions
-            .contains(&CompiledChangeRequestDisposition::Apply),
-        CompiledChangeRequestApplicationMode::Manual => false,
-    };
-    if !may_apply {
-        return false;
-    }
-    match route.operation {
-        Operation::SubmitRequest => plan.review_mode == CompiledChangeRequestReviewMode::None,
-        Operation::ApproveRequest => {
-            plan.review_mode == CompiledChangeRequestReviewMode::Stages
-                && route.request_stage.as_deref()
-                    == plan.stages.last().map(|stage| stage.id.as_str())
-        }
-        _ => false,
     }
 }
 
@@ -2213,14 +2239,7 @@ fn request_visibility_authority(
                             })
                             .map(|grant| (BTreeSet::new(), &grant.row_boundaries))
                     } else {
-                        plan.review_permissions
-                            .iter()
-                            .find(|grant| {
-                                grant.profile_id == selected_profile
-                                    && grant.target_entity_id == entity.id
-                                    && Some(grant.stage.as_str()) == route.request_stage.as_deref()
-                            })
-                            .map(|grant| (grant.readable_fields.clone(), &grant.row_boundaries))
+                        None
                     };
                     match grant {
                         Some((fields, boundaries)) => Some(VerifiedRequestTargetAuthority::new(
@@ -2231,41 +2250,14 @@ fn request_visibility_authority(
                         None => None,
                     }
                 };
-                let automatic_apply_authority = entity.change_request.as_ref().and_then(|plan| {
-                    request_automatic_apply_authority(plan, selected_profile, claims).map(
-                        |authority| {
-                            authority
-                                .into_iter()
-                                .map(|authority| {
-                                    VerifiedRequestTargetAuthority::new(
-                                        authority.target_entity_id,
-                                        authority.readable_fields,
-                                        authority.row_boundaries,
-                                    )
-                                })
-                                .collect()
-                        },
-                    )
-                });
                 Some(VerifiedRequestAction::new(
                     route.id.clone(),
                     route.method,
                     route.path.clone(),
                     route.operation,
-                    route.request_stage.clone(),
                     surface.readable_fields,
-                    VerifiedRequestActionAuthority::new(
-                        target_authority,
-                        automatic_apply_authority,
-                        request_action_requires_automatic_apply_if_ready(
-                            entity
-                                .change_request
-                                .as_ref()
-                                .expect("change request checked"),
-                            route,
-                        ),
-                    )
-                    .with_attachment_request_authority(attachment_request_authority),
+                    VerifiedRequestActionAuthority::new(target_authority)
+                        .with_attachment_request_authority(attachment_request_authority),
                 ))
             })
             .collect()
@@ -2723,9 +2715,6 @@ fn is_request_operation(operation: Operation) -> bool {
     matches!(
         operation,
         Operation::SubmitRequest
-            | Operation::ApproveRequest
-            | Operation::RejectRequest
-            | Operation::RequestRevision
             | Operation::ReviseRequest
             | Operation::CancelRequest
             | Operation::ApplyRequest
@@ -2769,9 +2758,6 @@ fn served_operation(service: &HttpService, route: &CompiledRoute) -> bool {
         }
         Operation::Revisions => service.revisions.is_some(),
         Operation::SubmitRequest
-        | Operation::ApproveRequest
-        | Operation::RejectRequest
-        | Operation::RequestRevision
         | Operation::ReviseRequest
         | Operation::CancelRequest
         | Operation::ApplyRequest => {
@@ -2782,10 +2768,9 @@ fn served_operation(service: &HttpService, route: &CompiledRoute) -> bool {
                     .get(&route.entity_id)
                     .and_then(|entity| entity.change_request.as_ref())
                     .is_some_and(|plan| {
-                        plan.actions.iter().any(|action| {
-                            action.operation.access_operation() == route.operation
-                                && action.review_stage.as_deref() == route.request_stage.as_deref()
-                        })
+                        plan.actions
+                            .iter()
+                            .any(|action| action.operation.access_operation() == route.operation)
                     })
         }
         Operation::Snapshot => service.snapshots.is_some(),
@@ -4704,9 +4689,6 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
         Operation::SubmitRequest => "submit_request",
-        Operation::ApproveRequest => "approve_request",
-        Operation::RejectRequest => "reject_request",
-        Operation::RequestRevision => "request_revision",
         Operation::ReviseRequest => "revise_request",
         Operation::CancelRequest => "cancel_request",
         Operation::ApplyRequest => "apply_request",
@@ -5218,54 +5200,26 @@ fn parse_create_body(body: &[u8]) -> Result<Map<String, Value>, ()> {
         .ok_or(())
 }
 
-fn parse_request_action_body(
-    operation: Operation,
-    request_stage: Option<&str>,
-    body: &[u8],
-) -> Result<RequestActionBody, ()> {
+fn parse_request_action_body(operation: Operation, body: &[u8]) -> Result<RequestActionBody, ()> {
     let value = parse_json_strict(body).map_err(|_| ())?;
     let object = value.as_object().ok_or(())?;
     match operation {
-        Operation::SubmitRequest if request_stage.is_none() => {
+        Operation::SubmitRequest => {
             parse_empty_action_object(object)?;
             Ok(RequestActionBody::Submit)
         }
-        Operation::ApproveRequest if request_stage.is_some() => {
-            let (proposal_version, effect_digest, reason) = parse_reasoned_proposal_action(object)?;
-            Ok(RequestActionBody::Approve {
-                proposal_version,
-                effect_digest,
-                reason,
-            })
-        }
-        Operation::RejectRequest if request_stage.is_some() => {
-            let (proposal_version, effect_digest, reason) = parse_reasoned_proposal_action(object)?;
-            Ok(RequestActionBody::Reject {
-                proposal_version,
-                effect_digest,
-                reason,
-            })
-        }
-        Operation::RequestRevision if request_stage.is_some() => {
-            let (proposal_version, effect_digest, reason) = parse_reasoned_proposal_action(object)?;
-            Ok(RequestActionBody::RequestRevision {
-                proposal_version,
-                effect_digest,
-                reason,
-            })
-        }
-        Operation::ReviseRequest if request_stage.is_none() => {
+        Operation::ReviseRequest => {
             if object.len() != 1 {
                 return Err(());
             }
             let rebase = object.get("rebase").and_then(Value::as_bool).ok_or(())?;
             Ok(RequestActionBody::Revise { rebase })
         }
-        Operation::CancelRequest if request_stage.is_none() => {
+        Operation::CancelRequest => {
             parse_empty_action_object(object)?;
             Ok(RequestActionBody::Cancel)
         }
-        Operation::ApplyRequest if request_stage.is_none() => {
+        Operation::ApplyRequest => {
             let (proposal_version, effect_digest, reason) = parse_reasoned_proposal_action(object)?;
             Ok(RequestActionBody::Apply {
                 proposal_version,
@@ -5312,7 +5266,7 @@ fn parse_reasoned_proposal_action(
     };
     let reason = reason
         .as_str()
-        .filter(|reason| crate::request_workflow::valid_review_reason(reason))
+        .filter(|reason| crate::request_workflow::valid_application_reason(reason))
         .ok_or(())?;
     let mut binding = object.clone();
     binding.remove("reason");

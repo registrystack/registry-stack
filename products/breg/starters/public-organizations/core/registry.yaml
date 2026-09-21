@@ -279,15 +279,10 @@
           }
         ],
         "review": {
-          "stages": [
-            {
-              "id": "review",
-              "approvals": 1,
-              "excludeSubmitter": true
-            }
-          ]
+          "authority": "casework",
+          "policyId": "name-correction"
         },
-        "application": {
+        "onApproved": {
           "mode": "manual"
         },
         "retention": {
@@ -385,15 +380,10 @@
           }
         ],
         "review": {
-          "stages": [
-            {
-              "id": "review",
-              "approvals": 1,
-              "excludeSubmitter": true
-            }
-          ]
+          "authority": "casework",
+          "policyId": "relationship-correction"
         },
-        "application": {
+        "onApproved": {
           "mode": "manual"
         },
         "retention": {
@@ -524,7 +514,11 @@
             "supporting-reference"
           ],
           "requestVisibility": "owner",
-          "rowBoundaries": []
+          "rowBoundaries": [],
+          "readableRequestFields": [
+            "reason",
+            "review_state"
+          ]
         },
         {
           "entity": "relationship-correction",
@@ -555,7 +549,11 @@
             "supporting-reference"
           ],
           "requestVisibility": "owner",
-          "rowBoundaries": []
+          "rowBoundaries": [],
+          "readableRequestFields": [
+            "reason",
+            "review_state"
+          ]
         }
       ]
     },
@@ -606,9 +604,6 @@
           "entity": "name-correction",
           "operations": [
             "get",
-            "approve_request",
-            "reject_request",
-            "request_revision",
             "apply_request"
           ],
           "readableFields": [
@@ -618,36 +613,21 @@
             "supporting-reference"
           ],
           "rowBoundaries": [],
-          "reviewStages": [
-            {
-              "stage": "review",
-              "targets": [
-                {
-                  "entity": "public-organization",
-                  "readableFields": [
-                    "local-identifier",
-                    "name",
-                    "description"
-                  ],
-                  "rowBoundaries": []
-                }
-              ]
-            }
-          ],
           "applyTargets": [
             {
               "entity": "public-organization",
               "rowBoundaries": []
             }
+          ],
+          "readableRequestFields": [
+            "reason",
+            "review_state"
           ]
         },
         {
           "entity": "relationship-correction",
           "operations": [
             "get",
-            "approve_request",
-            "reject_request",
-            "request_revision",
             "apply_request"
           ],
           "readableFields": [
@@ -660,29 +640,15 @@
             "supporting-reference"
           ],
           "rowBoundaries": [],
-          "reviewStages": [
-            {
-              "stage": "review",
-              "targets": [
-                {
-                  "entity": "institutional-relationship",
-                  "readableFields": [
-                    "institution-from",
-                    "institution-to",
-                    "relationship-type",
-                    "start-date",
-                    "end-date"
-                  ],
-                  "rowBoundaries": []
-                }
-              ]
-            }
-          ],
           "applyTargets": [
             {
               "entity": "institutional-relationship",
               "rowBoundaries": []
             }
+          ],
+          "readableRequestFields": [
+            "reason",
+            "review_state"
           ]
         }
       ]

@@ -11,7 +11,7 @@ source_repos:
   - registry-manifest
   - registry-evidence
   - solmara-lab
-last_reviewed: "2026-09-11"
+last_reviewed: "2026-09-20"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -54,7 +54,7 @@ Product names are always in English, including on future translated pages.
   <dd>The bearer credential a caller presents to Evidence Gateway. Evidence Gateway runs one authentication kind, `oidc-access-token`, whose issuer, audiences, accepted token types, algorithms, JWKS URI, and claim names are fixed in the immutable bundle, and it reads authority only from those configured claim names. Any issuer may be used only when it satisfies that complete configured token profile and signs with a key accepted from the configured JWKS; matching claim names alone is insufficient.</dd>
 
   <dt id="accountability-record">accountability record</dt>
-  <dd>The protected state Registry Casework keeps beside a hosted item's terminal outcome: the deciding person's issuer-qualified identity and the staff reason, held for the hosted kind's `accountabilityDays`. The Requester's terminal feed carries an opaque actor reference instead. A Supervisor who currently leads a team serving the item's queue resolves one terminal `eventId` through the separate accountability route, and that read is audited. See <a href="../../operate/casework-retention/">Retain, erase, and settle</a>.</dd>
+  <dd>The protected state Registry Casework keeps beside a terminal review decision: the deciding person's issuer-qualified identity, profile, private reason, and result digest, held for the review kind's `accountabilityDays`. Producer-visible results carry none of that identity or private reason. An authorized Supervisor resolves one event through the separate accountability route, and that read is audited. See <a href="../../operate/casework-retention/">Retain, erase, and settle</a>.</dd>
 
   <dt id="attempt">attempt</dt>
   <dd>Registry Casework's accountable action against a source: the runtime presents the deciding person's own token under the selected <a href="#casework-source-profile">source profile</a> and asks the source system to apply the decision. The source keeps eligibility and mutation authority, so an attempt can be confirmed, refused, or left uncertain when the source's answer never arrived; an uncertain attempt is preserved for recovery, never retried on its own, and an operator settles it with `caseworkctl attempt settle` once the outcome is confirmed with the source owner.</dd>
@@ -197,11 +197,11 @@ Product names are always in English, including on future translated pages.
   <dt id="holiday-revision">holiday revision</dt>
   <dd>In Registry Casework, a dated list of public holidays for one named holiday set, published to a running deployment by an Administrator rather than written into the policy, because holidays are announced on their own schedule. A new revision drives a reviewed recompute of the activity <a href="#clock">clocks</a> that count against a <a href="#calendar">calendar</a> naming that set.</dd>
 
-  <dt id="hosted-item">hosted item</dt>
-  <dd>A Registry Casework <a href="#work-item">work item</a> the runtime holds in full: a Requester service creates it under a declared <a href="#hosted-kind">hosted kind</a> with an `Idempotency-Key`, a Staff member in the kind's deciding profiles claims and decides it, and the Requester pages the outcome from its terminal feed. No source system is involved, so a standalone deployment needs no Base Registry Engine.</dd>
+  <dt id="review-request">review request</dt>
+  <dd>A source-neutral Registry Casework request created by an admitted producer under one <a href="#review-kind">review kind</a>. It binds an immutable subject, policy identity, submission digest, submitted snapshot or source context, staged reviewer tasks, terminal result, and retention. A submitted-context deployment needs no Base Registry Engine.</dd>
 
-  <dt id="hosted-kind">hosted kind</dt>
-  <dd>A policy declaration in `casework.yaml` for one kind of <a href="#hosted-item">hosted item</a>: its version, the <a href="#queue">queue</a> it lands in, the profiles that may decide it, its closed display schema, its outcome vocabulary with per-outcome reason rules, and its retention periods (`terminalDays`, `accountabilityDays`). Casework pins the kind version and policy digest on each item it accepts, so a later policy change does not rewrite existing work. See <a href="../../configure/casework/">Author a Casework policy</a>.</dd>
+  <dt id="review-kind">review kind</dt>
+  <dd>A policy declaration in `casework.yaml` for one kind of <a href="#review-request">review request</a>: its purpose, context strategy, ordered stages, thresholds and reviewer exclusions, closed display and result schemas, outcomes, clocks, and retention (`terminalDays`, `accountabilityDays`). Casework pins its version and digest on each accepted request. See <a href="../../configure/casework/">Author a Casework policy</a>.</dd>
 
   <dt id="key-binding-jwt">key-binding JWT</dt>
   <dd>The JWT a holder appends to a presentation, defined by RFC 9901 section 4.3, signed by the private key of the credential's `cnf` and covering the presented bytes plus the audience and nonce the relying party chose. Evidence Gateway never appends one; the holder does, and the relying party verifies it with the portable verifier or the `evidence verify-presentation` command. A verified key-binding JWT proves possession at signing time and nothing more: comparing a nonce is not consuming it, so this is not replay prevention, and RFC 9901 section 7.3 leaves the challenge lifecycle to the relying party.</dd>
@@ -294,7 +294,7 @@ Product names are always in English, including on future translated pages.
   <dd>Registry Stack product term for a request that carries or is evaluated against purpose limitation, policy-based access control, or context-aware authorization. In Registry Relay, purpose is a constraint an access profile may place on a token claim: the profile names the claim and the closed set of values that admit the request. Relay reads purpose from the verified token, never from a request header or a caller-supplied string.</dd>
 
   <dt id="queue">queue</dt>
-  <dd>A named inbox declared in a Registry Casework policy. Source-backed requests and <a href="#hosted-kind">hosted kinds</a> route into a queue; a team in the <a href="#directory">directory</a> serves it, and only members of a serving team see its items. Routing rules and clock steps may move an item to another queue under actor `system:clock`.</dd>
+  <dd>A named inbox declared in a Registry Casework policy. Source-backed work and <a href="#review-kind">review stages</a> route into a queue; a team in the <a href="#directory">directory</a> serves it, and only eligible members of a serving team see its work. Routing rules and clock steps may move source work under actor `system:clock`.</dd>
 
   <dt>scope</dt>
   <dd>The authorization scope a protected Registry Relay access profile requires. Relay verifies the scope against the bearer token before the access profile applies, and the profile grants nothing broader than the disclosure profile it names. A scope is not a disclosure decision on its own.</dd>
@@ -318,7 +318,7 @@ Product names are always in English, including on future translated pages.
   <dd>The JSON document a fully successful `bregctl test` run writes, recording the candidate package revision, the source closure, the deployment and database identity, the target schema fingerprint, and the <a href="#journey">journeys</a> that passed, so packaging can refuse a receipt taken for anything else.</dd>
 
   <dt id="registry-casework">Registry Casework</dt>
-  <dd>The coordinated inbox product in this monorepo: authorized human teams claim, draft, and decide <a href="#work-item">work items</a> that a source system owns or that a Requester service submits as <a href="#hosted-item">hosted items</a>. It verifies bearer tokens and issues none, requires the issuer's human-identity assertion for Staff, Supervisor, and Administrator, and leaves eligibility, visibility, and registry mutation with the source. Crates: `crates/registry-casework` (runtime, binary `casework`) and `crates/registry-caseworkctl` (adopter tooling, binary `caseworkctl`); client module `casework` in the unified clients. Short form on a page after first use: Casework. See the <a href="../../start/casework/">Registry Casework overview</a>.</dd>
+  <dd>The coordinated inbox and unified-review product in this monorepo: authorized human teams claim, draft, and decide <a href="#work-item">source work items</a> or <a href="#review-request">review requests</a> from admitted producers. It verifies bearer tokens and issues none, requires the issuer's human-identity assertion for human roles, and leaves source eligibility, visibility, and mutation with the source. Crates: `crates/registry-casework` (runtime, binary `casework`) and `crates/registry-caseworkctl` (adopter tooling, binary `caseworkctl`); client module `casework` in the unified clients. Short form on a page after first use: Casework. See the <a href="../../start/casework/">Registry Casework overview</a>.</dd>
 
   <dt id="registry-discovery">Registry Discovery</dt>
   <dd>The read-only public index in this monorepo. A catalog operator maintains provider URLs and evidence-type mappings for the Evidence Gateway and Registry Relay providers that operator has chosen to index, `discoveryctl check` and `discoveryctl build` produce one immutable index offline, and the `discovery` binary serves that index until it is restarted with a newer one. Discovery carries inert public metadata: it makes no authorization decision, serves no record, and answers no question. Crate: `crates/registry-discovery`; binaries `discovery` and `discoveryctl`; repo slug: `registry-discovery`. Write `Registry Discovery` on a page's first use and `Discovery` after it. See <a href="../../configure/discovery/">Build and run a Registry Discovery index</a>.</dd>
@@ -375,7 +375,7 @@ Product names are always in English, including on future translated pages.
   <dd>How a Registry Relay source is expected to behave while it is being read, declared per source as `snapshot` or `live-read-only`. Under `snapshot` the database is a fixed artifact published for reading, so a response is reproducible for the life of that snapshot. Under `live-read-only` the database is the operational registry, still opened read-only through the shared SQLite boundary, so answers move as the registry moves. Neither profile permits a write, and both pin the expected schema fingerprint.</dd>
 
   <dt id="casework-source-profile">source profile (Casework)</dt>
-  <dd>In Registry Casework, the value a caller sends in `Registry-Source-Profile` to act on source-backed work. It names the source-side access profile under which Casework presents the caller's own token to the source for reads and for the accountable <a href="#attempt">attempt</a>, so source visibility and action authority stay with the source. Omitting the header selects hosted work, and hosted-only routes refuse it. Registry Relay uses the same two words for the unrelated <a href="#source-profile">snapshot or live-read-only</a> declaration.</dd>
+  <dd>In Registry Casework, the value a human caller sends in `Registry-Source-Profile` to act on source-backed work or read source-context review tasks. It names the source-side access profile under which Casework presents that caller's token. Source visibility and action authority stay with the source; submitted-context review tasks need no source profile. Registry Relay uses the same two words for the unrelated <a href="#source-profile">snapshot or live-read-only</a> declaration.</dd>
 
   <dt>source</dt>
   <dd>A named registry data interface a Registry Relay deployment reads. In the current Relay a source is one SQLite database, opened through the read-only boundary in `crates/registry-platform-sqlite` under its declared source profile, with its schema fingerprint pinned in the contract. An OAuth or JSON Web Key Set endpoint used by a protocol is not another data source. Evidence Gateway uses the same word for its own configured provider, whose origin, method, path, headers, authentication, transport trust, timeout, and byte limits are fixed in the bundle and executed only by the Rust core.</dd>
@@ -431,8 +431,8 @@ Product names are always in English, including on future translated pages.
   <dt id="team">team</dt>
   <dd>A <a href="#directory">directory</a> entry in Registry Casework: a named group with members, leads, and the <a href="#queue">queues</a> it serves. Membership decides what a Staff member sees, and leading a serving team decides what a Supervisor may move, cover, or read from an <a href="#accountability-record">accountability record</a>.</dd>
 
-  <dt id="terminal-feed">terminal feed</dt>
-  <dd>The Requester-facing, cursor-paged list of terminal outcomes for the <a href="#hosted-item">hosted items</a> one Requester created under one issuer, subject, and profile. Each event carries the outcome, the reason when the kind requires one, and an opaque actor reference. Events leave the feed when the kind's `terminalDays` elapse, so a Requester polls within that period and deduplicates by `eventId`.</dd>
+  <dt id="result-feed">result feed</dt>
+  <dd>The producer-facing, cursor-paged list of terminal results for <a href="#review-request">review requests</a> created under one exact producer binding. Events carry a stable identifier and terminal result without raw reviewer identity or private reason. Events leave the feed when the kind's `terminalDays` elapse, so a producer polls within that period and deduplicates by `eventId`.</dd>
 
   <dt id="transit-proxy">Transit proxy</dt>
   <dd>The workload-local Vault or OpenBao Transit proxy an Evidence Gateway deployment reaches over a Unix socket to sign assertions in production and evidence-grade mode. The operator runs it beside the service, so Evidence Gateway holds no signing key of its own in those modes. Local assurance may use an owner-only P-256 private JWK under the secret root instead.</dd>
@@ -446,7 +446,7 @@ Product names are always in English, including on future translated pages.
   <dt>wallet</dt>
   <dd>Holder-owned application that stores credentials and presents them to verifiers. The separate `registry-evidence-oid4vci` supporting service exposes a frozen OID4VCI delivery profile to a wallet, while Evidence Gateway itself integrates with none. Wallet onboarding, wallet attestation, trust-list membership, and holder key generation, holding, escrow, or recovery by a service remain non-goals. The holder-bound profile defines what a relying party verifies when a holder presents a credential; no test in this repository covers a wallet storing or presenting an Evidence Gateway credential.</dd>
 <dt id="work-item">work item</dt>
-  <dd>The unit of work in Registry Casework: one item in one <a href="#queue">queue</a> with a holder, a revision, history, and clocks. A source-backed item mirrors a governed <a href="#change-request">change request</a> a Base Registry Engine holds, so Casework keeps assignment, routing, clocks, drafts, and recovery while the registry keeps eligibility, visibility, and the mutation; a <a href="#hosted-item">hosted item</a> lives in Casework in full. A caller that may not see an item gets the same answer as for an item that does not exist.</dd>
+  <dd>The source-work coordination record in Registry Casework: one item in one <a href="#queue">queue</a> with a holder, revision, history, and clocks. It mirrors a governed <a href="#change-request">change request</a> a Base Registry Engine holds, so Casework keeps assignment, routing, clocks, drafts, and recovery while the registry keeps eligibility, visibility, and mutation. Unified review work uses a separate <a href="#review-request">request and task</a> model.</dd>
 
 </dl>
 

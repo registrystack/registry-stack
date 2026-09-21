@@ -49,7 +49,7 @@ class ProblemCatalogueTests(unittest.TestCase):
         self.assertEqual(len(published), len(set(published)), "the stub names a code twice")
 
     def test_the_stub_names_every_validation_reason_the_client_answers(self) -> None:
-        published = _literal_members("HostedValidationReason")
+        published = _literal_members("ReviewValidationReason")
         self.assertEqual(
             sorted(set(published)),
             sorted(registry_casework_client.VALIDATION_REASONS),

@@ -242,8 +242,8 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "cargo test --locked --profile ci -p registry-casework --features postgres-test --test service_visibility",
     ),
     (
-        "Casework hosted, assignment, and routing suites",
-        "cargo test --locked --profile ci -p registry-casework --features postgres-test --test hosted_postgres --test assignment_postgres --test routing_postgres",
+        "Casework assignment and source routing suites",
+        "cargo test --locked --profile ci -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres",
     ),
     (
         "Casework persisted source clock selection",
@@ -258,12 +258,16 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "cargo test --locked --profile ci -p registry-casework --features postgres-test --test inbox_ordering_postgres",
     ),
     (
-        "Casework standalone hosted acceptance suite",
-        "cargo test --locked --profile ci -p registry-casework --features postgres-test --test hosted_standalone",
-    ),
-    (
         "Casework source retention suite",
         "cargo test --locked --profile ci -p registry-casework --features postgres-test --test source_retention_postgres",
+    ),
+    (
+        "Casework governed review persistence, HTTP, payment, and BReg suites",
+        "cargo test --locked --profile ci -p registry-casework --features postgres-test\n          --test review_postgres\n          --test review_http\n          --test review_payment_fixture_postgres\n          --test breg_review_journey",
+    ),
+    (
+        "Casework governed review schema upgrade suite",
+        "cargo test --locked --profile ci -p registry-casework --features postgres-test --test review_migration_postgres",
     ),
     (
         "Casework Python client binding coverage",

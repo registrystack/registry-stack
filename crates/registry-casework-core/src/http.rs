@@ -1,6 +1,5 @@
 //! Source-neutral HTTP request and response contract.
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -71,9 +70,6 @@ pub const MAXIMUM_DIRECTORY_PRINCIPAL_COMPONENT_BYTES: usize = 2_048;
 pub const MAXIMUM_DIRECTORY_DISPLAY_NAME_BYTES: usize = 500;
 pub const MAXIMUM_DIRECTORY_SERVED_QUEUES: usize = 100;
 pub const WORK_ITEMS_PATH: &str = "/v1/work-items";
-pub const HOSTED_ITEMS_PATH: &str = "/v1/hosted-items";
-pub const HOSTED_TERMINAL_PATH: &str = "/v1/hosted-items/terminal";
-pub const HOSTED_ACCOUNTABILITY_PATH: &str = "/v1/hosted-accountability";
 pub const NEXT_WORK_ITEM_PATH: &str = "/v1/work-items/next";
 pub const HOLDINGS_PATH: &str = "/v1/holdings";
 pub const DIRECTORY_PATH: &str = "/v1/directory";
@@ -181,16 +177,7 @@ impl ListWorkItemsQuery {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostedTerminalQuery {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<usize>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostedPageQuery {
+pub struct ReviewPageQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -387,8 +374,6 @@ pub struct Description {
     pub calendars: Vec<crate::CalendarPolicy>,
     #[serde(default)]
     pub clocks: Vec<crate::ClockPolicy>,
-    #[serde(default)]
-    pub hosted_kinds: Vec<crate::HostedKindPolicy>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -404,57 +389,10 @@ pub struct WorkItemPage {
 pub type HoldingsPage = Page<HoldingSummary>;
 pub type DirectoryTargetPage = Page<crate::DirectoryMember>;
 pub type HistoryPage = Page<crate::HistoryEntry>;
-pub type HostedNotePage = Page<crate::HostedNote>;
-pub type HostedHistoryPage = Page<HostedHistoryEntry>;
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HostedHistoryKind {
-    Created,
-    Claimed,
-    Assigned,
-    Delegated,
-    CaseloadMoved,
-    Released,
-    NoteAdded,
-    Completed,
-    Cancelled,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostedHistoryEntry {
-    pub event_id: Uuid,
-    pub item_id: Uuid,
-    pub item_revision: i64,
-    pub kind: HostedHistoryKind,
-    pub occurred_at: DateTime<Utc>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub actor_ref: Option<crate::OpaqueActorRef>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assignment: Option<crate::AssignmentContext>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub outcome: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cancellation_reason: Option<String>,
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ItemPath {
     pub item_id: Uuid,
-}
-
-pub type HostedItemPath = ItemPath;
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct HostedAccountabilityPath {
-    pub event_id: Uuid,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

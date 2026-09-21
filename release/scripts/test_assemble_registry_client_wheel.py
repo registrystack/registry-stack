@@ -42,6 +42,12 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
                     f"registry_{product}_client/native.abi3.so",
                     f"{product} native".encode(),
                 )
+                if product == "casework":
+                    archive.writestr(
+                        "registry_casework_client/__init__.pyi",
+                        "class CaseworkClient: ...\n",
+                    )
+                    archive.writestr("registry_casework_client/py.typed", b"")
                 if product == "evidence":
                     archive.writestr(
                         "registry_evidence_client.libs/libfixture.so",
@@ -89,6 +95,11 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
                         name.startswith(f"registry_{product}_client/") for name in names
                     )
                 )
+            self.assertEqual(
+                archive.read("registry_client/casework/__init__.pyi"),
+                b"class CaseworkClient: ...\n",
+            )
+            self.assertIn("registry_client/casework/py.typed", names)
             self.assertIn("registry_client/__init__.py", names)
             self.assertIn(
                 "registry_client/registry_evidence_client.libs/libfixture.so",

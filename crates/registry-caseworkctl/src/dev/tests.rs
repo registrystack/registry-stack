@@ -2841,9 +2841,10 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
         "apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1",
         "kind":"BRegCaseworkSourceDescription","origin":"bregctl explain change-requests","authority":"none",
         "sourceId":"source","sourceRevision":"sha256:source",
-        "request":{"requestEntity":"correction","requestRoute":"corrections","reviewMode":"staged",
-            "stages":[{"id":"review","approvals":1,"excludeSubmitter":true,"excludePreviousReviewers":false}],
-            "fields":[],"contractFingerprint":"sha256:contract","application":{"mode":"manual"}}
+        "request":{"requestEntity":"correction","requestRoute":"corrections",
+            "fields":[],"contractFingerprint":"sha256:contract",
+            "review":{"authority":"casework-main","policyId":"registry-correction"},
+            "onApproved":{"mode":"manual"},"application":{}}
     })).unwrap()).unwrap();
     let client_bytes = serde_norway::to_string(&clients).unwrap();
     assert!(capture_with_sources(&project, client_bytes.as_bytes(), &[], &BTreeMap::new()).is_ok());
@@ -3328,6 +3329,7 @@ case "$client" in
   supervisor) scopes='["casework:supervisor","starter:reviewer"]';;
   staff) scopes='["casework:staff","starter:reviewer"]';;
   requester) scopes='["casework:request"]';;
+  integration-requester) scopes='["casework:reviews:request"]';;
   *) scopes='["casework:fixture"]';;
 esac
 umask 077
@@ -3429,7 +3431,7 @@ fn binding_a_source_exports_the_reader_and_every_person_from_the_registry_sessio
         private::directory(&root.join("credentials").join(&client.id)).unwrap();
     }
     state.sources.insert(
-        "professional-register".into(),
+        "professional-licences".into(),
         SourceSession {
             project: registry.project.clone(),
             binding: None,
@@ -3438,7 +3440,7 @@ fn binding_a_source_exports_the_reader_and_every_person_from_the_registry_sessio
 
     export_sources(&registry.executable, &mut state, &clients).unwrap();
 
-    let binding = state.sources["professional-register"]
+    let binding = state.sources["professional-licences"]
         .binding
         .as_ref()
         .unwrap();
@@ -3450,14 +3452,14 @@ fn binding_a_source_exports_the_reader_and_every_person_from_the_registry_sessio
         "urn:registrystack:registry:professional-licences:instance:professional-licences-starter"
     );
     assert_eq!(
-        fs::read_to_string(root.join("secrets/professional-register-reader-client-id")).unwrap(),
+        fs::read_to_string(root.join("secrets/professional-licences-reader-client-id")).unwrap(),
         "casework-reader"
     );
     assert!(file_has_bytes(
-        &root.join("secrets/professional-register-reader-assertion-key.jwk")
+        &root.join("secrets/professional-licences-reader-assertion-key.jwk")
     ));
     let webhook =
-        fs::read_to_string(root.join("secrets/professional-register-webhook-key")).unwrap();
+        fs::read_to_string(root.join("secrets/professional-licences-webhook-key")).unwrap();
     assert_eq!(webhook.len(), 64);
     for client in &clients.clients {
         let directory = root.join("credentials").join(&client.id);
@@ -3488,8 +3490,8 @@ fn binding_a_source_exports_the_reader_and_every_person_from_the_registry_sessio
     }
     // The retained state carries the binding across restarts.
     assert_eq!(
-        read_state(&root).unwrap().sources["professional-register"].binding,
-        state.sources["professional-register"].binding
+        read_state(&root).unwrap().sources["professional-licences"].binding,
+        state.sources["professional-licences"].binding
     );
 
     // A restart exports the pairs again instead of refusing the retained copies.
@@ -3497,7 +3499,7 @@ fn binding_a_source_exports_the_reader_and_every_person_from_the_registry_sessio
     assert_eq!(registry.calls().len(), 2 * (1 + clients.clients.len()));
     assert_eq!(
         webhook,
-        fs::read_to_string(root.join("secrets/professional-register-webhook-key")).unwrap()
+        fs::read_to_string(root.join("secrets/professional-licences-webhook-key")).unwrap()
     );
 }
 
@@ -3663,7 +3665,7 @@ fn active_source_revalidation_refuses_rotated_credentials_without_replacement() 
     let mut state = persisted_session(&project);
     let clients = config::clients(&fs::read(project.join("dev-clients.yaml")).unwrap()).unwrap();
     state.sources.insert(
-        "professional-register".into(),
+        "professional-licences".into(),
         SourceSession {
             project: registry.project.clone(),
             binding: None,
@@ -3688,7 +3690,7 @@ fn active_source_revalidation_refuses_rotated_credentials_without_replacement() 
         let path = state
             .root()
             .join("secrets")
-            .join(format!("professional-register-{suffix}"));
+            .join(format!("professional-licences-{suffix}"));
         retained.insert(path.clone(), fs::read(path).unwrap());
     }
 

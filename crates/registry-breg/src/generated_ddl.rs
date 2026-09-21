@@ -970,9 +970,6 @@ fn runtime_privileges(
             matches!(
                 operation,
                 Operation::SubmitRequest
-                    | Operation::ApproveRequest
-                    | Operation::RejectRequest
-                    | Operation::RequestRevision
                     | Operation::ReviseRequest
                     | Operation::CancelRequest
                     | Operation::ApplyRequest
@@ -1194,7 +1191,7 @@ fn request_get_lifecycle_expression(
                       FROM registry_internal.registry_request_state AS cr_state
                      WHERE cr_state.request_entity_id = {}
                        AND cr_state.request_id = record_id
-                       AND cr_state.state IN ('rejected', 'canceled', 'applied')
+                       AND cr_state.state IN ('cancelled', 'superseded', 'applied')
                        AND cr_state.detail_erased_at IS NOT NULL
                 )
             )",
@@ -1530,9 +1527,6 @@ fn change_request_action_policies_for_table(entity: &CompiledEntity) -> Vec<DdlP
     for profile in entity.access_profiles.values() {
         for operation in [
             Operation::SubmitRequest,
-            Operation::ApproveRequest,
-            Operation::RejectRequest,
-            Operation::RequestRevision,
             Operation::ReviseRequest,
             Operation::CancelRequest,
             Operation::ApplyRequest,
@@ -1540,71 +1534,54 @@ fn change_request_action_policies_for_table(entity: &CompiledEntity) -> Vec<DdlP
             if !profile.operations.contains(&operation) {
                 continue;
             }
-            let stages = if matches!(
+            let select_expression = change_request_action_expression(
+                entity,
+                profile,
+                request,
                 operation,
-                Operation::ApproveRequest | Operation::RejectRequest | Operation::RequestRevision
-            ) {
-                request
-                    .stages
-                    .iter()
-                    .map(|stage| Some(stage.id.as_str()))
-                    .collect::<Vec<_>>()
-            } else {
-                vec![None]
-            };
-            for stage in stages {
-                let select_expression = change_request_action_expression(
-                    entity,
-                    profile,
-                    request,
+                PolicyCommand::Select,
+            );
+            let update_expression = change_request_action_expression(
+                entity,
+                profile,
+                request,
+                operation,
+                PolicyCommand::Update,
+            );
+            policies.push(DdlPolicy {
+                name: change_request_action_policy_name(
+                    &entity.id,
+                    &profile.id,
                     operation,
-                    stage,
+                    "none",
                     PolicyCommand::Select,
-                );
-                let update_expression = change_request_action_expression(
-                    entity,
-                    profile,
-                    request,
+                ),
+                command: PolicyCommand::Select,
+                access_profile: profile.id.clone(),
+                applies_to: ordinary_policy_role(entity),
+                using_expression: Some(format!(
+                    "{select_expression} AND record_lifecycle = 'active'"
+                )),
+                check_expression: None,
+            });
+            policies.push(DdlPolicy {
+                name: change_request_action_policy_name(
+                    &entity.id,
+                    &profile.id,
                     operation,
-                    stage,
+                    "none",
                     PolicyCommand::Update,
-                );
-                let stage_name = stage.unwrap_or("none");
-                policies.push(DdlPolicy {
-                    name: change_request_action_policy_name(
-                        &entity.id,
-                        &profile.id,
-                        operation,
-                        stage_name,
-                        PolicyCommand::Select,
-                    ),
-                    command: PolicyCommand::Select,
-                    access_profile: profile.id.clone(),
-                    applies_to: ordinary_policy_role(entity),
-                    using_expression: Some(format!(
-                        "{select_expression} AND record_lifecycle = 'active'"
-                    )),
-                    check_expression: None,
-                });
-                policies.push(DdlPolicy {
-                    name: change_request_action_policy_name(
-                        &entity.id,
-                        &profile.id,
-                        operation,
-                        stage_name,
-                        PolicyCommand::Update,
-                    ),
-                    command: PolicyCommand::Update,
-                    access_profile: profile.id.clone(),
-                    applies_to: ordinary_policy_role(entity),
-                    using_expression: Some(format!(
-                        "{update_expression} AND record_lifecycle = 'active'"
-                    )),
-                    check_expression: Some(format!(
-                        "{update_expression} AND record_lifecycle = 'active'"
-                    )),
-                });
-            }
+                ),
+                command: PolicyCommand::Update,
+                access_profile: profile.id.clone(),
+                applies_to: ordinary_policy_role(entity),
+                using_expression: Some(format!(
+                    "{update_expression} AND record_lifecycle = 'active'"
+                )),
+                check_expression: Some(format!(
+                    "{update_expression} AND record_lifecycle = 'active'"
+                )),
+            });
         }
     }
     policies
@@ -1615,15 +1592,10 @@ fn change_request_action_expression(
     profile: &crate::contract::AccessProfileSource,
     request: &crate::model::CompiledChangeRequest,
     operation: Operation,
-    stage: Option<&str>,
     command: PolicyCommand,
 ) -> String {
     let context = change_request_action_context_expression();
-    let stage_predicate = match stage {
-        Some(stage) => format!("{context} ->> 'stage' = {}", quote_literal(stage)),
-        None => format!("({context} ->> 'stage') IS NULL"),
-    };
-    let route_id = change_request_action_route_id(&entity.id, operation, stage);
+    let route_id = change_request_action_route_id(&entity.id, operation);
     [
         format!("jsonb_typeof({context}) = 'object'"),
         format!("{context} ->> 'version' = '1'"),
@@ -1657,7 +1629,7 @@ fn change_request_action_expression(
             "{context} ->> 'operation' = {}",
             quote_literal(change_request_operation_name(operation))
         ),
-        stage_predicate,
+        format!("({context} ->> 'stage') IS NULL"),
         format!("{context} ->> 'routeId' = {}", quote_literal(&route_id)),
         format!(
             "{context} ->> 'activePackageRevision' = NULLIF(current_setting('registry.active_package_revision', true), '')"
@@ -1674,14 +1646,7 @@ fn change_request_action_state_exists_expression(
 ) -> String {
     let context = change_request_action_context_expression();
     if command == PolicyCommand::Select {
-        let mut visible_states = vec![
-            "draft",
-            "submitted",
-            "approved",
-            "needs_changes",
-            "rejected",
-            "canceled",
-        ];
+        let mut visible_states = vec!["draft", "submitted", "cancelled", "superseded"];
         if operation == Operation::ApplyRequest {
             visible_states.push("applied");
         }
@@ -1704,18 +1669,9 @@ fn change_request_action_state_exists_expression(
     let states = match command {
         PolicyCommand::Update => match operation {
             Operation::SubmitRequest => vec!["draft"],
-            Operation::ApproveRequest | Operation::RejectRequest | Operation::RequestRevision => {
-                vec!["submitted"]
-            }
-            Operation::ReviseRequest => vec!["submitted", "approved", "needs_changes", "rejected"],
-            Operation::CancelRequest => vec![
-                "draft",
-                "submitted",
-                "approved",
-                "needs_changes",
-                "rejected",
-            ],
-            Operation::ApplyRequest => vec!["approved"],
+            Operation::ReviseRequest => vec!["submitted"],
+            Operation::CancelRequest => vec!["draft", "submitted"],
+            Operation::ApplyRequest => vec!["submitted"],
             _ => Vec::new(),
         },
         PolicyCommand::Insert | PolicyCommand::Select => Vec::new(),
@@ -1750,25 +1706,15 @@ fn change_request_action_context_expression() -> &'static str {
     "NULLIF(current_setting('registry.change_request_action_context', true), '')::jsonb"
 }
 
-fn change_request_action_route_id(
-    entity_id: &str,
-    operation: Operation,
-    stage: Option<&str>,
-) -> String {
+fn change_request_action_route_id(entity_id: &str, operation: Operation) -> String {
     let action_id = match operation {
         Operation::SubmitRequest => "submit",
-        Operation::ApproveRequest => "approve",
-        Operation::RejectRequest => "reject",
-        Operation::RequestRevision => "request_revision",
         Operation::ReviseRequest => "revise",
         Operation::CancelRequest => "cancel",
         Operation::ApplyRequest => "apply",
         _ => "unsupported",
     };
-    match stage {
-        Some(stage) => format!("records.{entity_id}.request.stages.{stage}.{action_id}"),
-        None => format!("records.{entity_id}.request.{action_id}"),
-    }
+    format!("records.{entity_id}.request.{action_id}")
 }
 
 fn change_request_presence_policies_for_table(
@@ -1868,7 +1814,7 @@ fn change_request_presence_target_exists_expression(request_entity: &CompiledEnt
                AND cr_target.proposal_version = cr_proposal.proposal_version
              WHERE cr_state.request_entity_id = ({context} ->> 'requestEntityId')
                AND cr_state.request_id = {request_id}
-               AND cr_state.state IN ('submitted', 'approved')
+               AND cr_state.state = 'submitted'
                AND cr_proposal.contract_fingerprint = ({context} ->> 'contractFingerprint')
                AND cr_target.target_entity_id = ({context} ->> 'targetEntityId')
                AND cr_target.target_record_id = ({context} ->> 'targetRecordId')::uuid
@@ -1975,39 +1921,6 @@ fn change_request_target_policies_for_table(
                         check_expression: None,
                     });
                 }
-            }
-            for grant in request
-                .review_permissions
-                .iter()
-                .filter(|grant| grant.target_entity_id == target_entity.id)
-            {
-                if !effect_fields(effect).is_subset(&grant.readable_fields) {
-                    continue;
-                }
-                policies.push(DdlPolicy {
-                    name: change_request_policy_name(
-                        &request_entity.id,
-                        &target_entity.id,
-                        &grant.profile_id,
-                        &effect.id,
-                        &format!("review-{}", grant.stage),
-                        PolicyCommand::Select,
-                    ),
-                    command: PolicyCommand::Select,
-                    access_profile: grant.profile_id.clone(),
-                    applies_to: ordinary_policy_role(target_entity),
-                    using_expression: Some(format!(
-                        "{} AND record_lifecycle = 'active'",
-                        change_request_review_expression(
-                            target_entity,
-                            request_entity,
-                            request,
-                            effect,
-                            grant,
-                        )
-                    )),
-                    check_expression: None,
-                });
             }
             for grant in request
                 .apply_permissions
@@ -2246,43 +2159,6 @@ fn change_request_planner_write_policies(
         }
     }
     for grant in request
-        .review_permissions
-        .iter()
-        .filter(|grant| grant.target_entity_id == target_entity.id)
-    {
-        let review_fields = write
-            .fields
-            .intersection(&grant.readable_fields)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if review_fields.is_empty() {
-            continue;
-        }
-        let expression = change_request_planner_review_expression(
-            target_entity,
-            request_entity,
-            request,
-            write,
-            grant,
-            &review_fields,
-        );
-        policies.push(DdlPolicy {
-            name: change_request_policy_name(
-                &request_entity.id,
-                &target_entity.id,
-                &grant.profile_id,
-                &policy_id,
-                &format!("review-{}", grant.stage),
-                PolicyCommand::Select,
-            ),
-            command: PolicyCommand::Select,
-            access_profile: grant.profile_id.clone(),
-            applies_to: ordinary_policy_role(target_entity),
-            using_expression: Some(format!("{expression} AND record_lifecycle = 'active'")),
-            check_expression: None,
-        });
-    }
-    for grant in request
         .apply_permissions
         .iter()
         .filter(|grant| grant.target_entity_id == target_entity.id)
@@ -2462,57 +2338,6 @@ fn change_request_planner_preparation_expression(
     .join(" AND ")
 }
 
-fn change_request_review_expression(
-    target_entity: &CompiledEntity,
-    request_entity: &CompiledEntity,
-    request: &crate::model::CompiledChangeRequest,
-    effect: &CompiledChangeRequestEffect,
-    grant: &crate::model::CompiledChangeRequestReviewPermission,
-) -> String {
-    [
-        change_request_common_expression(
-            target_entity,
-            &grant.profile_id,
-            request,
-            effect,
-            "review",
-            Some(&grant.stage),
-        ),
-        session_authority_expression(&request_entity.access_profiles[&grant.profile_id]),
-        change_request_proposal_target_exists_expression("submitted", effect),
-        change_request_target_boundary_expression(target_entity, &grant.row_boundaries),
-    ]
-    .join(" AND ")
-}
-
-fn change_request_planner_review_expression(
-    target_entity: &CompiledEntity,
-    request_entity: &CompiledEntity,
-    request: &crate::model::CompiledChangeRequest,
-    write: &crate::model::CompiledChangeRequestPlannerWrite,
-    grant: &crate::model::CompiledChangeRequestReviewPermission,
-    review_fields: &BTreeSet<String>,
-) -> String {
-    [
-        change_request_planner_common_expression(
-            target_entity,
-            &grant.profile_id,
-            request,
-            write,
-            "review",
-            Some(&grant.stage),
-            review_fields,
-        ),
-        session_authority_expression(&request_entity.access_profiles[&grant.profile_id]),
-        change_request_proposal_target_exists_expression_for_operation(
-            "submitted",
-            write.operation,
-        ),
-        change_request_target_boundary_expression(target_entity, &grant.row_boundaries),
-    ]
-    .join(" AND ")
-}
-
 fn change_request_application_expression(
     target_entity: &CompiledEntity,
     request_entity: &CompiledEntity,
@@ -2530,7 +2355,7 @@ fn change_request_application_expression(
             None,
         ),
         session_authority_expression(&request_entity.access_profiles[&grant.profile_id]),
-        change_request_proposal_target_exists_expression("approved", effect),
+        change_request_proposal_target_exists_expression("submitted", effect),
         change_request_target_boundary_expression(target_entity, &grant.row_boundaries),
     ]
     .join(" AND ")
@@ -2569,7 +2394,7 @@ fn change_request_guard_application_expression(
                  WHERE cr_state.request_entity_id = ({context} ->> 'requestEntityId')
                    AND cr_state.request_id = ({context} ->> 'requestId')::uuid
                    AND cr_state.proposal_version = ({context} ->> 'proposalVersion')::bigint
-                   AND cr_state.state = 'approved'
+                   AND cr_state.state = 'submitted'
                    AND cr_proposal.contract_fingerprint = ({context} ->> 'contractFingerprint')
                    AND cr_proposal.effect_digest = ({context} ->> 'effectDigest')
                    AND EXISTS (
@@ -2605,7 +2430,10 @@ fn change_request_planner_application_expression(
             &write.fields,
         ),
         session_authority_expression(&request_entity.access_profiles[&grant.profile_id]),
-        change_request_proposal_target_exists_expression_for_operation("approved", write.operation),
+        change_request_proposal_target_exists_expression_for_operation(
+            "submitted",
+            write.operation,
+        ),
         change_request_target_boundary_expression(target_entity, &grant.row_boundaries),
     ]
     .join(" AND ")
@@ -3409,9 +3237,6 @@ fn operation_name(operation: Operation) -> &'static str {
 fn change_request_operation_name(operation: Operation) -> &'static str {
     match operation {
         Operation::SubmitRequest => "submit_request",
-        Operation::ApproveRequest => "approve_request",
-        Operation::RejectRequest => "reject_request",
-        Operation::RequestRevision => "request_revision",
         Operation::ReviseRequest => "revise_request",
         Operation::CancelRequest => "cancel_request",
         Operation::ApplyRequest => "apply_request",
@@ -4316,9 +4141,6 @@ mod tests {
 
         for operation in [
             Operation::SubmitRequest,
-            Operation::ApproveRequest,
-            Operation::RejectRequest,
-            Operation::RequestRevision,
             Operation::ReviseRequest,
             Operation::ApplyRequest,
         ] {

@@ -133,7 +133,7 @@ EXCLUDED_EVIDENCE_TUTORIALS=(
 	first-breg                            # Base Registry Engine journey; product CI runs quickstart/run.sh --smoke, reader execution checks the documented steps
 	first-casework                                   # Registry Casework journey; replayed end to end by check-casework-tutorial.sh in the casework-tutorial job
 	first-render-document                            # Registry Render journey; offline render CLI steps against the products/render example bundles, verified in reader mode outside the Evidence runner
-	review-breg-changes-in-casework                  # Registry Casework two-product journey; replayed end to end by check-casework-tutorial.sh in the casework-tutorial job, beside a Base Registry Engine session
+	review-breg-changes-in-casework                  # cross-product boundary guide with no Evidence CLI journey; real BReg-to-Casework composition runs in the owning product aggregate
 	extend-a-registry-with-a-module                  # Base Registry Engine journey; offline bregctl steps on the quickstart project, verified in reader mode outside the Evidence runner
 	derive-a-registry-from-publicschema              # Base Registry Engine journey; offline bregctl steps deriving a project from the embedded PublicSchema snapshot, verified in reader mode outside the Evidence runner
 	send-registry-events-to-a-webhook                # Base Registry Engine journey; needs the demo launcher's webhook receiver, verified in reader mode outside the Evidence runner

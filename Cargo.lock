@@ -4855,6 +4855,7 @@ dependencies = [
  "registry-platform-oidc",
  "registry-platform-script",
  "registry-platform-testing",
+ "registry-review-client",
  "reqwest",
  "rhai",
  "rustix 1.1.4",
@@ -5071,12 +5072,14 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "chrono",
  "ed25519-dalek",
  "getrandom 0.4.3",
  "registry-casework-core",
  "registry-platform-crypto",
  "registry-platform-httpsec",
  "registry-platform-httputil",
+ "registry-review-client",
  "reqwest",
  "serde",
  "serde_json",
@@ -5126,6 +5129,7 @@ dependencies = [
  "jsonschema",
  "registry-platform-canonical-json",
  "registry-platform-httputil",
+ "registry-review-protocol",
  "serde",
  "serde_json",
  "serde_norway",
@@ -6040,6 +6044,38 @@ dependencies = [
  "typst-assets",
  "typst-pdf",
  "zeroize",
+]
+
+[[package]]
+name = "registry-review-client"
+version = "0.32.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "registry-platform-canonical-json",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-review-protocol",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "registry-review-protocol"
+version = "0.32.0"
+dependencies = [
+ "chrono",
+ "registry-platform-canonical-json",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "uuid",
 ]
 
 [[package]]

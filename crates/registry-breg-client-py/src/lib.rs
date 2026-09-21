@@ -24,10 +24,9 @@ use breg_client_sdk::{
     BRegPreparedCreate as CorePreparedCreate, BRegPreparedLifecycle as CorePreparedLifecycle,
     BRegProblemCode, BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
     BRegRelationshipContinuation, BRegRelationshipContinuationProjection,
-    BRegRelationshipListRequest, BRegRequestApplicationDisposition, BRegRequestMetadata,
-    BRegRequestProposal, BRegRequestResultReference as CoreRequestResultReference,
-    BRegRequestReview, BRegRequestReviewMode, BRegRequestState,
-    BRegRetainedRequestHistoryPage as CoreRetainedRequestHistoryPage,
+    BRegRelationshipListRequest, BRegRequestMetadata, BRegRequestProposal,
+    BRegRequestResultReference as CoreRequestResultReference, BRegRequestReviewRequirement,
+    BRegRequestState, BRegRetainedRequestHistoryPage as CoreRetainedRequestHistoryPage,
     BRegRetainedRequestProposal as CoreRetainedRequestProposal, BRegSnapshotContinuation,
     BRegSnapshotContinuationProjection, BRegSnapshotListRequest, BRegTombstoneBinding,
     BaseRegistryClient as RustClient, BaseRegistryClientError as RustClientError,
@@ -915,20 +914,19 @@ fn state_name(value: BRegRequestState) -> &'static str {
     match value {
         BRegRequestState::Draft => "draft",
         BRegRequestState::Submitted => "submitted",
-        BRegRequestState::Approved => "approved",
-        BRegRequestState::NeedsChanges => "needs_changes",
-        BRegRequestState::Rejected => "rejected",
-        BRegRequestState::Canceled => "canceled",
+        BRegRequestState::Cancelled => "cancelled",
         BRegRequestState::Applied => "applied",
+        BRegRequestState::Superseded => "superseded",
     }
 }
 
 fn proposal_value(value: &BRegRequestProposal) -> Value {
-    json!({
-        "review_mode": match value.review_mode() { BRegRequestReviewMode::None => "none", BRegRequestReviewMode::Staged => "staged" },
-        "application_disposition": match value.application_disposition() { BRegRequestApplicationDisposition::Apply => "apply", BRegRequestApplicationDisposition::Queue => "queue" },
-        "queue_reason": value.queue_reason().map(|reason| json!({"code": reason.code(), "label": reason.label()})),
-    })
+    json!({"review": match value.review() {
+        BRegRequestReviewRequirement::None => json!({"mode":"none"}),
+        BRegRequestReviewRequirement::External(requirement) => {
+            json!({"authority":requirement.authority(),"policy_id":requirement.policy_id()})
+        }
+    }})
 }
 
 fn receipt_value(value: &BRegLifecycleActionReceipt) -> Value {
@@ -954,20 +952,6 @@ fn receipt_value(value: &BRegLifecycleActionReceipt) -> Value {
         receipt["actor_reference"] = Value::String(actor_reference.to_owned());
     }
     receipt
-}
-
-fn review_value(value: &BRegRequestReview) -> Value {
-    json!({"targets": value.targets().iter().map(|target| json!({
-        "entity_identifier": target.entity_identifier(),
-        "record_identifier": target.record_identifier(),
-        "operation": match target.operation() {
-            breg_client_sdk::BRegReviewOperation::Create => "create",
-            breg_client_sdk::BRegReviewOperation::Patch => "patch",
-        },
-        "base_revision": target.base_revision(),
-        "before": target.before(),
-        "after": target.after(),
-    })).collect::<Vec<_>>()})
 }
 
 fn attachment_state_value(value: &BRegAttachmentState) -> Value {
@@ -1127,9 +1111,9 @@ fn immediate_action_value(value: &breg_client_sdk::BRegImmediateActionDescriptor
 
 fn change_request_capability_value(value: &breg_client_sdk::BRegChangeRequestCapability) -> Value {
     use breg_client_sdk::{
-        BRegChangeRequestApplicationMode as ApplicationMode,
-        BRegChangeRequestDisposition as Disposition, BRegChangeRequestPlannerKind as PlannerKind,
-        BRegChangeRequestReviewMode as ReviewMode,
+        BRegChangeRequestOnApprovedMode as OnApprovedMode,
+        BRegChangeRequestPlannerKind as PlannerKind,
+        BRegChangeRequestReviewRequirement as ReviewRequirement,
     };
 
     let planner = value.planner();
@@ -1148,7 +1132,6 @@ fn change_request_capability_value(value: &breg_client_sdk::BRegChangeRequestCap
             "maximum_modules": limits.maximum_modules(),
         })
     });
-    let application = value.application();
     json!({
         "planner": {
             "kind": match planner.kind() {
@@ -1164,32 +1147,21 @@ fn change_request_capability_value(value: &breg_client_sdk::BRegChangeRequestCap
                 .map(|value| value.as_str())
                 .collect::<Vec<_>>(),
         },
-        "review_mode": match value.review_mode() {
-            ReviewMode::None => "none",
-            ReviewMode::Staged => "staged",
+        "review": match value.review() {
+            ReviewRequirement::None => json!({"mode":"none"}),
+            ReviewRequirement::External(requirement) => {
+                json!({"authority":requirement.authority(),"policy_id":requirement.policy_id()})
+            }
         },
-        "stages": value.stages().map(|stages| {
-            stages.iter().map(|stage| json!({
-                "id": stage.identifier(),
-                "approvals": stage.approvals(),
-                "exclude_submitter": stage.exclude_submitter(),
-                "exclude_previous_reviewers": stage.exclude_previous_reviewers(),
-            })).collect::<Vec<_>>()
-        }),
-        "application": {
-            "mode": match application.mode() {
-                ApplicationMode::Manual => "manual",
-                ApplicationMode::Automatic => "automatic",
-                ApplicationMode::Planner => "planner",
+        "on_approved": {
+            "mode": match value.on_approved().mode() {
+                OnApprovedMode::Manual => "manual",
+                OnApprovedMode::Automatic => "automatic",
             },
-            "allowed_dispositions": application.allowed_dispositions().iter().map(|value| match value {
-                Disposition::Apply => "apply",
-                Disposition::Queue => "queue",
-            }).collect::<Vec<_>>(),
-            "queue_reasons": application.queue_reasons().iter().map(|value| json!({
-                "code": value.code(),
-                "label": value.label(),
-            })).collect::<Vec<_>>(),
+            "executor": value.on_approved().executor(),
+        },
+        "application": {
+            "preconditions": value.application().preconditions(),
         },
     })
 }
@@ -1648,23 +1620,12 @@ impl LifecycleAction {
         self.inner.operation().identifier().to_owned()
     }
     #[getter]
-    fn stage(&self) -> Option<String> {
-        self.inner.stage().map(str::to_owned)
-    }
-    #[getter]
     fn href(&self) -> String {
         self.inner.href().to_owned()
     }
     #[getter]
     fn body<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         json_to_python(py, &self.inner.body().to_value())
-    }
-    #[getter]
-    fn review<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
-        self.inner
-            .review()
-            .map(|value| json_to_python(py, &review_value(value)))
-            .transpose()
     }
 }
 

@@ -173,13 +173,9 @@ class BRegLifecycleAction:
     @property
     def operation(self) -> str: ...
     @property
-    def stage(self) -> str | None: ...
-    @property
     def href(self) -> str: ...
     @property
     def body(self) -> dict[str, JsonValue]: ...
-    @property
-    def review(self) -> dict[str, JsonValue] | None: ...
 
 class BRegRequestResultReference:
     @property
@@ -197,7 +193,7 @@ class BRegRetainedRequestProposal:
     @property
     def proposal_version(self) -> int: ...
     @property
-    def breg_state(self) -> Literal["draft", "submitted", "approved", "needs_changes", "rejected", "canceled", "applied"]: ...
+    def breg_state(self) -> Literal["draft", "submitted", "cancelled", "applied", "superseded"]: ...
     @property
     def current(self) -> bool: ...
     @property
@@ -227,17 +223,10 @@ class BRegRetainedRequestHistoryPage:
         proposal_version: int,
         application_identifier: str,
     ) -> BRegRetainedRequestProposal | None: ...
-
-class BRegChangeRequestStage(TypedDict):
-    id: str
-    approvals: int
-    exclude_submitter: bool
-    exclude_previous_reviewers: bool
-
 class BRegChangeRequestCapability(TypedDict):
     planner: dict[str, JsonValue]
-    review_mode: Literal["none", "staged"]
-    stages: list[BRegChangeRequestStage] | None
+    review: dict[str, JsonValue]
+    on_approved: dict[str, JsonValue]
     application: dict[str, JsonValue]
 
 class BRegLifecycleReceiptRequest(TypedDict):

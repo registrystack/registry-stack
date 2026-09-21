@@ -72,7 +72,7 @@ pub(super) const PROJECT: &str = r#"{
       ],
       "changeRequest":{
         "effects":[{"target":{"fromField":"placement"},"operation":"patch","set":{"site":{"fromField":"proposed-site"}}}],
-        "review":{"stages":[{"id":"review","approvals":1,"excludeSubmitter":true}]}
+        "review":{"mode":"none"}
       }
     }
   ],
@@ -118,20 +118,6 @@ pub(super) const PROJECT: &str = r#"{
       "requesterClients":["task-agent"],
       "requiredPurposes":["review"],
       "taskGrant":{"sourceIssuer":"https://casework.example"}
-    },
-    {
-      "id":"reviewer",
-      "principalClaim":"sub",
-      "requiredPurposes":["review"],
-      "permissions":[
-        {
-          "entity":"correction-request",
-          "operations":["get","list","approve_request","reject_request","request_revision"],
-          "readableFields":["tenant","placement","proposed-site","reason"],
-          "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-          "reviewStages":[{"stage":"review","targets":[{"entity":"asset-placement","readableFields":["site"],"rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]}]
-        }
-      ]
     },
     {
       "id":"applier",
@@ -375,7 +361,6 @@ pub(super) async fn counts(db: &TestDatabase) -> Vec<i64> {
         "registry_revisions",
         "registry_idempotency",
         "registry_request_proposals",
-        "registry_request_decisions",
         "registry_request_applications",
         "registry_request_results",
         "registry_request_task_authority",

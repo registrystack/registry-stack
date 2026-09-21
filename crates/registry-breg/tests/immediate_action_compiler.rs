@@ -488,7 +488,8 @@ fn immediate_actions_preserve_review_control_and_request_lifecycle_boundaries() 
         ],
         "changeRequest":{
           "effects":[{"target":{"fromField":"record"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-          "review":{"stages":[{"id":"review","approvals":1,"excludeSubmitter":true}]}
+          "review":{"authority":"casework-main","policyId":"record-change"},
+          "onApproved":{"mode":"manual"}
         }
       }],
       "actions":[{
@@ -503,9 +504,8 @@ fn immediate_actions_preserve_review_control_and_request_lifecycle_boundaries() 
         "id":"operator","default":true,"principalClaim":"principal",
         "permissions":[{
           "entity":"record-change",
-          "operations":["get","submit_request","approve_request","apply_request"],
+          "operations":["get","submit_request","apply_request"],
           "readableFields":["record","label"],
-          "reviewStages":[{"stage":"review","targets":[{"entity":"record","readableFields":["label"],"rowBoundaries":[]}]}],
           "applyTargets":[{"entity":"record","rowBoundaries":[]}],
           "rowBoundaries": []
         },{

@@ -381,6 +381,91 @@ mod tests {
     }
 
     #[test]
+    fn completion_destination_schema_states_the_bounds_the_runtime_enforces() {
+        let schema = runtime_schema();
+        let with = |timeout_milliseconds, maximum_attempts, retry_seconds| {
+            let mut instance = runtime_instance("secret:file/jwks.json", "file");
+            instance["reviewCompletionDestinations"] = serde_json::json!({
+                "review-requester": {
+                    "url": "https://requester.example.test/completions",
+                    "bearerTokenRef": "secret:file/completion-token",
+                    "timeoutMilliseconds": timeout_milliseconds,
+                    "maximumAttempts": maximum_attempts,
+                    "retrySeconds": retry_seconds
+                }
+            });
+            instance
+        };
+
+        for (label, instance) in [
+            (
+                "timeout below minimum",
+                with(
+                    crate::config::MINIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS - 1,
+                    1,
+                    1,
+                ),
+            ),
+            (
+                "timeout above maximum",
+                with(
+                    crate::config::MAXIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS + 1,
+                    1,
+                    1,
+                ),
+            ),
+            (
+                "attempts below minimum",
+                with(
+                    100,
+                    crate::config::MINIMUM_REVIEW_COMPLETION_ATTEMPTS - 1,
+                    1,
+                ),
+            ),
+            (
+                "attempts above maximum",
+                with(
+                    100,
+                    crate::config::MAXIMUM_REVIEW_COMPLETION_ATTEMPTS + 1,
+                    1,
+                ),
+            ),
+            (
+                "retry below minimum",
+                with(
+                    100,
+                    1,
+                    crate::config::MINIMUM_REVIEW_COMPLETION_RETRY_SECONDS - 1,
+                ),
+            ),
+            (
+                "retry above maximum",
+                with(
+                    100,
+                    1,
+                    crate::config::MAXIMUM_REVIEW_COMPLETION_RETRY_SECONDS + 1,
+                ),
+            ),
+        ] {
+            assert!(
+                !schema.is_valid(&instance),
+                "{label}: the schema accepted a destination the runtime refuses"
+            );
+        }
+
+        assert!(schema.is_valid(&with(
+            crate::config::MINIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS,
+            crate::config::MINIMUM_REVIEW_COMPLETION_ATTEMPTS,
+            crate::config::MINIMUM_REVIEW_COMPLETION_RETRY_SECONDS,
+        )));
+        assert!(schema.is_valid(&with(
+            crate::config::MAXIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS,
+            crate::config::MAXIMUM_REVIEW_COMPLETION_ATTEMPTS,
+            crate::config::MAXIMUM_REVIEW_COMPLETION_RETRY_SECONDS,
+        )));
+    }
+
+    #[test]
     fn static_jwks_secret_reference_schema_matches_runtime_validation() {
         let schema = runtime_schema();
         for reference in [

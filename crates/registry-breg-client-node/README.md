@@ -81,7 +81,7 @@ number boundary. `getRecordJson`, `listRecordsJson`, `continueListJson`,
 `executeLifecycleActionJson` return `valueJson` with the same trace, ETag,
 location, and opaque continuation semantics as their object counterparts.
 `lifecycleActionsJson` accepts a complete record envelope as JSON text; its
-opaque actions expose `bodyJson` and `reviewJson` for exact display.
+opaque actions expose `bodyJson` for exact display.
 
 ```js
 const { breg } = require('@registrystack/client');
@@ -169,9 +169,8 @@ bytes contain the original request values and idempotency key, but no token or
 metadata authority, and their diagnostic representation is redacted. The
 `...Json` variants preserve values outside the JavaScript safe-integer range.
 
-Use `action.withReason(text)` on a promoted `approve_request`,
-`reject_request`, `request_revision`, or `apply_request` action to add optional
-recorded text. It returns a copy and validates before network effects. The
+Use `action.withReason(text)` on a promoted `apply_request` action to add an
+optional application explanation. It returns a copy and validates before network effects. The
 original action omits the reason. Text
 is preserved exactly, allows an empty string, and is limited to 4096 Unicode
 characters with NUL refused. Reuse the same action and idempotency key for an

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import re
 import unittest
 from pathlib import Path
@@ -17,6 +18,18 @@ STANDALONE_FIXTURE = (
     / "products/casework/examples/standalone-decision/fixtures/standalone-decision.yaml"
 )
 BREG_EXAMPLE = ROOT / "products/casework/examples/professional-review/casework.yaml"
+PAYMENT_EXAMPLE = ROOT / "products/casework/examples/payment-review/casework.yaml"
+PAYMENT_FIXTURE = (
+    ROOT / "products/casework/examples/payment-review/fixtures/payment-review.yaml"
+)
+PAYMENT_RUNTIME = (
+    ROOT / "products/casework/examples/payment-review/runtime.example.yaml"
+)
+CASEWORK_RUNTIME_SCHEMA = (
+    ROOT / "products/casework/generated/runtime/runtime.schema.json"
+)
+BREG_RUNTIME_SCHEMA = ROOT / "products/breg/generated/runtime/runtime.schema.json"
+REVIEW_EXAMPLE_RUNNER = ROOT / "products/casework/scripts/check-review-examples.sh"
 MULTISTAGE_EXAMPLE = (
     ROOT / "products/casework/examples/multi-stage-routing-clocks/casework.yaml"
 )
@@ -75,13 +88,76 @@ class ProductContractTests(unittest.TestCase):
         breg = BREG_EXAMPLE.read_text(encoding="utf-8")
 
         self.assertNotRegex(standalone, r"(?m)^sources:")
-        self.assertRegex(standalone, r"(?m)^hostedKinds:")
+        self.assertRegex(standalone, r"(?m)^reviewKinds:")
+        self.assertRegex(standalone, r"(?m)^reviewProducers:")
         self.assertRegex(standalone, r"(?m)^\s+role: requester$")
-        self.assertRegex(standalone, r"(?m)^\s+kinds: \[decision\]$")
-        self.assertRegex(fixture, r"(?m)^hosted:$")
+        self.assertRegex(standalone, r"(?m)^\s+contextStrategy: submitted$")
+        self.assertRegex(fixture, r"(?m)^review:$")
         self.assertRegex(fixture, r"(?m)^\s+outcomes: \[confirmed, rejected\]$")
         self.assertRegex(breg, r"(?m)^sources:")
         self.assertNotRegex(breg, r"(?m)^hostedKinds:")
+
+    def test_payment_example_owns_completion_and_retention_without_breg(self):
+        policy = PAYMENT_EXAMPLE.read_text(encoding="utf-8")
+        fixture = PAYMENT_FIXTURE.read_text(encoding="utf-8")
+        runtime = PAYMENT_RUNTIME.read_text(encoding="utf-8")
+
+        self.assertNotRegex(policy, r"(?m)^sources:")
+        self.assertRegex(policy, r"(?m)^\s+- id: payment-batch$")
+        self.assertRegex(policy, r"(?m)^\s+terminalDays: 30$")
+        self.assertRegex(policy, r"(?m)^\s+recoveryDays: 7$")
+        self.assertRegex(policy, r"(?m)^\s+destinationId: payment-results$")
+        self.assertRegex(policy, r"(?m)^\s+recipientBinding: payment-processor-v1$")
+        self.assertRegex(fixture, r"(?m)^\s+kind: payment-batch$")
+        self.assertRegex(fixture, r"(?m)^\s+outcomes: \[\]$")
+        self.assertRegex(runtime, r"(?m)^reviewCompletionDestinations:$")
+        self.assertRegex(runtime, r"(?m)^\s+payment-results:$")
+        self.assertRegex(runtime, r"(?m)^\s+bearerTokenRef: secret:file/payment-completion-token$")
+
+    def test_payment_example_admits_producers_from_the_runtime_oidc_issuer(self):
+        # Every deployed token validates under the runtime file's OIDC issuer,
+        # and producer admission requires that exact issuer, so the example is
+        # only deployable as shipped when the two files name the same one.
+        policy = PAYMENT_EXAMPLE.read_text(encoding="utf-8")
+        runtime = PAYMENT_RUNTIME.read_text(encoding="utf-8")
+
+        policy_issuers = re.findall(r"(?m)^\s+issuer: (\S+)$", policy)
+        runtime_issuers = re.findall(r"(?m)^\s+issuer: (\S+)$", runtime)
+        self.assertEqual(len(policy_issuers), 1)
+        self.assertEqual(len(runtime_issuers), 1)
+        self.assertEqual(policy_issuers[0], runtime_issuers[0])
+
+    def test_review_runtime_schemas_own_both_sides_of_the_connection(self):
+        casework = json.loads(CASEWORK_RUNTIME_SCHEMA.read_text(encoding="utf-8"))
+        breg = json.loads(BREG_RUNTIME_SCHEMA.read_text(encoding="utf-8"))
+
+        self.assertIn("reviewCompletionDestinations", casework["properties"])
+        authority = breg["$defs"]["RawReviewAuthorityConfig"]
+        self.assertEqual(
+            set(authority["required"]),
+            {"endpoint", "profile", "producerId", "recoveryDays"},
+        )
+        for member in [
+            "tokenRef",
+            "privateKeyJwt",
+            "completionTokenRef",
+            "completionRecipient",
+        ]:
+            self.assertIn(member, authority["properties"])
+
+    def test_review_example_runner_aggregates_three_examples_without_app_kit(self):
+        runner = REVIEW_EXAMPLE_RUNNER.read_text(encoding="utf-8")
+        for proof in [
+            "asset-site-placement-change-requests",
+            "payment-review",
+            "standalone-decision",
+            "breg_review_journey",
+            "review_payment_fixture_postgres",
+            "standalone_structured_answers_support_polling_and_completion_modes",
+            "review_connection_retention_diagnostic_names_the_incompatible_pair",
+        ]:
+            self.assertIn(proof, runner)
+        self.assertNotRegex(runner, r"(?i)app[-_ ]?kit")
 
     def test_multistage_example_pins_routing_and_both_clock_contracts(self):
         policy = MULTISTAGE_EXAMPLE.read_text(encoding="utf-8")
@@ -98,8 +174,9 @@ class ProductContractTests(unittest.TestCase):
         self.assertIn("scope: subject", policy)
         self.assertIn("scope: activity", policy)
         self.assertIn("after: {workingDays: 5}", policy)
-        self.assertIn('"reviewMode": "staged"', source)
-        self.assertIn('"id": "authorization"', source)
+        self.assertIn('"authority": "casework-main"', source)
+        self.assertIn('"policyId": "regional-review"', source)
+        self.assertIn('"onApproved": {"mode": "manual"}', source)
         self.assertIn('"field": "region"', source)
         self.assertIn('"requestEntity": "response-correction"', response_source)
         self.assertIn('dueAt: "2026-09-14T17:00:00+07:00"', simulation)

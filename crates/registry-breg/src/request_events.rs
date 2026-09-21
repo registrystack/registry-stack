@@ -31,7 +31,6 @@ pub struct RequestLifecycleEvent<'a> {
     pub from_state: &'a str,
     pub to_state: &'a str,
     pub transition: &'a str,
-    pub stage_id: Option<&'a str>,
     pub reason: Option<&'a str>,
     pub effect_digest: Option<&'a str>,
     pub package_revision: &'a str,
@@ -57,20 +56,8 @@ pub async fn insert_request_lifecycle_events(
         || event.to_state.is_empty()
         || event.transition.is_empty()
         || event.reason.is_some_and(|reason| {
-            !crate::request_workflow::valid_review_reason(reason)
-                || !matches!(
-                    (event.transition, event.to_state),
-                    // An approve that neither completes its stage quorum nor
-                    // clears the last stage leaves the request under review.
-                    ("approve", "submitted")
-                        // An approve whose proposal applies in the same transaction
-                        // emits its reason on the terminal applied state instead.
-                        | ("approve", "approved")
-                        | ("approve", "applied")
-                        | ("reject", "rejected")
-                        | ("request_revision", "needs_changes")
-                        | ("apply", "applied")
-                )
+            !crate::request_workflow::valid_application_reason(reason)
+                || (event.transition, event.to_state) != ("apply", "applied")
         })
     {
         return Err(OutboxError::InvalidProjection);
@@ -125,7 +112,6 @@ pub async fn insert_request_lifecycle_events(
                 "transition": event.transition,
                 "fromState": event.from_state,
                 "toState": event.to_state,
-                "stage": event.stage_id,
                 "reasonPresent": event.reason.is_some(),
                 "effectDigest": event.effect_digest,
                 "deduplicationKey": deduplication_key,
@@ -227,7 +213,6 @@ fn lifecycle_condition_matches(
     let EventConditionSource::RequestLifecycle {
         transitions,
         to_states,
-        stages,
     } = condition
     else {
         return Err(OutboxError::InvalidProjection);
@@ -236,9 +221,6 @@ fn lifecycle_condition_matches(
         return Ok(false);
     }
     if !to_states.is_empty() && !to_states.contains(event.to_state) {
-        return Ok(false);
-    }
-    if !stages.is_empty() && !event.stage_id.is_some_and(|stage| stages.contains(stage)) {
         return Ok(false);
     }
     Ok(true)
@@ -298,13 +280,12 @@ fn lifecycle_deduplication_key(event_type: &str, event: &RequestLifecycleEvent<'
     )
 }
 
-// Proposal version, workflow revision, transition, and stage id are relied on to uniquely
-// determine from_state, to_state, and effect_digest for one request lifecycle event, so this
-// digest omits those three fields from its input; verify_existing_event catches any divergence
-// when an insert reuses the event_id this digest derives.
+// Proposal version, workflow revision, and transition are relied on to uniquely
+// determine from_state, to_state, and effect_digest for one request lifecycle
+// event. verify_existing_event catches divergence when an insert reuses the ID.
 fn lifecycle_digest(event_type: &str, event: &RequestLifecycleEvent<'_>) -> [u8; 32] {
     let mut input = Vec::new();
-    append_length_prefixed(&mut input, b"breg-request-lifecycle-event-v1");
+    append_length_prefixed(&mut input, b"breg-request-lifecycle-event-v2");
     append_length_prefixed(&mut input, event_type.as_bytes());
     append_length_prefixed(&mut input, event.package_revision.as_bytes());
     append_length_prefixed(&mut input, event.schema_fingerprint.as_bytes());
@@ -313,7 +294,6 @@ fn lifecycle_digest(event_type: &str, event: &RequestLifecycleEvent<'_>) -> [u8;
     append_length_prefixed(&mut input, event.proposal_version.to_string().as_bytes());
     append_length_prefixed(&mut input, event.workflow_revision.to_string().as_bytes());
     append_length_prefixed(&mut input, event.transition.as_bytes());
-    append_length_prefixed(&mut input, event.stage_id.unwrap_or("").as_bytes());
     let digest = Sha256::digest(input);
     digest.into()
 }

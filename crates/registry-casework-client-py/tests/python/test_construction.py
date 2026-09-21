@@ -34,12 +34,17 @@ class ConstructionTests(unittest.TestCase):
         display["cycle"] = display
         client = CaseworkClient("https://casework.example.invalid/")
         with self.assertRaises(CaseworkClientError) as raised:
-            client.create_hosted_item(
+            client.create_or_recover_review_request(
                 "valid-token", "requester", "create-key", {
                     "kind": "decision",
+                    "subject": {
+                        "source": "source", "type": "case", "id": "one", "version": "1",
+                        "digest": f"sha256:{'a' * 64}",
+                    },
                     "requesterReference": "reference",
-                    "display": display,
-                }
+                    "context": {"strategy": "submitted", "snapshot": display},
+                },
+                f"sha256:{'b' * 64}",
             )
         self.assertEqual(raised.exception.kind, "invalid_request")
 

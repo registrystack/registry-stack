@@ -122,12 +122,11 @@ the same rules a careful direct client would:
   `ifMatch` value from the request's advertised actions, never the record ETag. The lifecycle helper
   refetches the contract and the record and refuses to act on a changed proposal.
 - **Drafts do not submit themselves.** Creating a change request produces a draft. Submitting,
-  approving, rejecting, requesting revision, revising, and cancelling are separate lifecycle
-  operations, each subject to the actor and stage that the registry's metadata advertises. Whether
-  application is also a separate step is the registry's decision: `application.mode: manual` waits
-  for an applier, `automatic` applies inside the submit or the final approval, and `planner` lets a
-  script return an `apply` disposition. Follow the actions the registry advertises after each call
-  rather than assuming a fixed sequence.
+  revising, cancelling, and applying are separate source lifecycle operations. An external review
+  authority owns its reviewer actions and returns a result bound to the frozen proposal. Under
+  `onApproved.mode: manual`, a currently authorized applier follows BReg's advertised apply action;
+  `automatic` uses a separately configured ordinary executor credential against that same action.
+  Follow the actions the registry advertises after each call rather than assuming a fixed sequence.
 
 Patch members are written as field operations such as replace on a named field. The native client
 builds and validates the HTTP patch document, so job authors never touch JSON Pointer paths.

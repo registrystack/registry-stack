@@ -7,7 +7,7 @@ mod action;
 pub(crate) use action::erase_expired_action_evidence;
 pub(crate) use action::{HookProposalApplication, HookProposalOutcome};
 mod request;
-pub(crate) use request::{request_action_etag, RequestEvidencePreflight};
+pub(crate) use request::{request_action_etag, RequestEvidencePreflight, RequestReceiptPreflight};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -567,7 +567,6 @@ impl MutationPlan {
                 operation,
                 query_kind: None,
                 revision_kind: None,
-                request_stage: None,
                 maximum_records: None,
                 access_profiles: vec![profile_id.to_owned()],
                 default_access_profile: Some(profile_id.to_owned()),
@@ -815,6 +814,7 @@ pub struct MutationCoordinator {
     event_destinations: Option<Arc<ActivatedEventDestinationRegistry>>,
     task_status: Option<Arc<dyn crate::task_grant::TaskGrantStatusChecker>>,
     field_encryption: Option<Arc<FieldEncryptionService>>,
+    review_authorities: Option<Arc<crate::review_store::ReviewAuthorityRegistry>>,
 }
 
 impl MutationCoordinator {
@@ -851,7 +851,17 @@ impl MutationCoordinator {
             event_destinations,
             task_status: None,
             field_encryption: None,
+            review_authorities: None,
         }
+    }
+
+    #[must_use]
+    pub(crate) fn with_review_authorities(
+        mut self,
+        authorities: Arc<crate::review_store::ReviewAuthorityRegistry>,
+    ) -> Self {
+        self.review_authorities = Some(authorities);
+        self
     }
 
     pub fn with_task_status(
@@ -881,8 +891,9 @@ impl MutationCoordinator {
             .task_status
             .as_ref()
             .ok_or(MutationError::Unavailable)?;
-        // Bound all implementations, including injected adapters. The exact
-        // proposal remains locked through this check and the following commit.
+        // Bound all implementations, including injected adapters. Callers own
+        // the database boundary and must revalidate any retained binding after
+        // this remote observation when the following effect is transactional.
         tokio::time::timeout(Duration::from_secs(5), checker.check(binding))
             .await
             .map_err(|_| MutationError::Unavailable)?

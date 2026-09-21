@@ -44,7 +44,7 @@ const PACKAGE_REVISION: &str =
 const TENANT: &str = "tenant-a";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn heavy_retained_history_pages_decode_without_skipping_proposals_or_decisions() {
+async fn retained_history_pages_decode_without_skipping_proposals() {
     let database = TestDatabase::create(6).await;
     let registry = Arc::new(compiled_registry());
     let identity = install_registry(&database, &registry).await;
@@ -77,37 +77,20 @@ async fn heavy_retained_history_pages_decode_without_skipping_proposals_or_decis
     .await;
     let request_id = Uuid::parse_str(&request.id).unwrap();
     let (migration, task) = database.connect_migration().await;
-    // Each historical version models 32 stages with 32 reviewers: 1023
-    // approvals followed by a revision request with maximum escaped reason text.
-    let reason = "\u{1}".repeat(4096);
     migration
         .execute(
             "INSERT INTO registry_internal.registry_request_proposals
              (request_entity_id, request_id, proposal_version, request_record_revision,
               contract_fingerprint, effect_digest, snapshot)
          SELECT 'correction-request', $1, version, 1, $2, $2, '{}'::jsonb
-           FROM generate_series(1, 50) version",
+           FROM generate_series(1, 100) version",
             &[&request_id, &PACKAGE_REVISION],
         )
         .await
         .expect("heavy historical versions insert");
     migration
         .execute(
-            "INSERT INTO registry_internal.registry_request_decisions
-             (request_entity_id, request_id, proposal_version, decision_index, stage_id,
-              actor_reference, decision, effect_digest, decided_at, reason, reason_present)
-         SELECT 'correction-request', $1, version, i, 'stage-' || (i / 32)::text,
-                'reviewer-' || i::text,
-                CASE WHEN i = 1023 THEN 'request_revision' ELSE 'approve' END,
-                $2, transaction_timestamp(), CASE WHEN i = 1023 THEN $3 ELSE NULL END, i = 1023
-           FROM generate_series(1, 50) version CROSS JOIN generate_series(0, 1023) i",
-            &[&request_id, &PACKAGE_REVISION, &reason],
-        )
-        .await
-        .expect("bounded complete decision histories insert");
-    migration
-        .execute(
-            "UPDATE registry_internal.registry_request_state SET proposal_version = 51
+            "UPDATE registry_internal.registry_request_state SET proposal_version = 101
           WHERE request_entity_id = 'correction-request' AND request_id = $1",
             &[&request_id],
         )
@@ -144,12 +127,8 @@ async fn heavy_retained_history_pages_decode_without_skipping_proposals_or_decis
         assert!(!proposals.is_empty());
         for proposal in proposals {
             versions.push(i64::from(proposal.proposal_version().get()));
-            let decisions = proposal.decisions();
-            assert_eq!(decisions.len(), 1024);
-            assert_eq!(decisions[0].stage_id(), "stage-0");
-            assert_eq!(decisions[1023].stage_id(), "stage-31");
-            assert_eq!(decisions[1023].reason(), Some(reason.as_str()));
-            assert!(decisions[1023].reason_present());
+            assert_eq!(proposal.result_link_count(), 0);
+            assert!(proposal.result_references().is_empty());
         }
         page_count += 1;
         after = history
@@ -162,7 +141,7 @@ async fn heavy_retained_history_pages_decode_without_skipping_proposals_or_decis
         assert!(page_count < 50, "cursor must make forward progress");
     }
     assert!(page_count > 1, "byte budget splits heavy history");
-    assert_eq!(versions, (1..=50).collect::<Vec<_>>());
+    assert_eq!(versions, (1..=100).collect::<Vec<_>>());
     drop(http);
     task.abort();
     database.cleanup().await;
@@ -227,15 +206,6 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
         .as_str()
         .expect("submission has effect digest")
         .to_owned();
-    run_action(
-        &app,
-        &request.id,
-        "approve_request",
-        "read-retention-approve",
-        operator.clone(),
-        |_| json!({"proposalVersion": 1, "effectDigest": effect_digest}),
-    )
-    .await;
     let before_apply = get_record(
         &app,
         &format!(
@@ -403,7 +373,7 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
     assert_eq!(erased.body["data"]["domainData"], json!({}));
     assert_eq!(
         erased.body["data"]["revisionIdentifier"],
-        (request.revision + 4).to_string()
+        (request.revision + 3).to_string()
     );
     assert_eq!(
         erased.body["data"]["request"]["history"]["proposals"][0]["detailErased"],
@@ -589,15 +559,6 @@ async fn snapshot_reads_exclude_soft_erased_request_revisions() {
         .as_str()
         .expect("submission has effect digest")
         .to_owned();
-    run_action(
-        &app,
-        &request.id,
-        "approve_request",
-        "snapshot-erasure-approve",
-        operator.clone(),
-        |_| json!({"proposalVersion": 1, "effectDigest": effect_digest}),
-    )
-    .await;
     let before_apply = get_record(
         &app,
         &format!(
@@ -1103,7 +1064,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                   "operation":"patch",
                   "set":{"site":{"fromField":"proposed-site"}}
                 }],
-                "review":{"stages":[{"id":"review","approvals":1}]}
+                "review":{"mode":"none"},
+                "onApproved":{"mode":"manual"}
               }
             }
           ],
@@ -1124,15 +1086,10 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
               },{
                 "entity":"correction-request",
-                "operations":["create","get","list","patch","submit_request","approve_request","apply_request"],
+                "operations":["create","get","list","patch","submit_request","apply_request"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "writableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-                "reviewStages":[{"stage":"review","targets":[{
-                  "entity":"placement",
-                  "readableFields":["site"],
-                  "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-                }]}],
                 "applyTargets":[{"entity":"placement","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
               }]
             },
