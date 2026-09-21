@@ -887,7 +887,10 @@ class GateInventoryTest(unittest.TestCase):
             ),
         ):
             with self.subTest(gate=gate):
-                text = self.workflow.replace(snippet, replacement, 1)
+                # Replace every occurrence: the PostgreSQL 17 digest is pinned
+                # by both casework-postgres and casework-tutorial, and the gate
+                # is missing only when no pin survives.
+                text = self.workflow.replace(snippet, replacement)
                 self.assertIn(gate, self.module.missing_gates(text))
 
     def test_missing_casework_checkpoint_wrapper_steps_are_reported(self) -> None:
