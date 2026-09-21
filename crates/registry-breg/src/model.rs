@@ -748,6 +748,9 @@ pub struct CompiledMembershipBoundary {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledEntity {
     pub id: String,
+    /// The module that declared this entity. Absent means the project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_module: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub primary_dataset: Option<String>,
     pub route: String,
@@ -783,6 +786,49 @@ pub struct CompiledEntity {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub membership_boundaries: BTreeMap<String, Vec<CompiledMembershipBoundary>>,
     pub hooks: BTreeMap<String, HookSource>,
+    /// Which module contributed each id in this entity's id-keyed
+    /// collections. An id absent from a map was contributed by the project
+    /// root. Two modules can never declare the same id (every level is a
+    /// compile error), so this is exactly one contributing module per id,
+    /// never a list.
+    #[serde(default, skip_serializing_if = "CompiledEntityModuleOrigins::is_empty")]
+    pub module_origins: CompiledEntityModuleOrigins,
+}
+
+/// Per-collection module provenance for one [`CompiledEntity`]. See
+/// [`CompiledEntity::module_origins`].
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledEntityModuleOrigins {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub constraints: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub hooks: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub derived_relations: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub indexes: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub access_profiles: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub selector_profiles: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub read_paths: BTreeMap<String, String>,
+}
+
+impl CompiledEntityModuleOrigins {
+    pub fn is_empty(&self) -> bool {
+        self.fields.is_empty()
+            && self.constraints.is_empty()
+            && self.hooks.is_empty()
+            && self.derived_relations.is_empty()
+            && self.indexes.is_empty()
+            && self.access_profiles.is_empty()
+            && self.selector_profiles.is_empty()
+            && self.read_paths.is_empty()
+    }
 }
 
 /// Governed catalogue projection with every resource reference resolved once.
