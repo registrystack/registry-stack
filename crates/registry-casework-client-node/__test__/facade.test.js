@@ -42,7 +42,10 @@ test('review task context uses the exact route and forwards the optional source 
         context: {
           strategy: 'source', reference: 'correction-42', bindingStatus: 'current',
           projection: {
-            binding: { sourceRevision: 'revision-42', version: '1', generation: 'generation-42' },
+            binding: {
+              sourceRevision: 'revision-42', version: '1', generation: 'generation-42',
+              integrity: `sha256:${'a'.repeat(64)}`,
+            },
             displayReference: 'Correction 42', display: {},
           },
         },
