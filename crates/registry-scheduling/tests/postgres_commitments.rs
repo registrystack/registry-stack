@@ -1922,6 +1922,59 @@ async fn an_expired_hold_returns_capacity_and_refuses_confirmation() {
     assert_eq!(problem["code"], "hold.released");
 }
 
+/// Every closing writer advances the claim's revision, so the history event
+/// that closes a claim is distinguishable from the one that opened it. The
+/// expiry sweeper closes a hold exactly as release and cancellation do, and
+/// must leave the same trace behind it.
+#[tokio::test]
+async fn hold_expiry_advances_the_claim_revision_like_every_other_close() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "hold-revision",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let hold_id = Uuid::parse_str(hold["holdId"].as_str().unwrap()).expect("a hold UUID");
+
+    let expired = fx
+        .store
+        .expire_due_holds(Utc::now() + TimeDelta::minutes(11), 100)
+        .await
+        .expect("the hold expiry pass");
+    assert_eq!(expired, 1);
+
+    let history = fx
+        .store
+        .claim_history(hold_id, None, 10)
+        .await
+        .expect("the hold history");
+    let revision_of = |kind: &str| {
+        history
+            .iter()
+            .find(|event| event["kind"] == kind)
+            .and_then(|event| event["revision"].as_i64())
+    };
+    assert_eq!(revision_of("held"), Some(1));
+    assert_eq!(
+        revision_of("expired"),
+        Some(2),
+        "the expiry event carries the revision its own close minted"
+    );
+
+    let claim = fx
+        .store
+        .claim(hold_id)
+        .await
+        .expect("the claim read")
+        .expect("the expired hold row");
+    assert_eq!(claim.revision, 2);
+}
+
 /// SEC-01 and SEC-11 at their shared transaction boundary. A confirmation may
 /// enter while its hold is live and pause before it reaches the supply anchor.
 /// Once the hold expires, a later transaction may reclaim and book that

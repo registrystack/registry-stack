@@ -1887,7 +1887,8 @@ impl PostgresStore {
         let transaction = client.transaction().await?;
         let rows = transaction
             .query(
-                "UPDATE scheduling_claims SET state='expired', closed_at=now(), changed_at=now() \
+                "UPDATE scheduling_claims SET state='expired', revision=revision + 1, \
+                 closed_at=now(), changed_at=now() \
                  WHERE claim_id IN (\
                      SELECT claim_id FROM scheduling_claims \
                      WHERE kind='hold' AND state='active' AND hold_expires_at <= $1 \
