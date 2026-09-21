@@ -5487,6 +5487,11 @@ fn explain_render_error() -> FailureReport {
 /// behaviour, so accepting a project would teach a reader that some project
 /// could change it, and compiling one would let an unrelated authoring error
 /// refuse an answer that never depended on the project in the first place.
+///
+/// `--production` is refused for the same reason. It selects the production
+/// package-closure check, which runs against a compiled project; a report
+/// that compiled nothing and still named `profile: production` would state
+/// that check had passed when it never ran.
 fn explain_lifecycle(
     profile: ProfileArg,
     project_path: Option<&Path>,
@@ -5497,6 +5502,13 @@ fn explain_lifecycle(
             "lifecycle.project.unused",
             "project",
             "explain lifecycle reports the engine's request lifecycle, which no registry project changes; run it with no PROJECT",
+        )));
+    }
+    if matches!(profile, ProfileArg::Production) {
+        return Err(explain_usage_error(diagnostic(
+            "lifecycle.profile.unused",
+            "production",
+            "explain lifecycle compiles no project, so it enforces no production package closure; run it without --production",
         )));
     }
     if scenario_path.is_some() {
@@ -9279,6 +9291,11 @@ fn success_lead(report: &SuccessReport) -> String {
             report::counted(artifacts, "artifact")
         ),
         "generate" => format!("Generated {}.", report::counted(artifacts, "artifact")),
+        // `explain lifecycle` is the one explain that compiles nothing, and
+        // the absent revision is how the report says so.
+        "explain" if report.revision.is_none() => {
+            "Explained the engine's request lifecycle. No project was compiled.".to_owned()
+        }
         "explain" => "Explained the compiled inventory.".to_owned(),
         other => format!("{other} succeeded."),
     }

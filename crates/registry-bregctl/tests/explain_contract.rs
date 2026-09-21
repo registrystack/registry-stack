@@ -312,6 +312,46 @@ fn explain_lifecycle_reports_no_revision_while_other_subjects_do() {
     );
 }
 
+/// `--production` asks for the production package-closure check. This subject
+/// compiles nothing and so runs no such check, and reporting
+/// `profile: production` anyway would state that a check had passed when it
+/// never ran. Refused for the same reason PROJECT is.
+#[test]
+fn explain_lifecycle_refuses_the_production_profile() {
+    let output = bregctl(&["--format", "json", "explain", "lifecycle", "--production"]);
+    assert!(
+        !output.status.success(),
+        "bregctl explain lifecycle --production is refused: {output:?}"
+    );
+    let report = json_stdout(&output);
+    assert_eq!(report["ok"], Value::Bool(false), "{report:#?}");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        Value::String("lifecycle.profile.unused".to_owned()),
+        "{report:#?}"
+    );
+}
+
+/// The human lead every other `explain` subject prints announces a compiled
+/// inventory. This subject has none, so it must not borrow that sentence.
+#[test]
+fn explain_lifecycle_does_not_announce_a_compiled_inventory() {
+    let output = bregctl(&["explain", "lifecycle"]);
+    assert!(
+        output.status.success(),
+        "bregctl explain lifecycle failed: {output:?}"
+    );
+    let stdout = String::from_utf8(output.stdout).expect("bregctl writes UTF-8");
+    assert!(
+        !stdout.contains("Explained the compiled inventory."),
+        "explain lifecycle compiles nothing: {stdout}"
+    );
+    assert!(
+        stdout.contains("No project was compiled."),
+        "explain lifecycle says so in its lead: {stdout}"
+    );
+}
+
 /// A PROJECT is refused rather than ignored, so that nothing teaches a reader
 /// the lifecycle might vary by project.
 #[test]
