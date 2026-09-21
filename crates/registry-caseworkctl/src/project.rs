@@ -1157,11 +1157,13 @@ fn check_source_descriptions(project: &Path) -> Result<()> {
 
 /// Confirm the pinned description's declared review policy still resolves
 /// against this project's declared reviewKinds and reviewProducers,
-/// mirroring the four assertions `caseworkctl source add` makes when a
-/// binding is first written: the named policy exists, its purpose is
-/// approval, its contextStrategy is source, and casework.yaml admits
-/// exactly one reviewProducers[] entry whose sourceNamespaces contains this
-/// source's id and whose kinds contains the pinned policy id.
+/// mirroring the assertions `caseworkctl source add` makes when a binding is
+/// first written: the named policy exists, its purpose is approval, its
+/// contextStrategy is source, and casework.yaml admits at least one
+/// reviewProducers[] entry whose sourceNamespaces contains this source's id
+/// and whose kinds contains the pinned policy id. `source add` additionally
+/// requires exactly one such entry, because it must choose the credentials it
+/// pins; repinning is not what this check guards, so it accepts several.
 /// `validate_breg_source_description` only confirms the description's shape
 /// matches the closed BReg adapter contract; it forwards `review.policyId`
 /// unchecked, so a later hand-edit of casework.yaml leaves the binding
@@ -1223,26 +1225,22 @@ fn check_source_review_binding(
     // Mirrors the producer filter `caseworkctl source add` applies at
     // crates/registry-caseworkctl/src/source_add.rs:450-464: an admitting
     // producer is one whose sourceNamespaces contains this source's id and
-    // whose kinds contains the pinned policy id.
-    let producers: Vec<_> = policy
-        .review_producers
-        .iter()
-        .filter(|producer| {
-            producer
-                .source_namespaces
-                .iter()
-                .any(|namespace| namespace.as_str() == source_id)
-                && producer.kinds.iter().any(|kind| kind.as_str() == policy_id)
-        })
-        .collect();
-    if producers.is_empty() {
+    // whose kinds contains the pinned policy id. Only the filter is mirrored,
+    // not `source add`'s exactly-one rule: that command has to pick the single
+    // identity it writes into the description, while the runtime resolves a
+    // producer by the authenticated actor's profile, issuer, and subject in
+    // ReviewRuntime::producer_for_actor. Two identities admitting one source
+    // and policy are a working failover pair, not a broken binding.
+    let admitted = policy.review_producers.iter().any(|producer| {
+        producer
+            .source_namespaces
+            .iter()
+            .any(|namespace| namespace.as_str() == source_id)
+            && producer.kinds.iter().any(|kind| kind.as_str() == policy_id)
+    });
+    if !admitted {
         bail!(
             "source {source_id} description {rendered_path} pins review.policyId {policy_id:?} at sourceRevision {source_revision:?}, but casework.yaml admits no reviewProducers[] entry whose sourceNamespaces includes {source_id:?} and whose kinds includes {policy_id:?} as pinned; declare a reviewProducers[] entry admitting source {source_id:?} for review kind {policy_id:?} in casework.yaml, or re-run `caseworkctl source add` to repin a policy a producer admits"
-        );
-    }
-    if producers.len() > 1 {
-        bail!(
-            "source {source_id} description {rendered_path} pins review.policyId {policy_id:?} at sourceRevision {source_revision:?}, which more than one reviewProducers[] entry admits as pinned, each with sourceNamespaces including {source_id:?} and kinds including {policy_id:?}; keep exactly one reviewProducers[] entry admitting source {source_id:?} for review kind {policy_id:?} in casework.yaml, or re-run `caseworkctl source add` to repin a policy exactly one producer admits"
         );
     }
     Ok(())
@@ -2028,21 +2026,22 @@ mod tests {
     }
 
     #[test]
-    fn check_source_descriptions_refuses_when_more_than_one_producer_admits_the_binding() {
-        // A second reviewProducers entry duplicates the first one's
-        // sourceNamespaces and kinds under a distinct id and subject, so two
-        // producers admit this source and policy pair.
-        let duplicated_producer_yaml = CASEWORK_YAML.replace(
+    fn check_source_descriptions_accepts_two_producer_identities_for_one_source_and_policy() {
+        // A second reviewProducers entry admits the same sourceNamespaces and
+        // kinds under a distinct id and subject: a failover integration beside
+        // the primary one. The runtime resolves a producer by the authenticated
+        // actor's profile, issuer, and subject, never by uniqueness, so both
+        // identities submit under the same pinned policy and neither shadows
+        // the other. Only `source add` needs exactly one, because it must pick
+        // the credentials it writes into the description.
+        let second_identity_yaml = CASEWORK_YAML.replace(
             "    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n",
-            "    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n  - id: registry-breg-duplicate\n    profile: integration-requester\n    issuer: http://127.0.0.1:8091\n    subject: professional-review-breg-duplicate\n    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n",
+            "    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n  - id: registry-breg-failover\n    profile: integration-requester\n    issuer: http://127.0.0.1:8091\n    subject: professional-review-breg-failover\n    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n",
         );
         let (_root, project) =
-            write_offline_project(&duplicated_producer_yaml, BREG_SOURCE_DESCRIPTION);
+            write_offline_project(&second_identity_yaml, BREG_SOURCE_DESCRIPTION);
 
-        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("more than one reviewProducers"), "{error}");
-        assert!(error.contains("professional-licences"), "{error}");
-        assert!(error.contains("scope-correction"), "{error}");
+        check_source_descriptions(&project).unwrap();
     }
 
     #[test]
