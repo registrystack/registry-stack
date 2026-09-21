@@ -305,11 +305,12 @@ same database waits rather than racing it. Run it before the first `serve` and b
 release that adds migrations.
 
 The unified review schema arrives in a single migration that drops the experimental hosted-item
-tables from the earlier Casework release. No data is carried over. Do not delete rows, edit the
-migration ledger, or run migration SQL by hand. For a disposable local session, use `caseworkctl
-dev stop PROJECT --remove` and start it again. For an operated database, retain the old deployment
-long enough to export required work, take the normal backup, and provision a fresh Casework
-database for the unified review package.
+tables from the earlier Casework release. No data is carried over, and this release has
+no in-place legacy conversion command. Do not delete rows, edit the migration ledger, or run
+migration SQL by hand. For a disposable local session, use `caseworkctl dev stop PROJECT --remove`
+and start it again. For an operated database, retain the old deployment long enough to export
+required work, take the normal backup, and provision a fresh Casework database for the unified
+review package.
 
 :::caution[Keep the migration credential off the serving host]
 The migration credential owns the schema, and the serving process never needs it. Supply it only
