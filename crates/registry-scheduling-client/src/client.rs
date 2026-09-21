@@ -11,13 +11,14 @@ use registry_platform_httputil::{
     read_bounded, url::append_path_segments, validate_response_headers,
 };
 use registry_scheduling_core::{
-    type_uri, AdmissionRequest, AppointmentDocument, AppointmentHistoryEntryDocument,
-    AvailabilityEntry, CancelAppointmentRequest, CreateAppointmentRequest, ExplainDocument,
-    HoldDocument, LocationDocument, OfferingDocument, PageDocument, ProblemCode,
-    RescheduleAppointmentRequest, ResourceDocument, SchedulingServiceDocument, ServiceDocument,
-    APPOINTMENTS_PATH, AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH, CURSOR_QUERY_PARAMETER,
-    HOLDS_PATH, IDEMPOTENCY_KEY_HEADER, LIMIT_QUERY_PARAMETER, LOCATIONS_PATH,
-    MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH, RESOURCES_PATH, SCHEDULING_PATH, SERVICES_PATH,
+    type_uri, valid_identifier, AdmissionRequest, AppointmentDocument,
+    AppointmentHistoryEntryDocument, AvailabilityEntry, CancelAppointmentRequest,
+    CreateAppointmentRequest, ExplainDocument, HoldDocument, LocationDocument, OfferingDocument,
+    PageDocument, ProblemCode, RescheduleAppointmentRequest, ResourceDocument,
+    SchedulingServiceDocument, ServiceDocument, APPOINTMENTS_PATH, AVAILABILITY_EXPLAIN_PATH,
+    AVAILABILITY_PATH, CURSOR_QUERY_PARAMETER, HOLDS_PATH, IDEMPOTENCY_KEY_HEADER,
+    LIMIT_QUERY_PARAMETER, LOCATIONS_PATH, MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH,
+    RESOURCES_PATH, SCHEDULING_PATH, SERVICES_PATH,
 };
 use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{RequestBuilder, Response, StatusCode, Url};
@@ -563,9 +564,17 @@ fn validate_identifier(
 /// The offering selector both availability routes carry. It travels as a
 /// query parameter rather than a path segment, so an out-of-grammar value
 /// cannot reach a different route; what it would otherwise buy is a round
-/// trip spent sending a URL the runtime's own grammar already refuses.
+/// trip spent sending a URL the runtime's own grammar already refuses. An
+/// offering is authored in a policy rather than minted into a document, so
+/// the grammar it is held to here is the one the runtime publishes offerings
+/// under, not the wider alphabet an opaque route identifier travels in.
 fn validate_offering(offering: &str) -> Result<(), SchedulingClientError> {
-    validate_identifier(offering, "the offering selector is invalid")
+    if valid_identifier(offering) {
+        return Ok(());
+    }
+    Err(SchedulingClientError::invalid_request(
+        "the offering selector is invalid",
+    ))
 }
 
 fn validate_availability(
@@ -649,8 +658,9 @@ mod tests {
     }
 
     /// Both availability entry points refuse an out-of-grammar selector
-    /// before any I/O, with the identifier bound the route identifiers
-    /// already use.
+    /// before any I/O, against the grammar the runtime publishes offerings
+    /// under rather than the looser one a route segment carries: a selector
+    /// the runtime would refuse on arrival is refused here instead.
     #[test]
     fn offering_selectors_are_bounded_before_io() {
         assert!(validate_offering("registry-update-30").is_ok());
@@ -659,6 +669,13 @@ mod tests {
             "registry/update",
             "registry update",
             "registry?update",
+            // Each of these is a legal opaque route segment and no
+            // identifier the policy grammar admits.
+            "Registry_Update",
+            "registry_update",
+            "registry.update",
+            "30-minute-update",
+            &"x".repeat(65),
             &"x".repeat(MAXIMUM_IDENTIFIER_BYTES + 1),
         ] {
             assert!(
