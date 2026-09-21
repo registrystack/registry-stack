@@ -56,6 +56,11 @@ const MAXIMUM_TIMESTAMP_BYTES: usize = 128;
 const MAXIMUM_SNAPSHOT_REFERENCE_BYTES: usize = 4 * 1024;
 /// Runs are operator-driven and few; one page stays explicitly bounded.
 const MAXIMUM_RUN_PAGE_LIMIT: u32 = 100;
+/// The largest count member a run document, attempt, or receipt may carry.
+/// The JavaScript bindings convert counts through an f64, so a larger value
+/// would silently round and corrupt the checkpoint arithmetic a resuming
+/// caller derives; such a document is a protocol failure instead.
+const MAXIMUM_INGESTION_COUNT: u64 = 9_007_199_254_740_991;
 
 /// A value-free reason an ingestion-run exchange cannot be constructed or decoded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -248,9 +253,10 @@ impl BRegIngestionAttempt {
             .as_str()
             .and_then(BRegIngestionAttemptOutcome::parse)
             .ok_or(BRegIngestionError::InvalidResponse)?;
-        let chunk_index = match &attempt["chunkIndex"] {
-            Value::Null => None,
-            value => Some(value.as_u64().ok_or(BRegIngestionError::InvalidResponse)?),
+        let chunk_index = match attempt.get("chunkIndex") {
+            Some(Value::Null) => None,
+            Some(_) => Some(count_member(attempt, "chunkIndex")?),
+            None => return Err(BRegIngestionError::InvalidResponse),
         };
         Ok(Self {
             outcome,
@@ -468,13 +474,13 @@ impl BRegIngestionRun {
         if !is_sha256_hex(input_digest) || !is_sha256_hex(committed_prefix_digest) {
             return Err(refuse);
         }
-        let input_length = number_member(object, "inputLength")?;
-        let item_count = number_member(object, "itemCount")?;
-        let chunk_count = number_member(object, "chunkCount")?;
-        let maximum_items = number_member(object, "maximumItems")?;
-        let maximum_bytes = number_member(object, "maximumBytes")?;
-        let next_chunk_index = number_member(object, "nextChunkIndex")?;
-        let committed_items = number_member(object, "committedItems")?;
+        let input_length = count_member(object, "inputLength")?;
+        let item_count = count_member(object, "itemCount")?;
+        let chunk_count = count_member(object, "chunkCount")?;
+        let maximum_items = count_member(object, "maximumItems")?;
+        let maximum_bytes = count_member(object, "maximumBytes")?;
+        let next_chunk_index = count_member(object, "nextChunkIndex")?;
+        let committed_items = count_member(object, "committedItems")?;
         if item_count == 0
             || chunk_count == 0
             || maximum_items == 0
@@ -635,7 +641,7 @@ impl BRegIngestionChunkReceipt {
         {
             return Err(refuse);
         }
-        let chunk_index = number_member(object, "chunkIndex")?;
+        let chunk_index = count_member(object, "chunkIndex")?;
         let digest = text_member(object, "digest")?;
         if !is_sha256_hex(digest) {
             return Err(refuse);
@@ -1346,11 +1352,17 @@ fn text_member<'a>(
         .ok_or(BRegIngestionError::InvalidResponse)
 }
 
-fn number_member(object: &Map<String, Value>, member: &str) -> Result<u64, BRegIngestionError> {
-    object
+/// One count member of a run document, attempt, or receipt, within the
+/// JavaScript-safe range the bindings convert without rounding.
+fn count_member(object: &Map<String, Value>, member: &str) -> Result<u64, BRegIngestionError> {
+    let value = object
         .get(member)
         .and_then(Value::as_u64)
-        .ok_or(BRegIngestionError::InvalidResponse)
+        .ok_or(BRegIngestionError::InvalidResponse)?;
+    if value > MAXIMUM_INGESTION_COUNT {
+        return Err(BRegIngestionError::InvalidResponse);
+    }
+    Ok(value)
 }
 
 fn take_member(object: &mut Map<String, Value>, member: &str) -> Result<Value, BRegIngestionError> {
@@ -1836,6 +1848,45 @@ mod tests {
             BRegIngestionChunkReceipt::from_value(value),
             Err(BRegIngestionError::ErasedReceipt)
         );
+    }
+
+    #[test]
+    fn run_counts_above_the_javascript_safe_range_are_refused() {
+        // The bindings convert run counts through an f64, so a count above
+        // the largest exactly representable integer would silently round;
+        // the boundary itself still decodes exactly.
+        let mut wire = run_wire();
+        wire["itemCount"] = json!(9_007_199_254_740_992u64);
+        assert_eq!(decode_wire(&wire), Err(BRegIngestionError::InvalidResponse));
+
+        let mut last_attempt = run_wire();
+        last_attempt["lastAttempt"]["chunkIndex"] = json!(9_007_199_254_740_992u64);
+        assert_eq!(
+            decode_wire(&last_attempt),
+            Err(BRegIngestionError::InvalidResponse)
+        );
+
+        let mut wire = run_wire();
+        wire["itemCount"] = json!(9_007_199_254_740_991u64);
+        let run = decode_wire(&wire).expect("a count at the safe boundary decodes");
+        assert_eq!(run.item_count(), 9_007_199_254_740_991);
+    }
+
+    #[test]
+    fn receipt_counts_above_the_javascript_safe_range_are_refused() {
+        let mut wire = receipt_wire();
+        wire["chunkIndex"] = json!(9_007_199_254_740_992u64);
+        let bytes = serde_json::to_vec(&wire).unwrap();
+        let value = crate::strict_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            BRegIngestionChunkReceipt::from_value(value),
+            Err(BRegIngestionError::InvalidResponse)
+        );
+
+        let mut wire = receipt_wire();
+        wire["chunkIndex"] = json!(9_007_199_254_740_991u64);
+        let receipt = decode_receipt_wire(&wire).expect("a boundary chunk index decodes");
+        assert_eq!(receipt.chunk_index(), 9_007_199_254_740_991);
     }
 
     #[test]
