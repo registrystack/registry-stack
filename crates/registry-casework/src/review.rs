@@ -1168,7 +1168,7 @@ impl PostgresStore {
             )
             .await?;
         let mut applied = 0usize;
-        for row in rows {
+        'occurrences: for row in rows {
             let occurrence_id: Uuid = row.get(0);
             let request_id: Uuid = row
                 .get::<_, Option<Uuid>>(1)
@@ -1332,6 +1332,28 @@ impl PostgresStore {
             }
             let mut prior_queue: String = task.get(1);
             for step in steps.iter().filter(|effect| effect.at <= now) {
+                // A reassignment no team serves would drop the task out of
+                // every review inbox and record the effect as applied with
+                // no retry left, so the occurrence defers until the queue is
+                // served again instead of applying the step.
+                let served: bool = transaction
+                    .query_one(
+                        "SELECT EXISTS(SELECT 1 FROM casework_queue_service WHERE queue_id=$1)",
+                        &[&step.reassign_queue],
+                    )
+                    .await?
+                    .get(0);
+                if !served {
+                    transaction
+                        .execute(
+                            "UPDATE casework_review_clock_occurrences
+                             SET next_action_at=$2::timestamptz+interval '30 seconds',updated_at=$2
+                             WHERE clock_occurrence_id=$1 AND state='running'",
+                            &[&occurrence_id, &now],
+                        )
+                        .await?;
+                    continue 'occurrences;
+                }
                 let event_id = Uuid::new_v4();
                 if transaction
                     .execute(

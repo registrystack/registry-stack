@@ -5632,6 +5632,210 @@ async fn review_activity_clock_recovers_after_holiday_publication_and_applies_ef
 }
 
 #[tokio::test]
+async fn review_clock_reassignment_to_an_unserved_queue_defers_until_the_queue_is_served() {
+    let fixture = fixture().await;
+    let project = activity_clock_project();
+    project.check().expect("activity clock project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("activity clock service");
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            request("record-unserved-queue", "producer-ref-unserved-queue"),
+            "create-unserved-queue",
+        )
+        .await
+        .expect("create unserved-queue review");
+    let request_id = created.accepted.request_id;
+    let task = task_id(&fixture, request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-unserved-queue",
+        )
+        .await
+        .expect("claim unserved-queue task");
+    let occurrence_id: Uuid = fixture
+        .database
+        .query_one(
+            "SELECT clock_occurrence_id FROM casework_review_clock_occurrences WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("activity clock occurrence")
+        .get(0);
+    service
+        .create_holiday_revision(
+            &actor("admin", CaseworkRole::Administrator, "administrator"),
+            &HolidaySetDocument {
+                holiday_set: "office-holidays".to_owned(),
+                revision: 1,
+                dates: Vec::new(),
+            },
+            "publish-office-holidays",
+        )
+        .await
+        .expect("publish holiday revision");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_clock_occurrences
+             SET anchor_at='2020-01-06T09:00:00Z',updated_at='2020-01-06T09:00:00Z',
+                 next_action_at='2020-01-06T09:00:00Z'
+             WHERE clock_occurrence_id=$1",
+            &[&occurrence_id],
+        )
+        .await
+        .expect("make the unserved-queue clock due");
+
+    // The reminder still applies, but the reassignment step cannot: no team
+    // serves the target queue, so applying it would drop the task out of
+    // every review inbox and record the effect as applied with no retry.
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("process review clock with unserved target queue"),
+        1
+    );
+    let deferred_task = fixture
+        .database
+        .query_one(
+            "SELECT queue_id,state,holder_issuer,holder_subject,revision
+             FROM casework_review_tasks WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("read deferred review task");
+    assert_eq!(deferred_task.get::<_, String>(0), "review");
+    assert_eq!(deferred_task.get::<_, String>(1), "claimed");
+    assert_eq!(
+        deferred_task.get::<_, Option<String>>(2).as_deref(),
+        Some(fixture.reviewer_a.principal.issuer.as_str())
+    );
+    assert_eq!(
+        deferred_task.get::<_, Option<String>>(3).as_deref(),
+        Some(fixture.reviewer_a.principal.subject.as_str())
+    );
+    assert_eq!(deferred_task.get::<_, i64>(4), 2);
+    assert_eq!(
+        fixture
+            .database
+            .query_one(
+                "SELECT count(*) FROM casework_review_clock_effects
+                 WHERE clock_occurrence_id=$1 AND effect_kind='step'",
+                &[&occurrence_id],
+            )
+            .await
+            .expect("count deferred review clock steps")
+            .get::<_, i64>(0),
+        0
+    );
+    assert_eq!(
+        fixture
+            .database
+            .query_one(
+                "SELECT count(*) FROM casework_review_history
+                 WHERE request_id=$1 AND kind='clock_step_applied'",
+                &[&request_id],
+            )
+            .await
+            .expect("count deferred review clock step history")
+            .get::<_, i64>(0),
+        0
+    );
+    assert!(fixture
+        .database
+        .query_one(
+            "SELECT next_action_at>transaction_timestamp()
+             FROM casework_review_clock_occurrences WHERE clock_occurrence_id=$1",
+            &[&occurrence_id],
+        )
+        .await
+        .expect("deferred unserved-queue retry")
+        .get::<_, bool>(0));
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("immediate unserved-queue retry is backed off"),
+        0
+    );
+
+    // Once a team serves the target queue again, the deferred step applies.
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_queue_service(queue_id,team_id,revision)
+             VALUES('overdue-review','review-team',1)",
+            &[],
+        )
+        .await
+        .expect("serve overdue review queue");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_clock_occurrences
+             SET next_action_at='2020-01-06T09:00:00Z'
+             WHERE clock_occurrence_id=$1",
+            &[&occurrence_id],
+        )
+        .await
+        .expect("make the deferred unserved-queue clock due again");
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("apply the deferred reassignment"),
+        1
+    );
+    let reassigned_task = fixture
+        .database
+        .query_one(
+            "SELECT queue_id,state,holder_issuer,revision
+             FROM casework_review_tasks WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("reread reassigned review task");
+    assert_eq!(reassigned_task.get::<_, String>(0), "overdue-review");
+    assert_eq!(reassigned_task.get::<_, String>(1), "open");
+    assert_eq!(reassigned_task.get::<_, Option<String>>(2), None);
+    assert_eq!(reassigned_task.get::<_, i64>(3), 3);
+    assert_eq!(
+        fixture
+            .database
+            .query_one(
+                "SELECT count(*) FROM casework_review_clock_effects
+                 WHERE clock_occurrence_id=$1",
+                &[&occurrence_id],
+            )
+            .await
+            .expect("count review clock effects after retry")
+            .get::<_, i64>(0),
+        2
+    );
+    assert!(fixture
+        .database
+        .query_one(
+            "SELECT next_action_at IS NULL
+             FROM casework_review_clock_occurrences WHERE clock_occurrence_id=$1",
+            &[&occurrence_id],
+        )
+        .await
+        .expect("completed review clock occurrence")
+        .get::<_, bool>(0));
+}
+
+#[tokio::test]
 async fn source_review_clock_defers_effects_until_the_frozen_binding_is_current() {
     let fixture = fixture().await;
     fixture
