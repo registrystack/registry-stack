@@ -746,12 +746,29 @@ pub enum ReviewTransition {
     },
 }
 
+/// Checks that `reviewer` currently holds a task, independent of policy
+/// verification, stage matching, or any other decision validation. Both
+/// [`record_review_decision`] and the store's task-fetch path call this first
+/// so a non-holder is refused before any expensive policy re-verification.
+pub fn check_task_holder(
+    task_state: &ReviewerTaskState,
+    reviewer: &IssuerPrincipal,
+) -> Result<(), ReviewDecisionError> {
+    match task_state {
+        ReviewerTaskState::Open => Err(ReviewDecisionError::TaskNotHeld),
+        ReviewerTaskState::Held { holder } if holder == reviewer => Ok(()),
+        ReviewerTaskState::Held { .. } => Err(ReviewDecisionError::HolderMismatch),
+        ReviewerTaskState::Decided => Err(ReviewDecisionError::TaskAlreadyDecided),
+    }
+}
+
 pub fn record_review_decision(
     policy: &ReviewKindPolicySnapshot,
     progress: &mut ReviewProgress,
     task: &ReviewerTask,
     decision: ReviewerDecision,
 ) -> Result<ReviewTransition, ReviewDecisionError> {
+    check_task_holder(&task.state, &decision.reviewer)?;
     policy.verify()?;
     if progress.settlement.is_some() {
         return Err(ReviewDecisionError::AlreadySettled);
@@ -769,12 +786,6 @@ pub fn record_review_decision(
         || decision.task_id != task.task_id
     {
         return Err(ReviewDecisionError::StageMismatch);
-    }
-    match &task.state {
-        ReviewerTaskState::Open => return Err(ReviewDecisionError::TaskNotHeld),
-        ReviewerTaskState::Held { holder } if *holder == decision.reviewer => {}
-        ReviewerTaskState::Held { .. } => return Err(ReviewDecisionError::HolderMismatch),
-        ReviewerTaskState::Decided => return Err(ReviewDecisionError::TaskAlreadyDecided),
     }
     if !stage
         .deciding_profiles
@@ -2187,6 +2198,72 @@ mod tests {
         assert_eq!(
             record_review_decision(&snapshot, &mut progress, &open_task, decision),
             Err(ReviewDecisionError::TaskNotHeld)
+        );
+        assert!(progress.decisions.is_empty());
+        assert!(progress.settlement.is_none());
+    }
+
+    /// Corrupts a snapshot's stored digest so `ReviewKindPolicySnapshot::verify`
+    /// fails, without touching the valid snapshot the caller already used to
+    /// build `ReviewProgress`. Used to prove the cheap task-state/holder check
+    /// runs before the expensive policy re-verification in
+    /// `record_review_decision`.
+    fn corrupted(mut snapshot: ReviewKindPolicySnapshot) -> ReviewKindPolicySnapshot {
+        snapshot.identity.digest = ContentDigest::for_bytes(b"tampered-policy-snapshot");
+        snapshot
+    }
+
+    #[test]
+    fn holder_mismatch_is_refused_before_policy_verification() {
+        let snapshot = approval_policy(vec![stage("review", 1)])
+            .snapshot()
+            .unwrap();
+        let request_id = Uuid::from_u128(100);
+        let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
+        let held_task = task(request_id, 0, "review", 1, "holder-a");
+        let decision = approve(&held_task, person("holder-b"));
+
+        assert_eq!(
+            record_review_decision(&corrupted(snapshot), &mut progress, &held_task, decision),
+            Err(ReviewDecisionError::HolderMismatch)
+        );
+        assert!(progress.decisions.is_empty());
+        assert!(progress.settlement.is_none());
+    }
+
+    #[test]
+    fn open_task_is_refused_before_policy_verification() {
+        let snapshot = approval_policy(vec![stage("review", 1)])
+            .snapshot()
+            .unwrap();
+        let request_id = Uuid::from_u128(100);
+        let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
+        let mut open_task = task(request_id, 0, "review", 1, "reviewer");
+        open_task.state = ReviewerTaskState::Open;
+        let decision = approve(&open_task, person("reviewer"));
+
+        assert_eq!(
+            record_review_decision(&corrupted(snapshot), &mut progress, &open_task, decision),
+            Err(ReviewDecisionError::TaskNotHeld)
+        );
+        assert!(progress.decisions.is_empty());
+        assert!(progress.settlement.is_none());
+    }
+
+    #[test]
+    fn decided_task_is_refused_before_policy_verification() {
+        let snapshot = approval_policy(vec![stage("review", 1)])
+            .snapshot()
+            .unwrap();
+        let request_id = Uuid::from_u128(100);
+        let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
+        let mut decided_task = task(request_id, 0, "review", 1, "reviewer");
+        decided_task.state = ReviewerTaskState::Decided;
+        let decision = approve(&decided_task, person("reviewer"));
+
+        assert_eq!(
+            record_review_decision(&corrupted(snapshot), &mut progress, &decided_task, decision),
+            Err(ReviewDecisionError::TaskAlreadyDecided)
         );
         assert!(progress.decisions.is_empty());
         assert!(progress.settlement.is_none());

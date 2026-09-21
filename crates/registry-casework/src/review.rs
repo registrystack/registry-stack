@@ -2,19 +2,20 @@ use chrono::{DateTime, TimeDelta, Utc};
 use deadpool_postgres::GenericClient;
 use futures::{stream, StreamExt};
 use registry_casework_core::{
-    evaluate_activity_clock, record_review_decision, resolve_absence_cover, submission_digest,
-    AbsenceRecord, ActorContext, AssignmentRequest, CalendarPolicy, CaseworkRole, ClockPolicy,
-    ContentDigest, DelegateRequest, EphemeralCredential, HolidaySetDocument, IssuerPrincipal,
-    PolicyBinding, ReminderOccurrence, ReviewAccountabilityRecord, ReviewCancelRequest,
-    ReviewCancelResponse, ReviewClockCorrelation, ReviewClockOccurrence, ReviewClockState,
-    ReviewCreateRequest, ReviewDecisionError, ReviewDecisionValidationError, ReviewHistoryAudience,
-    ReviewHistoryEntry, ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest,
-    ReviewProgress, ReviewRequestAccepted, ReviewRequestLifecycle, ReviewRequestView, ReviewResult,
-    ReviewResultFeedEntry, ReviewResultFeedPage, ReviewResultStatus, ReviewSettlement,
-    ReviewSourceBindingStatus, ReviewSourceProjection, ReviewStagePolicy, ReviewTaskContext,
-    ReviewTaskContextData, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage, ReviewTransition,
-    ReviewValidationError, ReviewerDecision, ReviewerDecisionKind, ReviewerTask, ReviewerTaskState,
-    SourceAdapterError, SourceContextBinding, StepOccurrence, SubjectBinding, SubjectRef,
+    check_task_holder, evaluate_activity_clock, record_review_decision, resolve_absence_cover,
+    submission_digest, AbsenceRecord, ActorContext, AssignmentRequest, CalendarPolicy,
+    CaseworkRole, ClockPolicy, ContentDigest, DelegateRequest, EphemeralCredential,
+    HolidaySetDocument, IssuerPrincipal, PolicyBinding, ReminderOccurrence,
+    ReviewAccountabilityRecord, ReviewCancelRequest, ReviewCancelResponse, ReviewClockCorrelation,
+    ReviewClockOccurrence, ReviewClockState, ReviewCreateRequest, ReviewDecisionError,
+    ReviewDecisionValidationError, ReviewHistoryAudience, ReviewHistoryEntry, ReviewHistoryPage,
+    ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewProgress, ReviewRequestAccepted,
+    ReviewRequestLifecycle, ReviewRequestView, ReviewResult, ReviewResultFeedEntry,
+    ReviewResultFeedPage, ReviewResultStatus, ReviewSettlement, ReviewSourceBindingStatus,
+    ReviewSourceProjection, ReviewStagePolicy, ReviewTaskContext, ReviewTaskContextData,
+    ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage, ReviewTransition, ReviewValidationError,
+    ReviewerDecision, ReviewerDecisionKind, ReviewerTask, ReviewerTaskState, SourceAdapterError,
+    SourceContextBinding, StepOccurrence, SubjectBinding, SubjectRef,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -108,6 +109,21 @@ fn review_validation_error(error: ReviewDecisionValidationError) -> ReviewRuntim
     match error {
         ReviewDecisionValidationError::Structured(error) => ReviewRuntimeError::Validation(error),
         ReviewDecisionValidationError::Policy(_) => ReviewRuntimeError::Corrupt,
+    }
+}
+
+fn map_review_decision_error(error: ReviewDecisionError) -> ReviewRuntimeError {
+    match error {
+        ReviewDecisionError::TaskNotHeld | ReviewDecisionError::HolderMismatch => {
+            ReviewRuntimeError::TaskNotHeld
+        }
+        ReviewDecisionError::DuplicateReviewer
+        | ReviewDecisionError::InitiatorExcluded
+        | ReviewDecisionError::PreviousStageReviewerExcluded
+        | ReviewDecisionError::ProfileNotEligible => ReviewRuntimeError::Forbidden,
+        ReviewDecisionError::Validation(error) => review_validation_error(error),
+        ReviewDecisionError::Policy(_) => ReviewRuntimeError::Corrupt,
+        _ => ReviewRuntimeError::Invalid,
     }
 }
 
@@ -3790,6 +3806,7 @@ impl PostgresStore {
                 _ => return Err(ReviewRuntimeError::Corrupt),
             },
         };
+        check_task_holder(&task.state, &actor.principal).map_err(map_review_decision_error)?;
         let mut progress = ReviewProgress::new(
             request_id,
             record.initiator.clone(),
@@ -3809,18 +3826,7 @@ impl PostgresStore {
         };
         let transition =
             record_review_decision(&record.policy, &mut progress, &task, decision.clone())
-                .map_err(|error| match error {
-                    ReviewDecisionError::TaskNotHeld | ReviewDecisionError::HolderMismatch => {
-                        ReviewRuntimeError::TaskNotHeld
-                    }
-                    ReviewDecisionError::DuplicateReviewer
-                    | ReviewDecisionError::InitiatorExcluded
-                    | ReviewDecisionError::PreviousStageReviewerExcluded
-                    | ReviewDecisionError::ProfileNotEligible => ReviewRuntimeError::Forbidden,
-                    ReviewDecisionError::Validation(error) => review_validation_error(error),
-                    ReviewDecisionError::Policy(_) => ReviewRuntimeError::Corrupt,
-                    _ => ReviewRuntimeError::Invalid,
-                })?;
+                .map_err(map_review_decision_error)?;
         let (decision_name, outcome, result, reason) = decision_columns(&decision.decision);
         let decision_id = Uuid::new_v4();
         transaction
