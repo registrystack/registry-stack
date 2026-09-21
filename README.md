@@ -88,9 +88,6 @@ curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/downl
 # Registry Casework: casework and caseworkctl
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/casework-install.sh | bash
 
-# Registry Scheduling: scheduling and schedulingctl
-curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/scheduling-install.sh | bash
-
 # Registry Relay: relay and relayctl
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh | bash
 
@@ -100,15 +97,16 @@ curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/downl
 
 Each installer verifies the binaries against the published `SHA256SUMS` before
 writing them to `$HOME/.local/bin`, or to the directory `BREG_INSTALL_DIR`,
-`CASEWORK_INSTALL_DIR`, `SCHEDULING_INSTALL_DIR`, `RELAY_INSTALL_DIR`, or
-`EVIDENCECTL_INSTALL_DIR` names. Registry Discovery and Registry Manifest
-publish a binary and no installer: download `discovery-<tag>-linux-amd64` or
+`CASEWORK_INSTALL_DIR`, `RELAY_INSTALL_DIR`, or `EVIDENCECTL_INSTALL_DIR`
+names. Registry Discovery and Registry Manifest publish a binary and no
+installer: download `discovery-<tag>-linux-amd64` or
 `registry-manifest-<tag>-linux-amd64` from the
 [release page](https://github.com/registrystack/registry-stack/releases) and
-check it against the release checksum chain. Container images for `breg`,
-`casework`, `scheduling`, `relay`, `evidence`, and `discovery` are published as
-`ghcr.io/registrystack/<name>:<tag>`. Which platforms each artifact supports,
-and what is not supported, is recorded in
+check it against the release checksum chain. Registry Scheduling publishes a
+container image only; it has no released binary or installer yet. Container
+images for `breg`, `casework`, `scheduling`, `relay`, `evidence`, and
+`discovery` are published as `ghcr.io/registrystack/<name>:<tag>`. Which
+platforms each artifact supports, and what is not supported, is recorded in
 [known limitations](https://docs.registrystack.org/dev/explanation/known-limitations/#platform-support).
 
 ```mermaid
