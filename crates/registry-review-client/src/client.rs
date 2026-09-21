@@ -1,4 +1,5 @@
 use std::fmt;
+use std::time::Duration;
 
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
@@ -39,6 +40,7 @@ pub struct ReviewClient {
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
     max_response_bytes: u64,
+    request_timeout: Duration,
 }
 
 impl fmt::Debug for ReviewClient {
@@ -65,7 +67,14 @@ impl ReviewClient {
             http,
             base_url,
             max_response_bytes: config.max_response_bytes,
+            request_timeout: config.request_timeout,
         })
+    }
+
+    /// The configured outbound request timeout, so callers that guard an
+    /// exchange with a durable lease can size that lease to outlive it.
+    pub fn request_timeout(&self) -> Duration {
+        self.request_timeout
     }
 
     /// Create a request, or recover its accepted binding by repeating the exact

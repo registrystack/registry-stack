@@ -1032,7 +1032,7 @@ async fn external_review_submission_preserves_exact_task_grant_and_refuses_subst
     assert_eq!(row.get::<_, String>(1), "casework-a");
     assert_eq!(row.get::<_, String>(2), "correction-review");
     assert_eq!(create_request["subject"]["source"], PACKAGE);
-    assert_eq!(create_request["subject"]["type"], "change-request");
+    assert_eq!(create_request["subject"]["type"], "correction-request");
     assert_eq!(create_request["subject"]["id"], record);
     assert_eq!(create_request["subject"]["version"], "1");
 

@@ -20,6 +20,7 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, IF_MATCH};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 use subtle::ConstantTimeEq;
 use tokio_postgres::{GenericClient, Transaction};
 use uuid::Uuid;
@@ -32,13 +33,23 @@ use crate::mutation::MutationError;
 use crate::postgres::SqlIdentifier;
 use crate::request_workflow::ProposalSnapshot;
 
-const SUBMISSION_LEASE_SECONDS: i64 = 30;
 const APPLICATION_LEASE_MINIMUM_SECONDS: i64 = 30;
 const MAX_APPLICATION_ATTEMPTS: i32 = 1_000;
 const APPLICATION_ATTEMPTS_EXHAUSTED: &str = "application-attempts-exhausted";
 const MAX_APPLICATION_RESPONSE_BYTES: u64 = 256 * 1024;
 pub(crate) const MAXIMUM_COMPLETION_RECIPIENT_BYTES: usize = 256;
 pub(crate) const MAXIMUM_REVIEW_RECOVERY_DAYS: u32 = 3_650;
+
+fn outbound_lease_seconds(request_timeout: Duration) -> i64 {
+    // The claim lease must outlive the outbound call it guards: an expiry
+    // inside the request timeout lets another instance treat the job as
+    // unclaimed while the original request is still in flight. A five second
+    // grace absorbs scheduling delay and database clock difference; short
+    // timeouts keep the thirty second floor so fast-failing jobs are retried
+    // promptly.
+    (i64::try_from(request_timeout.as_secs()).unwrap_or(i64::MAX) + 5)
+        .max(APPLICATION_LEASE_MINIMUM_SECONDS)
+}
 
 pub(crate) fn valid_completion_recipient(recipient: &str) -> bool {
     !recipient.is_empty()
@@ -113,14 +124,7 @@ impl ReviewExecutorClient {
             trusted_root_certificates: None,
         })
         .map_err(|_| ReviewConfigurationError)?;
-        // The application claim lease must outlive the outbound call it
-        // guards: an expiry inside the request timeout lets another instance
-        // treat the job as unclaimed while the original request is still in
-        // flight. A five second grace absorbs scheduling delay and database
-        // clock difference; short timeouts keep the previous thirty second
-        // floor so fast-failing jobs are retried promptly.
-        let lease_seconds = (i64::try_from(request_timeout.as_secs()).unwrap_or(i64::MAX) + 5)
-            .max(APPLICATION_LEASE_MINIMUM_SECONDS);
+        let lease_seconds = outbound_lease_seconds(request_timeout);
         Ok(Self {
             executor,
             http,
@@ -348,6 +352,7 @@ pub struct ReviewAuthorityClient {
     recovery_days: u32,
     completion_token: Option<Zeroizing<String>>,
     completion_recipient: Option<String>,
+    lease_seconds: i64,
 }
 
 impl ReviewAuthorityClient {
@@ -383,6 +388,10 @@ impl ReviewAuthorityClient {
         {
             return Err(ReviewConfigurationError);
         }
+        // Submission, cancellation, and result-poll claims all guard one
+        // outbound exchange on this authority's client, so their lease is
+        // sized from that client's request timeout.
+        let lease_seconds = outbound_lease_seconds(client.request_timeout());
         Ok(Self {
             authority,
             client,
@@ -392,6 +401,7 @@ impl ReviewAuthorityClient {
             recovery_days,
             completion_token,
             completion_recipient,
+            lease_seconds,
         })
     }
 }
@@ -607,7 +617,8 @@ impl ReviewAuthorityRegistry {
                         END,
                         updated_at=transaction_timestamp()
                   WHERE state='cancelling'
-                    AND (recovery_deadline <= transaction_timestamp() OR attempt_count >= 1000)",
+                    AND (recovery_deadline <= transaction_timestamp() OR attempt_count >= 1000)
+                    AND (lease_until IS NULL OR lease_until < transaction_timestamp())",
                 &[],
             )
             .await
@@ -640,6 +651,7 @@ impl ReviewAuthorityRegistry {
                 &authority.client,
                 &authority.profile,
                 &token,
+                authority.lease_seconds,
             )
             .await?
             {
@@ -665,6 +677,7 @@ impl ReviewAuthorityRegistry {
                 &authority.client,
                 &authority.profile,
                 &token,
+                authority.lease_seconds,
             )
             .await?
             {
@@ -720,6 +733,7 @@ impl ReviewAuthorityRegistry {
                         &authority.client,
                         &authority.profile,
                         &token,
+                        authority.lease_seconds,
                     )
                     .await
                 }
@@ -1571,6 +1585,7 @@ pub struct ClaimedReviewSubmission {
 pub async fn claim_submission(
     client: &impl GenericClient,
     authority: &str,
+    lease_seconds: i64,
 ) -> Result<Option<ClaimedReviewSubmission>, MutationError> {
     let row = client
         .query_opt(
@@ -1606,7 +1621,7 @@ pub async fn claim_submission(
              RETURNING s.request_entity_id,s.request_id,s.proposal_version,s.authority,
                        s.idempotency_key,s.create_request,s.expected_submission_digest,
                        s.lease_until",
-            &[&SUBMISSION_LEASE_SECONDS, &authority],
+            &[&lease_seconds, &authority],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
@@ -1634,8 +1649,9 @@ pub async fn run_one_submission(
     review_client: &ReviewClient,
     profile: &str,
     token: &BearerToken,
+    lease_seconds: i64,
 ) -> Result<bool, MutationError> {
-    let Some(job) = claim_submission(client, authority).await? else {
+    let Some(job) = claim_submission(client, authority, lease_seconds).await? else {
         return Ok(false);
     };
     let response = review_client
@@ -1722,6 +1738,7 @@ pub async fn run_one_cancellation(
     review_client: &ReviewClient,
     profile: &str,
     token: &BearerToken,
+    lease_seconds: i64,
 ) -> Result<bool, MutationError> {
     let Some(row) = client
         .query_opt(
@@ -1737,7 +1754,7 @@ pub async fn run_one_cancellation(
                      ORDER BY next_attempt_at,created_at FOR UPDATE SKIP LOCKED LIMIT 1)
               RETURNING request_entity_id,request_id,proposal_version,authority,
                         idempotency_key,accepted_binding,lease_until",
-            &[&SUBMISSION_LEASE_SECONDS, &authority_id],
+            &[&lease_seconds, &authority_id],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?
@@ -2003,28 +2020,43 @@ pub async fn poll_one_result(
     review_client: &ReviewClient,
     profile: &str,
     token: &BearerToken,
+    lease_seconds: i64,
 ) -> Result<bool, MutationError> {
+    // The lookup is claimed with a lease before the outbound exchange so two
+    // instances cannot both act on one submission's result at once.
     let Some(row) = client
         .query_opt(
-            "SELECT authority,accepted_binding
-               FROM registry_internal.registry_request_review_submissions s
-              WHERE state='accepted' AND authority=$1
-                AND next_result_poll_at <= transaction_timestamp()
-                AND NOT EXISTS (
-                    SELECT 1 FROM registry_internal.registry_request_review_results r
-                     WHERE r.request_entity_id=s.request_entity_id AND r.request_id=s.request_id
-                       AND r.proposal_version=s.proposal_version)
-              ORDER BY updated_at LIMIT 1",
-            &[&authority_id],
+            "UPDATE registry_internal.registry_request_review_submissions s
+                SET lease_until=transaction_timestamp()+($2::bigint * interval '1 second'),
+                    updated_at=transaction_timestamp()
+              WHERE (s.request_entity_id,s.request_id,s.proposal_version)=(
+                    SELECT c.request_entity_id,c.request_id,c.proposal_version
+                      FROM registry_internal.registry_request_review_submissions c
+                     WHERE c.state='accepted' AND c.authority=$1
+                       AND c.next_result_poll_at <= transaction_timestamp()
+                       AND (c.lease_until IS NULL OR c.lease_until < transaction_timestamp())
+                       AND NOT EXISTS (
+                           SELECT 1 FROM registry_internal.registry_request_review_results r
+                            WHERE r.request_entity_id=c.request_entity_id
+                              AND r.request_id=c.request_id
+                              AND r.proposal_version=c.proposal_version)
+                     ORDER BY c.updated_at FOR UPDATE SKIP LOCKED LIMIT 1)
+              RETURNING s.request_entity_id,s.request_id,s.proposal_version,
+                        s.authority,s.accepted_binding,s.lease_until",
+            &[&authority_id, &lease_seconds],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?
     else {
         return Ok(false);
     };
-    let authority: String = row.get(0);
+    let entity_id: String = row.get(0);
+    let request_id: Uuid = row.get(1);
+    let version: i64 = row.get(2);
+    let authority: String = row.get(3);
     let accepted: ReviewRequestAccepted =
-        serde_json::from_value(row.get(1)).map_err(|_| MutationError::Unavailable)?;
+        serde_json::from_value(row.get(4)).map_err(|_| MutationError::Unavailable)?;
+    let lease_until: chrono::DateTime<chrono::Utc> = row.get(5);
     let response = review_client
         .result(ReviewAuth::new(token, profile), &accepted)
         .await
@@ -2042,6 +2074,9 @@ pub async fn poll_one_result(
                 .map_err(|_| MutationError::Unavailable)?;
         }
         ReviewResultResponse::Pending { .. } | ReviewResultResponse::ConcealedOrUnknown { .. } => {
+            // The lease fence keeps a worker that lost its claim (expired
+            // lease, reclaimed row) from republishing a backoff over the
+            // new holder's schedule.
             client
                 .execute(
                     "UPDATE registry_internal.registry_request_review_submissions
@@ -2049,26 +2084,28 @@ pub async fn poll_one_result(
                             next_result_poll_at=transaction_timestamp()+
                               (LEAST(60,5*LEAST(result_poll_attempts+1,1000)) * interval '1 second'),
                             updated_at=transaction_timestamp()
-                      WHERE authority=$1 AND accepted_binding=$2 AND state='accepted'",
-                    &[
-                        &authority,
-                        &serde_json::to_value(&accepted).map_err(|_| MutationError::Unavailable)?,
-                    ],
+                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                        AND state='accepted' AND lease_until=$4",
+                    &[&entity_id, &request_id, &version, &lease_until],
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
         }
         ReviewResultResponse::Expired { .. } => {
+            // Terminal failure is fenced the same way, and never marks a
+            // submission another worker already reconciled a result for.
             client
                 .execute(
                     "UPDATE registry_internal.registry_request_review_submissions
-                        SET state='failed',last_error_code='result-expired',
+                        SET state='failed',last_error_code='result-expired',lease_until=NULL,
                             updated_at=transaction_timestamp()
-                      WHERE authority=$1 AND accepted_binding=$2 AND state='accepted'",
-                    &[
-                        &authority,
-                        &serde_json::to_value(&accepted).map_err(|_| MutationError::Unavailable)?,
-                    ],
+                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                        AND state='accepted' AND lease_until=$4
+                        AND NOT EXISTS (
+                            SELECT 1 FROM registry_internal.registry_request_review_results r
+                             WHERE r.request_entity_id=$1 AND r.request_id=$2
+                               AND r.proposal_version=$3)",
+                    &[&entity_id, &request_id, &version, &lease_until],
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
@@ -2652,11 +2689,18 @@ pub(crate) async fn read_projection(
         .await
         .map_err(|_| MutationError::Unavailable)?;
     let Some(row) = row else {
+        // The same executor presence rule the accepted row publishes and the
+        // clients decode applies before any submission exists: an automatic
+        // application always names its executor.
+        let mut application = json!({"mode":application_mode(proposal),"state":"awaitingReview"});
+        if let Some(executor) = proposal.on_approved().executor.as_deref() {
+            application["executor"] = json!(executor);
+        }
         return Ok(Some(json!({
             "submission":{"state":"pending","authority":requirement.authority},
             "result":{"state":"pending"},
             "delivery":{"state":"polling"},
-            "application":{"mode":application_mode(proposal),"state":"awaitingReview"},
+            "application":application,
             "recovery":{"state":"none"}
         })));
     };

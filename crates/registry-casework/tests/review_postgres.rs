@@ -2744,6 +2744,70 @@ async fn review_decisions_reach_the_audit_outbox_in_the_decision_transaction() {
 }
 
 #[tokio::test]
+async fn review_cancellation_reaches_the_audit_outbox_in_the_cancel_transaction() {
+    let fixture = fixture().await;
+    let project = answer_project(false);
+    project.check().expect("cancel audit test project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("cancel audit test service");
+    let mut create = request("cancel-audit", "cancel-audit-ref");
+    create.kind = "registry-answer".to_owned();
+    let created = service
+        .create_review_request(&fixture.producer, create.clone(), "create-cancel-audit")
+        .await
+        .expect("create cancel audit review");
+    service
+        .cancel_review_request(
+            &fixture.producer,
+            created.accepted.request_id,
+            ReviewCancelRequest {
+                subject: create.subject,
+                reason: "private cancellation reason".to_owned(),
+            },
+            "cancel-cancel-audit",
+        )
+        .await
+        .expect("cancel audit review");
+    let cancel_audit: serde_json::Value = fixture
+        .database
+        .query_one(
+            "SELECT audit_record FROM casework_audit_outbox
+             WHERE audit_record->>'event'='casework.review_cancelled'
+               AND audit_record->>'requestId'=$1",
+            &[&created.accepted.request_id.to_string()],
+        )
+        .await
+        .expect("committed cancellation audit")
+        .get(0);
+    assert_eq!(
+        cancel_audit["actor"]["issuer"],
+        fixture.producer.principal.issuer
+    );
+    assert_eq!(
+        cancel_audit["actor"]["subject"],
+        fixture.producer.principal.subject
+    );
+    assert_eq!(cancel_audit["profileId"], fixture.producer.profile_id);
+    let result_id: Uuid = fixture
+        .database
+        .query_one(
+            "SELECT result_id FROM casework_review_results WHERE request_id=$1",
+            &[&created.accepted.request_id],
+        )
+        .await
+        .expect("cancelled result")
+        .get(0);
+    assert_eq!(cancel_audit["resultId"], result_id.to_string());
+    // The audit trail carries who cancelled, not why: the private reason
+    // stays in the review history row only.
+    assert!(cancel_audit.get("reason").is_none());
+}
+
+#[tokio::test]
 async fn review_reads_check_access_before_disclosing_retention_expiry() {
     let fixture = fixture().await;
     let project = answer_project(false);
@@ -5662,7 +5726,6 @@ async fn source_review_clock_defers_effects_until_the_frozen_binding_is_current(
     fixture.source_revoked.store(false, Ordering::SeqCst);
     for state in [
         OccurrenceState::Cancelled,
-        OccurrenceState::Completed,
         OccurrenceState::Superseded,
         OccurrenceState::Synchronizing,
     ] {
@@ -5704,6 +5767,117 @@ async fn source_review_clock_defers_effects_until_the_frozen_binding_is_current(
             .expect("apply current source review clock"),
         2
     );
+}
+
+#[tokio::test]
+async fn completed_source_occurrence_keeps_the_review_clock_current() {
+    let fixture = fixture().await;
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_queue_service(queue_id,team_id,revision)
+             VALUES('overdue-review','review-team',1)",
+            &[],
+        )
+        .await
+        .expect("serve overdue review queue");
+    let mut project = activity_clock_project();
+    project.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    project.check().expect("source activity clock project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        [Arc::new(ReviewSource {
+            revoked: Arc::clone(&fixture.source_revoked),
+            state: Arc::clone(&fixture.source_state),
+            read_blocked: Arc::new(AtomicBool::new(false)),
+            read_started: Arc::new(Notify::new()),
+            read_continue: Arc::new(Notify::new()),
+            advanced: Arc::new(AtomicBool::new(false)),
+        }) as Arc<dyn SourceAdapter>],
+    )
+    .expect("source activity clock service");
+    let mut create = request(
+        "record-source-completed-clock",
+        "source-completed-clock-reference",
+    );
+    create.context = ReviewContext::Source {
+        binding: SourceContextBinding {
+            reference: "breg:registry:record:record-source-completed-clock:1".to_owned(),
+        },
+    };
+    let created = service
+        .create_review_request(&fixture.producer, create, "create-source-completed-clock")
+        .await
+        .expect("create source completed-clock review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            Some("staff"),
+            "human-bearer",
+            1,
+            "claim-source-completed-clock",
+        )
+        .await
+        .expect("claim source completed-clock task");
+    service
+        .create_holiday_revision(
+            &actor("admin", CaseworkRole::Administrator, "administrator"),
+            &HolidaySetDocument {
+                holiday_set: "office-holidays".to_owned(),
+                revision: 1,
+                dates: Vec::new(),
+            },
+            "publish-source-completed-clock-holidays",
+        )
+        .await
+        .expect("publish source completed-clock holiday revision");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_clock_occurrences
+             SET anchor_at='2020-01-06T09:00:00Z',updated_at='2020-01-06T09:00:00Z'
+             WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("place source activity clock in the past");
+    *fixture.source_state.lock().expect("source state lock") = OccurrenceState::Completed;
+
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("apply completed-occurrence source review clock"),
+        2
+    );
+    let applied_effects: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_clock_effects e
+              JOIN casework_review_clock_occurrences c USING(clock_occurrence_id)
+             WHERE c.task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("count applied source clock effects")
+        .get(0);
+    assert_eq!(applied_effects, 2, "reminder and reassignment both apply");
+    // Every effect is applied, so the clock is finished instead of being
+    // deferred for another thirty-second cycle.
+    let deferred: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_clock_occurrences
+             WHERE task_id=$1 AND next_action_at IS NOT NULL",
+            &[&task],
+        )
+        .await
+        .expect("check completed source clock deferral")
+        .get(0);
+    assert_eq!(deferred, 0);
 }
 
 #[tokio::test]

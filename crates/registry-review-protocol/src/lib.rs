@@ -325,6 +325,11 @@ pub struct ReviewResult {
 
 impl ReviewResult {
     pub fn check(&self) -> Result<(), ProtocolError> {
+        // A nil result identifier cannot anchor the unique stored result a
+        // later reconciliation or duplicate feed entry correlates against.
+        if self.result_id.is_nil() {
+            return Err(ProtocolError::Identifier);
+        }
         self.subject.check()?;
         self.policy.check()?;
         if self.available_until <= self.completed_at {
@@ -517,6 +522,8 @@ pub enum ProtocolError {
     TerminalPayload,
     #[error("result availability must end after completion")]
     Availability,
+    #[error("a correlation identifier cannot be the nil UUID")]
+    Identifier,
     #[error("the result endpoint returned a status outside the review lookup contract")]
     UnexpectedResultStatus,
 }
@@ -612,7 +619,7 @@ mod tests {
     fn approved_result_cannot_carry_a_custom_outcome_or_payload() {
         let completed_at = Utc.with_ymd_and_hms(2026, 9, 19, 0, 0, 0).unwrap();
         let result = ReviewResult {
-            result_id: Uuid::nil(),
+            result_id: Uuid::from_u128(0x1),
             request_id: Uuid::nil(),
             subject: request().subject,
             policy: PolicyBinding {
@@ -634,7 +641,7 @@ mod tests {
     fn corrective_results_require_a_configured_outcome() {
         let completed_at = Utc.with_ymd_and_hms(2026, 9, 19, 0, 0, 0).unwrap();
         let result = ReviewResult {
-            result_id: Uuid::nil(),
+            result_id: Uuid::from_u128(0x1),
             request_id: Uuid::nil(),
             subject: request().subject,
             policy: PolicyBinding {
@@ -653,11 +660,35 @@ mod tests {
     }
 
     #[test]
+    fn a_nil_result_identifier_cannot_anchor_stored_results() {
+        let completed_at = Utc.with_ymd_and_hms(2026, 9, 19, 0, 0, 0).unwrap();
+        let mut result = ReviewResult {
+            result_id: Uuid::from_u128(0x1),
+            request_id: Uuid::nil(),
+            subject: request().subject,
+            policy: PolicyBinding {
+                id: "registry-correction".to_owned(),
+                version: "1".to_owned(),
+                digest: ContentDigest::for_bytes(b"policy"),
+            },
+            submission_digest: ContentDigest::for_bytes(b"submission"),
+            status: ReviewResultStatus::Approved,
+            outcome: None,
+            result: None,
+            completed_at,
+            available_until: completed_at + chrono::Duration::days(30),
+        };
+        assert!(result.check().is_ok());
+        result.result_id = Uuid::nil();
+        assert_eq!(result.check(), Err(ProtocolError::Identifier));
+    }
+
+    #[test]
     fn corrective_result_payloads_must_be_objects() {
         let completed_at = Utc.with_ymd_and_hms(2026, 9, 19, 0, 0, 0).unwrap();
         for payload in [json!("scalar"), json!(["array"])] {
             let result = ReviewResult {
-                result_id: Uuid::nil(),
+                result_id: Uuid::from_u128(0x1),
                 request_id: Uuid::nil(),
                 subject: request().subject,
                 policy: PolicyBinding {

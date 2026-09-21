@@ -153,13 +153,11 @@ impl CaseworkService {
                         match self.adapters.get(&subject.source_id) {
                             Some(adapter) => adapter.read_authoritative(&subject).await.is_ok_and(
                                 |observation| {
-                                    observation.subject == subject
-                                    && observation.binding.version == record.subject.version
-                                    && observation.binding.integrity.as_deref()
-                                        == Some(record.subject.digest.as_str())
-                                    && observation.state.is_active()
-                                    && observation.state
-                                        != registry_casework_core::OccurrenceState::Synchronizing
+                                    pinned_occurrence_reviewable(
+                                        &observation,
+                                        &subject,
+                                        &record.subject,
+                                    )
                                 },
                             ),
                             None => false,
@@ -1004,18 +1002,8 @@ impl CaseworkService {
                 // occurrence the caller viewed: if the source advanced to a
                 // newer binding between the two reads, authorizing against
                 // the stale pin would act on source-owned work the caller
-                // never saw. Withdrawn, superseded, and still-synchronizing
-                // occurrences refuse the operation, while a completed
-                // occurrence stays reviewable under the same bounded
-                // retention as the caller view above.
-                if observation.subject != subject
-                    || observation.binding.version != record.subject.version
-                    || observation.binding.integrity.as_deref()
-                        != Some(record.subject.digest.as_str())
-                    || (!observation.state.is_active()
-                        && observation.state != registry_casework_core::OccurrenceState::Completed)
-                    || observation.state == registry_casework_core::OccurrenceState::Synchronizing
-                {
+                // never saw.
+                if !pinned_occurrence_reviewable(&observation, &subject, &record.subject) {
                     return Err(ReviewRuntimeError::Forbidden);
                 }
                 Ok(())
@@ -2619,15 +2607,38 @@ impl PostgresStore {
             now,
         )
         .await?;
+        let cancel_event_id = Uuid::new_v4();
         transaction
             .execute(
                 "INSERT INTO casework_review_history(event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
                  VALUES($1,$2,NULL,'review_cancelled',NULL,$3,$4)",
                 &[
-                    &Uuid::new_v4(),
+                    &cancel_event_id,
                     &request_id,
                     &json!({"reason": request.reason}),
                     &now,
+                ],
+            )
+            .await?;
+        // The cancellation reaches the external audit stream like every other
+        // mutation, in the same transaction. The record stays minimal: the
+        // private reason never leaves the review history row.
+        transaction
+            .execute(
+                "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
+                &[
+                    &cancel_event_id,
+                    &json!({
+                        "event": "casework.review_cancelled",
+                        "eventId": cancel_event_id,
+                        "requestId": request_id,
+                        "actor": {
+                            "issuer": actor.principal.issuer,
+                            "subject": actor.principal.subject,
+                        },
+                        "profileId": actor.profile_id,
+                        "resultId": result.result_id,
+                    }),
                 ],
             )
             .await?;
@@ -4977,6 +4988,28 @@ fn policy_binding(policy: &ReviewKindPolicySnapshot) -> PolicyBinding {
         version: policy.identity.version.clone(),
         digest: policy.identity.digest.clone(),
     }
+}
+
+// The review clock driver and the review preflight gate on the same source
+// facts: an authoritative observation is usable only while it still describes
+// the pinned occurrence the request was created against and the source
+// reports live work. Superseded and cancelled occurrences refuse the
+// operation, and a still-synchronizing occurrence refuses it because the
+// source has not finished publishing the work. A completed occurrence stays
+// reviewable, because Casework's bounded retention intentionally accepts
+// fresh reviews for settled proposals and the source's pinned correlation,
+// not this gate, refuses their results.
+fn pinned_occurrence_reviewable(
+    observation: &registry_casework_core::AuthoritativeObservation,
+    subject: &SubjectRef,
+    binding: &SubjectBinding,
+) -> bool {
+    observation.subject == *subject
+        && observation.binding.version == binding.version
+        && observation.binding.integrity.as_deref() == Some(binding.digest.as_str())
+        && (observation.state.is_active()
+            || observation.state == registry_casework_core::OccurrenceState::Completed)
+        && observation.state != registry_casework_core::OccurrenceState::Synchronizing
 }
 
 fn review_submission_binding_digest(producer_id: &str, request: &ReviewCreateRequest) -> String {

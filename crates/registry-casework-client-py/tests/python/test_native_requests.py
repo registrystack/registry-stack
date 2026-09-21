@@ -124,6 +124,7 @@ class _Handler(BaseHTTPRequestHandler):
                             "sourceRevision": "revision-42",
                             "version": "1",
                             "generation": "generation-42",
+                            "integrity": f"sha256:{'a' * 64}",
                         },
                         "displayReference": "Correction 42",
                         "display": {},

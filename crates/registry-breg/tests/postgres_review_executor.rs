@@ -39,6 +39,9 @@ use postgres_harness::TestDatabase;
 
 const DIGEST: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TRACEPARENT: &str = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
+// The claim lease these tests pass to the one-shot executor helpers. It
+// matches the production floor for a request timeout at or under two seconds.
+const TEST_LEASE_SECONDS: i64 = 30;
 
 struct SourceState {
     request_id: Uuid,
@@ -1724,6 +1727,7 @@ async fn remote_review_submission_and_result_lookup_hold_no_postgres_transaction
             &review_client,
             "producer-profile-a",
             &token,
+            TEST_LEASE_SECONDS,
         )
         .await;
         (worker, review_client, token, outcome)
@@ -1741,6 +1745,7 @@ async fn remote_review_submission_and_result_lookup_hold_no_postgres_transaction
             &review_client,
             "producer-profile-a",
             &token,
+            TEST_LEASE_SECONDS,
         )
         .await;
         (worker, outcome)
@@ -1791,6 +1796,7 @@ async fn deterministic_review_submission_refusal_becomes_terminal() {
         &authority_client(endpoint, "producer-profile-a"),
         "producer-profile-a",
         &BearerToken::new("token-a").unwrap(),
+        TEST_LEASE_SECONDS,
     )
     .await
     .expect("refused submission is handled"));
@@ -1852,6 +1858,7 @@ async fn nonconforming_gateway_response_retries_the_exact_review_submission() {
         &client,
         "producer-profile-a",
         &token,
+        TEST_LEASE_SECONDS,
     )
     .await
     .expect("nonconforming gateway response is retained for retry"));
@@ -1889,6 +1896,7 @@ async fn nonconforming_gateway_response_retries_the_exact_review_submission() {
         &client,
         "producer-profile-a",
         &token,
+        TEST_LEASE_SECONDS,
     )
     .await
     .expect("exact idempotent retry recovers the accepted binding"));
@@ -1952,6 +1960,7 @@ async fn rate_limited_review_submission_retries_the_exact_idempotency_key() {
         &client,
         "producer-profile-a",
         &token,
+        TEST_LEASE_SECONDS,
     )
     .await
     .expect("rate-limited submission is retained for bounded retry"));
@@ -1989,6 +1998,7 @@ async fn rate_limited_review_submission_retries_the_exact_idempotency_key() {
         &client,
         "producer-profile-a",
         &token,
+        TEST_LEASE_SECONDS,
     )
     .await
     .expect("exact idempotent retry recovers the accepted binding"));
@@ -2055,6 +2065,7 @@ async fn stale_submission_failure_cannot_replace_a_reclaimed_lease() {
             &review_client,
             "producer-profile-a",
             &token,
+            TEST_LEASE_SECONDS,
         )
         .await
     });
@@ -2287,6 +2298,7 @@ async fn accepted_after_withdrawal_preserves_original_submission_recovery_deadli
         &authority_client(endpoint, "producer-profile-a"),
         "producer-profile-a",
         &BearerToken::new("token-a").unwrap(),
+        TEST_LEASE_SECONDS,
     )
     .await
     .expect("accepted submission is retained for cancellation"));
@@ -2449,6 +2461,7 @@ async fn stale_cancellation_failure_cannot_replace_a_reclaimed_lease() {
             &review_client,
             "producer-profile-a",
             &token,
+            TEST_LEASE_SECONDS,
         )
         .await
     });
@@ -2554,6 +2567,7 @@ async fn successful_cancellation_reconciles_before_becoming_cancelled() {
         &authority_client(endpoint, "producer-profile-a"),
         "producer-profile-a",
         &BearerToken::new("token-a").unwrap(),
+        TEST_LEASE_SECONDS,
     )
     .await
     .expect("successful cancellation is reconciled"));
@@ -2680,6 +2694,323 @@ async fn expired_or_exhausted_cancellations_become_terminal_without_remote_io() 
     }
 
     drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn cancellation_recovery_expiry_leaves_a_live_lease_to_its_holder() {
+    let database = TestDatabase::create(2).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT USAGE ON SCHEMA registry_internal TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime review schema access");
+    let leased = Uuid::from_u128(0xe1);
+    let unleased = Uuid::from_u128(0xe2);
+    for request_id in [leased, unleased] {
+        seed_submission(
+            &database.admin,
+            request_id,
+            "casework-a",
+            "producer-a",
+            "policy-a",
+        )
+        .await;
+        let review_request_id = Uuid::from_u128(request_id.as_u128() + 100).to_string();
+        database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_request_review_submissions
+                    SET state='cancelling',withdrawn=true,
+                        accepted_binding=jsonb_build_object('requestId',$2::text),
+                        recovery_deadline=transaction_timestamp()-interval '1 second',
+                        lease_until=CASE WHEN request_id=$3
+                            THEN transaction_timestamp()+interval '20 seconds'
+                            ELSE NULL END
+                  WHERE request_id=$1",
+                &[&request_id, &review_request_id, &leased],
+            )
+            .await
+            .expect("seed cancellation recovery");
+    }
+
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let authorities = authority_registry("casework-a", "producer-a", "sender", "registry-a");
+    assert!(run_review_authority_once_for_test(&pool, &authorities)
+        .await
+        .expect("expire only unleased cancellation recovery"));
+    let rows = database
+        .admin
+        .query(
+            "SELECT request_id,state,lease_until,last_error_code
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=ANY($1) ORDER BY request_id",
+            &[&vec![leased, unleased]],
+        )
+        .await
+        .expect("read cancellation recovery outcomes");
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        let request_id: Uuid = row.get(0);
+        if request_id == leased {
+            assert_eq!(row.get::<_, String>(1), "cancelling");
+            assert!(row
+                .get::<_, Option<chrono::DateTime<chrono::Utc>>>(2)
+                .is_some());
+            assert_eq!(row.get::<_, Option<String>>(3), None);
+        } else {
+            assert_eq!(row.get::<_, String>(1), "failed");
+            assert_eq!(row.get::<_, Option<chrono::DateTime<chrono::Utc>>>(2), None);
+            assert_eq!(row.get::<_, String>(3), "cancellation-recovery-expired");
+        }
+    }
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn submission_claims_size_their_lease_from_the_request_timeout() {
+    let database = TestDatabase::create(2).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT USAGE ON SCHEMA registry_internal TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime review schema access");
+    let source_request_id = Uuid::from_u128(0xe3);
+    seed_submission(
+        &database.admin,
+        source_request_id,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+
+    let gate = Arc::new(RemoteGate::default());
+    let (endpoint, server) = serve_failing_authority(Arc::clone(&gate)).await;
+    let slow_client = ReviewClient::new(
+        ReviewClientConfig::new(endpoint).with_request_timeout(Duration::from_secs(60)),
+    )
+    .expect("review client");
+    let configured = Arc::new(
+        ReviewAuthorityClient::new(
+            "casework-a".to_owned(),
+            slow_client,
+            Arc::new(registry_platform_httputil::StaticToken::new("token-a".to_owned()).unwrap()),
+            "producer-profile-a".to_owned(),
+            "producer-a".to_owned(),
+            7,
+            None,
+            None,
+        )
+        .expect("review authority"),
+    );
+    let authorities = Arc::new(
+        ReviewAuthorityRegistry::new(BTreeMap::from([("casework-a".to_owned(), configured)]))
+            .expect("authority registry"),
+    );
+    let worker = tokio::spawn({
+        let authorities = Arc::clone(&authorities);
+        let pool = database.runtime_config.build_pool().expect("runtime pool");
+        async move { run_review_authority_once_for_test(&pool, &authorities).await }
+    });
+    gate.entered.notified().await;
+    let claimed = database
+        .admin
+        .query_one(
+            "SELECT state,lease_until-transaction_timestamp() > interval '45 seconds'
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&source_request_id],
+        )
+        .await
+        .expect("claimed submission lease");
+    assert_eq!(claimed.get::<_, String>(0), "submitting");
+    assert!(
+        claimed.get::<_, bool>(1),
+        "the claim lease must outlive the sixty second request timeout"
+    );
+    gate.release.notify_one();
+    assert!(worker
+        .await
+        .expect("authority worker joins")
+        .expect("uncertain submission is handled"));
+
+    server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_live_result_poll_lease_keeps_the_lookup_to_its_holder() {
+    let mut database = TestDatabase::create(2).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+    let request_id = Uuid::from_u128(0xe4);
+    seed_submission(
+        &database.admin,
+        request_id,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    let accepting = Arc::new(AuthorityState {
+        producer_id: "producer-a",
+        expected_token: "Bearer token-a",
+        expected_profile: "producer-profile-a",
+        accepted_request_id: Uuid::from_u128(0xe5),
+        requests: AtomicUsize::new(0),
+        gate: None,
+    });
+    let (endpoint, server) = serve_authority(accepting).await;
+    let token = BearerToken::new("token-a").unwrap();
+    assert!(run_one_submission(
+        &database.admin,
+        "casework-a",
+        &authority_client(endpoint, "producer-profile-a"),
+        "producer-profile-a",
+        &token,
+        TEST_LEASE_SECONDS,
+    )
+    .await
+    .expect("accept the review submission"));
+
+    let gate = Arc::new(RemoteGate::default());
+    let polling = Arc::new(AuthorityState {
+        producer_id: "producer-a",
+        expected_token: "Bearer token-a",
+        expected_profile: "producer-profile-a",
+        accepted_request_id: Uuid::from_u128(0xe5),
+        requests: AtomicUsize::new(0),
+        gate: Some(Arc::clone(&gate)),
+    });
+    let (gated_endpoint, gated_server) = serve_authority(polling).await;
+    let (mut worker, worker_task) = database.connect_admin().await;
+    let lookup = tokio::spawn(async move {
+        poll_one_result(
+            &mut worker,
+            "casework-a",
+            &authority_client(gated_endpoint, "producer-profile-a"),
+            "producer-profile-a",
+            &token,
+            TEST_LEASE_SECONDS,
+        )
+        .await
+    });
+    gate.entered.notified().await;
+    let claimed = database
+        .admin
+        .query_one(
+            "SELECT lease_until,result_poll_attempts
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("claimed result lookup");
+    let lease_until = claimed.get::<_, chrono::DateTime<chrono::Utc>>(0);
+    assert_eq!(claimed.get::<_, i32>(1), 0);
+
+    // The poll is made due again so only the live lease can keep the lookup
+    // claimed; a second worker without that lease must find nothing to poll.
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET next_result_poll_at=transaction_timestamp()
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("make the result poll due again");
+    let unreachable = "http://127.0.0.1:9/"
+        .parse()
+        .expect("unroutable review authority URL");
+    assert!(!poll_one_result(
+        &mut database.admin,
+        "casework-a",
+        &authority_client(unreachable, "producer-profile-a"),
+        "producer-profile-a",
+        &BearerToken::new("token-a").unwrap(),
+        TEST_LEASE_SECONDS,
+    )
+    .await
+    .expect("a live lease leaves no result lookup to claim"));
+
+    gate.release.notify_one();
+    assert!(lookup
+        .await
+        .expect("result lookup worker joins")
+        .expect("pending result lookup succeeds"));
+    let settled = database
+        .admin
+        .query_one(
+            "SELECT result_poll_attempts,lease_until
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("settled result lookup");
+    assert_eq!(settled.get::<_, i32>(0), 1);
+    assert_eq!(
+        settled.get::<_, chrono::DateTime<chrono::Utc>>(1),
+        lease_until
+    );
+
+    worker_task.abort();
+    server.abort();
+    gated_server.abort();
     database.cleanup().await;
 }
 
@@ -3458,6 +3789,7 @@ async fn two_authority_concurrent_workers_keep_clients_credentials_and_rows_isol
         &client_a,
         "producer-profile-a",
         &token_a,
+        TEST_LEASE_SECONDS,
     );
     let second = run_one_submission(
         &connection_b,
@@ -3465,6 +3797,7 @@ async fn two_authority_concurrent_workers_keep_clients_credentials_and_rows_isol
         &client_b,
         "producer-profile-b",
         &token_b,
+        TEST_LEASE_SECONDS,
     );
     let (first, second) = tokio::join!(first, second);
     let first = first.expect("first concurrent worker");
@@ -3575,6 +3908,7 @@ async fn unavailable_authority_does_not_starve_another_authoritys_result() {
         &authority_client(endpoint_a.clone(), "producer-profile-a"),
         "producer-profile-a",
         &BearerToken::new("token-a").unwrap(),
+        TEST_LEASE_SECONDS,
     )
     .await
     .expect("authority A submission"));
@@ -3584,6 +3918,7 @@ async fn unavailable_authority_does_not_starve_another_authoritys_result() {
         &authority_client(submission_endpoint_b, "producer-profile-b"),
         "producer-profile-b",
         &BearerToken::new("token-b").unwrap(),
+        TEST_LEASE_SECONDS,
     )
     .await
     .expect("authority B submission"));
