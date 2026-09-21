@@ -7,7 +7,8 @@ use registry_casework::{
 };
 use registry_casework_core::{
     AttemptSettlement, AttemptSettlementReport, CaseworkProject, ReviewContextStrategy,
-    ReviewKindPurpose, SourcePolicy, SourceRetentionReport, SourceRetentionSelector,
+    ReviewKindPurpose, SourcePolicy, SourceRequestPolicy, SourceRetentionReport,
+    SourceRetentionSelector,
 };
 use registry_platform_config::{SecretError, SecretProvider, SecretReference, SecretResolver};
 use serde_json::{json, Value};
@@ -438,6 +439,26 @@ fn missing_source_findings(project: &Path, policy: &CaseworkProject) -> Vec<Valu
         .collect()
 }
 
+/// One authored request, as `check` reports it.
+///
+/// Every value here is read from the project. A request that declares no
+/// clock and no target reports `null` for both rather than a stand-in, because
+/// a reader takes this block for what the engine compiled.
+fn request_description(request: &SourceRequestPolicy) -> Value {
+    json!({
+        "entity": request.entity,
+        "queue": request.queue,
+        "queueMode": if request.routing.is_empty() { "default" } else { "first_match" },
+        "routingRules": request.routing.len(),
+        "applicationMode": "manual",
+        "clock": request.clock,
+        "target": request.target.as_ref().map(|target| json!({
+            "id": target.id,
+            "elapsed": target.after.elapsed,
+        })),
+    })
+}
+
 pub(super) fn check(project: &Path, production: bool, deny_findings: bool) -> Result<Value> {
     let policy = load_and_check_policy(project)?;
     let findings = missing_source_findings(project, &policy);
@@ -472,9 +493,22 @@ pub(super) fn check(project: &Path, production: bool, deny_findings: bool) -> Re
     } else {
         "pending_source_add"
     };
-    let source = &policy.sources[0];
-    let request = &source.requests[0];
     let inbox = serde_json::to_value(&policy.inbox)?;
+    let sources = policy
+        .sources
+        .iter()
+        .map(|source| {
+            json!({
+                "sourceId": source.id,
+                "sourceAdapter": source.adapter,
+                "requests": source
+                    .requests
+                    .iter()
+                    .map(request_description)
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
     let status = if findings.is_empty() {
         "complete"
     } else {
@@ -489,15 +523,8 @@ pub(super) fn check(project: &Path, production: bool, deny_findings: bool) -> Re
         "findings": findings,
         "effective": {
             "projectId": policy.casework.id,
-            "sourceId": source.id,
-            "sourceAdapter": source.adapter,
-            "requestEntity": request.entity,
-            "queue": request.queue,
-            "queueMode": if request.routing.is_empty() { "default" } else { "first_match" },
-            "routingRules": request.routing.len(),
-            "applicationMode": "manual",
+            "sources": sources,
             "sourceDescription": source_description,
-            "queueTarget": {"clock":"first_observed_elapsed", "elapsed": request.target.as_ref().map(|target| target.after.elapsed.as_str()), "worker":false},
             "inbox": inbox,
             "reviewKinds": policy.review_kinds,
             "reviewProducers": policy.review_producers,
@@ -765,26 +792,44 @@ fn validate_fixture(fixture: &Value, effective: &Value, policy: &CaseworkProject
         }
         return Ok(());
     }
+    let source_id = fixture["source"]["id"]
+        .as_str()
+        .context("fixture requires a source id")?;
+    let entity = fixture["source"]["requestEntity"]
+        .as_str()
+        .context("fixture requires a request entity")?;
+    // Resolve the request the fixture names. The project may declare several
+    // sources, so a fixture is checked against its own request rather than
+    // against whichever one the report happens to list first.
+    let source = effective["sources"]
+        .as_array()
+        .context("the effective project reports no sources")?
+        .iter()
+        .find(|source| source["sourceId"] == source_id)
+        .with_context(|| {
+            format!("fixture names source {source_id}, which this project does not declare")
+        })?;
+    let request = source["requests"]
+        .as_array()
+        .context("the effective source reports no requests")?
+        .iter()
+        .find(|request| request["entity"] == entity)
+        .with_context(|| {
+            format!(
+                "fixture names request entity {entity}, which source {source_id} does not declare"
+            )
+        })?;
+
     let assertions = [
-        (
-            &fixture["source"]["id"],
-            &effective["sourceId"],
-            "source id",
-        ),
-        (
-            &fixture["source"]["requestEntity"],
-            &effective["requestEntity"],
-            "request entity",
-        ),
-        (&fixture["expect"]["queue"], &effective["queue"], "queue"),
+        (&fixture["expect"]["queue"], &request["queue"], "queue"),
         (
             &fixture["expect"]["applicationMode"],
-            &effective["applicationMode"],
+            &request["applicationMode"],
             "application mode",
         ),
         (
             &fixture["expect"]["targetElapsed"],
-            &effective["queueTarget"]["elapsed"],
+            &request["target"]["elapsed"],
             "target elapsed time",
         ),
     ];
@@ -1426,7 +1471,9 @@ mod tests {
     #[test]
     fn fixture_exercises_effective_defaults() {
         let fixture: Value = serde_norway::from_str(FIXTURE).unwrap();
-        let effective = json!({"sourceId":"professional-licences","requestEntity":"scope-correction","queue":"corrections","applicationMode":"manual","queueTarget":{"elapsed":"PT48H"}});
+        let effective = json!({"sources":[{"sourceId":"professional-licences","requests":[
+            {"entity":"scope-correction","queue":"corrections","applicationMode":"manual","target":{"elapsed":"PT48H"}}
+        ]}]});
         validate_fixture(
             &fixture,
             &effective,
@@ -2143,7 +2190,7 @@ mod tests {
 
         let effective = check(&project, false, false).unwrap()["effective"].clone();
 
-        assert_eq!(effective["sourceId"], "professional-licences");
+        assert_eq!(effective["sources"][0]["sourceId"], "professional-licences");
         assert_eq!(effective["reviewKinds"][0]["id"], "scope-correction");
         assert_eq!(
             effective["reviewKinds"][0]["stages"][0]["queue"],
@@ -2158,5 +2205,109 @@ mod tests {
             effective["reviewProducers"][0]["sourceNamespaces"][0],
             "professional-licences"
         );
+    }
+    /// A project with a second source, so a report that only ever describes
+    /// `sources[0]` is visibly wrong rather than plausibly right.
+    fn write_two_source_project() -> (tempfile::TempDir, PathBuf) {
+        let mut policy: serde_norway::Value = serde_norway::from_str(CASEWORK_YAML).unwrap();
+        let sources = policy["sources"].as_sequence_mut().unwrap();
+        let mut second = sources[0].clone();
+        second["id"] = "response-register".into();
+        second["description"] = "sources/response-register.json".into();
+        second["requests"][0]["entity"] = "response-correction".into();
+        second["requests"][0]["target"]["id"] = "response-window".into();
+        second["requests"][0]["target"]["after"]["elapsed"] = "PT72H".into();
+        sources.push(second);
+        policy["reviewProducers"][0]["sourceNamespaces"]
+            .as_sequence_mut()
+            .unwrap()
+            .push("response-register".into());
+
+        let mut description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
+        description["sourceId"] = json!("response-register");
+        description["request"]["requestEntity"] = json!("response-correction");
+
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("authored");
+        fs::create_dir_all(project.join("sources")).unwrap();
+        fs::write(
+            project.join("casework.yaml"),
+            serde_norway::to_string(&policy).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            project.join("sources/professional-licences.json"),
+            BREG_SOURCE_DESCRIPTION,
+        )
+        .unwrap();
+        fs::write(
+            project.join("sources/response-register.json"),
+            serde_json::to_string(&description).unwrap(),
+        )
+        .unwrap();
+        (root, project)
+    }
+
+    #[test]
+    fn check_reports_every_source_and_request_not_just_the_first() {
+        let (_root, project) = write_two_source_project();
+
+        let effective = check(&project, false, false).unwrap()["effective"].clone();
+
+        let sources = effective["sources"].as_array().unwrap();
+        assert_eq!(
+            sources
+                .iter()
+                .map(|source| source["sourceId"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["professional-licences", "response-register"],
+        );
+        assert_eq!(
+            sources
+                .iter()
+                .map(|source| source["requests"][0]["entity"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["scope-correction", "response-correction"],
+        );
+    }
+
+    #[test]
+    fn check_reports_the_authored_target_and_no_invented_clock() {
+        let (_root, project) = write_two_source_project();
+
+        let effective = check(&project, false, false).unwrap()["effective"].clone();
+        let requests = [
+            effective["sources"][0]["requests"][0].clone(),
+            effective["sources"][1]["requests"][0].clone(),
+        ];
+
+        // Neither request declares a clock, so neither reports one. The old
+        // report named a `first_observed_elapsed` clock that exists nowhere in
+        // the model.
+        for request in &requests {
+            assert_eq!(request["clock"], Value::Null);
+            assert!(request["target"].get("worker").is_none());
+        }
+        assert_eq!(requests[0]["target"]["id"], "first-review-response");
+        assert_eq!(requests[0]["target"]["elapsed"], "PT48H");
+        assert_eq!(requests[1]["target"]["id"], "response-window");
+        assert_eq!(requests[1]["target"]["elapsed"], "PT72H");
+    }
+
+    #[test]
+    fn test_accepts_a_fixture_naming_a_source_other_than_the_first() {
+        let (_root, project) = write_two_source_project();
+        fs::create_dir_all(project.join("fixtures")).unwrap();
+        fs::write(
+            project.join("fixtures/response.yaml"),
+            "apiVersion: registry.registrystack.org/casework-fixture/v1alpha1\n\
+             kind: CaseworkFixture\n\
+             name: response-window\n\
+             source: {id: response-register, requestEntity: response-correction}\n\
+             expect: {queue: corrections, applicationMode: manual, targetElapsed: PT72H}\n",
+        )
+        .unwrap();
+
+        test(&project).expect("a fixture naming the second source must resolve to that source");
     }
 }
