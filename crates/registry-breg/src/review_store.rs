@@ -608,8 +608,12 @@ impl ReviewAuthorityRegistry {
         }
         if client
             .execute(
+                // The binding is kept, not cleared: `receive_completion` and an
+                // operator reading the row both correlate a late Casework
+                // settlement by the same `accepted_binding` a live cancellation
+                // used, exactly as the result-bearing sweep above retains it.
                 "UPDATE registry_internal.registry_request_review_submissions
-                    SET state='failed',accepted_binding=NULL,lease_until=NULL,
+                    SET state='failed',lease_until=NULL,
                         last_error_code=CASE
                             WHEN recovery_deadline <= transaction_timestamp()
                             THEN 'cancellation-recovery-expired'
@@ -619,6 +623,38 @@ impl ReviewAuthorityRegistry {
                   WHERE state='cancelling'
                     AND (recovery_deadline <= transaction_timestamp() OR attempt_count >= 1000)
                     AND (lease_until IS NULL OR lease_until < transaction_timestamp())",
+                &[],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+            > 0
+        {
+            return Ok(true);
+        }
+        // An accepted row whose result lookup keeps failing has no other give-up
+        // path: it never returns to `pending`/`cancelling`, so without this sweep
+        // a permanently broken result endpoint would poll forever. The recovery
+        // deadline or the saturated poll-attempt budget bounds it the same way
+        // the sibling submission and cancellation sweeps bound theirs, and the
+        // binding is preserved for the same late-correlation reason as above.
+        if client
+            .execute(
+                "UPDATE registry_internal.registry_request_review_submissions s
+                    SET state='failed',lease_until=NULL,
+                        last_error_code=CASE
+                            WHEN s.recovery_deadline <= transaction_timestamp()
+                            THEN 'result-recovery-expired'
+                            ELSE 'result-poll-attempts-exhausted'
+                        END,
+                        updated_at=transaction_timestamp()
+                  WHERE s.state='accepted'
+                    AND (s.recovery_deadline <= transaction_timestamp()
+                         OR s.result_poll_attempts >= 1000)
+                    AND (s.lease_until IS NULL OR s.lease_until < transaction_timestamp())
+                    AND NOT EXISTS (
+                        SELECT 1 FROM registry_internal.registry_request_review_results r
+                         WHERE (r.request_entity_id,r.request_id,r.proposal_version)
+                               = (s.request_entity_id,s.request_id,s.proposal_version))",
                 &[],
             )
             .await
@@ -2057,10 +2093,33 @@ pub async fn poll_one_result(
     let accepted: ReviewRequestAccepted =
         serde_json::from_value(row.get(4)).map_err(|_| MutationError::Unavailable)?;
     let lease_until: chrono::DateTime<chrono::Utc> = row.get(5);
-    let response = review_client
+    let response = match review_client
         .result(ReviewAuth::new(token, profile), &accepted)
         .await
-        .map_err(|_| MutationError::Unavailable)?;
+    {
+        Ok(response) => response,
+        Err(_) => {
+            // A failed lookup still leaves row-level evidence and consumes the
+            // same attempt budget a successful pending poll would, so an
+            // indefinitely failing endpoint is bounded by the recovery-deadline
+            // sweep in `run_one` instead of polling forever in silence.
+            client
+                .execute(
+                    "UPDATE registry_internal.registry_request_review_submissions
+                        SET result_poll_attempts=LEAST(result_poll_attempts+1,1000),
+                            last_error_code='result-lookup-uncertain',
+                            next_result_poll_at=transaction_timestamp()+
+                              (LEAST(60,5*LEAST(result_poll_attempts+1,1000)) * interval '1 second'),
+                            updated_at=transaction_timestamp()
+                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                        AND state='accepted' AND lease_until=$4",
+                    &[&entity_id, &request_id, &version, &lease_until],
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            return Err(MutationError::Unavailable);
+        }
+    };
     match response {
         ReviewResultResponse::Available(complete) => {
             let transaction = client

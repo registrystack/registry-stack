@@ -19,15 +19,16 @@ use axum::{Json, Router};
 use registry_breg::mutation::MutationError;
 use registry_breg::review_store::{
     back_off_review_token_failure_for_test, install_review_storage_for_test, poll_one_result,
-    receive_completion, run_one_cancellation, run_one_submission,
+    receive_completion, reconcile_result, run_one_cancellation, run_one_submission,
     run_review_application_once_for_test, run_review_authority_once_for_test,
     schedule_cancellation_for_test, verify_retained_bindings, ReviewAuthorityClient,
     ReviewAuthorityRegistry, ReviewExecutorClient,
 };
 use registry_review_client::{
-    submission_digest, BearerToken, ContentDigest, ReviewAuth, ReviewClient, ReviewClientConfig,
-    ReviewCompletion, ReviewCompletionType, ReviewContext, ReviewCreateRequest,
-    ReviewRequestAccepted, ReviewResultResponse, SourceContextBinding, SubjectBinding,
+    submission_digest, BearerToken, ContentDigest, PolicyBinding, ReviewAuth, ReviewClient,
+    ReviewClientConfig, ReviewCompletion, ReviewCompletionType, ReviewContext, ReviewCreateRequest,
+    ReviewRequestAccepted, ReviewResult, ReviewResultResponse, ReviewResultStatus,
+    SourceContextBinding, SubjectBinding,
 };
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
@@ -2681,8 +2682,19 @@ async fn expired_or_exhausted_cancellations_become_terminal_without_remote_io() 
     assert_eq!(rows.len(), 2);
     for row in rows {
         assert_eq!(row.get::<_, String>(1), "failed");
-        assert!(row.get::<_, Option<Value>>(2).is_none());
         let request_id: Uuid = row.get(0);
+        // The binding is preserved, not cleared: a late Casework settlement
+        // must still be correlated to this row by an operator or by
+        // `receive_completion`, exactly as the result-bearing sweep already
+        // preserves it when a stored result converges cancellation to
+        // `cancelled`.
+        let binding: Value = row
+            .get::<_, Option<Value>>(2)
+            .expect("cancellation give-up must preserve the accepted binding");
+        assert_eq!(
+            binding["requestId"],
+            Uuid::from_u128(request_id.as_u128() + 100).to_string()
+        );
         assert_eq!(
             row.get::<_, String>(3),
             if request_id == expired {
@@ -2782,6 +2794,165 @@ async fn cancellation_recovery_expiry_leaves_a_live_lease_to_its_holder() {
             assert_eq!(row.get::<_, String>(3), "cancellation-recovery-expired");
         }
     }
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn cancellation_give_up_preserves_the_binding_for_late_correlation() {
+    let mut database = TestDatabase::create(2).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT USAGE ON SCHEMA registry_internal TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime review schema access");
+
+    let request_id = Uuid::from_u128(0xf1);
+    let review_request_id = Uuid::from_u128(0xf2);
+    seed_submission(
+        &database.admin,
+        request_id,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state='cancelling',withdrawn=true,
+                    accepted_binding=jsonb_build_object('requestId',$2::text),
+                    recovery_deadline=transaction_timestamp()-interval '1 second'
+              WHERE request_id=$1",
+            &[&request_id, &review_request_id.to_string()],
+        )
+        .await
+        .expect("seed stranded cancellation");
+
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let authorities = authority_registry("casework-a", "producer-a", "sender", "registry-a");
+    assert!(run_review_authority_once_for_test(&pool, &authorities)
+        .await
+        .expect("terminalize the stranded cancellation"));
+    let terminal = database
+        .admin
+        .query_one(
+            "SELECT state,accepted_binding
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("terminalized cancellation");
+    assert_eq!(terminal.get::<_, String>(0), "failed");
+    let binding: Value = terminal
+        .get::<_, Option<Value>>(1)
+        .expect("cancellation give-up must preserve the accepted binding for late correlation");
+    assert_eq!(binding["requestId"], review_request_id.to_string());
+
+    // `receive_completion` matches by `accepted_binding->>'requestId'` with no
+    // state filter, so a late Casework settlement is still correlated to this
+    // now-failed row instead of falling into 'unmatched'.
+    let completion = ReviewCompletion {
+        event_type: ReviewCompletionType::ReviewCompleted,
+        event_id: Uuid::new_v4(),
+        request_id: review_request_id,
+        result_id: Uuid::new_v4(),
+        completed_at: chrono::Utc::now(),
+    };
+    let transaction = database.admin.transaction().await.unwrap();
+    receive_completion(
+        &transaction,
+        "casework-a",
+        &completion,
+        chrono::Utc::now() + chrono::Duration::days(7),
+    )
+    .await
+    .expect("late completion still correlates to the failed row");
+    transaction.commit().await.unwrap();
+    let completion_state: String = database
+        .admin
+        .query_one(
+            "SELECT state FROM registry_internal.registry_request_review_completions
+              WHERE authority='casework-a' AND event_id=$1",
+            &[&completion.event_id],
+        )
+        .await
+        .expect("stored completion")
+        .get(0);
+    assert_eq!(completion_state, "pending");
+
+    // `reconcile_result` explicitly restricts to `state IN ('accepted',
+    // 'cancelling')`, so it refuses to reopen a terminal 'failed' row rather
+    // than silently correlating a late result into it; the row remains
+    // identifiable by hand through its preserved binding.
+    let subject = SubjectBinding {
+        source: "registry-a".to_owned(),
+        subject_type: "change-request".to_owned(),
+        id: request_id.to_string(),
+        version: "1".to_owned(),
+        digest: ContentDigest::parse(DIGEST).unwrap(),
+    };
+    let policy = PolicyBinding {
+        id: "policy-a".to_owned(),
+        version: "1".to_owned(),
+        digest: ContentDigest::parse(DIGEST).unwrap(),
+    };
+    let submission_digest = ContentDigest::parse(DIGEST).unwrap();
+    let accepted = ReviewRequestAccepted {
+        request_id: review_request_id,
+        subject: subject.clone(),
+        policy: policy.clone(),
+        submission_digest: submission_digest.clone(),
+    };
+    let result = ReviewResult {
+        result_id: Uuid::new_v4(),
+        request_id: review_request_id,
+        subject,
+        policy,
+        submission_digest,
+        status: ReviewResultStatus::Cancelled,
+        outcome: None,
+        result: None,
+        completed_at: chrono::Utc::now(),
+        available_until: chrono::Utc::now() + chrono::Duration::days(1),
+    };
+    let refusal_transaction = database.admin.transaction().await.unwrap();
+    let refused = reconcile_result(&refusal_transaction, "casework-a", &accepted, &result).await;
+    assert!(matches!(refused, Err(MutationError::PreconditionFailed)));
+    refusal_transaction.rollback().await.unwrap();
+
+    let after: Value = database
+        .admin
+        .query_one(
+            "SELECT accepted_binding FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("binding survives the refused reconciliation")
+        .get(0);
+    assert_eq!(after["requestId"], review_request_id.to_string());
 
     drop(pool);
     database.cleanup().await;
@@ -3015,6 +3186,92 @@ async fn a_live_result_poll_lease_keeps_the_lookup_to_its_holder() {
 }
 
 #[tokio::test]
+async fn a_failed_result_lookup_records_the_attempt_and_error_without_terminalizing() {
+    let mut database = TestDatabase::create(2).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+
+    let request_id = Uuid::from_u128(0xf3);
+    seed_submission(
+        &database.admin,
+        request_id,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    let accepting = Arc::new(AuthorityState {
+        producer_id: "producer-a",
+        expected_token: "Bearer token-a",
+        expected_profile: "producer-profile-a",
+        accepted_request_id: Uuid::from_u128(0xf4),
+        requests: AtomicUsize::new(0),
+        gate: None,
+    });
+    let (endpoint, server) = serve_authority(accepting).await;
+    let token = BearerToken::new("token-a").unwrap();
+    assert!(run_one_submission(
+        &database.admin,
+        "casework-a",
+        &authority_client(endpoint, "producer-profile-a"),
+        "producer-profile-a",
+        &token,
+        TEST_LEASE_SECONDS,
+    )
+    .await
+    .expect("accept the review submission"));
+    server.abort();
+
+    // The result endpoint is unroutable: every lookup fails at the transport
+    // layer without a mock server, exercising a Casework /result endpoint
+    // that never returns a usable response.
+    let unreachable: reqwest::Url = "http://127.0.0.1:9/".parse().expect("unroutable endpoint");
+    let outcome = poll_one_result(
+        &mut database.admin,
+        "casework-a",
+        &authority_client(unreachable, "producer-profile-a"),
+        "producer-profile-a",
+        &token,
+        TEST_LEASE_SECONDS,
+    )
+    .await;
+    assert!(matches!(outcome, Err(MutationError::Unavailable)));
+
+    let row = database
+        .admin
+        .query_one(
+            "SELECT state,result_poll_attempts,last_error_code,accepted_binding
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("polled submission");
+    assert_eq!(row.get::<_, String>(0), "accepted");
+    assert_eq!(row.get::<_, i32>(1), 1);
+    assert_eq!(
+        row.get::<_, Option<String>>(2),
+        Some("result-lookup-uncertain".to_owned())
+    );
+    assert!(row.get::<_, Option<Value>>(3).is_some());
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
 async fn expired_recovery_leaves_a_live_submission_lease_to_its_holder() {
     let database = TestDatabase::create(2).await;
     database
@@ -3100,6 +3357,116 @@ async fn expired_recovery_leaves_a_live_submission_lease_to_its_holder() {
                 .is_none());
             assert_eq!(row.get::<_, String>(3), "submission-recovery-expired");
         }
+    }
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn accepted_recovery_expiry_and_poll_exhaustion_become_terminal_preserving_binding() {
+    let database = TestDatabase::create(2).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT USAGE ON SCHEMA registry_internal TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime review schema access");
+
+    let expired = Uuid::from_u128(0xd6);
+    let exhausted = Uuid::from_u128(0xd7);
+    for request_id in [expired, exhausted] {
+        seed_submission(
+            &database.admin,
+            request_id,
+            "casework-a",
+            "producer-a",
+            "policy-a",
+        )
+        .await;
+        let review_request_id = Uuid::from_u128(request_id.as_u128() + 100).to_string();
+        database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_request_review_submissions
+                    SET state='accepted',accepted_binding=jsonb_build_object('requestId',$2::text)
+                  WHERE request_id=$1",
+                &[&request_id, &review_request_id],
+            )
+            .await
+            .expect("seed accepted submission");
+    }
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET recovery_deadline=transaction_timestamp()-interval '1 second'
+              WHERE request_id=$1",
+            &[&expired],
+        )
+        .await
+        .expect("expire result recovery");
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET result_poll_attempts=1000 WHERE request_id=$1",
+            &[&exhausted],
+        )
+        .await
+        .expect("exhaust result poll attempts");
+
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let authorities = authority_registry("casework-a", "producer-a", "sender", "registry-a");
+    assert!(run_review_authority_once_for_test(&pool, &authorities)
+        .await
+        .expect("terminalize stranded accepted submissions"));
+    let rows = database
+        .admin
+        .query(
+            "SELECT request_id,state,accepted_binding,last_error_code
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=ANY($1) ORDER BY request_id",
+            &[&vec![expired, exhausted]],
+        )
+        .await
+        .expect("read terminal accepted rows");
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(row.get::<_, String>(1), "failed");
+        let request_id: Uuid = row.get(0);
+        let binding: Value = row
+            .get::<_, Option<Value>>(2)
+            .expect("result give-up must preserve the accepted binding for late correlation");
+        assert_eq!(
+            binding["requestId"],
+            Uuid::from_u128(request_id.as_u128() + 100).to_string()
+        );
+        assert_eq!(
+            row.get::<_, String>(3),
+            if request_id == expired {
+                "result-recovery-expired"
+            } else {
+                "result-poll-attempts-exhausted"
+            }
+        );
     }
 
     drop(pool);

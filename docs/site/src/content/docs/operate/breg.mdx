@@ -689,12 +689,13 @@ the database directly.
 
 | `recovery.code` | Operator action |
 | --- | --- |
-| `remote-uncertain`, `cancellation-uncertain`, `source-precondition-changed` | Wait through `application.nextAttemptAt` where present and re-read the request. The durable worker retries automatically. |
+| `remote-uncertain`, `cancellation-uncertain`, `result-lookup-uncertain`, `source-precondition-changed` | Wait through `application.nextAttemptAt` where present and re-read the request. The durable worker retries automatically. |
 | `token-unavailable` | Restore the configured review-authority credential provider, then let the durable worker retry. |
 | `submission-recovery-expired` | Reconcile the Casework request by the recorded idempotency and digest bindings before starting a new proposal. |
 | `remote-refused` | Correct the producer, policy, or submitted contract reported by the review authority before submitting a new proposal. |
 | `cancellation-recovery-expired`, `cancellation-attempts-exhausted` | Reconcile the exact Casework request and cancellation idempotency key. If cancellation did not complete, correct the binding before starting a fresh proposal. |
 | `result-expired` | Start a new review; the authority no longer promises the result payload. |
+| `result-recovery-expired`, `result-poll-attempts-exhausted` | Reconcile the accepted Casework request by its retained binding. If the authority still holds a result, repair the result endpoint and start a new proposal; the retained binding identifies the review to close. |
 | `executor-unconfigured` | Restore the named executor in runtime configuration, then use the advertised authorized manual apply action for the same approved proposal. |
 | `executor-denied` | Restore the executor's current application grant, then use the advertised authorized manual apply action for the same approved proposal. |
 | `source-action-unavailable` | Restore the compiled source apply action and its access profile, then use the advertised authorized manual apply action for the same approved proposal. |
