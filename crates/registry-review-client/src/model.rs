@@ -102,6 +102,12 @@ pub(crate) fn check_result_page(page: &ReviewResultFeedPage) -> Result<(), &'sta
     if page.items.len() > MAXIMUM_PAGE_SIZE {
         return Err("the result page contains too many entries");
     }
+    // A nil event identifier cannot anchor a resumable position or correlate
+    // a completion; a nil final entry would be checkpointed as a cursor no
+    // conforming authority can resolve, replaying the same page forever.
+    if page.items.iter().any(|entry| entry.event_id.is_nil()) {
+        return Err("the result page contains a nil event identifier");
+    }
     // A continuation names the position of the final returned entry, so a
     // page whose cursor points anywhere else would let a consumer durably
     // skip the entries in between.
@@ -172,5 +178,42 @@ mod tests {
             next_cursor: Some(Uuid::from_u128(10)),
         };
         assert!(check_result_page(&skipped).is_err());
+    }
+
+    #[test]
+    fn result_page_rejects_nil_event_identifiers() {
+        // A nil final entry would be checkpointed as a cursor no conforming
+        // authority can resolve, replaying the same page forever.
+        let nil_cursor = ReviewResultFeedPage {
+            items: vec![ReviewResultFeedEntry {
+                event_id: Uuid::nil(),
+                request_id: Uuid::from_u128(8),
+                result_id: Uuid::from_u128(9),
+                completed_at: DateTime::from_timestamp(0, 0).expect("fixture timestamp"),
+            }],
+            next_cursor: Some(Uuid::nil()),
+        };
+        assert!(check_result_page(&nil_cursor).is_err());
+
+        // A nil entry anywhere also fails completion correlation, even when
+        // the cursor names a real later entry.
+        let nil_entry = ReviewResultFeedPage {
+            items: vec![
+                ReviewResultFeedEntry {
+                    event_id: Uuid::nil(),
+                    request_id: Uuid::from_u128(8),
+                    result_id: Uuid::from_u128(9),
+                    completed_at: DateTime::from_timestamp(0, 0).expect("fixture timestamp"),
+                },
+                ReviewResultFeedEntry {
+                    event_id: Uuid::from_u128(7),
+                    request_id: Uuid::from_u128(8),
+                    result_id: Uuid::from_u128(10),
+                    completed_at: DateTime::from_timestamp(0, 0).expect("fixture timestamp"),
+                },
+            ],
+            next_cursor: Some(Uuid::from_u128(7)),
+        };
+        assert!(check_result_page(&nil_entry).is_err());
     }
 }
