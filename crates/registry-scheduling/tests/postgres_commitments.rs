@@ -1416,6 +1416,84 @@ async fn duplicate_active_keys_are_scoped_to_the_offering() {
     assert_eq!(status, StatusCode::CREATED, "{appointment}");
 }
 
+/// The duplicate guard exists so one party holds one live booking per offering
+/// at a time. A booking whose time has passed is not live, and counting it
+/// would refuse that party forever: the product publishes no completion
+/// transition, and cancellation closes at the cutoff before the appointment
+/// even starts, so nothing the party can do would ever release the key.
+#[tokio::test]
+async fn an_elapsed_booking_no_longer_holds_the_partys_duplicate_key() {
+    let keyed = POLICY.replacen(
+        "    requiresCapabilities: []",
+        "    duplicateActiveKey: subject\n    requiresCapabilities: []",
+        2,
+    );
+    let fx = fixture_publishing(
+        &keyed,
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+    )
+    .await;
+
+    let first = first_slot(&fx, OFFERING, 300, 440).await;
+    let mut first_admission = admission(&fx, OFFERING, first);
+    first_admission["duplicateKey"] = json!("subject:elapsed");
+    let (status, appointment) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "duplicate-elapsed-first",
+            json!({"hold": null, "admission": first_admission}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{appointment}");
+
+    let second = first_slot(&fx, OFFERING, 600, 740).await;
+    let mut second_admission = admission(&fx, OFFERING, second);
+    second_admission["duplicateKey"] = json!("subject:elapsed");
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "duplicate-elapsed-live",
+            json!({"hold": null, "admission": second_admission.clone()}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert_eq!(
+        problem["code"], "booking.duplicate-active",
+        "a live booking holds the key"
+    );
+
+    // What the passage of time does to that booking, with no sweeper and no
+    // transition the party could have reached.
+    fx.admin
+        .execute(
+            "UPDATE scheduling_claims SET \
+             displayed_start = now() - interval '2 hours', \
+             displayed_end = now() - interval '1 hour', \
+             occupied_start = now() - interval '2 hours', \
+             occupied_end = now() - interval '1 hour' \
+             WHERE duplicate_key = $1",
+            &[&"subject:elapsed"],
+        )
+        .await
+        .expect("the standing booking elapses");
+
+    let (status, appointment) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "duplicate-elapsed-after",
+            json!({"hold": null, "admission": second_admission}),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "an elapsed booking no longer holds the key: {appointment}"
+    );
+}
+
 /// A policy may move an exact-time offering's opening dates while retaining
 /// its offering and pool. The standing appointment then falls outside the new
 /// opening span, but its offering-scoped duplicate key remains active and must

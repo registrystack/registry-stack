@@ -158,6 +158,11 @@ impl LedgerSnapshot {
 
     /// Whether a consuming claim already holds `duplicate_key` at `now`,
     /// ignoring `exclude`.
+    ///
+    /// The key admits one live claim per party for an offering, so a claim
+    /// holds it only until the time it occupies has passed. A booking keeps
+    /// consuming capacity for overlap forever, but a party whose appointment
+    /// is behind them is free to book the offering again.
     pub fn duplicate_active(
         &self,
         offering: &str,
@@ -169,6 +174,7 @@ impl LedgerSnapshot {
             claim.offering == offering
                 && claim.duplicate_key.as_deref() == Some(duplicate_key)
                 && Some(claim.id.as_str()) != exclude
+                && claim.end > now
         })
     }
 }
@@ -574,6 +580,7 @@ mod tests {
             id: "claim-2".to_owned(),
             offering: "offering-b".to_owned(),
             kind: LedgerKind::Booking,
+            end: utc(5, 0),
             expires_at: None,
             ..expired_hold.clone()
         };
@@ -582,6 +589,30 @@ mod tests {
         };
         assert!(!snapshot.duplicate_active("offering-a", "subject:one", None, now));
         assert!(snapshot.duplicate_active("offering-b", "subject:one", None, now));
+    }
+
+    #[test]
+    fn an_elapsed_booking_stops_holding_the_duplicate_key() {
+        let booking = LedgerClaim {
+            id: "claim-1".to_owned(),
+            offering: "offering-a".to_owned(),
+            supply_id: "morning-window".to_owned(),
+            kind: LedgerKind::Booking,
+            channel: None,
+            start: utc(1, 0),
+            end: utc(2, 0),
+            units: 1,
+            duplicate_key: Some("subject:one".to_owned()),
+            expires_at: None,
+        };
+        let snapshot = LedgerSnapshot {
+            claims: vec![booking],
+        };
+        // The key names one live booking per party, so it is held while the
+        // appointment stands and released once the appointment has passed.
+        assert!(snapshot.duplicate_active("offering-a", "subject:one", None, utc(1, 30)));
+        assert!(!snapshot.duplicate_active("offering-a", "subject:one", None, utc(2, 0)));
+        assert!(!snapshot.duplicate_active("offering-a", "subject:one", None, utc(3, 0)));
     }
 
     #[test]

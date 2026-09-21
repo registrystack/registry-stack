@@ -266,7 +266,7 @@ impl ProblemCode {
                 "The bearer credential is missing, invalid, or expired. Sign in again."
             }
             Self::BookingDuplicateActive => {
-                "An active booking already holds this party's duplicate key. Cancel or complete it before booking again."
+                "An active booking already holds this party's duplicate key. Cancel it, or wait until it has passed, before booking again."
             }
             Self::CancellationCutoffPassed => {
                 "The cancellation cutoff for this appointment has passed, so it can no longer be cancelled."
