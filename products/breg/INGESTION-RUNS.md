@@ -13,7 +13,14 @@ compiled batch route an ordinary batch client uses, one chunk at a time.
 Creating a run binds the active package revision, the schema fingerprint, the
 entity, the selected access profile, the create-or-patch operation, the input
 digest and a positive length, the chunking algorithm
-`greedy-canonical-http-batch-v1`, and the expected item and chunk counts. A run refuses any other algorithm, so
+`greedy-canonical-http-batch-v1`, and the expected item and chunk counts. The
+announced counts (`inputLength`, `itemCount`, `chunkCount`) are each bounded
+at 9,007,199,254,740,991 (2^53 - 1, the JavaScript safe-integer bound); a
+larger announcement is answered `request.invalid`, and the create schema
+publishes the same maximum, so every count the API carries round-trips
+exactly through JSON-number consumers, and the maintained clients refuse a
+decoded count above the bound as a protocol failure rather than corrupt
+resumable checkpoint arithmetic. A run refuses any other algorithm, so
 remaining source bytes are never reinterpreted under a different chunking
 contract. `maximumItems` and `maximumBytes` on the run are the compiled batch
 bounds every chunk stays inside. `maximumBytes` bounds the chunk's canonical
@@ -41,7 +48,12 @@ rolling input-prefix digest. The three digest and index members must match the
 run's committed prefix exactly; a divergent value is refused and nothing is
 written. Every item carries the run's announced operation and the closed
 create-or-patch batch item shape, and the maintained clients refuse an item
-outside that shape before the chunk encodes. The final chunk
+outside that shape before the chunk encodes. Every run-scoped answer is
+bound to the request before the maintained clients return it: a chunk
+submission must name the addressed run and carry the submitted chunk's index
+and digest, a retained receipt must name the requested chunk, and a run or
+cancellation answer must name the requested run; any other body is refused
+as a protocol failure instead of being persisted as checkpoint state. The final chunk
 totals the announced item count exactly and binds the whole-input digest, so a
 run never completes on an underrun or a mixed-operation chunk. Admission keeps
 a run completable: after a chunk commits, the items remaining must fit the
@@ -114,7 +126,11 @@ package activation, `status=blocked` finds the stored-open runs the durable
 binding retired, and `status=open` returns only runs that still match the
 active binding. The page renders against the very binding its own filter
 read, so a package activation cannot fall between the filter and the
-rendering. Both surfaces answer only while the serving instance's durable
+rendering. A listing cursor is the canonical run id the `after` pair parses;
+the maintained clients refuse any other cursor text when the query is built
+and treat a non-canonical page cursor as a protocol failure, so a page
+answer is always continuable. Both surfaces answer only while the serving
+instance's durable
 identity is still active: a successor activation turns the read and the
 listing into `service.unavailable` until a current instance serves them, the
 same refusal the release and cancellation paths already owe. Problem codes are
@@ -145,7 +161,10 @@ later revisions of the same record survives. A later receipt read answers
 run. The release reads the stored receipt only inside its guarded
 transaction, after the registry lock: an erasure that commits while a release
 is parked on that lock answers `receipt_erased` and never the erased values,
-and writes no disclosure record for them.
+and writes no disclosure record for them. Receipt links are indexed by record
+id and revision, so the scrub reaches the chunks that describe the erased
+record directly from the matching links: an erasure stays proportional to
+the erased record, never to the registry's whole ingestion history.
 
 Over an entity with encrypted fields, a receipt stores the sealed field
 envelopes exactly as the ordinary batch route stores them, and every release
