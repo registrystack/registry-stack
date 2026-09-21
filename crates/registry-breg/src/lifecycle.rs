@@ -77,6 +77,19 @@ fn build_lifecycle(
     }
 }
 
+/// The concurrency precondition every edge carries. `execute_request_action`
+/// recomputes the action ETag from the record and workflow as locked and
+/// compares it with the caller's `If-Match` before it looks at ownership, at
+/// apply authority, or at the transition itself; the header is mandatory, so
+/// a caller who omits it is refused at the HTTP layer and never reaches here.
+/// Written once and concatenated onto each of the seven rather than drifting
+/// seven ways.
+macro_rules! action_precondition {
+    () => {
+        "the caller's If-Match, which is mandatory, matches the action ETag recomputed from the record and workflow as locked, checked before ownership, authority, or the transition"
+    };
+}
+
 /// Describes the request lifecycle enforced by `RequestWorkflow`: the states in
 /// `RequestState` and the transitions its `submit`, `revise`, `rebase`, `cancel`, and
 /// `apply` methods run.
@@ -98,43 +111,43 @@ pub fn request_lifecycle() -> LifecycleDescription {
                 from: "draft",
                 event: "submit",
                 to: "submitted",
-                guard: "the caller is the request owner and the request is in draft and its current version has not already been frozen into a proposal",
+                guard: concat!(action_precondition!(), "; ", "the caller is the request owner and the request is in draft and its current version has not already been frozen into a proposal"),
             },
             LifecycleTransition {
                 from: "submitted",
                 event: "revise",
                 to: "draft",
-                guard: "the caller is the request owner and the request is submitted; opens the next draft version tagged as a content revision, not a rebase",
+                guard: concat!(action_precondition!(), "; ", "the caller is the request owner and the request is submitted; opens the next draft version tagged as a content revision, not a rebase"),
             },
             LifecycleTransition {
                 from: "submitted",
                 event: "rebase",
                 to: "draft",
-                guard: "the caller is the request owner and the request is submitted; opens the next draft version tagged as a rebase onto updated context, not a revision",
+                guard: concat!(action_precondition!(), "; ", "the caller is the request owner and the request is submitted; opens the next draft version tagged as a rebase onto updated context, not a revision"),
             },
             LifecycleTransition {
                 from: "draft",
                 event: "cancel",
                 to: "cancelled",
-                guard: "the caller is the request owner and the request is not already applied or cancelled",
+                guard: concat!(action_precondition!(), "; ", "the caller is the request owner and the request is not already applied or cancelled"),
             },
             LifecycleTransition {
                 from: "submitted",
                 event: "cancel",
                 to: "cancelled",
-                guard: "the caller is the request owner and the request is not already applied or cancelled",
+                guard: concat!(action_precondition!(), "; ", "the caller is the request owner and the request is not already applied or cancelled"),
             },
             LifecycleTransition {
                 from: "submitted",
                 event: "apply",
                 to: "applied",
-                guard: "the caller's task grant and the proposal's task grant are each confirmed current and still live by the task-status check before the transaction opens, and both are re-verified as unchanged and current inside it; the request is submitted and unapplied at the current version; digest, fingerprint, review evidence, targets and links verify",
+                guard: concat!(action_precondition!(), "; ", "the caller's task grant and the proposal's task grant are each confirmed current and still live by the task-status check before the transaction opens, and both are re-verified as unchanged and current inside it; the request is submitted and unapplied at the current version; digest, fingerprint, review evidence, targets and links verify"),
             },
             LifecycleTransition {
                 from: "superseded",
                 event: "cancel",
                 to: "cancelled",
-                guard: "the caller is the request owner and the request is not already applied or cancelled",
+                guard: concat!(action_precondition!(), "; ", "the caller is the request owner and the request is not already applied or cancelled"),
             },
         ],
     )
@@ -156,6 +169,23 @@ mod tests {
             assert_eq!(
                 edge.guard.contains("the caller is the request owner"),
                 owner_gated,
+                "{edge:?}"
+            );
+        }
+    }
+
+    /// The ETag precondition refuses a stale action before any edge's own
+    /// checks run, so a guard that omitted it would report an owner in the
+    /// named state as able to act on a record that has since moved. It is on
+    /// `apply` too, which the reporting review did not claim: the check does
+    /// not branch on the action.
+    #[test]
+    fn every_edge_names_the_action_etag_precondition() {
+        for edge in &request_lifecycle().transitions {
+            assert!(edge.guard.contains("If-Match"), "{edge:?}");
+            assert!(
+                edge.guard
+                    .contains("recomputed from the record and workflow as locked"),
                 "{edge:?}"
             );
         }

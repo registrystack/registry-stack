@@ -289,10 +289,39 @@ fn explain_lifecycle_matches_contract() {
 /// contract and the schema pins them. Without that, renaming a state or an
 /// event and updating the Rust unit tests in the same change would leave this
 /// contract test green, which is exactly the drift "pinned in full" denies.
+///
+/// The machine's own id is pinned the same way and for a sharper reason: a
+/// constraint conditional on `id == "request"` would stop applying the moment
+/// the machine were renamed, so the one rename it most needs to reject would
+/// fall through to the generic shape and validate.
 #[test]
 fn renaming_a_lifecycle_state_or_event_fails_the_contract() {
     let report = explain_lifecycle_report();
     let schema = load_schema("LifecycleExplanation");
+
+    let renamed_machine = {
+        let mut explanation = report["explanation"].clone();
+        explanation["lifecycles"][0]["id"] = Value::String("change_request".to_owned());
+        explanation
+    };
+    assert!(
+        schema.validate(&renamed_machine).is_err(),
+        "renaming the machine itself must fail the schema: {renamed_machine:#?}"
+    );
+
+    let second_machine = {
+        let mut explanation = report["explanation"].clone();
+        let lifecycles = explanation["lifecycles"]
+            .as_array_mut()
+            .expect("lifecycles array");
+        let duplicate = lifecycles[0].clone();
+        lifecycles.push(duplicate);
+        explanation
+    };
+    assert!(
+        schema.validate(&second_machine).is_err(),
+        "bregctl reports one machine, so a second must fail the schema: {second_machine:#?}"
+    );
 
     let renamed_state: Value = serde_json::from_str(
         &report["explanation"]

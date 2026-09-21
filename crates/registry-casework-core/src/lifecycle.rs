@@ -198,13 +198,17 @@ const REVIEW_RECORD_EVENT: &str = "record_decision";
 const REVIEW_ADVANCE_EVENT: &str = "advance_stage";
 
 /// What a decision must satisfy before the engine looks at the decision at
-/// all: the checks `record_review_decision` makes, and the source preflight
-/// the runtime runs ahead of it. Every edge a decision raises carries both,
-/// so the sentence is written once and concatenated onto each of the six
-/// rather than drifting six ways.
+/// all: the checks `record_review_decision` makes, the revision precondition
+/// the store compares against the locked task row, and the source preflight
+/// the runtime runs ahead of both. Every edge a decision raises carries all
+/// three, so the sentence is written once and concatenated onto each of the
+/// six rather than drifting six ways.
+///
+/// The four decision kinds raise six edges between them, because an approval
+/// may be recorded, may advance a stage, or may settle the request.
 macro_rules! review_decision_gate {
     () => {
-        "Raised on a task on the active stage that the reviewer holds, under a deciding profile that both the stage and the task allow, on a request still in reviewing and not already settled, with no earlier decision on that task, no earlier decision by the same reviewer in this stage, and the stage's initiator and previous-stage-reviewer exclusions satisfied. Where the review kind takes its context from a source, the runtime first re-reads that source as the deciding caller and refuses unless the view still matches the subject, binding version and integrity digest pinned on the request and the authoritative occurrence is still reviewable, so a caller who has lost source access, or an occurrence withdrawn, superseded or still synchronizing at the source, blocks the decision even when every check above passes."
+        "The task's current revision is a mandatory If-Match precondition, compared against the locked task row before the decision is recorded, so a decision refuses with a revision conflict when another operation has already advanced that task. Raised on a task on the active stage that the reviewer holds, under a deciding profile that both the stage and the task allow, on a request still in reviewing and not already settled, with no earlier decision on that task, no earlier decision by the same reviewer in this stage, and the stage's initiator and previous-stage-reviewer exclusions satisfied. Where the review kind takes its context from a source, the runtime first re-reads that source as the deciding caller and refuses unless the view still matches the subject, binding version and integrity digest pinned on the request and the authoritative occurrence is still reviewable, so a caller who has lost source access, or an occurrence withdrawn, superseded or still synchronizing at the source, blocks the decision even when every check above passes."
     };
 }
 
@@ -683,5 +687,21 @@ mod tests {
             .guard;
         assert!(guard.contains("by the same admitted producer"), "{guard}");
         assert!(guard.contains("id, issuer and subject"), "{guard}");
+    }
+
+    /// A held task is not enough: another operation may have advanced it
+    /// between the reviewer reading it and deciding, and the store refuses
+    /// that with a revision conflict before the decision is recorded.
+    #[test]
+    fn every_decision_edge_names_the_revision_precondition() {
+        let description = review_lifecycle();
+        for edge in &description.transitions {
+            let decision = edge.guard.contains("that the reviewer holds");
+            assert_eq!(
+                decision,
+                edge.guard.contains("mandatory If-Match precondition"),
+                "{edge:?}"
+            );
+        }
     }
 }
