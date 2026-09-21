@@ -2997,6 +2997,85 @@ async fn erasing_through_revision_one_keeps_the_revision_two_receipt() {
     );
 }
 
+/// Chunk admission preserves a completable item budget: after a chunk takes
+/// its items, the remaining items must fit the remaining chunks, at least
+/// one per chunk and at most their combined maximum capacity, so a run can
+/// always be driven to complete. A chunk that strands the run in either
+/// direction is refused as a chunk mismatch, and an exact fit completes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chunk_admission_preserves_a_completable_item_budget() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+
+    // Forward strand: three items in two chunks. A first chunk that takes
+    // all three strands the required second chunk without an item to place.
+    let items = announce_items("budget-over", 3);
+    let over = chunk_plan(&items, &[(0, 3), (3, 3)]);
+    let over_id = harness.create_run(&claims, &over).await;
+    let refused = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{over_id}/chunks"),
+            &claims,
+            chunk_body(&over, 0),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(refused).await["code"], "ingestion.chunk_mismatch");
+    let run = harness.read_run(&claims, &over_id).await;
+    assert_eq!(run["nextChunkIndex"], 0, "the checkpoint does not move");
+    assert_eq!(durable_widget_count(&harness).await, 0);
+
+    // Inverse strand: five items in two chunks. A first chunk that takes one
+    // leaves more than the single remaining chunk can hold.
+    let items = announce_items("budget-under", 5);
+    let under = chunk_plan(&items, &[(0, 1), (1, 5)]);
+    let under_id = harness.create_run(&claims, &under).await;
+    let refused = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{under_id}/chunks"),
+            &claims,
+            chunk_body(&under, 0),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(refused).await["code"], "ingestion.chunk_mismatch");
+    let run = harness.read_run(&claims, &under_id).await;
+    assert_eq!(run["nextChunkIndex"], 0, "the checkpoint does not move");
+
+    // The inverse exact fit is accepted: two items now leave exactly the
+    // remaining chunk's capacity, and the legal final chunk completes.
+    let under_exact = chunk_plan(&items, &[(0, 2), (2, 5)]);
+    let under_exact_id = harness.create_run(&claims, &under_exact).await;
+    let uri = format!("/v1/records/widgets/ingestion-runs/{under_exact_id}/chunks");
+    let first = harness
+        .post_json(&uri, &claims, chunk_body(&under_exact, 0))
+        .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let final_chunk = harness
+        .post_json(&uri, &claims, chunk_body(&under_exact, 1))
+        .await;
+    assert_eq!(final_chunk.status(), StatusCode::OK);
+    assert_eq!(body_json(final_chunk).await["run"]["complete"], true);
+    assert_eq!(durable_widget_count(&harness).await, 5);
+
+    // The forward exact fit is accepted: one item now leaves one for the
+    // final chunk, and the run completes through it.
+    let items = announce_items("budget-exact", 3);
+    let over_exact = chunk_plan(&items, &[(0, 1), (1, 3)]);
+    let over_exact_id = harness.create_run(&claims, &over_exact).await;
+    let uri = format!("/v1/records/widgets/ingestion-runs/{over_exact_id}/chunks");
+    let first = harness
+        .post_json(&uri, &claims, chunk_body(&over_exact, 0))
+        .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let final_chunk = harness
+        .post_json(&uri, &claims, chunk_body(&over_exact, 1))
+        .await;
+    assert_eq!(final_chunk.status(), StatusCode::OK);
+    assert_eq!(body_json(final_chunk).await["run"]["complete"], true);
+    assert_eq!(durable_widget_count(&harness).await, 8);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn run_rows_and_audit_never_carry_source_values() {
     let harness = IngestionHarness::create().await;

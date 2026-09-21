@@ -1796,12 +1796,22 @@ impl MutationCoordinator {
             // here: these items are the normalized form of the same bytes.
             let terminal_chunk = chunk_binding.chunk_index + 1 == run.chunk_count;
             let not_open = run.status != IngestionRunStatus::Open;
+            // The remaining budget must stay completable: after this chunk
+            // commits, every remaining chunk needs at least one item and at
+            // most maximum_items, so the run can always be driven to its
+            // announced total. A chunk that strands the run in either
+            // direction refuses here, beside the other window checks.
+            let committed_after = run.committed_items.saturating_add(announced_items);
+            let remaining_items = run.item_count.saturating_sub(committed_after);
+            let remaining_chunks = run.chunk_count - (chunk_binding.chunk_index + 1);
             if not_open
                 || chunk_binding.chunk_index != run.next_chunk_index
                 || chunk_binding.chunk_index >= run.chunk_count
                 || announced_items != chunk_binding.item_count
                 || announced_items > run.maximum_items
                 || run.committed_items + announced_items > run.item_count
+                || remaining_items < remaining_chunks
+                || remaining_items > remaining_chunks.saturating_mul(run.maximum_items)
                 || (terminal_chunk && run.committed_items + announced_items != run.item_count)
                 || (terminal_chunk && chunk_binding.prefix_digest != run.input_digest)
                 || request
