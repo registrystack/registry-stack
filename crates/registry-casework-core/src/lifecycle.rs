@@ -192,22 +192,40 @@ fn review_lifecycle_state_id(state: ReviewRequestLifecycle) -> &'static str {
     }
 }
 
-const REVIEW_EVENT: &str = "settle";
+const REVIEW_SETTLE_EVENT: &str = "settle";
+const REVIEW_RECORD_EVENT: &str = "record_decision";
+const REVIEW_ADVANCE_EVENT: &str = "advance_stage";
 
-/// Describe the review request lifecycle: seven states, and six edges that
-/// all leave `reviewing` on the same `settle` event.
+/// What `record_review_decision` checks before it looks at the decision at
+/// all. Every edge it raises carries these, so the sentence is written once
+/// and concatenated onto each of the six rather than drifting six ways.
+macro_rules! review_decision_gate {
+    () => {
+        "Raised by the holder of an open task on the active stage, under a deciding profile that both the stage and the task allow, on a request still in reviewing and not already settled, with no earlier decision on that task, no earlier decision by the same reviewer in this stage, and the stage's initiator and previous-stage-reviewer exclusions satisfied."
+    };
+}
+
+/// Describe the review request lifecycle: seven states and eight edges, all
+/// leaving `reviewing`.
 ///
-/// Four of those six are decision outcomes. Which of `approved`, `rejected`,
+/// Six of the eight are raised by a reviewer's decision, and only four of
+/// those settle the request. Which of `approved`, `rejected`,
 /// `changes_requested`, or `answered` a given review reaches is decided by
 /// `record_review_decision` against the adopter's configured review policy
 /// (quorum, stage advancement, deciding profiles, initiator and
 /// previous-stage-reviewer exclusions). That decision is policy-dependent and
 /// deliberately not enumerated here.
 ///
-/// The other two are not policy decisions at all and must not be described as
-/// if they were. `cancelled` is the requester withdrawing their own request,
-/// and `superseded` is applied automatically to a prior reviewing request when
-/// a replacement is created for the same subject and policy. Neither path
+/// The other two decision edges return to `reviewing`, and omitting them
+/// would report that every decision settles the request. An approval that
+/// leaves the active stage short of its quorum is recorded and moves no
+/// stage; an approval that meets the quorum while a later stage exists closes
+/// the active stage's tasks and opens the next stage's.
+///
+/// The last two are not decisions at all and must not be described as if they
+/// were. `cancelled` is the requester withdrawing their own request, and
+/// `superseded` is applied automatically to a prior reviewing request when a
+/// replacement is created for the same subject and policy. Neither path
 /// consults a stage, a quorum, or an exclusion.
 pub fn review_lifecycle() -> LifecycleDescription {
     let state_ids: Vec<&'static str> = [
@@ -226,39 +244,69 @@ pub fn review_lifecycle() -> LifecycleDescription {
     let transitions = vec![
         LifecycleTransition {
             from: reviewing,
-            event: REVIEW_EVENT,
+            event: REVIEW_RECORD_EVENT,
+            to: reviewing,
+            guard: concat!(
+                review_decision_gate!(),
+                " An approval that leaves the stage's approvals short of the stage's required approvals is recorded against the task and moves no stage."
+            ),
+        },
+        LifecycleTransition {
+            from: reviewing,
+            event: REVIEW_ADVANCE_EVENT,
+            to: reviewing,
+            guard: concat!(
+                review_decision_gate!(),
+                " An approval that meets the active stage's required approvals while a later stage exists closes that stage's open tasks and opens the next stage's."
+            ),
+        },
+        LifecycleTransition {
+            from: reviewing,
+            event: REVIEW_SETTLE_EVENT,
             to: review_lifecycle_state_id(ReviewRequestLifecycle::Approved),
-            guard: "Settlement only applies to a request still in reviewing; approval carries no outcome and no result.",
+            guard: concat!(
+                review_decision_gate!(),
+                " On an approval-purpose policy, the approval that meets the last stage's required approvals settles the request as approved; approval carries no outcome and no result."
+            ),
         },
         LifecycleTransition {
             from: reviewing,
-            event: REVIEW_EVENT,
+            event: REVIEW_SETTLE_EVENT,
             to: review_lifecycle_state_id(ReviewRequestLifecycle::Rejected),
-            guard: "Settlement only applies to a request still in reviewing; rejection must carry an outcome.",
+            guard: concat!(
+                review_decision_gate!(),
+                " On an approval-purpose policy, a rejection settles the request on its own without reaching any quorum, and must carry an outcome the policy declares, with a result when that outcome requires one."
+            ),
         },
         LifecycleTransition {
             from: reviewing,
-            event: REVIEW_EVENT,
+            event: REVIEW_SETTLE_EVENT,
             to: review_lifecycle_state_id(ReviewRequestLifecycle::ChangesRequested),
-            guard: "Settlement only applies to a request still in reviewing; changes-requested must carry an outcome.",
+            guard: concat!(
+                review_decision_gate!(),
+                " On an approval-purpose policy, a changes-requested decision settles the request on its own without reaching any quorum, and must carry an outcome the policy declares, with a result when that outcome requires one."
+            ),
         },
         LifecycleTransition {
             from: reviewing,
-            event: REVIEW_EVENT,
+            event: REVIEW_SETTLE_EVENT,
             to: review_lifecycle_state_id(ReviewRequestLifecycle::Answered),
-            guard: "Settlement only applies to a request still in reviewing; an answer must carry an outcome.",
+            guard: concat!(
+                review_decision_gate!(),
+                " On an answer-purpose policy, an answer settles the request on its own without reaching any quorum, and must carry an outcome the policy declares, with a result when that outcome requires one."
+            ),
         },
         LifecycleTransition {
             from: reviewing,
-            event: REVIEW_EVENT,
+            event: REVIEW_SETTLE_EVENT,
             to: review_lifecycle_state_id(ReviewRequestLifecycle::Cancelled),
-            guard: "Settlement only applies to a request still in reviewing; cancellation is the requester withdrawing their own request, consults no stage, quorum, or exclusion, and carries no outcome and no result.",
+            guard: "Settlement only applies to a request still in reviewing; cancellation is the requester withdrawing their own request, is raised by no reviewer and through no task, consults no stage, quorum, or exclusion, and carries no outcome and no result.",
         },
         LifecycleTransition {
             from: reviewing,
-            event: REVIEW_EVENT,
+            event: REVIEW_SETTLE_EVENT,
             to: review_lifecycle_state_id(ReviewRequestLifecycle::Superseded),
-            guard: "Settlement only applies to a request still in reviewing; supersession is applied automatically when a replacement request is created for the same subject and policy, consults no stage, quorum, or exclusion, and carries no outcome and no result.",
+            guard: "Settlement only applies to a request still in reviewing; supersession is applied automatically when a replacement request is created for the same subject and policy, is raised by no reviewer and through no task, consults no stage, quorum, or exclusion, and carries no outcome and no result.",
         },
     ];
     describe(
@@ -452,14 +500,21 @@ mod tests {
     }
 
     #[test]
-    fn review_table_has_7_states_and_6_edges_all_from_reviewing_on_settle() {
+    fn review_table_has_7_states_and_8_edges_all_leaving_reviewing() {
         let description = review_lifecycle();
         assert_eq!(description.states.len(), 7);
-        assert_eq!(description.transitions.len(), 6);
+        assert_eq!(description.transitions.len(), 8);
         for edge in &description.transitions {
             assert_eq!(edge.from, "reviewing");
-            assert_eq!(edge.event, "settle");
         }
+        assert_eq!(
+            description
+                .transitions
+                .iter()
+                .filter(|edge| edge.event == "settle")
+                .count(),
+            6
+        );
         for id in [
             "approved",
             "rejected",
@@ -479,6 +534,47 @@ mod tests {
             description.states.iter().all(|state| !state.unreachable),
             "no review state should be unreachable"
         );
+    }
+
+    /// `record_review_decision` has three outcomes, not one. An approval that
+    /// leaves the active stage short of its quorum is recorded, and an
+    /// approval that meets it while a later stage exists advances the stage.
+    /// Both leave the request in `reviewing`, so a table of settle edges alone
+    /// would report that every decision settles the request.
+    #[test]
+    fn review_table_reports_the_two_decision_steps_that_do_not_settle() {
+        let description = review_lifecycle();
+        let staying: Vec<&LifecycleTransition> = description
+            .transitions
+            .iter()
+            .filter(|edge| edge.to == "reviewing")
+            .collect();
+        let events: Vec<&str> = staying.iter().map(|edge| edge.event).collect();
+        assert_eq!(events, vec!["record_decision", "advance_stage"]);
+        assert!(
+            staying[0].guard.contains("short of the stage's required"),
+            "{:?}",
+            staying[0]
+        );
+        assert!(
+            staying[1].guard.contains("a later stage exists"),
+            "{:?}",
+            staying[1]
+        );
+        for edge in staying {
+            assert!(!edge.guard.contains("settles"), "{edge:?}");
+        }
+
+        let reviewing = description
+            .states
+            .iter()
+            .find(|state| state.id == "reviewing")
+            .expect("reviewing state");
+        assert_eq!(reviewing.incoming_transitions, 2);
+        assert_eq!(reviewing.outgoing_transitions, 8);
+        assert!(reviewing.initial);
+        assert!(!reviewing.terminal);
+        assert!(!reviewing.unreachable);
     }
 
     #[test]
