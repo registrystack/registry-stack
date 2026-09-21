@@ -4733,6 +4733,115 @@ async fn policy_publication_refuses_to_remove_an_offering_with_a_live_appointmen
     assert_eq!(cancelled["state"], "cancelled");
 }
 
+/// A second edge over the same deployment, serving `policy` as the current
+/// one. Everything else stays the fixture's: the same store, schema, hooks,
+/// and audit keying, so a request through it meets the claims the first edge
+/// committed.
+async fn republished(fx: &Fixture, policy: SchedulingPolicy, pool_ids: &[String]) -> Router {
+    let digest = policy.policy_digest();
+    let revision = fx
+        .store
+        .apply_policy(SCHEDULING_ID, &digest, pool_ids, &policy)
+        .await
+        .expect("republish the scheduling policy");
+    let keying = AuditHashSecret::new(vec![0x42; 32]).expect("the test audit hash secret");
+    let service = Arc::new(
+        SchedulingService::new(
+            fx.store.clone(),
+            policy,
+            SCHEDULING_ID.to_owned(),
+            revision,
+            digest,
+            AuditKeyHasher::Keyed(keying),
+            7,
+        )
+        .with_hooks(fx.hooks.clone()),
+    );
+    router(HttpState {
+        service,
+        authenticator: Arc::new(authenticator()),
+        store: fx.store.clone(),
+    })
+}
+
+/// An offering stays in the policy while any claim on it is live, and may be
+/// retired once every one of them is closed. The receipts those closures wrote
+/// outlive the offering, and the retry each receipt exists to serve must still
+/// replay its recorded answer rather than read as an outage.
+#[tokio::test]
+async fn a_retry_replays_its_receipt_after_its_offering_leaves_the_policy() {
+    let fx = fixture().await;
+    let (appointment_id, revision) = booked(&fx, 300, 440, "retired-offering-create").await;
+    let slot = first_slot(&fx, OFFERING, 600, 740).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "retired-offering-hold",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let hold_id = hold["holdId"].as_str().expect("a hold id").to_owned();
+
+    let (status, _) = fx.delete(&format!("/v1/holds/{hold_id}"), &fx.agent).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let cancellation = json!({"observedRevision": revision, "reason": null});
+    let (status, cancelled) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/cancel"),
+            &fx.agent,
+            "retired-offering-cancel",
+            cancellation.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+
+    let mut replacement = parse_policy_yaml(POLICY).expect("the current policy");
+    replacement.scheduling.version += 1;
+    replacement
+        .offerings
+        .retain(|offering| offering.id != OFFERING);
+    let retired = republished(
+        &fx,
+        replacement,
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+    )
+    .await;
+
+    let (status, replayed) = send(
+        retired.clone(),
+        "DELETE".to_owned(),
+        format!("/v1/holds/{hold_id}"),
+        fx.agent.clone(),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "the release replays its receipt: {replayed}"
+    );
+
+    let (status, replayed) = send(
+        retired,
+        "POST".to_owned(),
+        format!("/v1/appointments/{appointment_id}/cancel"),
+        fx.agent.clone(),
+        Some("retired-offering-cancel".to_owned()),
+        Some(cancellation),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the cancellation replays its receipt: {replayed}"
+    );
+    assert_eq!(replayed["state"], "cancelled");
+    assert_eq!(replayed["appointmentId"], appointment_id);
+}
+
 #[tokio::test]
 async fn policy_publication_refuses_to_move_an_active_offering_between_pools() {
     let fx = fixture().await;

@@ -764,21 +764,16 @@ impl PostgresStore {
                     )
                     .await?
                     .and_then(|stored| stored.get(0));
-                let Some(mut current_document) = current_document else {
+                let Some(current_document) = current_document else {
                     return Err(StoreError::PolicyInUse(
                         "the current policy document is unavailable; reapply the current policy before publishing a change"
                             .to_owned(),
                     ));
                 };
-                // Earlier branch builds retained mutable window records inside
-                // the policy document. Preserve that historical document and
-                // digest, but ignore its legacy member while comparing the
-                // lifecycle terms governed by the current policy shape.
-                if let Some(document) = current_document.as_object_mut() {
-                    document.remove("windows");
-                }
-                let current: SchedulingPolicy =
-                    serde_json::from_value(current_document).map_err(|_| StoreError::Corrupt)?;
+                // The historical document and digest are preserved as they
+                // were published; only the lifecycle terms governed by the
+                // current policy shape are compared.
+                let current = retained_policy(current_document)?;
                 let now = self.observed_now();
                 let active_offerings = transaction
                     .query(
@@ -1024,6 +1019,32 @@ impl PostgresStore {
         let client = self.client().await?;
         let row = client.query_opt(SELECT_CLAIM, &[&claim_id]).await?;
         row.map(map_claim_row).transpose()
+    }
+
+    /// The offering as the policy revision `policy_revision` published it.
+    ///
+    /// Every claim names the revision it was committed under, and every
+    /// published revision retains its document. Publication may retire an
+    /// offering once no claim on it is live, so the close that retired it has
+    /// a receipt the current policy can no longer describe: the terms that
+    /// governed the claim are read from the revision that governed it.
+    pub async fn retained_offering(
+        &self,
+        policy_revision: i64,
+        offering: &str,
+    ) -> Result<Option<registry_scheduling_core::OfferingPolicy>, StoreError> {
+        let client = self.client().await?;
+        let row = client
+            .query_opt(
+                "SELECT policy_document FROM scheduling_policy_revisions \
+                 WHERE policy_revision=$1",
+                &[&policy_revision],
+            )
+            .await?;
+        let Some(document) = row.and_then(|row| row.get::<_, Option<Value>>(0)) else {
+            return Ok(None);
+        };
+        Ok(retained_policy(document)?.offering(offering).cloned())
     }
 
     /// The history of one claim, newest first, bounded by the listing limit.
@@ -2566,6 +2587,16 @@ async fn guard_revisions(
         return Err(CommitError::FactsStale);
     }
     Ok(())
+}
+
+/// Read a retained policy document. Earlier branch builds carried mutable
+/// window records inside the document; that member left the policy shape, so
+/// it is dropped rather than refused when an older document still carries it.
+fn retained_policy(mut document: Value) -> Result<SchedulingPolicy, StoreError> {
+    if let Some(object) = document.as_object_mut() {
+        object.remove("windows");
+    }
+    serde_json::from_value(document).map_err(|_| StoreError::Corrupt)
 }
 
 /// Replay a stored attempt: the same key with a different payload is

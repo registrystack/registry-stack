@@ -31,6 +31,7 @@ use registry_scheduling_core::{
 };
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
+use std::borrow::Cow;
 use uuid::Uuid;
 
 use crate::cursors::{
@@ -624,11 +625,11 @@ impl SchedulingService {
         if hold.kind != LedgerKind::Hold {
             return Err(ServiceError::Problem(ProblemCode::HoldReleased));
         }
-        let offering = self.policy.offering(&hold.offering).ok_or_else(|| {
-            ServiceError::internal("a committed hold names no offering in the policy")
-        })?;
+        let offering = self
+            .claim_offering(&hold.offering, hold.policy_revision)
+            .await?;
         let grant = self
-            .require_permission(caller, offering, HOLD_RELEASE_ACTION)
+            .require_permission(caller, &offering, HOLD_RELEASE_ACTION)
             .await?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let request_hash = canonical_hash(&json!({"hold": hold_id}))?;
@@ -891,11 +892,11 @@ impl SchedulingService {
             .booking(appointment_id)
             .await?
             .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
-        let offering = self.policy.offering(&appointment.offering).ok_or_else(|| {
-            ServiceError::internal("a committed appointment names no offering in the policy")
-        })?;
+        let offering = self
+            .claim_offering(&appointment.offering, appointment.policy_revision)
+            .await?;
         let grant = self
-            .require_permission(caller, offering, APPOINTMENT_CANCEL_ACTION)
+            .require_permission(caller, &offering, APPOINTMENT_CANCEL_ACTION)
             .await?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let request_hash = canonical_hash(&json!({
@@ -1178,6 +1179,34 @@ impl SchedulingService {
                 tracing::error!(error = %refused, "the refusal audit row could not be built");
             }
         }
+    }
+
+    /// The offering a committed claim names.
+    ///
+    /// The current policy answers for every live claim, because publication
+    /// refuses to retire an offering while one stands. A closed claim is the
+    /// other case: its offering may have been retired since, and the retry
+    /// its receipt exists to serve still has to be authorized before that
+    /// receipt is replayed. So the terms are read from the policy revision
+    /// the claim itself names, and the grant is matched against the offering
+    /// as it stood when the claim was committed.
+    async fn claim_offering(
+        &self,
+        offering: &str,
+        policy_revision: i64,
+    ) -> Result<Cow<'_, OfferingPolicy>, ServiceError> {
+        if let Some(current) = self.policy.offering(offering) {
+            return Ok(Cow::Borrowed(current));
+        }
+        self.store
+            .retained_offering(policy_revision, offering)
+            .await?
+            .map(Cow::Owned)
+            .ok_or_else(|| {
+                ServiceError::internal(
+                    "a committed claim names no offering in the policy revision it was committed under",
+                )
+            })
     }
 
     /// The policy-resolved supply an offering runs against, read from the
