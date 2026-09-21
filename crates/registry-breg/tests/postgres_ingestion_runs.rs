@@ -2534,6 +2534,48 @@ async fn a_committed_chunk_replays_after_the_package_lowers_the_batch_limits() {
     assert_eq!(durable_widget_count(&harness).await, 3);
 }
 
+/// The receipt links are indexed by the erased-record predicates the receipt
+/// scrub probes, record id then record revision. Erasure runs inside the
+/// record-history maintenance transaction while the registry's exclusive
+/// maintenance lock is held, so the scrub must start from the matching links
+/// and drive to the chunks they name, never probe every live chunk row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn receipt_links_are_indexed_by_the_erased_record_predicates() {
+    let harness = IngestionHarness::create().await;
+    let rows = harness
+        .database
+        .admin
+        .query(
+            "SELECT i.relname AS index_name,
+                    array_agg(a.attname ORDER BY k.ord) AS columns
+               FROM pg_index AS ix
+               JOIN pg_class AS i ON i.oid = ix.indexrelid
+               JOIN pg_class AS t ON t.oid = ix.indrelid
+               JOIN pg_namespace AS n ON n.oid = t.relnamespace
+               JOIN unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+               JOIN pg_attribute AS a
+                 ON a.attrelid = t.oid AND a.attnum = k.attnum
+              WHERE n.nspname = 'registry_internal'
+                AND t.relname = 'registry_ingestion_run_chunk_records'
+              GROUP BY i.relname",
+            &[],
+        )
+        .await
+        .expect("the link table's indexes are readable");
+    let mut by_erased_record = Vec::new();
+    for row in rows {
+        let columns: Vec<String> = row.get("columns");
+        if columns.len() >= 2 && columns[0] == "record_id" && columns[1] == "record_revision" {
+            by_erased_record.push(row.get::<_, String>("index_name"));
+        }
+    }
+    assert_eq!(
+        by_erased_record.len(),
+        1,
+        "the install schema indexes the receipt links by the erased-record predicates, found {by_erased_record:?}"
+    );
+}
+
 /// The runtime role inserts and reads receipt links but never rewrites them:
 /// repointing a link could make a retained receipt outlive the history it
 /// discloses or scrub an unrelated receipt, so the link table carries no

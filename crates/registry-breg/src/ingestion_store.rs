@@ -513,6 +513,9 @@ pub(crate) async fn install(
                  record_revision bigint NOT NULL CHECK (record_revision > 0),
                  PRIMARY KEY (run_id, chunk_index, record_id)
              );
+             CREATE INDEX IF NOT EXISTS registry_ingestion_run_chunk_records_erased_record
+                 ON registry_internal.registry_ingestion_run_chunk_records
+                     (record_id, record_revision);
              REVOKE ALL ON registry_internal.registry_ingestion_runs,
                  registry_internal.registry_ingestion_run_chunks,
                  registry_internal.registry_ingestion_run_chunk_records FROM PUBLIC;
@@ -1139,7 +1142,11 @@ pub(crate) fn parse_field_bindings(
 /// Tombstone every chunk receipt that describes one erased revision of the
 /// record. Called inside the record-history erasure transaction, so a receipt
 /// never outlives the history it describes, while a receipt describing only
-/// later revisions of the same record survives.
+/// later revisions of the same record survives. The links are indexed by the
+/// erased-record predicates, so the update starts from the matching links and
+/// reaches only the chunks those links name; a chunk with several matching
+/// links is still updated once, and the `erased_at IS NULL` guard keeps an
+/// already-erased chunk untouched.
 pub(crate) async fn scrub_receipts_for_records(
     transaction: &tokio_postgres::Transaction<'_>,
     entity_id: &str,
@@ -1154,18 +1161,15 @@ pub(crate) async fn scrub_receipts_for_records(
             "UPDATE registry_internal.registry_ingestion_run_chunks AS chunk
                 SET receipt = NULL,
                     erased_at = transaction_timestamp()
+               FROM registry_internal.registry_ingestion_run_chunk_records AS link
+               JOIN registry_internal.registry_ingestion_runs AS run
+                 ON run.run_id = link.run_id
               WHERE chunk.erased_at IS NULL
-                AND EXISTS (
-                    SELECT 1
-                      FROM registry_internal.registry_ingestion_run_chunk_records AS link
-                      JOIN registry_internal.registry_ingestion_runs AS run
-                        ON run.run_id = link.run_id
-                     WHERE link.run_id = chunk.run_id
-                       AND link.chunk_index = chunk.chunk_index
-                       AND link.record_id = $2
-                       AND link.record_revision <= $3
-                       AND run.entity_id = $1
-                )",
+                AND link.run_id = chunk.run_id
+                AND link.chunk_index = chunk.chunk_index
+                AND link.record_id = $2
+                AND link.record_revision <= $3
+                AND run.entity_id = $1",
             &[&entity_id, &record_id, &erase_through_revision],
         )
         .await
