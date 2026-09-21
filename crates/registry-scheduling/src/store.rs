@@ -254,6 +254,25 @@ pub struct ClaimRow {
     pub closed_at: Option<DateTime<Utc>>,
 }
 
+impl ClaimRow {
+    /// Whether this claim holds its offering's terms still. This is the Rust
+    /// twin of the sentence `apply_policy` selects on: publication refuses to
+    /// change the service, location, mode or supply of an offering under a
+    /// claim that answers true here, so for such a claim the current policy
+    /// and the revision the claim names give the same terms. Under every
+    /// other claim, a closed one or a hold already past its expiry, the
+    /// offering is free to move and only the revision the claim names still
+    /// describes what was committed.
+    #[must_use]
+    pub fn pins_its_offering(&self, now: DateTime<Utc>) -> bool {
+        self.state == ClaimState::Active
+            && match self.kind {
+                LedgerKind::Booking => true,
+                LedgerKind::Hold => self.hold_expires_at.is_some_and(|expiry| expiry > now),
+            }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ClaimState {

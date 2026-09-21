@@ -41,6 +41,11 @@
 - Retain idempotency attempt receipts for the configured period and forget
   listing cursors after fifteen minutes. Appointment, history, outbox, and
   audit retention are deferred.
+- Answer a release or cancellation retry from the policy revision that
+  governed the claim. Publication may retire an offering, or keep its
+  identifier and sell it under a different service or location, once no claim
+  on it is live, and the retry each receipt exists to serve is still
+  authorized against the offering as it stood when the claim was committed.
 - Provide `schedulingctl init`, `check`, `test`, `explain`, and `package`, and
   write complete `runtime.example.yaml` and `records.yaml` documents beside
   every initialized project.

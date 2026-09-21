@@ -625,9 +625,7 @@ impl SchedulingService {
         if hold.kind != LedgerKind::Hold {
             return Err(ServiceError::Problem(ProblemCode::HoldReleased));
         }
-        let offering = self
-            .claim_offering(&hold.offering, hold.policy_revision)
-            .await?;
+        let offering = self.claim_offering(&hold, now).await?;
         let grant = self
             .require_permission(caller, &offering, HOLD_RELEASE_ACTION)
             .await?;
@@ -892,9 +890,7 @@ impl SchedulingService {
             .booking(appointment_id)
             .await?
             .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
-        let offering = self
-            .claim_offering(&appointment.offering, appointment.policy_revision)
-            .await?;
+        let offering = self.claim_offering(&appointment, now).await?;
         let grant = self
             .require_permission(caller, &offering, APPOINTMENT_CANCEL_ACTION)
             .await?;
@@ -1183,23 +1179,31 @@ impl SchedulingService {
 
     /// The offering a committed claim names.
     ///
-    /// The current policy answers for every live claim, because publication
-    /// refuses to retire an offering while one stands. A closed claim is the
-    /// other case: its offering may have been retired since, and the retry
-    /// its receipt exists to serve still has to be authorized before that
-    /// receipt is replayed. So the terms are read from the policy revision
-    /// the claim itself names, and the grant is matched against the offering
-    /// as it stood when the claim was committed.
+    /// The current policy answers for a claim that still pins it, because
+    /// publication refuses to change the service, location, mode or supply of
+    /// an offering while such a claim stands: the live terms and the ones the
+    /// claim was committed under are the same terms. Every other claim, a
+    /// closed one or a hold already past its expiry, pins nothing. Its
+    /// offering may since have been retired, or kept its identifier and been
+    /// sold under a different service, and the retry its receipt exists to
+    /// serve still has to be authorized before that receipt is replayed. So
+    /// the terms are read from the policy revision the claim itself names,
+    /// and the grant is matched against the offering as it stood when the
+    /// claim was committed: the caller who committed it can still close it,
+    /// and a grant over whatever the identifier sells today cannot reach a
+    /// receipt written under something else.
     async fn claim_offering(
         &self,
-        offering: &str,
-        policy_revision: i64,
+        claim: &ClaimRow,
+        now: DateTime<Utc>,
     ) -> Result<Cow<'_, OfferingPolicy>, ServiceError> {
-        if let Some(current) = self.policy.offering(offering) {
-            return Ok(Cow::Borrowed(current));
+        if claim.pins_its_offering(now) {
+            if let Some(current) = self.policy.offering(&claim.offering) {
+                return Ok(Cow::Borrowed(current));
+            }
         }
         self.store
-            .retained_offering(policy_revision, offering)
+            .retained_offering(claim.policy_revision, &claim.offering)
             .await?
             .map(Cow::Owned)
             .ok_or_else(|| {

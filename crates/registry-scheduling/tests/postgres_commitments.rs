@@ -5072,6 +5072,96 @@ async fn a_retry_replays_its_receipt_after_its_offering_leaves_the_policy() {
     assert_eq!(replayed["appointmentId"], appointment_id);
 }
 
+/// The same retry, from the other side of publication. Retirement is not the
+/// only change a closed claim outlives: once nothing on an offering is live,
+/// publication may also keep its identifier and change the service or the
+/// location it is sold under, because only a live claim pins those. The
+/// receipt a closed claim carries was authorized against the offering as it
+/// stood when the claim was committed, so its retry has to be judged the same
+/// way. Reading the live policy instead would refuse a caller holding the very
+/// grant that committed the claim, and would let a grant over the offering's
+/// new service reach a receipt written under the old one.
+#[tokio::test]
+async fn a_retry_replays_its_receipt_after_its_offering_changes_service() {
+    let fx = fixture().await;
+    let (appointment_id, revision) = booked(&fx, 300, 440, "moved-offering-create").await;
+    let slot = first_slot(&fx, OFFERING, 600, 740).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "moved-offering-hold",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let hold_id = hold["holdId"].as_str().expect("a hold id").to_owned();
+
+    let (status, _) = fx.delete(&format!("/v1/holds/{hold_id}"), &fx.agent).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let cancellation = json!({"observedRevision": revision, "reason": null});
+    let (status, cancelled) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/cancel"),
+            &fx.agent,
+            "moved-offering-cancel",
+            cancellation.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+
+    // The booking agent holds every action over registry-update and
+    // appointment.create alone over registry-review, so an offering that
+    // changes service leaves the grant which committed both of these claims
+    // unable to close either one again.
+    let mut replacement = parse_policy_yaml(POLICY).expect("the current policy");
+    replacement.scheduling.version += 1;
+    replacement
+        .offerings
+        .iter_mut()
+        .find(|offering| offering.id == OFFERING)
+        .expect("the exact-time offering")
+        .service = "registry-review".to_owned();
+    let moved = republished(
+        &fx,
+        replacement,
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+    )
+    .await;
+
+    let (status, replayed) = send(
+        moved.clone(),
+        "DELETE".to_owned(),
+        format!("/v1/holds/{hold_id}"),
+        fx.agent.clone(),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "the release replays its receipt: {replayed}"
+    );
+
+    let (status, replayed) = send(
+        moved,
+        "POST".to_owned(),
+        format!("/v1/appointments/{appointment_id}/cancel"),
+        fx.agent.clone(),
+        Some("moved-offering-cancel".to_owned()),
+        Some(cancellation),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the cancellation replays its receipt: {replayed}"
+    );
+    assert_eq!(replayed["state"], "cancelled");
+    assert_eq!(replayed["appointmentId"], appointment_id);
+}
+
 #[tokio::test]
 async fn policy_publication_refuses_to_move_an_active_offering_between_pools() {
     let fx = fixture().await;
