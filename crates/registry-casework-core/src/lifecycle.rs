@@ -40,11 +40,16 @@ pub struct LifecycleTransition {
 
 /// Build a lifecycle description from a declared state and transition list.
 /// Every derived field on a state is computed from the transitions and the
-/// declared initial state, never hand-written, so the two cannot drift apart.
+/// declared initial states, never hand-written, so the two cannot drift apart.
+///
+/// A machine may have more than one initial state. `initial` means a record
+/// can be created directly in that state, not that it is the only way in, so
+/// a state that is both constructible and reachable by transition reports
+/// `initial: true` and a non-zero `incomingTransitions`.
 fn describe(
     id: &'static str,
     label: &'static str,
-    initial_state_id: &'static str,
+    initial_state_ids: &[&'static str],
     state_ids: &[&'static str],
     transitions: Vec<LifecycleTransition>,
 ) -> LifecycleDescription {
@@ -59,7 +64,7 @@ fn describe(
                 .iter()
                 .filter(|transition| transition.from == state_id)
                 .count();
-            let initial = state_id == initial_state_id;
+            let initial = initial_state_ids.contains(&state_id);
             LifecycleState {
                 id: state_id,
                 initial,
@@ -112,9 +117,34 @@ fn occurrence_event_id(event: OccurrenceEvent) -> &'static str {
     }
 }
 
-/// Every occurrence edge shares this guard: the reducer itself is unguarded,
-/// and legality is enforced one layer up, by storage, before an event fires.
-const OCCURRENCE_GUARD: &str = "The occurrence reducer is total over (state, event); the store enforces holding, queue authority, revision, and attempt-state preconditions before any event is raised.";
+/// What the store actually checks before each occurrence event is raised.
+/// The reducer itself is unguarded and total over `(state, event)`; legality
+/// is enforced one layer up, and it is enforced differently per event, so
+/// these sentences are selected by event rather than shared across the table.
+/// An authoritative observation is the case that matters most: it carries no
+/// actor at all, so attaching the claim path's holder and queue-authority
+/// checks to it would describe a check that never runs.
+fn occurrence_guard(event: OccurrenceEvent) -> &'static str {
+    match event {
+        OccurrenceEvent::Claim => "Raised by a staff actor with authority over the item's queue, on an item that is unheld and still active, at the caller's expected revision, and only while no attempt is live.",
+        OccurrenceEvent::Release => "Raised on two paths that check different things. A human release requires staff authority over the queue or supervisor authority, the item held and still active, the caller's expected revision, and no live attempt. The clock-driven reassignment path carries no actor and checks none of those: it requires the item active and not synchronizing, no live attempt, the source occurrence still current against a fresh read, a served target queue, and an unclaimed clock effect.",
+        OccurrenceEvent::AttemptReserved => "Raised by the item's current holder with staff authority over its queue, at the caller's expected revision and against an action binding that still matches, and only while no other attempt is live.",
+        OccurrenceEvent::AttemptUncertain | OccurrenceEvent::AttemptCompleted => "Raised by the actor recorded on the attempt itself, fenced by that attempt's execution token. The item's holder and queue authority are not re-checked here. A completed result additionally requires a receipt naming a positive source revision.",
+        OccurrenceEvent::AttemptRefused => "Raised on two mutually exclusive paths: by the attempt's own actor under a still-live lease, or by an operator settling an uncertain attempt whose lease has already expired. Neither re-checks the item's holder or queue authority.",
+        OccurrenceEvent::ObserveOpen
+        | OccurrenceEvent::ObserveWaitingApplicant
+        | OccurrenceEvent::ObserveWaitingApplication
+        | OccurrenceEvent::Complete
+        | OccurrenceEvent::Supersede
+        | OccurrenceEvent::Cancel => "Raised by an authoritative observation of the source, which carries no actor and is checked against no queue authority: it requires the source binding generation to match, the observed revision to be monotonic against the revision already applied, and no attempt to be live.",
+    }
+}
+
+/// The states in which the store can create an occurrence record outright.
+/// The first authoritative observation for an unseen occurrence is inserted
+/// with the state it reports, so a record can begin in any of these without
+/// ever passing through `open`.
+const OCCURRENCE_INITIAL_STATES: &[&str] = &["open", "waiting_applicant", "waiting_application"];
 
 /// Describe the occurrence lifecycle by generating its transition table from
 /// the real reducer: every `(state, event)` pair is tried against
@@ -133,7 +163,7 @@ pub fn occurrence_lifecycle() -> LifecycleDescription {
                     from: occurrence_state_id(state),
                     event: occurrence_event_id(event),
                     to: occurrence_state_id(next),
-                    guard: OCCURRENCE_GUARD,
+                    guard: occurrence_guard(event),
                 });
             }
         }
@@ -141,7 +171,7 @@ pub fn occurrence_lifecycle() -> LifecycleDescription {
     describe(
         "occurrence",
         "Casework occurrence lifecycle",
-        "open",
+        OCCURRENCE_INITIAL_STATES,
         &state_ids,
         transitions,
     )
@@ -165,13 +195,20 @@ fn review_lifecycle_state_id(state: ReviewRequestLifecycle) -> &'static str {
 const REVIEW_EVENT: &str = "settle";
 
 /// Describe the review request lifecycle: seven states, and six edges that
-/// all leave `reviewing` on the same `settle` event. Which terminal state a
-/// given review actually reaches is decided by `record_review_decision`
-/// against the adopter's configured review policy (quorum, stage
-/// advancement, deciding profiles, initiator and previous-stage-reviewer
-/// exclusions). That decision is policy-dependent and deliberately not
-/// enumerated here; this function only describes the shape all policies
-/// settle within.
+/// all leave `reviewing` on the same `settle` event.
+///
+/// Four of those six are decision outcomes. Which of `approved`, `rejected`,
+/// `changes_requested`, or `answered` a given review reaches is decided by
+/// `record_review_decision` against the adopter's configured review policy
+/// (quorum, stage advancement, deciding profiles, initiator and
+/// previous-stage-reviewer exclusions). That decision is policy-dependent and
+/// deliberately not enumerated here.
+///
+/// The other two are not policy decisions at all and must not be described as
+/// if they were. `cancelled` is the requester withdrawing their own request,
+/// and `superseded` is applied automatically to a prior reviewing request when
+/// a replacement is created for the same subject and policy. Neither path
+/// consults a stage, a quorum, or an exclusion.
 pub fn review_lifecycle() -> LifecycleDescription {
     let state_ids: Vec<&'static str> = [
         ReviewRequestLifecycle::Reviewing,
@@ -215,19 +252,19 @@ pub fn review_lifecycle() -> LifecycleDescription {
             from: reviewing,
             event: REVIEW_EVENT,
             to: review_lifecycle_state_id(ReviewRequestLifecycle::Cancelled),
-            guard: "Settlement only applies to a request still in reviewing; cancellation carries no outcome and no result.",
+            guard: "Settlement only applies to a request still in reviewing; cancellation is the requester withdrawing their own request, consults no stage, quorum, or exclusion, and carries no outcome and no result.",
         },
         LifecycleTransition {
             from: reviewing,
             event: REVIEW_EVENT,
             to: review_lifecycle_state_id(ReviewRequestLifecycle::Superseded),
-            guard: "Settlement only applies to a request still in reviewing; supersession carries no outcome and no result.",
+            guard: "Settlement only applies to a request still in reviewing; supersession is applied automatically when a replacement request is created for the same subject and policy, consults no stage, quorum, or exclusion, and carries no outcome and no result.",
         },
     ];
     describe(
         "review_request",
         "Casework review request lifecycle",
-        reviewing,
+        &[reviewing],
         &state_ids,
         transitions,
     )
@@ -323,6 +360,78 @@ mod tests {
             .collect();
         assert_eq!(self_transitions.len(), 6);
         assert_eq!(self_transitions, expected_ids);
+    }
+
+    /// A record is created in whatever state the first authoritative
+    /// observation reports, not always in `open`: the store inserts
+    /// `state_name(observation.state)` directly for an occurrence it has not
+    /// seen before. Reporting `open` as the only initial state would tell a
+    /// reader that `waiting_applicant` is reachable only by transition, which
+    /// is not how a record in that state actually comes to exist.
+    #[test]
+    fn every_directly_constructible_occurrence_state_is_reported_initial() {
+        let description = occurrence_lifecycle();
+        let initial: BTreeSet<&str> = description
+            .states
+            .iter()
+            .filter(|state| state.initial)
+            .map(|state| state.id)
+            .collect();
+        assert_eq!(
+            initial,
+            BTreeSet::from(["open", "waiting_applicant", "waiting_application"])
+        );
+    }
+
+    /// The guard is the only place the report says what the runtime checks
+    /// before an edge fires, so one shared sentence across every edge would
+    /// be wrong wherever the checks differ. An authoritative observation in
+    /// particular carries no actor at all, so it must not claim the holder
+    /// and queue-authority checks a claim makes.
+    #[test]
+    fn occurrence_guards_are_selected_by_event_not_shared_by_every_edge() {
+        let description = occurrence_lifecycle();
+        let guards: BTreeSet<&str> = description
+            .transitions
+            .iter()
+            .map(|edge| edge.guard)
+            .collect();
+        assert!(
+            guards.len() > 1,
+            "one guard across every edge cannot be accurate: {guards:#?}"
+        );
+
+        for edge in &description.transitions {
+            let observation = edge.event.starts_with("observe_")
+                || matches!(edge.event, "complete" | "supersede" | "cancel");
+            if observation {
+                for claimed in ["staff authority", "supervisor authority", "current holder"] {
+                    assert!(
+                        !edge.guard.contains(claimed),
+                        "{} claims {claimed:?}, which the observation path never checks: {}",
+                        edge.event,
+                        edge.guard
+                    );
+                }
+                assert!(
+                    edge.guard.contains("carries no actor"),
+                    "{} should say it carries no actor: {}",
+                    edge.event,
+                    edge.guard
+                );
+            }
+        }
+
+        let claim = description
+            .transitions
+            .iter()
+            .find(|edge| edge.event == "claim")
+            .expect("the table has a claim edge");
+        assert!(
+            claim.guard.contains("authority over the item's queue"),
+            "claim does check queue authority: {}",
+            claim.guard
+        );
     }
 
     #[test]

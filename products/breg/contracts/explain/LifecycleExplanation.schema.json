@@ -15,7 +15,7 @@
     },
     "lifecycles": {
       "type": "array",
-      "description": "One entry per state machine reported. `bregctl` reports exactly one, the request lifecycle; the array shape is shared with `caseworkctl explain lifecycle`, which reports two.",
+      "description": "One entry per state machine reported. `bregctl` reports exactly one, the request lifecycle; the array shape is shared with `caseworkctl lifecycle`, a top-level command rather than an `explain` subject, which reports two.",
       "minItems": 1,
       "items": { "$ref": "#/$defs/lifecycle" }
     }
@@ -65,7 +65,7 @@
         },
         "initial": {
           "type": "boolean",
-          "description": "True for the state a record is created in. An initial state is reached by construction, not by a transition, so it may report zero incoming transitions without being unreachable."
+          "description": "True when a record can be created directly in this state. A machine may have more than one: Casework's occurrence machine creates a record in whichever state the first authoritative observation reports. `initial` says nothing about whether transitions also enter the state, so an initial state may report zero incoming transitions without being unreachable, or a non-zero count when it is reachable both ways."
         },
         "terminal": {
           "type": "boolean",
@@ -73,7 +73,7 @@
         },
         "unreachable": {
           "type": "boolean",
-          "description": "True when no transition enters this state and it is not the initial state, so nothing the engine does can put a record here. Reported separately from `terminal` because the two are independent: a state the engine stores and whose guards would accept an outgoing transition can still have no way in."
+          "description": "True when no transition enters this state and it is not an initial state, so nothing the engine does can put a record here. Reported separately from `terminal` because the two are independent: a state the engine stores and whose guards would accept an outgoing transition can still have no way in."
         },
         "incomingTransitions": {
           "type": "integer",
@@ -106,7 +106,7 @@
         },
         "guard": {
           "type": "string",
-          "description": "One sentence naming what the engine checks before it runs this transition. Prose, not a machine-evaluable expression: the guards are procedural code, so this names them rather than reproducing them.",
+          "description": "What the engine checks before it runs this transition. Prose, not a machine-evaluable expression: the guards are procedural code, so this names them rather than reproducing them. Selected by event, and by path where one event is raised on more than one path with different checks, so two edges carry the same text only when the same checks really run for both.",
           "minLength": 1
         }
       }
