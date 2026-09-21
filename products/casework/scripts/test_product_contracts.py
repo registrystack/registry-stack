@@ -18,6 +18,9 @@ STANDALONE_FIXTURE = (
     / "products/casework/examples/standalone-decision/fixtures/standalone-decision.yaml"
 )
 BREG_EXAMPLE = ROOT / "products/casework/examples/professional-review/casework.yaml"
+BREG_RUNTIME = (
+    ROOT / "products/casework/examples/professional-review/runtime.example.yaml"
+)
 PAYMENT_EXAMPLE = ROOT / "products/casework/examples/payment-review/casework.yaml"
 PAYMENT_FIXTURE = (
     ROOT / "products/casework/examples/payment-review/fixtures/payment-review.yaml"
@@ -120,6 +123,19 @@ class ProductContractTests(unittest.TestCase):
         # only deployable as shipped when the two files name the same one.
         policy = PAYMENT_EXAMPLE.read_text(encoding="utf-8")
         runtime = PAYMENT_RUNTIME.read_text(encoding="utf-8")
+
+        policy_issuers = re.findall(r"(?m)^\s+issuer: (\S+)$", policy)
+        runtime_issuers = re.findall(r"(?m)^\s+issuer: (\S+)$", runtime)
+        self.assertEqual(len(policy_issuers), 1)
+        self.assertEqual(len(runtime_issuers), 1)
+        self.assertEqual(policy_issuers[0], runtime_issuers[0])
+
+    def test_professional_review_example_admits_producers_from_the_runtime_oidc_issuer(self):
+        # Every deployed token validates under the runtime file's OIDC issuer,
+        # and producer admission requires that exact issuer, so the example is
+        # only deployable as shipped when the two files name the same one.
+        policy = BREG_EXAMPLE.read_text(encoding="utf-8")
+        runtime = BREG_RUNTIME.read_text(encoding="utf-8")
 
         policy_issuers = re.findall(r"(?m)^\s+issuer: (\S+)$", policy)
         runtime_issuers = re.findall(r"(?m)^\s+issuer: (\S+)$", runtime)

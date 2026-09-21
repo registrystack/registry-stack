@@ -78,7 +78,7 @@ reviewKinds:
 reviewProducers:
   - id: registry-breg
     profile: integration-requester
-    issuer: http://127.0.0.1:8091
+    issuer: https://identity.example.test/realms/registry
     subject: professional-review-breg
     sourceNamespaces: [professional-licences]
     kinds: [scope-correction]
