@@ -16,6 +16,11 @@
   publication and records replacement re-run the same check at the database
   under the locks they already hold, so a deployment that bypasses the
   authoring tooling cannot publish the combination it refuses.
+- Keep one supply identifier to one kind of supply. A resource pool and a
+  published window anchor their capacity transactions on the same row keyed by
+  that identifier, so authoring refuses the collision from either side and both
+  anchor writes name the standing supply rather than aborting one publish path
+  and silently skipping the anchor on the other.
 - Authorize every commitment with a task grant whose scheduling bounds name
   the offering's service, its location, and the action, bounded to 64
   permissions of 32 actions with no wildcard. Only the grant's expiry is

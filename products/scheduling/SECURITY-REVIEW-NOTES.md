@@ -301,6 +301,45 @@ share. The per-admission refusal remains as defense in depth:
 plants its contradicting record directly in the tables, underneath the
 writes that now refuse to produce one.
 
+## One supply identifier, one kind of supply
+
+**Threat:** `scheduling_supply` is one flat table keyed by `supply_id`,
+and both kinds of supply anchor their capacity transactions on a row in
+it. Pool identifiers come from the policy package and window identifiers
+come from the environment records, authored separately, so nothing made
+the two namespaces disjoint. A collision was not symmetric and neither
+half was safe. Publishing a window over a live pool identifier hit the
+primary key and aborted the facts replacement with a database error
+instead of a refusal. Publishing a pool over a live window identifier was
+worse: the insert skipped the conflicting row, so the pool quietly
+anchored on a row still marked `window`, and the next records replacement
+deleted it along with the rest of that kind. From there `lock_supply`
+found fewer rows than it asked for and every commitment against that pool
+was refused, on a deployment whose policy looked published and whose
+records looked current.
+
+**Enforcement:** the collision is refused before it can be written, by
+name, on both sides. `SchedulingPolicy::check` refuses an arrival
+offering whose window identifier an exact-time offering already sells,
+which is the check `schedulingctl package` runs with no records in hand,
+and `check_window` refuses a published window that takes such an
+identifier, which reaches both database writes through the combined check
+above. Beneath them the two anchor writes are now one `anchor_supply`
+insert that returns the kind the row settled on and refuses when that is
+not the kind it asked for, so a standing anchor of the other kind is
+named rather than aborting one path and being skipped on the other, and
+the standing row keeps its kind. `lock_supply` names the identifiers it
+could not find instead of reporting a corrupt ledger, which is what
+SCHEDULING-SEC-02 already promised the operator's diagnostics would say.
+
+**Tests:** `a_supply_identifier_may_not_anchor_both_a_pool_and_a_window`
+(`crates/registry-scheduling/tests/postgres_commitments.rs`) publishes a
+colliding identifier in both directions and asserts the named refusal and
+that the standing anchor keeps its kind, and
+`a_pool_and_a_window_may_not_share_one_supply_identifier`
+(`crates/registry-scheduling-core/src/policy.rs`) holds the authoring
+refusal that reports it offline.
+
 ## Known deferrals
 
 The matrix records four deferrals with their compensating controls.

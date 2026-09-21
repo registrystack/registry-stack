@@ -544,6 +544,16 @@ impl SchedulingPolicy {
         for (index, offering) in self.offerings.iter().enumerate() {
             self.check_offering(offering, index, &mut findings);
         }
+        for (index, offering) in self.offerings.iter().enumerate() {
+            if let Some(arrival) = &offering.arrival {
+                if self.sells_pool(&arrival.window) {
+                    findings.push(SchedulingDiagnostic::new(
+                        format!("offerings[{index}].arrival.window"),
+                        PolicyCheckReason::SupplyIdentifierCollision,
+                    ));
+                }
+            }
+        }
 
         check_because(
             &self.hold_policy.because,
@@ -793,6 +803,19 @@ impl SchedulingPolicy {
         }
         findings.extend(window.units_policy.check(&format!("{path}.unitsPolicy")));
 
+        // A pool and a window anchor their capacity transactions on one row
+        // keyed by the identifier, so the two supply namespaces must stay
+        // disjoint. Sharing an identifier makes the two publish paths write
+        // the same row: one aborts on the key, the other leaves the wrong
+        // kind standing and the next records swap deletes the anchor the
+        // pool still depends on.
+        if self.sells_pool(&window.id) {
+            findings.push(SchedulingDiagnostic::new(
+                format!("{path}.id"),
+                PolicyCheckReason::SupplyIdentifierCollision,
+            ));
+        }
+
         if window.leftover.is_some() {
             findings.push(SchedulingDiagnostic::new(
                 format!("{path}.leftover"),
@@ -906,6 +929,18 @@ impl SchedulingPolicy {
                 ));
             }
         }
+    }
+
+    /// Whether any exact-time offering draws on the pool named `id`. Those
+    /// are the pools publication anchors, so they are the identifiers a
+    /// window may not take.
+    fn sells_pool(&self, id: &str) -> bool {
+        self.offerings.iter().any(|offering| {
+            offering
+                .exact_time
+                .as_ref()
+                .is_some_and(|exact| exact.pool == id)
+        })
     }
 
     fn check_unique_id(
@@ -1726,6 +1761,69 @@ windows:
         let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
         assert!(
             rendered.contains(&"channels[1]: duplicate-identifier".to_owned()),
+            "{rendered:?}"
+        );
+    }
+
+    /// A resource pool and a published window anchor their capacity
+    /// transactions on one row keyed by the identifier, so the two supply
+    /// namespaces have to stay disjoint. The policy states one side of the
+    /// collision by itself, and the records state the other, so each
+    /// authored document is refused naming its own field.
+    #[test]
+    fn a_pool_and_a_window_may_not_share_one_supply_identifier() {
+        let mut policy = household_window_policy();
+        let windows = household_windows();
+        assert!(policy.check().is_empty(), "{:?}", policy.check());
+        assert!(
+            policy.check_window_records(&windows).is_empty(),
+            "{:?}",
+            policy.check_window_records(&windows)
+        );
+
+        policy.offerings.push(OfferingPolicy {
+            id: "urgent-five".to_owned(),
+            service: "household-day".to_owned(),
+            label: "Urgent five-minute slot".to_owned(),
+            mode: SchedulingMode::ExactTime,
+            location: "civic-hall".to_owned(),
+            because: "Urgent matters get exact five-minute slots.".to_owned(),
+            exact_time: Some(ExactTimeOffering {
+                duration_minutes: 5,
+                buffer_before_minutes: 0,
+                buffer_after_minutes: 0,
+                lead_time_minutes: 30,
+                horizon_days: 14,
+                pool: "household-morning-window".to_owned(),
+                start_increment_minutes: 5,
+                max_recipients: 1,
+            }),
+            arrival: None,
+            cancellation_cutoff_minutes: 60,
+            reminders: Vec::new(),
+            duplicate_active_key: None,
+            requires_capabilities: Vec::new(),
+            prerequisites: Vec::new(),
+        });
+
+        // The policy alone already names both sides: the arrival offering
+        // points at a window identifier its own exact-time offering sells.
+        let rendered: Vec<String> = policy.check().iter().map(ToString::to_string).collect();
+        assert!(
+            rendered
+                .contains(&"offerings[0].arrival.window: supply-identifier-collision".to_owned()),
+            "{rendered:?}"
+        );
+
+        // The published record is refused in its own vocabulary, which is
+        // the finding the two database writes carry.
+        let rendered: Vec<String> = policy
+            .check_window_records(&windows)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert!(
+            rendered.contains(&"windows[0].id: supply-identifier-collision".to_owned()),
             "{rendered:?}"
         );
     }
