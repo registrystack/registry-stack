@@ -151,9 +151,12 @@ struct PackageArgs {
     /// Authored Casework project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
-    /// New directory for the verified policy package.
-    #[arg(long, value_name = "DIRECTORY")]
-    output: PathBuf,
+    /// New directory for the verified policy package. Required unless --dry-run.
+    #[arg(long, value_name = "DIRECTORY", required_unless_present = "dry_run")]
+    output: Option<PathBuf>,
+    /// Report the same policyDigest and files a package would produce, without writing one.
+    #[arg(long, conflicts_with = "output", required_unless_present = "output")]
+    dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -768,7 +771,10 @@ fn run(cli: Cli) -> Result<Value> {
         },
         Command::Check(args) => project::check(&args.project, args.production, args.deny_findings),
         Command::Explain(args) => project::explain(&args.project),
-        Command::Package(args) => project::package(&args.project, &args.output),
+        Command::Package(args) => match args.output {
+            Some(output) => project::package(&args.project, &output),
+            None => project::package_dry_run(&args.project),
+        },
         Command::Simulate(args) => project::simulate(&args.project, &args.fixture),
         Command::Test(args) => project::test(&args.project),
         Command::Doctor(args) => project::doctor(&args.runtime_config),
@@ -915,6 +921,45 @@ mod tests {
             Cli::try_parse_from(["caseworkctl", "init", "--template", "standalone-decision"])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn package_requires_exactly_one_of_output_or_dry_run() {
+        assert!(Cli::try_parse_from(["caseworkctl", "package", "/tmp/project"]).is_err());
+        assert!(Cli::try_parse_from([
+            "caseworkctl",
+            "package",
+            "/tmp/project",
+            "--output",
+            "/tmp/out",
+            "--dry-run",
+        ])
+        .is_err());
+
+        let Command::Package(args) = Cli::try_parse_from([
+            "caseworkctl",
+            "package",
+            "/tmp/project",
+            "--output",
+            "/tmp/out",
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!("expected package")
+        };
+        assert_eq!(args.output, Some(PathBuf::from("/tmp/out")));
+        assert!(!args.dry_run);
+
+        let Command::Package(args) =
+            Cli::try_parse_from(["caseworkctl", "package", "/tmp/project", "--dry-run"])
+                .unwrap()
+                .command
+        else {
+            panic!("expected package")
+        };
+        assert_eq!(args.output, None);
+        assert!(args.dry_run);
     }
 
     #[test]

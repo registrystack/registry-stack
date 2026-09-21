@@ -37,6 +37,31 @@ multistage="$repo_root/products/casework/examples/multi-stage-routing-clocks"
 "$caseworkctl_bin" simulate "$multistage" \
   --fixture "$multistage/simulations/resubmitted-response.yaml" >/dev/null
 "$caseworkctl_bin" test "$multistage" >/dev/null
-"$caseworkctl_bin" package "$multistage" \
-  --output "$work/multistage-package" >/dev/null
+"$caseworkctl_bin" --format json package "$multistage" \
+  --output "$work/multistage-package" >"$work/multistage-package.json"
+"$caseworkctl_bin" --format json package "$multistage" --dry-run \
+  >"$work/multistage-dry-run.json"
+python3 - "$work/multistage-package.json" "$work/multistage-dry-run.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    packaged = json.load(handle)
+with open(sys.argv[2], encoding="utf-8") as handle:
+    dry_run = json.load(handle)
+
+if dry_run["dryRun"] is not True:
+    sys.exit("dry-run report must set dryRun: true")
+if "output" in dry_run:
+    sys.exit("dry-run report must omit output")
+if packaged["dryRun"] is not False:
+    sys.exit("written package report must set dryRun: false")
+if dry_run["policyDigest"] != packaged["policyDigest"]:
+    sys.exit(
+        "dry-run policyDigest %r does not match the written package's %r"
+        % (dry_run["policyDigest"], packaged["policyDigest"])
+    )
+if dry_run["files"] != packaged["files"]:
+    sys.exit("dry-run files do not match the written package's files")
+PY
 echo "Casework product contracts and offline authoring journey passed."

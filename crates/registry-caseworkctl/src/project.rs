@@ -590,7 +590,18 @@ pub(super) fn simulate(project: &Path, fixture: &Path) -> Result<Value> {
     crate::policy::simulate(project, &policy, fixture)
 }
 
-pub(super) fn package(project: &Path, output: &Path) -> Result<Value> {
+/// The compute-only half of a policy package: everything `package` and
+/// `package_dry_run` share before any filesystem write.
+struct PackageContents {
+    project: PathBuf,
+    manifest: PolicyPackageManifest,
+    inputs: Vec<(String, Vec<u8>)>,
+}
+
+/// Canonicalize the project, run every package validation, and assemble the
+/// exact inputs and identity a package would carry. Performs no writes, so
+/// both `package` and `package_dry_run` can share it.
+fn compute_package(project: &Path) -> Result<PackageContents> {
     let project = fs::canonicalize(project).context("resolving the Casework authoring project")?;
     let policy = load_and_check_policy(&project)?;
     check_source_descriptions(&project)?;
@@ -606,6 +617,39 @@ pub(super) fn package(project: &Path, output: &Path) -> Result<Value> {
     }
     let manifest = PolicyPackageManifest::build(inputs.clone())
         .context("building the Casework policy package identity")?;
+    Ok(PackageContents {
+        project,
+        manifest,
+        inputs,
+    })
+}
+
+/// Report the exact `policyDigest` and `files` a package of this project
+/// would carry, without writing anything.
+pub(super) fn package_dry_run(project: &Path) -> Result<Value> {
+    let PackageContents {
+        project, manifest, ..
+    } = compute_package(project)?;
+    Ok(json!({
+        "ok": true,
+        "command": "package",
+        "project": project,
+        "dryRun": true,
+        "policyDigest": manifest.policy_digest,
+        "files": manifest.files,
+        "runtimeConfigurationIncluded": false,
+        "secretsIncluded": false,
+        "networkAccess": false,
+        "databaseAccess": false,
+    }))
+}
+
+pub(super) fn package(project: &Path, output: &Path) -> Result<Value> {
+    let PackageContents {
+        project,
+        manifest,
+        inputs,
+    } = compute_package(project)?;
 
     if output.exists() {
         bail!("policy package output already exists");
@@ -648,6 +692,7 @@ pub(super) fn package(project: &Path, output: &Path) -> Result<Value> {
         "command": "package",
         "project": project,
         "output": output,
+        "dryRun": false,
         "policyDigest": manifest.policy_digest,
         "files": manifest.files,
         "runtimeConfigurationIncluded": false,
@@ -1659,6 +1704,58 @@ mod tests {
         );
         fs::write(output.join("sources/professional-licences.json"), "{}\n").unwrap();
         assert!(verify_policy_package(&output.join("casework.yaml"), &policy).is_err());
+    }
+
+    #[test]
+    fn package_dry_run_reports_the_same_digest_without_writing() {
+        fn count_files(dir: &Path) -> usize {
+            let mut count = 0;
+            for entry in fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    count += count_files(&path);
+                } else {
+                    count += 1;
+                }
+            }
+            count
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        init(&project, "standalone-decision").unwrap();
+        let files_before = count_files(&project);
+
+        let output = root.path().join("package");
+        let dry = package_dry_run(&project).unwrap();
+        assert_eq!(dry["command"], "package");
+        assert_eq!(dry["dryRun"], true);
+        assert!(dry["policyDigest"].as_str().unwrap().starts_with("sha256:"));
+        assert!(dry.get("output").is_none());
+        assert!(!output.exists());
+        assert_eq!(count_files(&project), files_before);
+
+        let real = package(&project, &output).unwrap();
+        assert_eq!(real["dryRun"], false);
+        assert_eq!(real["policyDigest"], dry["policyDigest"]);
+        assert_eq!(real["files"], dry["files"]);
+    }
+
+    #[test]
+    fn package_dry_run_still_refuses_an_invalid_project() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        init(&project, "standalone-decision").unwrap();
+        let actual_policy = root.path().join("actual-casework.yaml");
+        fs::rename(project.join("casework.yaml"), &actual_policy).unwrap();
+        std::os::unix::fs::symlink(&actual_policy, project.join("casework.yaml")).unwrap();
+
+        let output = root.path().join("package");
+        let real_error = format!("{:#}", package(&project, &output).unwrap_err());
+        let dry_run_error = format!("{:#}", package_dry_run(&project).unwrap_err());
+        assert_eq!(real_error, dry_run_error);
+        assert!(dry_run_error.contains("regular file"), "{dry_run_error}");
+        assert!(!output.exists());
     }
 
     #[test]
