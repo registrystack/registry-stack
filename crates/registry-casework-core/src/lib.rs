@@ -10,6 +10,7 @@ mod attempt_settlement;
 mod clock_runtime;
 mod config;
 mod http;
+mod lifecycle;
 mod model;
 mod policy;
 mod review;
@@ -25,6 +26,7 @@ pub use attempt_settlement::*;
 pub use clock_runtime::*;
 pub use config::*;
 pub use http::*;
+pub use lifecycle::*;
 pub use model::*;
 pub use policy::*;
 // Casework's clocks are working-day deadlines, so it re-exports that

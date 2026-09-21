@@ -259,3 +259,107 @@ fn explain_events_matches_contract() {
         assert_matches_contract(name, "EventsExplanation", &explanation);
     }
 }
+
+/// `explain lifecycle` is the one subject that takes no PROJECT, so it needs
+/// its own runner rather than the fixture loop above. It returns the whole
+/// report, not just `explanation`, because the absent `revision` is part of
+/// what this contract states.
+fn explain_lifecycle_report() -> Value {
+    let output = bregctl(&["--format", "json", "explain", "lifecycle"]);
+    assert!(
+        output.status.success(),
+        "bregctl explain lifecycle failed: {output:?}"
+    );
+    let report = json_stdout(&output);
+    assert_eq!(
+        report["ok"],
+        Value::Bool(true),
+        "bregctl explain lifecycle reported ok=false: {report:#?}"
+    );
+    report
+}
+
+#[test]
+fn explain_lifecycle_matches_contract() {
+    let report = explain_lifecycle_report();
+    assert_matches_contract("lifecycle", "LifecycleExplanation", &report["explanation"]);
+}
+
+/// The lifecycle report names no revision, because no project produced it.
+/// Every other subject does, so this also asserts the contrast rather than
+/// just the absence.
+#[test]
+fn explain_lifecycle_reports_no_revision_while_other_subjects_do() {
+    let report = explain_lifecycle_report();
+    assert_eq!(
+        report.get("revision"),
+        None,
+        "explain lifecycle carries no compiled project, so it names no revision: {report:#?}"
+    );
+
+    let project = fixture_path("products/breg/acceptance/business-establishments");
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "explain",
+        "model",
+        project.to_str().expect("fixture path is UTF-8"),
+    ]);
+    let model_report = json_stdout(&output);
+    assert!(
+        model_report["revision"].is_string(),
+        "explain model names the compiled revision: {model_report:#?}"
+    );
+}
+
+/// A PROJECT is refused rather than ignored, so that nothing teaches a reader
+/// the lifecycle might vary by project.
+#[test]
+fn explain_lifecycle_refuses_a_project() {
+    let project = fixture_path("products/breg/acceptance/business-establishments");
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "explain",
+        "lifecycle",
+        project.to_str().expect("fixture path is UTF-8"),
+    ]);
+    assert!(
+        !output.status.success(),
+        "bregctl explain lifecycle <project> is refused: {output:?}"
+    );
+    let report = json_stdout(&output);
+    assert_eq!(report["ok"], Value::Bool(false), "{report:#?}");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        Value::String("lifecycle.project.unused".to_owned()),
+        "{report:#?}"
+    );
+}
+
+/// PROJECT stayed required for every other subject: making it optional in
+/// clap moved the refusal from clap to `explain`, it did not remove it.
+#[test]
+fn explain_refuses_a_missing_project_for_every_other_subject() {
+    for subject in [
+        "model",
+        "access",
+        "routes",
+        "queries",
+        "actions",
+        "change-requests",
+        "events",
+    ] {
+        let output = bregctl(&["--format", "json", "explain", subject]);
+        assert!(
+            !output.status.success(),
+            "bregctl explain {subject} with no project is refused: {output:?}"
+        );
+        let report = json_stdout(&output);
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            Value::String("explain.project.missing".to_owned()),
+            "explain {subject}: {report:#?}"
+        );
+    }
+}

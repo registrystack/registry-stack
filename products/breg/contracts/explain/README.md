@@ -20,8 +20,8 @@ whose `explanation` field carries an envelope plus a subject-specific payload:
 
 `apiVersion` and `kind` are injected into `explanation` after serialization by
 `explain_envelope` in `crates/registry-bregctl/src/lib.rs`; they are not
-fields on any `registry-breg` type. Eight `kind` values exist, one per
-subject (nine invocations, because `explain access` produces a different
+fields on any `registry-breg` type. Nine `kind` values exist, one per
+subject (ten invocations, because `explain access` produces a different
 `kind` with `--scenario` than without):
 
 | Subject | `--scenario` | `kind` | Schema |
@@ -34,6 +34,15 @@ subject (nine invocations, because `explain access` produces a different
 | `actions` | n/a | `ActionsExplanation` | `ActionsExplanation.schema.json` |
 | `change-requests` | n/a | `ChangeRequestsExplanation` | `ChangeRequestsExplanation.schema.json` |
 | `events` | n/a | `EventsExplanation` | `EventsExplanation.schema.json` |
+| `lifecycle` | n/a | `LifecycleExplanation` | `LifecycleExplanation.schema.json` |
+
+`lifecycle` is the one subject that takes no PROJECT: `bregctl explain
+lifecycle` reports the request lifecycle the engine enforces, which no
+registry project changes. It refuses a PROJECT rather than ignoring one, so
+that a reader is never taught the lifecycle might vary, and so that an
+unrelated authoring error cannot refuse an answer that never depended on a
+project. Its report is also the only one whose `revision` is absent, for the
+same reason: there is no compiled project to name.
 
 Each schema file is draft 2020-12, self-contained (its own `$defs`, no
 cross-file `$ref`), and is validated against every fixture the gate covers by
@@ -83,6 +92,16 @@ fields of `AccessExplanation`'s and `AccessPreview`'s own top level, because
 both are small, hand-authored structs whose fields are named directly in
 `registry-breg`.
 
+`LifecycleExplanation` is pinned in full for a different reason. It is a
+passthrough by construction (`serde_json::to_value` of a
+`registry_breg::lifecycle::LifecycleDescription`), but the usual argument
+against pinning a passthrough does not apply: `LifecycleDescription` is not
+a compiled-model type that `explain_*` happens to forward, it exists only to
+be this payload. Nothing else reads it, so its fields cannot drift under this
+contract as a side effect of an unrelated change to the compiler; changing
+them is changing this contract, and the test that gates it is the same test
+that gates the engine's own lifecycle table.
+
 Opaque nodes, in full:
 
 - `model.entities`, `model.physicalNames`, `model.package`,
@@ -105,7 +124,7 @@ Opaque nodes, in full:
 
 ## Compatibility promise
 
-`apiVersion` versions the payload as a whole, across all eight kinds. A
+`apiVersion` versions the payload as a whole, across all nine kinds. A
 change bumps it when it removes a pinned key, renames a pinned key, changes
 a pinned key's type or enum member set, or **adds any key to a pinned
 object**, optional or not. Adding a key is a breaking change here and

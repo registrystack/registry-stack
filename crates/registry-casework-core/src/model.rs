@@ -151,6 +151,26 @@ pub enum OccurrenceState {
 }
 
 impl OccurrenceState {
+    /// Every declared occurrence state, in a fixed order the lifecycle
+    /// description and its tests iterate against.
+    ///
+    /// Rust cannot enumerate an enum's variants, so this list is what
+    /// `occurrence_lifecycle` walks. A new variant missing from here is
+    /// missing from the published lifecycle too. The exhaustive match in
+    /// `lifecycle::occurrence_state_id` is what catches that: it has no
+    /// wildcard arm, so adding a variant fails the build there, and adding
+    /// it here is the other half of that same edit.
+    pub const ALL: [Self; 8] = [
+        Self::Open,
+        Self::Claimed,
+        Self::WaitingApplicant,
+        Self::WaitingApplication,
+        Self::Synchronizing,
+        Self::Completed,
+        Self::Superseded,
+        Self::Cancelled,
+    ];
+
     #[must_use]
     pub fn is_active(self) -> bool {
         !matches!(self, Self::Completed | Self::Superseded | Self::Cancelled)

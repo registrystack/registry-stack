@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/breg-explain/v1alpha1/LifecycleExplanation.schema.json",
+  "title": "LifecycleExplanation",
+  "description": "Wire shape of `explanation` for `bregctl explain lifecycle`, which reports the request lifecycle the engine enforces. This kind is pinned in full. `LifecycleDescription` in `registry-breg` exists to be this payload rather than to model anything the engine computes, so a change to its fields is a deliberate change to this contract and not the incidental drift that makes a compiled-model passthrough opaque. `lifecycle` is the one subject that takes no PROJECT: the lifecycle is engine behaviour and does not vary by project, so the report carries no `revision`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "lifecycles"],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/breg-explain/v1alpha1"
+    },
+    "kind": {
+      "const": "LifecycleExplanation"
+    },
+    "lifecycles": {
+      "type": "array",
+      "description": "One entry per state machine reported. `bregctl` reports exactly one, the request lifecycle; the array shape is shared with `caseworkctl explain lifecycle`, which reports two.",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/lifecycle" }
+    }
+  },
+  "$defs": {
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "states", "transitions"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable identifier for the machine, for example `request`."
+        },
+        "label": {
+          "type": "string",
+          "description": "One line naming the machine for a reader."
+        },
+        "states": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/state" }
+        },
+        "transitions": {
+          "type": "array",
+          "description": "Every edge, in declaration order. An array rather than a map keyed by state, because two distinct transitions may share a `from` and a `to` (the request lifecycle's `revise` and `rebase` both run `submitted` to `draft`) and because a transition may be a self-transition. Keying by state pair would silently drop one of a colliding pair and render a self-transition as a no-op.",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/transition" }
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "initial",
+        "terminal",
+        "unreachable",
+        "incomingTransitions",
+        "outgoingTransitions"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The state's stored spelling, the same value a persisted row and the generated OpenAPI enums carry."
+        },
+        "initial": {
+          "type": "boolean",
+          "description": "True for the state a record is created in. An initial state is reached by construction, not by a transition, so it may report zero incoming transitions without being unreachable."
+        },
+        "terminal": {
+          "type": "boolean",
+          "description": "True when no transition leaves this state."
+        },
+        "unreachable": {
+          "type": "boolean",
+          "description": "True when no transition enters this state and it is not the initial state, so nothing the engine does can put a record here. Reported separately from `terminal` because the two are independent: a state the engine stores and whose guards would accept an outgoing transition can still have no way in."
+        },
+        "incomingTransitions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of transitions whose `to` is this state, self-transitions included."
+        },
+        "outgoingTransitions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of transitions whose `from` is this state, self-transitions included."
+        }
+      }
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "event", "to", "guard"],
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "Source state id."
+        },
+        "event": {
+          "type": "string",
+          "description": "The operation that runs the transition. Load-bearing identity, not decoration: it is what distinguishes two edges sharing a `from` and a `to`."
+        },
+        "to": {
+          "type": "string",
+          "description": "Target state id. Equal to `from` for a self-transition."
+        },
+        "guard": {
+          "type": "string",
+          "description": "One sentence naming what the engine checks before it runs this transition. Prose, not a machine-evaluable expression: the guards are procedural code, so this names them rather than reproducing them.",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
