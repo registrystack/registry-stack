@@ -82,6 +82,8 @@ pub mod hook_handler;
 #[cfg(feature = "runtime")]
 pub mod idempotency;
 pub mod immediate_actions;
+#[cfg(feature = "runtime")]
+mod ingestion_store;
 pub mod logical_names;
 pub mod manifest_adapter;
 pub(crate) mod membership;

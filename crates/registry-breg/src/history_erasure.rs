@@ -89,6 +89,7 @@ pub struct HistoryErasureOutcome {
     pub scrubbed_change_context_count: u64,
     pub scrubbed_outbox_payload_count: u64,
     pub scrubbed_cached_response_count: u64,
+    pub scrubbed_ingestion_receipt_count: u64,
     pub scrubbed_request_target_count: u64,
     pub scrubbed_request_proposal_count: u64,
     pub removed_descriptor_count: u64,
@@ -228,6 +229,14 @@ async fn erase_record_history_scoped(
         &affected_positions,
     )
     .await?;
+    let scrubbed_ingestion_receipt_count = crate::ingestion_store::scrub_receipts_for_records(
+        &transaction,
+        request.target.entity_id,
+        request.target.record_id,
+        request.target.erase_through_revision,
+    )
+    .await
+    .map_err(|_| HistoryErasureError::Unavailable)?;
     let scrubbed_outbox_payload_count =
         scrub_outbox_payloads(&transaction, &request.target).await?;
     // Change-request proposals and target snapshots are workflow records, not
@@ -254,6 +263,7 @@ async fn erase_record_history_scoped(
         scrubbed_change_context_count,
         scrubbed_outbox_payload_count,
         scrubbed_cached_response_count,
+        scrubbed_ingestion_receipt_count,
         scrubbed_request_target_count,
         scrubbed_request_proposal_count,
         removed_descriptor_count,
@@ -552,6 +562,7 @@ async fn append_history_erasure_audit(
         "scrubbedChangeContextCount": outcome.scrubbed_change_context_count,
         "scrubbedOutboxPayloadCount": outcome.scrubbed_outbox_payload_count,
         "scrubbedCachedResponseCount": outcome.scrubbed_cached_response_count,
+        "scrubbedIngestionReceiptCount": outcome.scrubbed_ingestion_receipt_count,
         "scrubbedRequestTargetCount": outcome.scrubbed_request_target_count,
         "scrubbedRequestProposalCount": outcome.scrubbed_request_proposal_count,
         "removedDescriptorCount": outcome.removed_descriptor_count,

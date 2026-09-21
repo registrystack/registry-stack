@@ -158,3 +158,36 @@ fn the_client_answers_each_code_under_the_engine_status() {
         );
     }
 }
+
+/// A client accepts a problem only under the engine's own sentence, so each
+/// fixed-sentence code must agree byte for byte or the client degrades the
+/// problem to an unclassifiable protocol failure. One code is excluded: a
+/// refused plan names its planner failure kind from its own closed vocabulary,
+/// which the `BRegPlanRefusal` sentences carry, not this catalogue's sentence.
+/// A code whose wire detail varies per response still matches here, because
+/// `detail` is the catalogue sentence and the variants are `accepts_detail`
+/// business.
+#[test]
+fn the_client_matches_the_engine_sentence_for_every_fixed_detail_code() {
+    for engine_code in ProblemCode::ALL {
+        if matches!(engine_code, ProblemCode::RequestPlanRefused) {
+            continue;
+        }
+        let client_code = BRegProblemCode::ALL
+            .iter()
+            .copied()
+            .find(|client| client.code() == engine_code.code())
+            .unwrap_or_else(|| {
+                panic!(
+                    "crates/registry-breg-client is behind the engine: it accepts no {} problem",
+                    engine_code.code()
+                )
+            });
+        assert_eq!(
+            client_code.detail(),
+            engine_code.description(),
+            "the client and the engine disagree on the published sentence for {}",
+            engine_code.code()
+        );
+    }
+}

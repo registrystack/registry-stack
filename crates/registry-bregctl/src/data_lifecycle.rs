@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Authenticated HTTP data workflows for Base Registry Engine.
 //!
-//! This module owns only ctl-side package inspection, file checkpoints, and
-//! HTTP dispatch. Data shape, chunking, idempotency, and response validation
-//! remain in `registry_breg::data`.
+//! This module owns only ctl-side package inspection, file checkpoints, HTTP
+//! dispatch, and the resume policy that drives one durable ingestion run.
+//! Data shape and chunking remain in `registry_breg::data`; the run wire
+//! contract and its verification remain in `registry_breg_client`.
 
 use std::ffi::OsString;
 use std::fs::File;
@@ -14,12 +15,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use registry_breg::data::{
-    execute_export_page, execute_import_chunk, DataError, DataExportCheckpoint,
-    DataExportOutputState, DataExportPlan, DataExportResumeState, DataHttpMethod, DataHttpRequest,
-    DataHttpResponse, DataImportCheckpoint, DataImportOperation, DataImportPlan,
-    MAX_DATA_EXPORT_PAGE_BYTES, MAX_DATA_HTTP_RESPONSE_BYTES, MAX_DATA_IMPORT_INPUT_BYTES,
+    execute_export_page, DataError, DataExportCheckpoint, DataExportOutputState, DataExportPlan,
+    DataExportResumeState, DataHttpMethod, DataHttpRequest, DataHttpResponse, DataImportCheckpoint,
+    DataImportOperation, DataImportPlan, MAX_DATA_EXPORT_PAGE_BYTES, MAX_DATA_HTTP_RESPONSE_BYTES,
+    MAX_DATA_IMPORT_INPUT_BYTES,
 };
 use registry_breg::package::{inspect_package_integrity, PackageEnvelope, PackageError};
+use registry_breg_client::{
+    ingestion_prefix_digest, BRegBatchOperation, BRegIngestionChunk, BRegIngestionChunkReceipt,
+    BRegIngestionError, BRegIngestionRun, BRegIngestionRunRequest, BRegIngestionRunStatus,
+    BRegProblemCode, BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError,
+    BearerToken, BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
+};
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_httputil::client::{
     build_client, OutboundOptions, ServiceBaseUrl, DEFAULT_CONNECT_TIMEOUT, DEFAULT_REQUEST_TIMEOUT,
@@ -28,13 +35,17 @@ use registry_platform_httputil::{read_bounded, validate_response_headers};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, Method, Url};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::safe_path::{SafeDir, SafeEntry, SafePathError};
 
 const MAX_TOKEN_BYTES: u64 = 64 * 1024;
 const MAX_CHECKPOINT_BYTES: u64 = 1024 * 1024;
 const DATA_HTTP_USER_AGENT: &str = "bregctl-data";
-const DATA_STATE_API_VERSION: &str = "registry.registrystack.org/bregctl-data/v1";
+const DATA_STATE_API_VERSION: &str = "registry.registrystack.org/bregctl-data/v2";
+/// The state apiVersion the raw batch protocol wrote: a sidecar that names no
+/// ingestion run. It is kept only to refuse such a sidecar by name.
+const DATA_STATE_API_VERSION_V1: &str = "registry.registrystack.org/bregctl-data/v1";
 const IMPORT_STATE_KIND: &str = "BRegctlDataImportState";
 const MAX_ATOMIC_WRITE_TEMP_ATTEMPTS: usize = 16;
 /// The longest output tail a resuming export discards. The export appends one
@@ -54,6 +65,14 @@ pub(crate) enum DataLifecycleError {
     Input,
     Output,
     Checkpoint,
+    /// The import sidecar predates ingestion runs and names no run to resume.
+    /// Resuming its committed items under a new run id would duplicate
+    /// mutations, so it is refused rather than upgraded.
+    LegacyImportCheckpoint,
+    /// The ingestion run is blocked because the active package changed.
+    ImportRunBlocked,
+    /// The ingestion run was cancelled and refuses new chunks.
+    ImportRunCancelled,
     BRegUrl,
     Token,
     Runtime,
@@ -130,6 +149,7 @@ pub(crate) struct DataImportOutcome {
     pub entity_id: String,
     pub profile_id: String,
     pub operation: DataImportOperation,
+    pub run_id: String,
     pub input_length: u64,
     pub item_count: u64,
     pub completed_chunk_count: u64,
@@ -162,6 +182,7 @@ struct ImportState {
     profile_id: String,
     input_digest: String,
     import_id: String,
+    run_id: String,
 }
 
 pub(crate) fn validate_import(
@@ -211,84 +232,621 @@ pub(crate) fn run_import(
     }
     let breg_url = parse_breg_url(request.breg_url)?;
     let token = read_access_token(request.access_token_file)?;
+    let entity_route = ingestion_entity_route(&inspected, &plan)?;
+    let client = ingestion_client(&breg_url, &token)?;
+    drop(token);
+    let drive = IngestionDrive {
+        plan: &plan,
+        inspected: &inspected,
+        input: &input,
+        client: &client,
+        entity_route,
+        runtime: data_runtime()?,
+    };
     let destinations = ImportDestinations::resolve(request.checkpoint)?;
-    let (mut checkpoint, import_id) = load_or_start_import(&plan, &inspected, &destinations)?;
-    let client = build_data_http_client()?;
-    let (_committed_chunks, _committed_items) = run_import_chunks(
-        &plan,
-        &mut checkpoint,
-        ImportExecutionBinding {
-            package_revision: &inspected.package_revision,
-            schema_fingerprint: &inspected.schema_fingerprint,
-            import_id: &import_id,
-        },
-        request.max_chunks,
-        |checkpoint| publish_import_checkpoint(&destinations.checkpoint, checkpoint),
-        |data_request| dispatch_http(&client, &breg_url, &token, data_request),
-    )?;
-    Ok(DataImportOutcome {
-        package_revision: inspected.package_revision,
-        schema_fingerprint: inspected.schema_fingerprint,
-        entity_id: plan.entity_id().to_owned(),
-        profile_id: plan.profile_id().to_owned(),
-        operation: plan.operation(),
-        input_length: plan.input_length(),
-        item_count: plan.item_count(),
-        completed_chunk_count: checkpoint.completed_chunk_count(),
-        committed_items: checkpoint.next_item_index(),
-        complete: checkpoint.is_complete(),
+    let mut started = load_or_start_ingestion(&drive, destinations)?;
+    submit_ingestion_chunks(&drive, &mut started, request.max_chunks)
+}
+
+/// The fixed context every ingestion exchange of one import acts through: the
+/// compiled plan, the package binding it was checked against, the complete
+/// source input the chunk digests name, the maintained client, and the single
+/// runtime the synchronous command drives it on.
+struct IngestionDrive<'a> {
+    plan: &'a DataImportPlan,
+    inspected: &'a InspectedDataPackage,
+    input: &'a [u8],
+    client: &'a BaseRegistryClient,
+    entity_route: &'a str,
+    runtime: tokio::runtime::Runtime,
+}
+
+impl IngestionDrive<'_> {
+    fn create_run(
+        &self,
+        request: &BRegIngestionRunRequest,
+    ) -> Result<BRegIngestionRun, DataLifecycleError> {
+        let created = self
+            .runtime
+            .block_on(self.client.create_ingestion_run(self.entity_route, request))
+            .map_err(map_ingestion_client_error)?;
+        Ok(created.value)
+    }
+
+    fn read_run(&self, run_id: Uuid) -> Result<BRegIngestionRun, DataLifecycleError> {
+        // The reread selects the plan's profile explicitly: an entity with
+        // several batch-capable profiles must not fall back to the route
+        // default and lose the run it is resuming.
+        let run = self
+            .runtime
+            .block_on(self.client.read_ingestion_run(
+                self.entity_route,
+                run_id,
+                Some(self.plan.profile_id()),
+            ))
+            .map_err(map_ingestion_client_error)?;
+        Ok(run.value)
+    }
+
+    /// Submit one chunk under the run's announced access profile, returning
+    /// the client's own error so the caller can decide whether the exchange
+    /// may have committed before mapping it.
+    fn submit_chunk(
+        &self,
+        run_id: Uuid,
+        chunk: &BRegIngestionChunk,
+    ) -> Result<registry_breg_client::BRegIngestionChunkSubmission, BaseRegistryClientError> {
+        self.runtime
+            .block_on(self.client.submit_ingestion_chunk(
+                self.entity_route,
+                run_id,
+                chunk,
+                self.plan.profile_id(),
+            ))
+            .map(|submission| submission.value)
+    }
+}
+
+/// One import run after its files and its server-side run agree: the resolved
+/// destinations, the sidecar binding, the server's run state, and the local
+/// checkpoint advanced to the chunk the run expects next.
+struct StartedIngestion {
+    destinations: ImportDestinations,
+    state: ImportState,
+    run: BRegIngestionRun,
+    checkpoint: DataImportCheckpoint,
+}
+
+/// Build the maintained Base Registry Engine client the ingestion-run surface
+/// travels on. It reuses the platform-hardened transport the raw data client
+/// uses, so redirects, ambient proxies, and unbounded reads stay refused.
+fn ingestion_client(
+    base: &ServiceBaseUrl,
+    token: &str,
+) -> Result<BaseRegistryClient, DataLifecycleError> {
+    let config = BaseRegistryClientConfig::new(base.as_url().clone())
+        .with_request_timeout(DEFAULT_REQUEST_TIMEOUT)
+        .with_connect_timeout(DEFAULT_CONNECT_TIMEOUT)
+        .with_user_agent(DATA_HTTP_USER_AGENT);
+    let client = BaseRegistryClient::new(config).map_err(|_| DataLifecycleError::BRegUrl)?;
+    let token = BearerToken::new(token).map_err(|_| DataLifecycleError::Token)?;
+    Ok(client.with_bearer_token(token))
+}
+
+/// The entity's URL route segment its ingestion-run routes live under.
+fn ingestion_entity_route<'a>(
+    inspected: &'a InspectedDataPackage,
+    plan: &DataImportPlan,
+) -> Result<&'a str, DataLifecycleError> {
+    inspected
+        .registry()
+        .entities()
+        .get(plan.entity_id())
+        .map(|entity| entity.route.as_str())
+        .ok_or(DataLifecycleError::Data(DataError::InvalidBinding))
+}
+
+/// The one-shot batch operation every chunk's items carry.
+fn ingestion_operation(operation: DataImportOperation) -> BRegBatchOperation {
+    match operation {
+        DataImportOperation::Create => BRegBatchOperation::Create,
+        DataImportOperation::Patch => BRegBatchOperation::Patch,
+    }
+}
+
+/// The canonical run identifier the sidecar binds the import to.
+fn parse_ingestion_run_id(state: &ImportState) -> Result<Uuid, DataLifecycleError> {
+    Uuid::parse_str(&state.run_id)
+        .ok()
+        .filter(|identifier| identifier.to_string() == state.run_id)
+        .ok_or(DataLifecycleError::Checkpoint)
+}
+
+/// Announce the whole input once: the binding the run pins, the counts
+/// `data validate` reports, and the chunking algorithm the plan used.
+fn announce_ingestion_run(
+    plan: &DataImportPlan,
+    inspected: &InspectedDataPackage,
+) -> Result<BRegIngestionRunRequest, DataLifecycleError> {
+    let chunk_count = u64::try_from(plan.chunks().len())
+        .map_err(|_| DataLifecycleError::Data(DataError::InvalidBinding))?;
+    BRegIngestionRunRequest::builder()
+        .operation(ingestion_operation(plan.operation()))
+        .profile(plan.profile_id())
+        .map_err(map_ingestion_error)?
+        .package_revision(inspected.package_revision.clone())
+        .map_err(map_ingestion_error)?
+        .schema_fingerprint(inspected.schema_fingerprint.clone())
+        .map_err(map_ingestion_error)?
+        .input_digest(plan.input_digest())
+        .map_err(map_ingestion_error)?
+        .input_length(plan.input_length())
+        .item_count(plan.item_count())
+        .map_err(map_ingestion_error)?
+        .chunk_count(chunk_count)
+        .map_err(map_ingestion_error)?
+        .chunk_algorithm_version(BREG_INGESTION_CHUNK_ALGORITHM_VERSION)
+        .map_err(map_ingestion_error)?
+        .build()
+        .map_err(map_ingestion_error)
+}
+
+/// Encode one chunk submission from the plan: the chunk's canonical batch
+/// items, the digest they hash to, and the digest of the complete raw input
+/// through the end of the chunk. The derived digest must equal the digest the
+/// plan derived, which proves the two chunk derivations agree.
+fn encode_ingestion_chunk(
+    plan: &DataImportPlan,
+    input: &[u8],
+    chunk_index: u64,
+) -> Result<BRegIngestionChunk, DataLifecycleError> {
+    let index = usize::try_from(chunk_index)
+        .map_err(|_| DataLifecycleError::Data(DataError::InvalidBinding))?;
+    let chunk = plan
+        .chunks()
+        .get(index)
+        .ok_or(DataLifecycleError::Data(DataError::InvalidBinding))?;
+    let body = parse_json_strict(chunk.canonical_body())
+        .map_err(|_| DataLifecycleError::Data(DataError::InvalidResponse))?;
+    let items = body
+        .get("items")
+        .and_then(|items| items.as_array())
+        .cloned()
+        .ok_or(DataLifecycleError::Data(DataError::InvalidResponse))?;
+    let end = usize::try_from(chunk.next_byte_offset())
+        .map_err(|_| DataLifecycleError::Data(DataError::InvalidResponse))?;
+    let prefix = input
+        .get(..end)
+        .ok_or(DataLifecycleError::Data(DataError::InvalidResponse))?;
+    let encoded = BRegIngestionChunk::new(chunk_index, items, ingestion_prefix_digest(prefix))
+        .map_err(map_ingestion_error)?;
+    if encoded.digest() != chunk.digest() {
+        return Err(DataLifecycleError::Data(DataError::InvalidResponse));
+    }
+    Ok(encoded)
+}
+
+/// The committed boundary the plan implies at `next_chunk_index`: the item
+/// count and raw-input prefix digest a run that committed exactly those chunks
+/// reports. The empty boundary is the SHA-256 of no bytes.
+fn expected_ingestion_commitment(
+    plan: &DataImportPlan,
+    input: &[u8],
+    next_chunk_index: u64,
+) -> Result<(u64, String), DataLifecycleError> {
+    if next_chunk_index == 0 {
+        return Ok((0, ingestion_prefix_digest(&[])));
+    }
+    let index = usize::try_from(next_chunk_index - 1)
+        .map_err(|_| DataLifecycleError::Data(DataError::InvalidResponse))?;
+    let chunk = plan
+        .chunks()
+        .get(index)
+        .ok_or(DataLifecycleError::Data(DataError::InvalidResponse))?;
+    let end = usize::try_from(chunk.next_byte_offset())
+        .map_err(|_| DataLifecycleError::Data(DataError::InvalidResponse))?;
+    let prefix = input
+        .get(..end)
+        .ok_or(DataLifecycleError::Data(DataError::InvalidResponse))?;
+    Ok((chunk.item_range().end, ingestion_prefix_digest(prefix)))
+}
+
+/// The run must still describe exactly this import: every announced binding,
+/// and the committed boundary the plan implies where the run stands. A run
+/// that disagrees is never resumed, because its committed chunks cannot be
+/// replayed against this source.
+fn validate_ingestion_run(
+    run: &BRegIngestionRun,
+    plan: &DataImportPlan,
+    inspected: &InspectedDataPackage,
+    input: &[u8],
+) -> Result<(), DataLifecycleError> {
+    let chunk_count = u64::try_from(plan.chunks().len())
+        .map_err(|_| DataLifecycleError::Data(DataError::InvalidBinding))?;
+    let (committed_items, committed_prefix_digest) =
+        expected_ingestion_commitment(plan, input, run.next_chunk_index())?;
+    if run.entity_id() != plan.entity_id()
+        || run.profile_id() != plan.profile_id()
+        || run.package_revision() != inspected.package_revision
+        || run.schema_fingerprint() != inspected.schema_fingerprint
+        || run.operation() != ingestion_operation(plan.operation())
+        || run.input_digest() != plan.input_digest()
+        || run.input_length() != plan.input_length()
+        || run.item_count() != plan.item_count()
+        || run.chunk_count() != chunk_count
+        || run.chunk_algorithm_version() != BREG_INGESTION_CHUNK_ALGORITHM_VERSION
+        || run.maximum_items() != u64::from(plan.maximum_items())
+        || run.maximum_bytes() != u64::from(plan.maximum_bytes())
+        || run.committed_items() != committed_items
+        || run.committed_prefix_digest() != committed_prefix_digest
+    {
+        return Err(DataLifecycleError::Data(DataError::CheckpointMismatch));
+    }
+    Ok(())
+}
+
+/// Rebuild the local checkpoint for the chunk boundary the server committed
+/// through. The server's nextChunkIndex is the only authority over progress:
+/// a local file that lags or leads it is replaced, never trusted.
+fn checkpoint_committed_to(
+    plan: &DataImportPlan,
+    inspected: &InspectedDataPackage,
+    state: &ImportState,
+    next_chunk_index: u64,
+) -> Result<DataImportCheckpoint, DataLifecycleError> {
+    let chunk_count = u64::try_from(plan.chunks().len())
+        .map_err(|_| DataLifecycleError::Data(DataError::InvalidBinding))?;
+    if next_chunk_index > chunk_count {
+        return Err(DataLifecycleError::Data(DataError::InvalidResponse));
+    }
+    let mut checkpoint = start_checkpoint_from_state(plan, inspected, state)?;
+    for chunk_index in 0..next_chunk_index {
+        checkpoint
+            .commit_chunk(
+                plan,
+                &inspected.package_revision,
+                &inspected.schema_fingerprint,
+                chunk_index,
+                &state.import_id,
+            )
+            .map_err(DataLifecycleError::Data)?;
+    }
+    Ok(checkpoint)
+}
+
+/// Load or create the durable ingestion run an import drives.
+///
+/// The sidecar names the run; the server owns the committed boundary. A rerun
+/// re-reads the run and rebuilds the local checkpoint from the server's
+/// nextChunkIndex whenever the two disagree. A v1 sidecar names no run and is
+/// refused rather than upgraded, because resuming its committed items under a
+/// fresh run id would duplicate mutations.
+fn load_or_start_ingestion(
+    drive: &IngestionDrive<'_>,
+    destinations: ImportDestinations,
+) -> Result<StartedIngestion, DataLifecycleError> {
+    let checkpoint_exists = destinations
+        .checkpoint
+        .exists()
+        .map_err(|_| DataLifecycleError::Checkpoint)?;
+    let state_exists = destinations
+        .state
+        .exists()
+        .map_err(|_| DataLifecycleError::Checkpoint)?;
+    if !state_exists {
+        if checkpoint_exists {
+            // A checkpoint without its sidecar names no run to resume.
+            return Err(DataLifecycleError::Checkpoint);
+        }
+        return start_new_ingestion(drive, destinations);
+    }
+    let state = read_import_state(&destinations.state, drive.plan, drive.inspected)?;
+    let run_id = parse_ingestion_run_id(&state)?;
+    let run = drive.read_run(run_id)?;
+    validate_ingestion_run(&run, drive.plan, drive.inspected, drive.input)?;
+    let checkpoint = if checkpoint_exists {
+        let bytes = read_bounded_entry(&destinations.checkpoint, MAX_CHECKPOINT_BYTES)
+            .map_err(|_| DataLifecycleError::Checkpoint)?;
+        let _ = DataImportCheckpoint::from_json(
+            &bytes,
+            drive.plan,
+            &drive.inspected.package_revision,
+            &drive.inspected.schema_fingerprint,
+            &state.import_id,
+        )
+        .map_err(DataLifecycleError::Data)?;
+        checkpoint_committed_to(drive.plan, drive.inspected, &state, run.next_chunk_index())?
+    } else {
+        checkpoint_committed_to(drive.plan, drive.inspected, &state, run.next_chunk_index())?
+    };
+    // The rebuilt checkpoint is what the server's boundary says, so publish it
+    // now: the file pair agrees with the run even when no chunk follows this
+    // load, and a concurrent rerun that won the write leaves equivalent bytes.
+    if checkpoint_exists {
+        publish_import_checkpoint(&destinations.checkpoint, &checkpoint)?;
+    } else {
+        let checkpoint_bytes = checkpoint
+            .canonical_json()
+            .map_err(DataLifecycleError::Data)?;
+        write_atomic_create_new_entry(&destinations.checkpoint, &checkpoint_bytes)
+            .map_err(|_| DataLifecycleError::Checkpoint)?;
+    }
+    Ok(StartedIngestion {
+        destinations,
+        state,
+        run,
+        checkpoint,
     })
 }
 
-struct ImportExecutionBinding<'a> {
-    package_revision: &'a str,
-    schema_fingerprint: &'a str,
-    import_id: &'a str,
+/// Create a run for a first import and publish the sidecar that names it. The
+/// sidecar publishes first, so a checkpoint can never exist without the run it
+/// belongs to. A run whose sidecar publication failed stays open with no
+/// chunks, commits nothing, and is named by no file; a run whose checkpoint
+/// publication failed is resumed through the sidecar that did publish.
+fn start_new_ingestion(
+    drive: &IngestionDrive<'_>,
+    destinations: ImportDestinations,
+) -> Result<StartedIngestion, DataLifecycleError> {
+    let request = announce_ingestion_run(drive.plan, drive.inspected)?;
+    let run = drive.create_run(&request)?;
+    validate_ingestion_run(&run, drive.plan, drive.inspected, drive.input)?;
+    if run.status() != BRegIngestionRunStatus::Open || run.next_chunk_index() != 0 {
+        return Err(DataLifecycleError::Data(DataError::InvalidResponse));
+    }
+    let checkpoint = DataImportCheckpoint::start(
+        drive.plan,
+        &drive.inspected.package_revision,
+        &drive.inspected.schema_fingerprint,
+    )
+    .map_err(DataLifecycleError::Data)?;
+    let state = import_state_for_checkpoint(
+        drive.plan,
+        drive.inspected,
+        &checkpoint,
+        &run.run_id().to_string(),
+    );
+    let state_bytes = canonical_import_state(&state)?;
+    let checkpoint_bytes = checkpoint
+        .canonical_json()
+        .map_err(DataLifecycleError::Data)?;
+    write_atomic_create_new_entry(&destinations.state, &state_bytes)
+        .map_err(|_| DataLifecycleError::Checkpoint)?;
+    write_atomic_create_new_entry(&destinations.checkpoint, &checkpoint_bytes)
+        .map_err(|_| DataLifecycleError::Checkpoint)?;
+    Ok(StartedIngestion {
+        destinations,
+        state,
+        run,
+        checkpoint,
+    })
 }
 
-fn run_import_chunks<Dispatch, DispatchFuture, DispatchError, AfterChunk>(
-    plan: &DataImportPlan,
-    checkpoint: &mut DataImportCheckpoint,
-    binding: ImportExecutionBinding<'_>,
+/// How one chunk submission resolved after a lost or refused answer.
+enum RecoveredSubmission {
+    /// The server answered for the chunk that was sent.
+    Answered(BRegIngestionRun),
+    /// The server committed past the chunk and only the answer was lost; the
+    /// retained receipt stays on the server.
+    CommittedWithoutAnswer(BRegIngestionRun),
+}
+
+/// Submit chunks until the run completes, the operator budget is spent, or the
+/// run refuses further chunks. Every commit is adopted from the server's
+/// returned run state, and the local checkpoint advances only after it.
+fn submit_ingestion_chunks(
+    drive: &IngestionDrive<'_>,
+    started: &mut StartedIngestion,
     max_chunks: Option<u64>,
-    mut after_chunk: AfterChunk,
-    mut dispatch: Dispatch,
-) -> Result<(u64, u64), DataLifecycleError>
-where
-    Dispatch: FnMut(DataHttpRequest) -> DispatchFuture,
-    DispatchFuture: Future<Output = Result<DataHttpResponse, DispatchError>>,
-    AfterChunk: FnMut(&DataImportCheckpoint) -> Result<(), DataLifecycleError>,
-{
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| DataLifecycleError::Runtime)?;
-    let mut committed_items = 0u64;
-    let mut committed_chunks = 0u64;
+) -> Result<DataImportOutcome, DataLifecycleError> {
+    let run_id = parse_ingestion_run_id(&started.state)?;
+    let mut submitted = 0u64;
     let max_chunks = max_chunks.unwrap_or(u64::MAX);
-    while !checkpoint.is_complete() && committed_chunks < max_chunks {
-        let progress = runtime
-            .block_on(execute_import_chunk(
-                plan,
-                checkpoint,
-                binding.package_revision,
-                binding.schema_fingerprint,
-                binding.import_id,
-                &mut dispatch,
-            ))
-            .map_err(map_data_or_transport)?;
-        let Some(progress) = progress else {
-            break;
+    while !started.run.complete() && submitted < max_chunks {
+        match started.run.status() {
+            BRegIngestionRunStatus::Open => {}
+            BRegIngestionRunStatus::Blocked => return Err(DataLifecycleError::ImportRunBlocked),
+            BRegIngestionRunStatus::Cancelled => {
+                return Err(DataLifecycleError::ImportRunCancelled)
+            }
+            BRegIngestionRunStatus::Complete => break,
+        }
+        let chunk_index = started.run.next_chunk_index();
+        let chunk = encode_ingestion_chunk(drive.plan, drive.input, chunk_index)?;
+        let recovered = match drive.submit_chunk(run_id, &chunk) {
+            Ok(submission) => {
+                validate_ingestion_receipt(submission.receipt(), &chunk)?;
+                RecoveredSubmission::Answered(submission.run().clone())
+            }
+            Err(error) => recover_lost_submission(drive, run_id, chunk_index, &chunk, error)?,
         };
-        committed_items = committed_items
-            .checked_add(progress.committed_items())
-            .ok_or(DataLifecycleError::Checkpoint)?;
-        committed_chunks = committed_chunks
+        let run = match recovered {
+            RecoveredSubmission::Answered(run) => run,
+            RecoveredSubmission::CommittedWithoutAnswer(run) => run,
+        };
+        if run.run_id() != run_id || run.next_chunk_index() <= chunk_index {
+            return Err(DataLifecycleError::Data(DataError::InvalidResponse));
+        }
+        adopt_ingestion_run(drive, started, run)?;
+        submitted = submitted
             .checked_add(1)
             .ok_or(DataLifecycleError::Checkpoint)?;
-        after_chunk(checkpoint)?;
     }
-    Ok((committed_chunks, committed_items))
+    Ok(ingestion_outcome(drive, started))
+}
+
+/// Recover one chunk submission whose answer was lost or was refused as
+/// run-not-open. The exchange may or may not have committed, so the run is
+/// re-read: a run still expecting this chunk gets the exact chunk bytes again,
+/// a run that moved past it is adopted, and a chunk is never skipped and never
+/// sent as a different chunk than the run names.
+fn recover_lost_submission(
+    drive: &IngestionDrive<'_>,
+    run_id: Uuid,
+    chunk_index: u64,
+    chunk: &BRegIngestionChunk,
+    error: BaseRegistryClientError,
+) -> Result<RecoveredSubmission, DataLifecycleError> {
+    // A transport failure and a service-unavailable answer both leave the
+    // chunk's commit state unknown: the service may have committed before
+    // the answer was lost. A run-not-open refusal likewise means the next
+    // request observed a checkpoint this request may have moved. All three
+    // resolve through the run state, never through a blind resubmission.
+    let run_may_have_committed = matches!(
+        error,
+        BaseRegistryClientError::Transport { .. }
+            | BaseRegistryClientError::Problem {
+                code: BRegProblemCode::ServiceUnavailable,
+                ..
+            }
+            | BaseRegistryClientError::Problem {
+                code: BRegProblemCode::IngestionRunNotOpen,
+                ..
+            }
+    );
+    if !run_may_have_committed {
+        return Err(map_ingestion_client_error(error));
+    }
+    let run = drive.read_run(run_id)?;
+    validate_ingestion_run(&run, drive.plan, drive.inspected, drive.input)?;
+    if run.status() == BRegIngestionRunStatus::Open && run.next_chunk_index() == chunk_index {
+        let replayed = drive
+            .submit_chunk(run_id, chunk)
+            .map_err(map_ingestion_client_error)?;
+        return Ok(RecoveredSubmission::Answered(replayed.run().clone()));
+    }
+    match run.status() {
+        BRegIngestionRunStatus::Blocked => Err(DataLifecycleError::ImportRunBlocked),
+        BRegIngestionRunStatus::Cancelled => Err(DataLifecycleError::ImportRunCancelled),
+        BRegIngestionRunStatus::Open | BRegIngestionRunStatus::Complete
+            if run.next_chunk_index() > chunk_index =>
+        {
+            Ok(RecoveredSubmission::CommittedWithoutAnswer(run))
+        }
+        _ => Err(DataLifecycleError::Data(DataError::InvalidResponse)),
+    }
+}
+
+/// The receipt must name the chunk that was sent: index and digest both.
+fn validate_ingestion_receipt(
+    receipt: &BRegIngestionChunkReceipt,
+    chunk: &BRegIngestionChunk,
+) -> Result<(), DataLifecycleError> {
+    if receipt.chunk_index() != chunk.chunk_index() || receipt.digest() != chunk.digest() {
+        return Err(DataLifecycleError::Data(DataError::InvalidResponse));
+    }
+    Ok(())
+}
+
+/// Adopt server run state as the commit record: the binding and committed
+/// boundary must still describe this import, the local checkpoint is rebuilt
+/// to the chunk the server expects next, and the rebuild is published through
+/// the destination the run resolved.
+fn adopt_ingestion_run(
+    drive: &IngestionDrive<'_>,
+    started: &mut StartedIngestion,
+    run: BRegIngestionRun,
+) -> Result<(), DataLifecycleError> {
+    validate_ingestion_run(&run, drive.plan, drive.inspected, drive.input)?;
+    started.checkpoint = checkpoint_committed_to(
+        drive.plan,
+        drive.inspected,
+        &started.state,
+        run.next_chunk_index(),
+    )?;
+    publish_import_checkpoint(&started.destinations.checkpoint, &started.checkpoint)?;
+    started.run = run;
+    Ok(())
+}
+
+/// Report the import from the server's own run state, which is the commit
+/// record the whole run maintained.
+fn ingestion_outcome(drive: &IngestionDrive<'_>, started: &StartedIngestion) -> DataImportOutcome {
+    DataImportOutcome {
+        package_revision: drive.inspected.package_revision.clone(),
+        schema_fingerprint: drive.inspected.schema_fingerprint.clone(),
+        entity_id: drive.plan.entity_id().to_owned(),
+        profile_id: drive.plan.profile_id().to_owned(),
+        operation: drive.plan.operation(),
+        run_id: started.state.run_id.clone(),
+        input_length: drive.plan.input_length(),
+        item_count: drive.plan.item_count(),
+        completed_chunk_count: started.run.next_chunk_index(),
+        committed_items: started.run.committed_items(),
+        complete: started.run.complete(),
+    }
+}
+
+/// A value-free reason an ingestion-run request could not be encoded.
+fn map_ingestion_error(error: BRegIngestionError) -> DataLifecycleError {
+    match error {
+        BRegIngestionError::EmptyChunk
+        | BRegIngestionError::InvalidItem
+        | BRegIngestionError::BodyEncoding => DataLifecycleError::Data(DataError::InvalidItem),
+        BRegIngestionError::BodyTooLarge => DataLifecycleError::Data(DataError::ItemTooLarge),
+        BRegIngestionError::InvalidDigest
+        | BRegIngestionError::UnsupportedChunkAlgorithm
+        | BRegIngestionError::InvalidBinding => DataLifecycleError::Data(DataError::InvalidBinding),
+        BRegIngestionError::InvalidResponse | BRegIngestionError::ErasedReceipt => {
+            DataLifecycleError::Data(DataError::InvalidResponse)
+        }
+        _ => DataLifecycleError::Data(DataError::InvalidBinding),
+    }
+}
+
+/// A value-free reason one ingestion-run exchange failed. The client's errors
+/// carry no request values, so they map without redaction.
+fn map_ingestion_client_error(error: BaseRegistryClientError) -> DataLifecycleError {
+    match error {
+        BaseRegistryClientError::Transport { .. } => DataLifecycleError::Transport,
+        BaseRegistryClientError::Configuration { .. } => DataLifecycleError::BRegUrl,
+        BaseRegistryClientError::Token(_) => DataLifecycleError::Token,
+        BaseRegistryClientError::InvalidRequest { .. } => {
+            DataLifecycleError::Data(DataError::InvalidBinding)
+        }
+        BaseRegistryClientError::Protocol { .. } => {
+            DataLifecycleError::Data(DataError::InvalidResponse)
+        }
+        BaseRegistryClientError::Problem {
+            code: BRegProblemCode::IngestionRunBlocked,
+            ..
+        } => DataLifecycleError::ImportRunBlocked,
+        BaseRegistryClientError::Problem {
+            code: BRegProblemCode::AuthenticationRefused,
+            ..
+        } => DataLifecycleError::Token,
+        BaseRegistryClientError::Problem {
+            code: BRegProblemCode::ResourceNotFound,
+            ..
+        } => DataLifecycleError::Checkpoint,
+        BaseRegistryClientError::Problem {
+            code: BRegProblemCode::IngestionChunkMismatch,
+            ..
+        } => DataLifecycleError::Data(DataError::CheckpointMismatch),
+        BaseRegistryClientError::Problem {
+            code: BRegProblemCode::RequestInvalid,
+            ..
+        } => DataLifecycleError::Data(DataError::InvalidBinding),
+        BaseRegistryClientError::Problem {
+            code:
+                BRegProblemCode::ServiceUnavailable
+                | BRegProblemCode::RuntimeNotReady
+                | BRegProblemCode::SourceUnavailable
+                | BRegProblemCode::RequestTimeout,
+            ..
+        } => DataLifecycleError::Transport,
+        BaseRegistryClientError::Problem { .. } => {
+            DataLifecycleError::Data(DataError::OperationRefused)
+        }
+        _ => DataLifecycleError::Data(DataError::OperationRefused),
+    }
+}
+
+fn data_runtime() -> Result<tokio::runtime::Runtime, DataLifecycleError> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| DataLifecycleError::Runtime)
 }
 
 pub(crate) fn run_export(
@@ -346,10 +904,7 @@ where
     Dispatch: FnMut(DataHttpRequest) -> DispatchFuture,
     DispatchFuture: Future<Output = Result<DataHttpResponse, DispatchError>>,
 {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| DataLifecycleError::Runtime)?;
+    let runtime = data_runtime()?;
     let mut pages = 0u64;
     let max_pages = max_pages.unwrap_or(u64::MAX);
     while !started.checkpoint.is_complete() && pages < max_pages {
@@ -519,27 +1074,6 @@ fn publish_import_checkpoint(
     )
 }
 
-fn load_or_start_import(
-    plan: &DataImportPlan,
-    inspected: &InspectedDataPackage,
-    destinations: &ImportDestinations,
-) -> Result<(DataImportCheckpoint, String), DataLifecycleError> {
-    let checkpoint_exists = destinations
-        .checkpoint
-        .exists()
-        .map_err(|_| DataLifecycleError::Checkpoint)?;
-    let state_exists = destinations
-        .state
-        .exists()
-        .map_err(|_| DataLifecycleError::Checkpoint)?;
-    match (checkpoint_exists, state_exists) {
-        (false, false) => start_new_import(plan, inspected, destinations),
-        (false, true) => recover_state_only_import(plan, inspected, destinations),
-        (true, true) => load_existing_import(plan, inspected, destinations),
-        (true, false) => Err(DataLifecycleError::Checkpoint),
-    }
-}
-
 /// The two files one export run writes, each resolved to a held parent
 /// directory descriptor when the run validates them.
 ///
@@ -614,71 +1148,11 @@ fn load_or_start_export(
     }
 }
 
-fn start_new_import(
-    plan: &DataImportPlan,
-    inspected: &InspectedDataPackage,
-    destinations: &ImportDestinations,
-) -> Result<(DataImportCheckpoint, String), DataLifecycleError> {
-    let checkpoint = DataImportCheckpoint::start(
-        plan,
-        &inspected.package_revision,
-        &inspected.schema_fingerprint,
-    )
-    .map_err(DataLifecycleError::Data)?;
-    let state = import_state_for_checkpoint(plan, inspected, &checkpoint);
-    let state_bytes = canonical_import_state(&state)?;
-    let checkpoint_bytes = checkpoint
-        .canonical_json()
-        .map_err(DataLifecycleError::Data)?;
-    write_atomic_create_new_entry(&destinations.state, &state_bytes)
-        .map_err(|_| DataLifecycleError::Checkpoint)?;
-    if write_atomic_create_new_entry(&destinations.checkpoint, &checkpoint_bytes).is_err() {
-        return load_existing_import(plan, inspected, destinations)
-            .map_err(|_| DataLifecycleError::Checkpoint);
-    }
-    Ok((checkpoint, state.import_id))
-}
-
-fn recover_state_only_import(
-    plan: &DataImportPlan,
-    inspected: &InspectedDataPackage,
-    destinations: &ImportDestinations,
-) -> Result<(DataImportCheckpoint, String), DataLifecycleError> {
-    let state = read_import_state(&destinations.state, plan, inspected)?;
-    let checkpoint = start_checkpoint_from_state(plan, inspected, &state)?;
-    let checkpoint_bytes = checkpoint
-        .canonical_json()
-        .map_err(DataLifecycleError::Data)?;
-    match write_atomic_create_new_entry(&destinations.checkpoint, &checkpoint_bytes) {
-        Ok(_) => Ok((checkpoint, state.import_id)),
-        Err(_) => load_existing_import(plan, inspected, destinations)
-            .map_err(|_| DataLifecycleError::Checkpoint),
-    }
-}
-
-fn load_existing_import(
-    plan: &DataImportPlan,
-    inspected: &InspectedDataPackage,
-    destinations: &ImportDestinations,
-) -> Result<(DataImportCheckpoint, String), DataLifecycleError> {
-    let state = read_import_state(&destinations.state, plan, inspected)?;
-    let checkpoint_bytes = read_bounded_entry(&destinations.checkpoint, MAX_CHECKPOINT_BYTES)
-        .map_err(|_| DataLifecycleError::Checkpoint)?;
-    let checkpoint = DataImportCheckpoint::from_json(
-        &checkpoint_bytes,
-        plan,
-        &inspected.package_revision,
-        &inspected.schema_fingerprint,
-        &state.import_id,
-    )
-    .map_err(DataLifecycleError::Data)?;
-    Ok((checkpoint, state.import_id))
-}
-
 fn import_state_for_checkpoint(
     plan: &DataImportPlan,
     inspected: &InspectedDataPackage,
     checkpoint: &DataImportCheckpoint,
+    run_id: &str,
 ) -> ImportState {
     ImportState {
         api_version: DATA_STATE_API_VERSION.to_owned(),
@@ -690,6 +1164,7 @@ fn import_state_for_checkpoint(
         profile_id: plan.profile_id().to_owned(),
         input_digest: plan.input_digest().to_owned(),
         import_id: checkpoint.import_id().to_owned(),
+        run_id: run_id.to_owned(),
     }
 }
 
@@ -730,10 +1205,18 @@ fn read_import_state(
 ) -> Result<ImportState, DataLifecycleError> {
     let bytes = read_bounded_entry(entry, MAX_CHECKPOINT_BYTES)
         .map_err(|_| DataLifecycleError::Checkpoint)?;
-    let state: ImportState = serde_json::from_value(
-        parse_json_strict(&bytes).map_err(|_| DataLifecycleError::Checkpoint)?,
-    )
-    .map_err(|_| DataLifecycleError::Checkpoint)?;
+    let value = parse_json_strict(&bytes).map_err(|_| DataLifecycleError::Checkpoint)?;
+    // A v1 sidecar predates ingestion runs: it carries committed progress but
+    // names no run, so its committed items cannot be resumed, only redone under
+    // a fresh run id, which would duplicate mutations. Refuse it by name
+    // before any binding is read.
+    if value.get("apiVersion").and_then(serde_json::Value::as_str)
+        == Some(DATA_STATE_API_VERSION_V1)
+    {
+        return Err(DataLifecycleError::LegacyImportCheckpoint);
+    }
+    let state: ImportState =
+        serde_json::from_value(value).map_err(|_| DataLifecycleError::Checkpoint)?;
     if state.api_version != DATA_STATE_API_VERSION
         || state.kind != IMPORT_STATE_KIND
         || state.package_revision != inspected.package_revision
@@ -1068,7 +1551,7 @@ mod tests {
     use std::process::Command;
     use std::sync::{
         atomic::{AtomicUsize, Ordering as AtomicOrdering},
-        Arc, Mutex,
+        Arc,
     };
     use std::thread;
     use std::time::{Duration as StdDuration, Instant};
@@ -1084,6 +1567,13 @@ mod tests {
     const PROFILE: &str = "operator";
     const PACKAGE: &str = "package-revision";
     const SCHEMA: &str = "schema-fingerprint";
+    /// The run id every scripted run document names. It is a fixed v4-shaped
+    /// value, so the sidecar and the wire fixtures agree on one run.
+    const RUN_ID: &str = "00000000-0000-4000-8000-000000000001";
+    /// A canonical trace context every scripted response carries: 32 and 16
+    /// nonzero lowercase hex digits, version 01.
+    const INGESTION_TRACE_ID: &str = "0123456789abcdef0123456789abcdef";
+    const INGESTION_SPAN_ID: &str = "0123456789abcdef";
 
     fn test_runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_current_thread()
@@ -1190,10 +1680,8 @@ mod tests {
         compile_project(&project, &[], CompileProfile::Authoring).unwrap()
     }
 
-    fn import_plan_and_inspected() -> (DataImportPlan, InspectedDataPackage) {
+    fn import_plan_and_inspected(input: &[u8]) -> (DataImportPlan, InspectedDataPackage) {
         let registry = compiled();
-        let input = br#"{"operation":"create","data":{"code":"AA"}}
-"#;
         let plan = DataImportPlan::from_jsonl(
             &registry,
             ENTITY,
@@ -1239,75 +1727,758 @@ mod tests {
         DataHttpResponse::new(200, Some("application/json".to_owned()), body).unwrap()
     }
 
+    /// One scripted exchange for the multi-response server: the bytes to
+    /// answer with, or a connection dropped once the request is read.
+    enum ScriptedExchange {
+        Respond(Vec<u8>),
+        Drop,
+    }
+
+    /// Serve one scripted response per connection, in order, then close. Every
+    /// response names `Connection: close`, so the maintained client opens one
+    /// connection per exchange and the script lines up with the protocol
+    /// sequence. The thread returns every request it read, and any request
+    /// beyond the script fails the test.
+    fn spawn_scripted_server(
+        script: Vec<ScriptedExchange>,
+    ) -> (SocketAddr, thread::JoinHandle<Vec<Vec<u8>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            let mut requests = Vec::new();
+            let deadline = Instant::now() + StdDuration::from_secs(10);
+            for exchange in script {
+                let mut stream = loop {
+                    if Instant::now() > deadline {
+                        return requests;
+                    }
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            thread::sleep(StdDuration::from_millis(5));
+                        }
+                        Err(error) => panic!("scripted server failed: {error}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                requests.push(read_http_request(&mut stream));
+                if let ScriptedExchange::Respond(response) = exchange {
+                    stream.write_all(&response).unwrap();
+                    stream.flush().unwrap();
+                }
+                // A dropped exchange closes without answering.
+            }
+            listener.set_nonblocking(true).unwrap();
+            let deadline = Instant::now() + StdDuration::from_millis(300);
+            loop {
+                if Instant::now() > deadline {
+                    return requests;
+                }
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = read_http_request(&mut stream);
+                        panic!("scripted server received a request beyond its script");
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(StdDuration::from_millis(5));
+                    }
+                    Err(error) => panic!("scripted server failed: {error}"),
+                }
+            }
+        });
+        (address, handle)
+    }
+
+    /// The import input the scripted runs carry: three items, which the
+    /// compiled batch bound of two items splits into two chunks.
+    fn import_input() -> Vec<u8> {
+        br#"{"operation":"create","data":{"code":"AA"}}
+{"operation":"create","data":{"code":"BB"}}
+{"operation":"create","data":{"code":"CC"}}
+"#
+        .to_vec()
+    }
+
+    /// One ingestion response: the exact media type, cache policy, and trace
+    /// context the maintained client requires, plus `Connection: close` so one
+    /// connection carries exactly one exchange.
+    fn ingestion_http_response(status: u16, reason: &str, body: &[u8]) -> Vec<u8> {
+        let head = format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\n\
+             Cache-Control: no-store\r\nVary: authorization, accept\r\n\
+             traceparent: 00-{INGESTION_TRACE_ID}-{INGESTION_SPAN_ID}-01\r\n\
+             Connection: close\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let mut response = head.into_bytes();
+        response.extend_from_slice(body);
+        response
+    }
+
+    /// One run document, with the committed boundary the plan implies at
+    /// `next_chunk_index` derived from the plan's own chunks.
+    fn ingestion_run_value(
+        plan: &DataImportPlan,
+        input: &[u8],
+        next_chunk_index: u64,
+        status: &str,
+    ) -> Value {
+        let (committed_items, committed_prefix_digest) = if next_chunk_index == 0 {
+            (0_u64, ingestion_prefix_digest(&[]))
+        } else {
+            let chunk = &plan.chunks()[(next_chunk_index - 1) as usize];
+            (
+                chunk.item_range().end,
+                ingestion_prefix_digest(&input[..chunk.next_byte_offset() as usize]),
+            )
+        };
+        json!({
+            "runId": RUN_ID,
+            "status": status,
+            "blockedReason": if status == "blocked" {
+                json!("activePackageChanged")
+            } else {
+                Value::Null
+            },
+            "entityId": ENTITY,
+            "operation": "create",
+            "profileId": PROFILE,
+            "packageRevision": PACKAGE,
+            "schemaFingerprint": SCHEMA,
+            "inputDigest": plan.input_digest(),
+            "inputLength": plan.input_length(),
+            "itemCount": plan.item_count(),
+            "chunkCount": plan.chunks().len(),
+            "chunkAlgorithmVersion": BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
+            "maximumItems": u64::from(plan.maximum_items()),
+            "maximumBytes": u64::from(plan.maximum_bytes()),
+            "nextChunkIndex": next_chunk_index,
+            "committedItems": committed_items,
+            "committedPrefixDigest": committed_prefix_digest,
+            "lastAttempt": Value::Null,
+            "createdAt": "2026-09-19T00:00:00Z",
+            "updatedAt": "2026-09-19T00:01:00Z",
+            "complete": status == "complete",
+        })
+    }
+
+    /// One retained receipt, naming the chunk and digest the server committed.
+    fn ingestion_receipt_value(chunk_index: u64, digest: &str, replayed: bool) -> Value {
+        json!({
+            "chunkIndex": chunk_index,
+            "digest": digest,
+            "replayed": replayed,
+            "erased": false,
+            "batch": {
+                "snapshot": "breg1_00000000-0000-4000-8000-000000000002",
+                "results": []
+            }
+        })
+    }
+
+    /// The `{run}` body a run creation or read answers with.
+    fn ingestion_run_response(
+        status: u16,
+        reason: &str,
+        plan: &DataImportPlan,
+        input: &[u8],
+        next_chunk_index: u64,
+        run_status: &str,
+    ) -> Vec<u8> {
+        let body = canonicalize_json(&json!({
+            "run": ingestion_run_value(plan, input, next_chunk_index, run_status)
+        }))
+        .unwrap();
+        ingestion_http_response(status, reason, &body)
+    }
+
+    /// The `{run, receipt}` body a chunk submission answers with. The receipt
+    /// names the chunk the drive encodes, and the run reports the boundary
+    /// after that chunk committed.
+    fn ingestion_submission_response(
+        plan: &DataImportPlan,
+        input: &[u8],
+        chunk_index: u64,
+        replayed: bool,
+        run_status: &str,
+    ) -> Vec<u8> {
+        let chunk = encode_ingestion_chunk(plan, input, chunk_index).unwrap();
+        let body = canonicalize_json(&json!({
+            "run": ingestion_run_value(plan, input, chunk_index + 1, run_status),
+            "receipt": ingestion_receipt_value(chunk_index, chunk.digest(), replayed),
+        }))
+        .unwrap();
+        ingestion_http_response(200, "OK", &body)
+    }
+
+    /// Stage the sidecar pair a rerun resumes from: the v2 state naming the
+    /// run, and optionally the checkpoint at the boundary the local file
+    /// happens to hold.
+    fn staged_import(
+        plan: &DataImportPlan,
+        inspected: &InspectedDataPackage,
+        checkpoint_path: &Path,
+        checkpoint_chunks: Option<u64>,
+    ) -> ImportState {
+        let state_path = import_state_path(checkpoint_path);
+        let checkpoint = DataImportCheckpoint::start(plan, PACKAGE, SCHEMA).unwrap();
+        let state = import_state_for_checkpoint(plan, inspected, &checkpoint, RUN_ID);
+        fs::write(&state_path, canonical_import_state(&state).unwrap()).unwrap();
+        if let Some(committed) = checkpoint_chunks {
+            let mut advanced = checkpoint;
+            for chunk_index in 0..committed {
+                advanced
+                    .commit_chunk(plan, PACKAGE, SCHEMA, chunk_index, &state.import_id)
+                    .unwrap();
+            }
+            fs::write(checkpoint_path, advanced.canonical_json().unwrap()).unwrap();
+        }
+        state
+    }
+
+    /// One drive against the scripted server: the plan, the package binding,
+    /// the source input, and the maintained client pointed at the server.
+    fn ingestion_drive<'a>(
+        plan: &'a DataImportPlan,
+        inspected: &'a InspectedDataPackage,
+        input: &'a [u8],
+        client: &'a BaseRegistryClient,
+    ) -> IngestionDrive<'a> {
+        IngestionDrive {
+            plan,
+            inspected,
+            input,
+            client,
+            entity_route: ingestion_entity_route(inspected, plan).unwrap(),
+            runtime: data_runtime().unwrap(),
+        }
+    }
+
+    /// The request line, headers, and parsed body of one captured request. A
+    /// bodyless request parses as `null`.
+    fn request_parts(request: &[u8]) -> (String, Vec<(String, String)>, Value) {
+        let text = String::from_utf8_lossy(request).into_owned();
+        let (head, body) = text.split_once("\r\n\r\n").unwrap();
+        let mut lines = head.lines();
+        let request_line = lines.next().unwrap().to_owned();
+        let headers = lines
+            .filter_map(|line| {
+                line.split_once(':')
+                    .map(|(name, value)| (name.to_ascii_lowercase(), value.trim().to_owned()))
+            })
+            .collect();
+        let body = if body.is_empty() {
+            Value::Null
+        } else {
+            parse_json_strict(body.as_bytes()).unwrap()
+        };
+        (request_line, headers, body)
+    }
+
+    /// The value of one captured request header, by name.
+    fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> &'a str {
+        headers
+            .iter()
+            .find(|(candidate, _)| candidate == name)
+            .map(|(_, value)| value.as_str())
+            .unwrap()
+    }
+
     #[test]
-    fn authenticated_import_transport_uses_the_compiled_batch_request_shape() {
-        let input = br#"{"operation":"create","data":{"code":"AA"}}
-"#;
+    fn an_import_announces_the_run_and_submits_chunks_through_the_run_routes() {
+        let input = import_input();
+        let (plan, inspected) = import_plan_and_inspected(&input);
+        assert_eq!(plan.chunks().len(), 2);
+        let directory = test_directory("ingestion-shape");
+        let checkpoint_path = directory.join("import.checkpoint.json");
+        let (address, handle) = spawn_scripted_server(vec![
+            ScriptedExchange::Respond(ingestion_run_response(
+                201, "Created", &plan, &input, 0, "open",
+            )),
+            ScriptedExchange::Respond(ingestion_submission_response(
+                &plan, &input, 0, false, "open",
+            )),
+            ScriptedExchange::Respond(ingestion_submission_response(
+                &plan, &input, 1, false, "complete",
+            )),
+        ]);
+        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let drive = ingestion_drive(&plan, &inspected, &input, &client);
+
+        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
+        let mut started = load_or_start_ingestion(&drive, destinations).unwrap();
+        let outcome = submit_ingestion_chunks(&drive, &mut started, None).unwrap();
+        let requests = handle.join().unwrap();
+
+        assert_eq!(requests.len(), 3);
+        assert!(started.checkpoint.is_complete());
+        assert!(outcome.complete);
+        assert_eq!(outcome.run_id, RUN_ID);
+        assert_eq!(outcome.completed_chunk_count, 2);
+        assert_eq!(outcome.committed_items, 3);
+        assert_eq!(
+            fs::read(&checkpoint_path).unwrap(),
+            started.checkpoint.canonical_json().unwrap()
+        );
+        assert!(import_state_path(&checkpoint_path).exists());
+
+        // The announcement carries every binding the plan and the package
+        // derived, and no value from the source rows.
+        let (request_line, headers, announcement) = request_parts(&requests[0]);
+        assert_eq!(
+            request_line,
+            "POST /v1/records/records/ingestion-runs?accessProfile=operator HTTP/1.1"
+        );
+        assert_eq!(
+            announcement,
+            json!({
+                "operation": "create",
+                "profileId": PROFILE,
+                "packageRevision": PACKAGE,
+                "schemaFingerprint": SCHEMA,
+                "inputDigest": plan.input_digest(),
+                "inputLength": plan.input_length(),
+                "itemCount": plan.item_count(),
+                "chunkCount": plan.chunks().len(),
+                "chunkAlgorithmVersion": BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
+            })
+        );
+        assert_eq!(header_value(&headers, "authorization"), "Bearer TEST-TOKEN");
+        assert_eq!(header_value(&headers, "accept"), "application/json");
+        assert_eq!(header_value(&headers, "content-type"), "application/json");
+        assert_eq!(header_value(&headers, "user-agent"), DATA_HTTP_USER_AGENT);
+        assert!(headers.iter().all(|(name, _)| name != "idempotency-key"));
+
+        // Every chunk names its index, its digest, and the digest of the
+        // source prefix it ends at, all derived from the plan's chunking of
+        // the same input.
+        for (chunk_index, request) in requests[1..].iter().enumerate() {
+            let (request_line, _, submission) = request_parts(request);
+            assert_eq!(
+                request_line,
+                format!(
+                    "POST /v1/records/records/ingestion-runs/{RUN_ID}/chunks\
+                     ?accessProfile=operator HTTP/1.1"
+                )
+            );
+            let chunk = &plan.chunks()[chunk_index];
+            let expected_items =
+                parse_json_strict(chunk.canonical_body()).unwrap()["items"].clone();
+            assert_eq!(
+                submission,
+                json!({
+                    "chunkIndex": chunk_index,
+                    "items": expected_items,
+                    "digest": chunk.digest(),
+                    "prefixDigest": ingestion_prefix_digest(
+                        &input[..chunk.next_byte_offset() as usize]
+                    ),
+                })
+            );
+        }
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// The registry whose batch byte bound is the protocol's highest, with one
+    /// text field large enough to fill it, so a plan can place a chunk's
+    /// canonical batch body exactly at the batch byte ceiling.
+    fn ceiling_compiled() -> registry_breg::CompiledRegistry {
+        let source = json!({
+            "apiVersion": "registry.registrystack.org/v1alpha1",
+            "kind": "RegistryProject",
+            "registry": {"id": "ctl-data", "version": "1", "defaultLanguage": "en",
+                         "canonicalBaseIri": "https://ctl-data.example.test"},
+            "entities": [{
+                "id": ENTITY,
+                "primaryDataset": "test-dataset",
+                "route": "records",
+                "mutationMode": "create_only",
+                "batch": {
+                    "maximumItems": 2,
+                    "maximumBytes": registry_breg::compiler::MAX_BATCH_BYTES
+                },
+                "fields": [
+                    {"id": "payload", "type": "text", "maxLength": 3_000_000,
+                     "required": true, "classification": "internal"}
+                ]
+            }],
+            "accessProfiles": [{
+                "id": PROFILE,
+                "principalClaim": "principal",
+                "permissions": [{
+                    "entity": ENTITY,
+                    "operations": ["create", "batch", "list"],
+                    "readableFields": ["payload"],
+                    "writableFields": ["payload"],
+                    "allowDataExport": true,
+                    "rowBoundaries": []
+                }]
+            }]
+        });
+        let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+        compile_project(&project, &[], CompileProfile::Authoring).unwrap()
+    }
+
+    /// One padded item: each padding character adds one encoded byte to every
+    /// body the item appears in, and nothing else moves.
+    fn ceiling_item(padding: usize) -> Value {
+        json!({
+            "operation": "create",
+            "data": {"payload": "x".repeat(padding)}
+        })
+    }
+
+    /// The canonical batch body of one padded item.
+    fn ceiling_items_body(padding: usize) -> Vec<u8> {
+        canonicalize_json(&json!({ "items": [ceiling_item(padding)] })).unwrap()
+    }
+
+    #[test]
+    fn a_chunk_at_the_batch_byte_ceiling_encodes_within_the_envelope_headroom() {
+        // The client ceiling mirrors the engine's chunk request ceiling: the
+        // batch byte ceiling plus the chunk envelope's own members. If the two
+        // drift apart, a chunk one side admits is refused by the other.
+        assert_eq!(
+            registry_breg_client::MAXIMUM_BREG_INGESTION_CHUNK_BODY_BYTES,
+            usize::try_from(registry_breg::compiler::INGESTION_CHUNK_REQUEST_CEILING).unwrap()
+        );
+        let ceiling = usize::try_from(registry_breg::compiler::MAX_BATCH_BYTES).unwrap();
+
+        // One item whose canonical batch body is exactly the batch byte
+        // ceiling: the largest chunk the planner may lawfully produce.
+        let padding = ceiling - ceiling_items_body(0).len();
+        assert_eq!(ceiling_items_body(padding).len(), ceiling);
+        let mut input = canonicalize_json(&ceiling_item(padding)).unwrap();
+        input.push(b'\n');
+
+        // The planner and the validator accept a chunk at the ceiling.
+        let registry = ceiling_compiled();
         let plan = DataImportPlan::from_jsonl(
-            &compiled(),
+            &registry,
             ENTITY,
             DataImportOperation::Create,
             PROFILE,
-            input,
+            &input,
         )
         .unwrap();
-        let mut checkpoint = DataImportCheckpoint::start(&plan, PACKAGE, SCHEMA).unwrap();
-        let import_id = checkpoint.import_id().to_owned();
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let captured_request = Arc::clone(&captured);
+        assert_eq!(plan.maximum_bytes() as usize, ceiling);
+        assert_eq!(plan.chunks().len(), 1);
+        assert_eq!(plan.chunks()[0].canonical_body().len(), ceiling);
 
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
+        // The envelope the importer submits carries that body plus its own
+        // members, so it passes the plain mutation ceiling while staying
+        // within the chunk request ceiling: exactly the headroom both sides
+        // reserve.
+        let encoded = encode_ingestion_chunk(&plan, &input, 0).unwrap();
+        assert!(
+            encoded.body_len() > registry_breg_client::MAXIMUM_BREG_MUTATION_BODY_BYTES,
+            "the ceiling-sized chunk must actually exercise the envelope headroom"
+        );
+        assert!(
+            encoded.body_len() <= registry_breg_client::MAXIMUM_BREG_INGESTION_CHUNK_BODY_BYTES
+        );
+
+        // One envelope byte beyond the ceiling is still refused, so the
+        // allowance is bounded, not open-ended.
+        let probe = BRegIngestionChunk::new(0, vec![ceiling_item(0)], ingestion_prefix_digest(&[]))
             .unwrap();
-        let progress = runtime
-            .block_on(execute_import_chunk(
-                &plan,
-                &mut checkpoint,
-                PACKAGE,
-                SCHEMA,
-                &import_id,
-                move |request| {
-                    let captured_request = Arc::clone(&captured_request);
-                    async move {
-                        captured_request.lock().unwrap().push((
-                            request.method(),
-                            request.path_and_query().to_owned(),
-                            request.content_type(),
-                            request.idempotency_key().map(str::to_owned),
-                            request.body().to_vec(),
-                        ));
-                        let body = canonicalize_json(&json!({
-                            "snapshot": "breg1_00000000-0000-4000-8000-000000000001",
-                            "results": [{
-                                "operation": "create",
-                                "id": "018f06d6-0248-4c7f-8a7e-df9dfbd83d2c",
-                                "revision": 1,
-                                "etag": "\"breg-revision\"",
-                                "data": {"code": "AA"}
-                            }]
-                        }))
-                        .unwrap();
-                        DataHttpResponse::new(200, Some("application/json".to_owned()), body)
-                    }
-                },
-            ))
-            .unwrap()
-            .expect("one chunk commits");
+        let overhead = probe.body_len() - ceiling_items_body(0).len();
+        let beyond = registry_breg_client::MAXIMUM_BREG_INGESTION_CHUNK_BODY_BYTES + 1
+            - overhead
+            - ceiling_items_body(0).len();
+        let refused =
+            BRegIngestionChunk::new(0, vec![ceiling_item(beyond)], ingestion_prefix_digest(&[]))
+                .unwrap_err();
+        assert_eq!(
+            refused,
+            registry_breg_client::BRegIngestionError::BodyTooLarge
+        );
+    }
 
-        assert!(progress.is_complete());
-        let captured = captured.lock().unwrap();
-        assert_eq!(captured.len(), 1);
-        let (method, path, content_type, idempotency_key, body) = &captured[0];
-        assert_eq!(*method, DataHttpMethod::Post);
-        assert_eq!(path, "/v1/records/records:batch?accessProfile=operator");
-        assert_eq!(*content_type, Some("application/json"));
-        assert!(idempotency_key
-            .as_deref()
-            .is_some_and(|key| key.starts_with("breg-data-v1-")));
-        let body = parse_json_strict(body).unwrap();
-        assert_eq!(body["items"].as_array().unwrap().len(), 1);
-        assert_eq!(body["items"][0]["data"]["code"], "AA");
+    #[test]
+    fn a_rerun_resumes_the_named_run_at_the_servers_next_chunk() {
+        let input = import_input();
+        let (plan, inspected) = import_plan_and_inspected(&input);
+        let directory = test_directory("ingestion-resume");
+        let checkpoint_path = directory.join("import.checkpoint.json");
+        staged_import(&plan, &inspected, &checkpoint_path, Some(0));
+        let (address, handle) = spawn_scripted_server(vec![
+            ScriptedExchange::Respond(ingestion_run_response(200, "OK", &plan, &input, 1, "open")),
+            ScriptedExchange::Respond(ingestion_submission_response(
+                &plan, &input, 1, false, "complete",
+            )),
+        ]);
+        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let drive = ingestion_drive(&plan, &inspected, &input, &client);
+
+        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
+        let mut started = load_or_start_ingestion(&drive, destinations).unwrap();
+        let outcome = submit_ingestion_chunks(&drive, &mut started, None).unwrap();
+        let requests = handle.join().unwrap();
+
+        // The rerun reads the run under the plan's own profile (an entity
+        // with several batch-capable profiles must not fall back to the
+        // route default and lose the run), takes the server's
+        // nextChunkIndex, and submits only the chunk after it: chunk 0 is
+        // never re-sent.
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            request_parts(&requests[0]).0,
+            format!(
+                "GET /v1/records/records/ingestion-runs/{RUN_ID}\
+                 ?accessProfile=operator HTTP/1.1"
+            )
+        );
+        let (chunk_request, _, submission) = request_parts(&requests[1]);
+        assert_eq!(
+            chunk_request,
+            format!(
+                "POST /v1/records/records/ingestion-runs/{RUN_ID}/chunks\
+                 ?accessProfile=operator HTTP/1.1"
+            )
+        );
+        assert_eq!(submission["chunkIndex"], 1);
+        assert_eq!(submission["digest"], plan.chunks()[1].digest());
+
+        assert!(outcome.complete);
+        assert_eq!(outcome.completed_chunk_count, 2);
+        assert_eq!(outcome.committed_items, 3);
+        // The local file was behind the server and now records the boundary
+        // the server maintained.
+        assert_eq!(
+            fs::read(&checkpoint_path).unwrap(),
+            started.checkpoint.canonical_json().unwrap()
+        );
+        assert!(started.checkpoint.is_complete());
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_lost_chunk_answer_replays_the_exact_chunk_bytes() {
+        let input = import_input();
+        let (plan, inspected) = import_plan_and_inspected(&input);
+        let directory = test_directory("ingestion-lost-answer");
+        let checkpoint_path = directory.join("import.checkpoint.json");
+        let (address, handle) = spawn_scripted_server(vec![
+            ScriptedExchange::Respond(ingestion_run_response(
+                201, "Created", &plan, &input, 0, "open",
+            )),
+            // The first chunk submission commits, but its answer never arrives.
+            ScriptedExchange::Drop,
+            ScriptedExchange::Respond(ingestion_run_response(200, "OK", &plan, &input, 0, "open")),
+            ScriptedExchange::Respond(ingestion_submission_response(
+                &plan, &input, 0, true, "open",
+            )),
+            ScriptedExchange::Respond(ingestion_submission_response(
+                &plan, &input, 1, false, "complete",
+            )),
+        ]);
+        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let drive = ingestion_drive(&plan, &inspected, &input, &client);
+
+        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
+        let mut started = load_or_start_ingestion(&drive, destinations).unwrap();
+        let outcome = submit_ingestion_chunks(&drive, &mut started, None).unwrap();
+        let requests = handle.join().unwrap();
+
+        assert_eq!(requests.len(), 5);
+        // The replay sends byte-identical chunk bytes, not a new chunk.
+        assert_eq!(requests[1], requests[3]);
+        assert!(outcome.complete);
+        assert_eq!(outcome.committed_items, 3);
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_service_unavailable_chunk_answer_recovers_from_the_run_state() {
+        let input = import_input();
+        let (plan, inspected) = import_plan_and_inspected(&input);
+        let directory = test_directory("ingestion-unavailable-answer");
+        let checkpoint_path = directory.join("import.checkpoint.json");
+        // A chunk can commit and still answer 503, the same ambiguity a
+        // dropped connection leaves, so the recovery path re-reads the run
+        // instead of exiting on the refusal.
+        let unavailable = {
+            let body = serde_json::to_vec(&json!({
+                "type": "https://id.registrystack.org/problems/registry-breg/service/unavailable",
+                "title": "Service Unavailable",
+                "status": 503,
+                "detail": "The Registry mutation service is unavailable.",
+                "code": "service.unavailable",
+                "traceId": INGESTION_TRACE_ID
+            }))
+            .unwrap();
+            let head = format!(
+                "HTTP/1.1 503 Service Unavailable\r\nContent-Type: \
+                 application/problem+json\r\nCache-Control: no-store\r\nVary: \
+                 authorization, accept\r\ntraceparent: \
+                 00-{INGESTION_TRACE_ID}-{INGESTION_SPAN_ID}-01\r\nConnection: \
+                 close\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            let mut response = head.into_bytes();
+            response.extend_from_slice(&body);
+            response
+        };
+        let (address, handle) = spawn_scripted_server(vec![
+            ScriptedExchange::Respond(ingestion_run_response(
+                201, "Created", &plan, &input, 0, "open",
+            )),
+            ScriptedExchange::Respond(unavailable),
+            ScriptedExchange::Respond(ingestion_run_response(200, "OK", &plan, &input, 0, "open")),
+            ScriptedExchange::Respond(ingestion_submission_response(
+                &plan, &input, 0, true, "open",
+            )),
+            ScriptedExchange::Respond(ingestion_submission_response(
+                &plan, &input, 1, false, "complete",
+            )),
+        ]);
+        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let drive = ingestion_drive(&plan, &inspected, &input, &client);
+
+        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
+        let mut started = load_or_start_ingestion(&drive, destinations).unwrap();
+        let outcome = submit_ingestion_chunks(&drive, &mut started, None).unwrap();
+        let requests = handle.join().unwrap();
+
+        assert_eq!(requests.len(), 5);
+        // The refused answer sends the exact chunk bytes again, not a new chunk.
+        assert_eq!(requests[1], requests[3]);
+        assert!(outcome.complete);
+        assert_eq!(outcome.committed_items, 3);
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_committed_chunk_whose_answer_was_lost_is_adopted_without_a_replay() {
+        let input = import_input();
+        let (plan, inspected) = import_plan_and_inspected(&input);
+        let directory = test_directory("ingestion-committed-silently");
+        let checkpoint_path = directory.join("import.checkpoint.json");
+        let (address, handle) = spawn_scripted_server(vec![
+            ScriptedExchange::Respond(ingestion_run_response(
+                201, "Created", &plan, &input, 0, "open",
+            )),
+            // The chunk commits and the connection drops: the run has already
+            // moved past it, so the rerun adopts the boundary instead of
+            // replaying the chunk.
+            ScriptedExchange::Drop,
+            ScriptedExchange::Respond(ingestion_run_response(200, "OK", &plan, &input, 1, "open")),
+        ]);
+        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let drive = ingestion_drive(&plan, &inspected, &input, &client);
+
+        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
+        let mut started = load_or_start_ingestion(&drive, destinations).unwrap();
+        let outcome = submit_ingestion_chunks(&drive, &mut started, Some(1)).unwrap();
+        let requests = handle.join().unwrap();
+
+        // One creation, one lost submission, one run read: chunk 0 was sent
+        // exactly once and chunk 1 is still due.
+        assert_eq!(requests.len(), 3);
+        assert!(!outcome.complete);
+        assert_eq!(outcome.completed_chunk_count, 1);
+        assert_eq!(outcome.committed_items, 2);
+        assert_eq!(started.checkpoint.completed_chunk_count(), 1);
+        assert_eq!(
+            fs::read(&checkpoint_path).unwrap(),
+            started.checkpoint.canonical_json().unwrap()
+        );
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_v1_sidecar_is_refused_without_a_request_and_without_rendering_values() {
+        let input = import_input();
+        let (plan, inspected) = import_plan_and_inspected(&input);
+        let directory = test_directory("ingestion-v1-sidecar");
+        let checkpoint_path = directory.join("import.checkpoint.json");
+        let state_path = import_state_path(&checkpoint_path);
+        let legacy = json!({
+            "apiVersion": DATA_STATE_API_VERSION_V1,
+            "kind": IMPORT_STATE_KIND,
+            "packageRevision": PACKAGE,
+            "schemaFingerprint": SCHEMA,
+            "entityId": ENTITY,
+            "operation": "create",
+            "profileId": PROFILE,
+            "inputDigest": plan.input_digest(),
+            "importId": "018f06d6-0248-4c7f-8a7e-df9dfbd83d2c",
+            "unknownCredential": "SECRET-CANARY",
+        });
+        let legacy_bytes = canonicalize_json(&legacy).unwrap();
+        fs::write(&state_path, &legacy_bytes).unwrap();
+        let (address, handle) = spawn_scripted_server(Vec::new());
+        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let drive = ingestion_drive(&plan, &inspected, &input, &client);
+
+        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
+        let error = match load_or_start_ingestion(&drive, destinations) {
+            Err(error) => error,
+            Ok(_) => panic!("a v1 sidecar is refused rather than resumed"),
+        };
+        let requests = handle.join().unwrap();
+
+        assert!(matches!(error, DataLifecycleError::LegacyImportCheckpoint));
+        let rendered = format!("{error:?}");
+        assert!(!rendered.contains("SECRET-CANARY"));
+        assert!(!rendered.contains(PACKAGE));
+        // The refusal happens before any network use and before any binding
+        // is read, and the sidecar is left untouched.
+        assert!(requests.is_empty());
+        assert_eq!(fs::read(&state_path).unwrap(), legacy_bytes);
+        assert!(!checkpoint_path.exists());
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_blocked_run_and_a_cancelled_run_stop_the_import_with_distinct_errors() {
+        let input = import_input();
+        let (plan, inspected) = import_plan_and_inspected(&input);
+        let directory = test_directory("ingestion-terminal-states");
+        let checkpoint_path = directory.join("import.checkpoint.json");
+
+        for (run_status, blocked) in [("blocked", true), ("cancelled", false)] {
+            staged_import(&plan, &inspected, &checkpoint_path, None);
+            let (address, handle) = spawn_scripted_server(vec![ScriptedExchange::Respond(
+                ingestion_run_response(200, "OK", &plan, &input, 0, run_status),
+            )]);
+            let base = parse_breg_url(&format!("http://{address}")).unwrap();
+            let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+            let drive = ingestion_drive(&plan, &inspected, &input, &client);
+
+            let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
+            let mut started = load_or_start_ingestion(&drive, destinations).unwrap();
+            let error = submit_ingestion_chunks(&drive, &mut started, None).unwrap_err();
+            let requests = handle.join().unwrap();
+
+            // The run is still inspectable: nothing but the read reached the
+            // server, and no chunk was sent to a run that refuses it.
+            assert_eq!(requests.len(), 1);
+            let surfaced = if blocked {
+                matches!(error, DataLifecycleError::ImportRunBlocked)
+            } else {
+                matches!(error, DataLifecycleError::ImportRunCancelled)
+            };
+            assert!(surfaced, "{run_status} surfaces as its own error");
+            fs::remove_file(import_state_path(&checkpoint_path)).unwrap();
+            fs::remove_file(&checkpoint_path).unwrap();
+        }
+
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[cfg(unix)]
@@ -1544,13 +2715,28 @@ mod tests {
 
         #[test]
         fn an_import_run_writes_every_checkpoint_in_the_tree_it_resolved() {
-            let (plan, inspected) = import_plan_and_inspected();
+            let input = import_input();
+            let (plan, inspected) = import_plan_and_inspected(&input);
             let tree = race_tree();
             let checkpoint_path = tree.named("import.checkpoint.json");
 
+            let (address, handle) = spawn_scripted_server(vec![
+                ScriptedExchange::Respond(ingestion_run_response(
+                    201, "Created", &plan, &input, 0, "open",
+                )),
+                ScriptedExchange::Respond(ingestion_submission_response(
+                    &plan, &input, 0, false, "open",
+                )),
+                ScriptedExchange::Respond(ingestion_submission_response(
+                    &plan, &input, 1, false, "complete",
+                )),
+            ]);
+            let base = parse_breg_url(&format!("http://{address}")).unwrap();
+            let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+            let drive = ingestion_drive(&plan, &inspected, &input, &client);
+
             let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
-            let (mut checkpoint, import_id) =
-                load_or_start_import(&plan, &inspected, &destinations).unwrap();
+            let mut started = load_or_start_ingestion(&drive, destinations).unwrap();
 
             // The ancestor the run resolved is renamed away and a different
             // directory takes its place, so the operator pathname reaches the
@@ -1563,51 +2749,15 @@ mod tests {
             fs::rename(tree.root().join("attacker"), tree.root().join("genuine")).unwrap();
             let substitute = tree.root().join("genuine/inner");
 
-            run_import_chunks(
-                &plan,
-                &mut checkpoint,
-                ImportExecutionBinding {
-                    package_revision: &inspected.package_revision,
-                    schema_fingerprint: &inspected.schema_fingerprint,
-                    import_id: &import_id,
-                },
-                None,
-                |checkpoint| publish_import_checkpoint(&destinations.checkpoint, checkpoint),
-                |request| async move {
-                    let body = parse_json_strict(request.body()).unwrap();
-                    let results = body["items"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .map(|item| {
-                            json!({
-                                "operation": item["operation"],
-                                "id": "018f06d6-0248-4c7f-8a7e-df9dfbd83d2c",
-                                "revision": 1,
-                                "etag": "\"breg-revision\"",
-                                "data": item["data"]
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    let body = canonicalize_json(&json!({
-                        "results": results,
-                        "snapshot": "breg1_00000000-0000-4000-8000-000000000001"
-                    }))
-                    .unwrap();
-                    Ok::<_, ()>(
-                        DataHttpResponse::new(200, Some("application/json".to_owned()), body)
-                            .unwrap(),
-                    )
-                },
-            )
-            .unwrap();
+            submit_ingestion_chunks(&drive, &mut started, None).unwrap();
+            handle.join().unwrap();
 
             // The advanced checkpoint stays beside the state file that binds
             // it, in the tree the run resolved.
-            assert!(checkpoint.is_complete());
+            assert!(started.checkpoint.is_complete());
             assert_eq!(
                 fs::read(tree.moved("import.checkpoint.json")).unwrap(),
-                checkpoint.canonical_json().unwrap()
+                started.checkpoint.canonical_json().unwrap()
             );
             assert!(tree.moved("import.checkpoint.json.state").exists());
 
@@ -2126,129 +3276,154 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn first_import_creation_does_not_clobber_staged_state_or_checkpoint_collisions() {
-        let (plan, inspected) = import_plan_and_inspected();
-        let directory = test_directory("initial-collisions");
+    fn a_first_import_does_not_clobber_staged_state_or_checkpoint_collisions() {
+        let input = import_input();
+        let (plan, inspected) = import_plan_and_inspected(&input);
+        let directory = test_directory("ingestion-collisions");
         let checkpoint_path = directory.join("import.checkpoint.json");
         let state_path = import_state_path(&checkpoint_path);
-        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
 
         fs::write(&state_path, b"existing-state").unwrap();
+        let (address, handle) = spawn_scripted_server(vec![ScriptedExchange::Respond(
+            ingestion_run_response(201, "Created", &plan, &input, 0, "open"),
+        )]);
+        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let drive = ingestion_drive(&plan, &inspected, &input, &client);
         assert!(matches!(
-            start_new_import(&plan, &inspected, &destinations),
+            start_new_ingestion(
+                &drive,
+                ImportDestinations::resolve(&checkpoint_path).unwrap()
+            ),
             Err(DataLifecycleError::Checkpoint)
         ));
+        // The run was created, but no staged file was written over.
+        assert_eq!(handle.join().unwrap().len(), 1);
         assert_eq!(fs::read(&state_path).unwrap(), b"existing-state");
         assert!(!checkpoint_path.try_exists().unwrap());
         fs::remove_file(&state_path).unwrap();
 
         fs::write(&checkpoint_path, b"existing-checkpoint").unwrap();
+        let (address, handle) = spawn_scripted_server(vec![ScriptedExchange::Respond(
+            ingestion_run_response(201, "Created", &plan, &input, 0, "open"),
+        )]);
+        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let drive = ingestion_drive(&plan, &inspected, &input, &client);
         assert!(matches!(
-            start_new_import(&plan, &inspected, &destinations),
-            Err(DataLifecycleError::Checkpoint)
-        ));
-        assert_eq!(fs::read(&checkpoint_path).unwrap(), b"existing-checkpoint");
-        read_import_state(&destinations.state, &plan, &inspected).unwrap();
-
-        fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn first_import_loser_keeps_state_after_concurrent_state_only_repair() {
-        let (plan, inspected) = import_plan_and_inspected();
-        let directory = test_directory("state-repair-race");
-        let checkpoint_path = directory.join("import.checkpoint.json");
-        let state_path = import_state_path(&checkpoint_path);
-        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
-        let checkpoint = DataImportCheckpoint::start(
-            &plan,
-            &inspected.package_revision,
-            &inspected.schema_fingerprint,
-        )
-        .unwrap();
-        let state = import_state_for_checkpoint(&plan, &inspected, &checkpoint);
-        let state_bytes = canonical_import_state(&state).unwrap();
-        let checkpoint_bytes = checkpoint.canonical_json().unwrap();
-
-        write_atomic_create_new_entry(&destinations.state, &state_bytes).unwrap();
-
-        let (repaired, repaired_import_id) =
-            recover_state_only_import(&plan, &inspected, &destinations).unwrap();
-
-        assert_eq!(repaired_import_id, checkpoint.import_id());
-        assert_eq!(repaired.import_id(), checkpoint.import_id());
-
-        assert!(matches!(
-            write_atomic_create_new_entry(&destinations.checkpoint, &checkpoint_bytes),
-            Err(DataLifecycleError::Output)
-        ));
-        assert_eq!(fs::read(&state_path).unwrap(), state_bytes);
-
-        let (loaded, loaded_import_id) =
-            load_existing_import(&plan, &inspected, &destinations).unwrap();
-        assert_eq!(loaded_import_id, checkpoint.import_id());
-        assert_eq!(loaded.import_id(), checkpoint.import_id());
-
-        fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn state_only_half_start_is_repaired_but_checkpoint_only_is_not_authority() {
-        let (plan, inspected) = import_plan_and_inspected();
-        let directory = test_directory("partial-start");
-        let checkpoint_path = directory.join("import.checkpoint.json");
-        let state_path = import_state_path(&checkpoint_path);
-        let checkpoint = DataImportCheckpoint::start(
-            &plan,
-            &inspected.package_revision,
-            &inspected.schema_fingerprint,
-        )
-        .unwrap();
-        let state = import_state_for_checkpoint(&plan, &inspected, &checkpoint);
-        let state_bytes = canonical_import_state(&state).unwrap();
-        fs::write(&state_path, &state_bytes).unwrap();
-
-        let (repaired, import_id) = load_or_start_import(
-            &plan,
-            &inspected,
-            &ImportDestinations::resolve(&checkpoint_path).unwrap(),
-        )
-        .unwrap();
-
-        assert_eq!(import_id, checkpoint.import_id());
-        assert_eq!(repaired.import_id(), checkpoint.import_id());
-        assert_eq!(fs::read(&state_path).unwrap(), state_bytes);
-        let repaired_bytes = fs::read(&checkpoint_path).unwrap();
-        let reloaded = DataImportCheckpoint::from_json(
-            &repaired_bytes,
-            &plan,
-            &inspected.package_revision,
-            &inspected.schema_fingerprint,
-            checkpoint.import_id(),
-        )
-        .unwrap();
-        assert_eq!(reloaded.import_id(), checkpoint.import_id());
-        fs::remove_dir_all(&directory).unwrap();
-
-        let directory = test_directory("checkpoint-only");
-        let checkpoint_path = directory.join("import.checkpoint.json");
-        let state_path = import_state_path(&checkpoint_path);
-        let checkpoint = DataImportCheckpoint::start(
-            &plan,
-            &inspected.package_revision,
-            &inspected.schema_fingerprint,
-        )
-        .unwrap();
-        fs::write(&checkpoint_path, checkpoint.canonical_json().unwrap()).unwrap();
-        assert!(matches!(
-            load_or_start_import(
-                &plan,
-                &inspected,
-                &ImportDestinations::resolve(&checkpoint_path).unwrap()
+            start_new_ingestion(
+                &drive,
+                ImportDestinations::resolve(&checkpoint_path).unwrap()
             ),
             Err(DataLifecycleError::Checkpoint)
         ));
+        handle.join().unwrap();
+        assert_eq!(fs::read(&checkpoint_path).unwrap(), b"existing-checkpoint");
+        // The sidecar the run published names the created run, so a rerun
+        // resumes it instead of orphaning it behind a fresh one.
+        let state = read_import_state(
+            &resolve_write_destination(&state_path).unwrap(),
+            &plan,
+            &inspected,
+        )
+        .unwrap();
+        assert_eq!(state.run_id, RUN_ID);
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_rerun_whose_checkpoint_file_is_missing_repairs_it_from_the_run() {
+        let input = import_input();
+        let (plan, inspected) = import_plan_and_inspected(&input);
+        let directory = test_directory("ingestion-repair");
+        let checkpoint_path = directory.join("import.checkpoint.json");
+        // The sidecar survived a crash before the checkpoint published. The
+        // run holds the committed boundary, so the rerun rebuilds the file
+        // from the server instead of restarting the input.
+        staged_import(&plan, &inspected, &checkpoint_path, None);
+        let (address, handle) = spawn_scripted_server(vec![
+            ScriptedExchange::Respond(ingestion_run_response(200, "OK", &plan, &input, 1, "open")),
+            ScriptedExchange::Respond(ingestion_submission_response(
+                &plan, &input, 1, false, "complete",
+            )),
+        ]);
+        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let drive = ingestion_drive(&plan, &inspected, &input, &client);
+
+        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
+        let mut started = load_or_start_ingestion(&drive, destinations).unwrap();
+        let outcome = submit_ingestion_chunks(&drive, &mut started, None).unwrap();
+        handle.join().unwrap();
+
+        assert!(outcome.complete);
+        assert_eq!(outcome.committed_items, 3);
+        assert!(started.checkpoint.is_complete());
+        assert_eq!(
+            fs::read(&checkpoint_path).unwrap(),
+            started.checkpoint.canonical_json().unwrap()
+        );
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_checkpoint_without_its_sidecar_is_refused_and_never_outranks_the_run() {
+        let input = import_input();
+        let (plan, inspected) = import_plan_and_inspected(&input);
+
+        // A checkpoint without its sidecar names no run to resume, so it is
+        // refused before any request is sent.
+        let directory = test_directory("ingestion-checkpoint-only");
+        let checkpoint_path = directory.join("import.checkpoint.json");
+        let state_path = import_state_path(&checkpoint_path);
+        let checkpoint = DataImportCheckpoint::start(&plan, PACKAGE, SCHEMA).unwrap();
+        fs::write(&checkpoint_path, checkpoint.canonical_json().unwrap()).unwrap();
+        let (address, handle) = spawn_scripted_server(Vec::new());
+        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let drive = ingestion_drive(&plan, &inspected, &input, &client);
+        assert!(matches!(
+            load_or_start_ingestion(
+                &drive,
+                ImportDestinations::resolve(&checkpoint_path).unwrap()
+            ),
+            Err(DataLifecycleError::Checkpoint)
+        ));
+        assert!(handle.join().unwrap().is_empty());
         assert!(!state_path.try_exists().unwrap());
+        fs::remove_dir_all(directory).unwrap();
+
+        // A checkpoint that claims more chunks than the run committed is not
+        // authority over it: the boundary is rebuilt from the run and the
+        // chunk the run still expects is submitted.
+        let directory = test_directory("ingestion-local-ahead");
+        let checkpoint_path = directory.join("import.checkpoint.json");
+        staged_import(&plan, &inspected, &checkpoint_path, Some(2));
+        let (address, handle) = spawn_scripted_server(vec![
+            ScriptedExchange::Respond(ingestion_run_response(200, "OK", &plan, &input, 1, "open")),
+            ScriptedExchange::Respond(ingestion_submission_response(
+                &plan, &input, 1, false, "complete",
+            )),
+        ]);
+        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let drive = ingestion_drive(&plan, &inspected, &input, &client);
+
+        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
+        let mut started = load_or_start_ingestion(&drive, destinations).unwrap();
+        let outcome = submit_ingestion_chunks(&drive, &mut started, None).unwrap();
+        let requests = handle.join().unwrap();
+
+        assert_eq!(requests.len(), 2);
+        let (_, _, submission) = request_parts(&requests[1]);
+        assert_eq!(submission["chunkIndex"], 1);
+        assert!(outcome.complete);
+        assert_eq!(
+            fs::read(&checkpoint_path).unwrap(),
+            started.checkpoint.canonical_json().unwrap()
+        );
 
         fs::remove_dir_all(directory).unwrap();
     }
@@ -2263,8 +3438,7 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             attempts_for_server.fetch_add(1, AtomicOrdering::SeqCst);
             let request = read_http_request(&mut stream);
-            assert!(String::from_utf8_lossy(&request)
-                .starts_with("POST /v1/records/records:batch?accessProfile=operator "));
+            assert!(String::from_utf8_lossy(&request).starts_with("POST /v1/records/records "));
             stream
                 .write_all(
                     b"HTTP/1.1 302 Found\r\nLocation: /redirect-target\r\nContent-Length: 0\r\n\r\n",
@@ -2290,38 +3464,27 @@ mod tests {
             }
         });
 
-        let input = br#"{"operation":"create","data":{"code":"AA"}}
-"#;
-        let plan = DataImportPlan::from_jsonl(
-            &compiled(),
-            ENTITY,
-            DataImportOperation::Create,
-            PROFILE,
-            input,
-        )
-        .unwrap();
-        let mut checkpoint = DataImportCheckpoint::start(&plan, PACKAGE, SCHEMA).unwrap();
-        let import_id = checkpoint.import_id().to_owned();
-        let runtime = test_runtime();
         let client = build_data_http_client_with_timeouts(
             StdDuration::from_secs(2),
             StdDuration::from_secs(1),
         )
         .unwrap();
-        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let runtime = test_runtime();
+        let response = runtime
+            .block_on(async {
+                client
+                    .request(Method::POST, format!("http://{address}/v1/records/records"))
+                    .header(AUTHORIZATION, "Bearer TEST-TOKEN")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body("{}")
+                    .send()
+                    .await
+            })
+            .unwrap();
 
-        let error = runtime
-            .block_on(execute_import_chunk(
-                &plan,
-                &mut checkpoint,
-                PACKAGE,
-                SCHEMA,
-                &import_id,
-                |request| dispatch_http(&client, &base, "TEST-TOKEN", request),
-            ))
-            .unwrap_err();
-
-        assert_eq!(error, DataError::OperationRefused);
+        // The redirect answer is returned, never followed: the exchange the
+        // operator's token reached is the one that was answered.
+        assert_eq!(response.status().as_u16(), 302);
         handle.join().unwrap();
         assert_eq!(attempts.load(AtomicOrdering::SeqCst), 1);
     }
@@ -2479,79 +3642,41 @@ mod tests {
     }
 
     #[test]
-    fn max_chunks_counts_committed_chunks_not_committed_items() {
-        let input = br#"{"operation":"create","data":{"code":"AA"}}
-{"operation":"create","data":{"code":"BB"}}
-{"operation":"create","data":{"code":"CC"}}
-"#;
-        let plan = DataImportPlan::from_jsonl(
-            &compiled(),
-            ENTITY,
-            DataImportOperation::Create,
-            PROFILE,
-            input,
-        )
-        .unwrap();
-        assert_eq!(plan.chunks().len(), 2);
-        let mut checkpoint = DataImportCheckpoint::start(&plan, PACKAGE, SCHEMA).unwrap();
-        let import_id = checkpoint.import_id().to_owned();
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let captured_request = Arc::clone(&captured);
+    fn max_chunks_bounds_one_operator_run_by_chunks_not_items() {
+        let input = import_input();
+        let (plan, inspected) = import_plan_and_inspected(&input);
+        let directory = test_directory("ingestion-budget");
+        let checkpoint_path = directory.join("import.checkpoint.json");
+        let (address, handle) = spawn_scripted_server(vec![
+            ScriptedExchange::Respond(ingestion_run_response(
+                201, "Created", &plan, &input, 0, "open",
+            )),
+            ScriptedExchange::Respond(ingestion_submission_response(
+                &plan, &input, 0, false, "open",
+            )),
+        ]);
+        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let drive = ingestion_drive(&plan, &inspected, &input, &client);
 
-        let (committed_chunks, committed_items) = run_import_chunks(
-            &plan,
-            &mut checkpoint,
-            ImportExecutionBinding {
-                package_revision: PACKAGE,
-                schema_fingerprint: SCHEMA,
-                import_id: &import_id,
-            },
-            Some(2),
-            |_| Ok(()),
-            move |request| {
-                let captured_request = Arc::clone(&captured_request);
-                async move {
-                    let body = parse_json_strict(request.body()).unwrap();
-                    let submitted = body["items"].as_array().unwrap();
-                    captured_request.lock().unwrap().push((
-                        request.path_and_query().to_owned(),
-                        request.idempotency_key().map(str::to_owned),
-                        submitted.len(),
-                    ));
-                    let results = submitted
-                        .iter()
-                        .map(|item| {
-                            json!({
-                                "operation": item["operation"],
-                                "id": "018f06d6-0248-4c7f-8a7e-df9dfbd83d2c",
-                                "revision": 1,
-                                "etag": "\"breg-revision\"",
-                                "data": item["data"]
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    let body = canonicalize_json(&json!({
-                        "results": results,
-                        "snapshot": "breg1_00000000-0000-4000-8000-000000000001"
-                    }))
-                    .unwrap();
-                    DataHttpResponse::new(200, Some("application/json".to_owned()), body)
-                }
-            },
-        )
-        .unwrap();
+        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
+        let mut started = load_or_start_ingestion(&drive, destinations).unwrap();
+        let outcome = submit_ingestion_chunks(&drive, &mut started, Some(1)).unwrap();
+        let requests = handle.join().unwrap();
 
-        assert_eq!(committed_chunks, 2);
-        assert_eq!(committed_items, 3);
-        assert!(checkpoint.is_complete());
-        let captured = captured.lock().unwrap();
-        assert_eq!(captured.len(), 2);
-        assert_eq!(captured[0].2, 2);
-        assert_eq!(captured[1].2, 1);
-        assert_ne!(captured[0].1, captured[1].1);
-        assert!(captured
-            .iter()
-            .all(|(path, _, _)| path == "/v1/records/records:batch?accessProfile=operator"));
+        // One bounded operator run commits one chunk of two items and stops:
+        // the budget counts chunks, so the remaining item stays due.
+        assert_eq!(requests.len(), 2);
+        assert!(!outcome.complete);
+        assert_eq!(outcome.completed_chunk_count, 1);
+        assert_eq!(outcome.committed_items, 2);
+        assert_eq!(started.checkpoint.completed_chunk_count(), 1);
+        assert_eq!(
+            fs::read(&checkpoint_path).unwrap(),
+            started.checkpoint.canonical_json().unwrap()
+        );
+
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -2612,6 +3737,7 @@ mod tests {
             profile_id: PROFILE.to_owned(),
             input_digest: plan.input_digest().to_owned(),
             import_id: "018f06d6-0248-4c7f-8a7e-df9dfbd83d2c".to_owned(),
+            run_id: RUN_ID.to_owned(),
         };
         let mut value = serde_json::to_value(&state).unwrap();
         value["unknownCredential"] = json!("SECRET-CANARY");

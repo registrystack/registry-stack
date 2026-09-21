@@ -222,6 +222,8 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['actionTargetConditionsJson'], ['invokeActionJson'], ['batchRecordsJson'], ['tombstoneRecordJson'],
   ['executeRecoveredCreateJson'], ['executeRecoveredLifecycleActionJson'],
   ['uploadAttachmentJson'], ['deleteAttachmentJson'],
+  ['createIngestionRun', [1], [1]], ['listIngestionRuns', [1]],
+  ['readIngestionRun'], ['submitIngestionChunk'], ['cancelIngestionRun'],
 ]) wrapAsync(method, jsonIndexes, requiredIndexes);
 
 for (const [method, jsonIndexes, requiredIndexes] of [
@@ -362,6 +364,42 @@ for (const name of [
   };
 }
 
+function encodeIngestionChunk(chunkIndex, items, prefixDigest) {
+  try {
+    if (!Number.isSafeInteger(chunkIndex)) throw inputError('invalid_request');
+    const sanitized = sanitizeArguments(
+      [chunkIndex, items, prefixDigest], new Set([1]), new Set([1]),
+    );
+    return native.encodeIngestionChunk(...sanitized);
+  } catch (error) {
+    throw normalize(error, 'invalid_request');
+  }
+}
+
+// napi truncates a fractional JavaScript number into the i64 chunk index, so
+// the exact chunk-bound protocol checks integrality before it reaches Rust.
+const ingestionChunkReceipt = native.BaseRegistryClient.prototype.ingestionChunkReceipt;
+native.BaseRegistryClient.prototype.ingestionChunkReceipt = function (...args) {
+  try {
+    if (!Number.isSafeInteger(args[2])) throw inputError('invalid_request');
+    return ingestionChunkReceipt.apply(this, args).catch((error) => { throw normalize(error); });
+  } catch (error) {
+    throw normalize(error, 'invalid_request');
+  }
+};
+
+const ingestionPrefixDigestUpdate = native.BRegIngestionPrefixDigest.prototype.update;
+native.BRegIngestionPrefixDigest.prototype.update = function (data) {
+  try {
+    if (!Buffer.isBuffer(data) || isSharedArrayBuffer(data.buffer)) {
+      throw inputError('invalid_request');
+    }
+    return ingestionPrefixDigestUpdate.call(this, data);
+  } catch (error) {
+    throw normalize(error, 'invalid_request');
+  }
+};
+
 class BaseRegistryClient extends native.BaseRegistryClient {
   constructor(config) {
     try {
@@ -411,4 +449,7 @@ module.exports = {
   BRegPreparedLifecycle,
   BRegRecoveredCreate: native.BRegRecoveredCreate,
   BRegRecoveredLifecycle: native.BRegRecoveredLifecycle,
+  BRegIngestionChunk: native.BRegIngestionChunk,
+  BRegIngestionPrefixDigest: native.BRegIngestionPrefixDigest,
+  encodeIngestionChunk,
 };

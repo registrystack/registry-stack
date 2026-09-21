@@ -99,3 +99,11 @@ scenarios:
     fixture: acceptance/request-attachments
     doneWhen: "An authored request attachment project checks, packages, activates, uploads a draft file, refuses missing required evidence and unauthorized reads, submits, downloads the frozen proposal for review, applies, and erases scoped retained content; configured external verification quarantines pending and rejected content."
     evidence: [{path: products/breg/scripts/test-request-attachments.py, name: test_request_attachment_journey}, {path: crates/registry-breg/tests/compiler_request_attachments.rs, name: generated_attachment_contract_exposes_binary_routes_and_read_only_metadata}, {path: crates/registry-breg/tests/postgres_change_requests.rs, name: real_s3_http_attachments_preserve_proposals_and_complete_operator_erasure}]
+  - id: BREG-J21
+    state: enforced
+    doneWhen: "A caller creates a durable ingestion run, commits more than one chunk, restarts its process and resumes from API state without resending a committed chunk, recovers from a fault after a chunk transaction commits but before the response arrives without duplicate mutation, has a changed chunk index digest prefix digest input binding entity operation profile package revision or schema fingerprint refused, cancels with counts and audit preserved, finds a package-changed run blocked and inspectable, and recovers a receipt after a lost response."
+    evidence:
+      - path: crates/registry-breg/tests/postgres_ingestion_runs.rs
+        name: ingestion_run_journey_commits_resumes_and_replays_without_duplicates
+      - path: crates/registry-breg/tests/postgres_ingestion_runs.rs
+        name: lost_chunk_response_replays_original_receipt_without_duplicate_mutation

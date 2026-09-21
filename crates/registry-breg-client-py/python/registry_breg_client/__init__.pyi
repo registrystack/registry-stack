@@ -69,6 +69,32 @@ class BRegImmediateActionBinding: ...
 class BRegTombstoneBinding: ...
 class BRegBatchBinding: ...
 
+IngestionRunStatus = Literal["open", "complete", "cancelled", "blocked"]
+
+class BRegIngestionChunk:
+    @property
+    def chunk_index(self) -> int: ...
+    @property
+    def item_count(self) -> int: ...
+    @property
+    def digest(self) -> str: ...
+    @property
+    def prefix_digest(self) -> str: ...
+
+class BRegIngestionPrefixDigest:
+    """Absorbs raw source bytes; the empty-input digest is
+    e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855."""
+
+    def __init__(self) -> None: ...
+    def update(self, data: bytes) -> None: ...
+    def digest(self) -> str: ...
+
+def encode_ingestion_chunk(
+    chunk_index: int,
+    items: Sequence[dict[str, JsonValue]],
+    prefix_digest: str,
+) -> BRegIngestionChunk: ...
+
 class BRegActionTargetConditions:
     @property
     def document(self) -> dict[str, JsonValue]: ...
@@ -498,6 +524,47 @@ class BaseRegistryClient:
         idempotency_key: str,
         *,
         change_context: dict[str, JsonValue] | None = None,
+    ) -> dict[str, Any]: ...
+    def create_ingestion_run(
+        self,
+        entity_route: str,
+        request: dict[str, JsonValue],
+    ) -> dict[str, Any]: ...
+    def list_ingestion_runs(
+        self,
+        entity_route: str,
+        *,
+        limit: int | None = None,
+        after: str | None = None,
+        status: IngestionRunStatus | None = None,
+        input_digest: str | None = None,
+        access_profile: str | None = None,
+    ) -> dict[str, Any]: ...
+    def read_ingestion_run(
+        self,
+        entity_route: str,
+        run_id: str,
+        access_profile: str | None = None,
+    ) -> dict[str, Any]: ...
+    def submit_ingestion_chunk(
+        self,
+        entity_route: str,
+        run_id: str,
+        chunk: BRegIngestionChunk,
+        profile_id: str,
+    ) -> dict[str, Any]: ...
+    def cancel_ingestion_run(
+        self,
+        entity_route: str,
+        run_id: str,
+        access_profile: str | None = None,
+    ) -> dict[str, Any]: ...
+    def ingestion_chunk_receipt(
+        self,
+        entity_route: str,
+        run_id: str,
+        chunk_index: int,
+        profile_id: str,
     ) -> dict[str, Any]: ...
     def lifecycle_actions(
         self,

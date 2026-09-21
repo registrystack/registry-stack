@@ -710,6 +710,85 @@ pub(crate) fn open_member_map(
     Ok(())
 }
 
+/// The failure of opening one batch answer's sealed result members at a serve
+/// edge. Value-free by construction: neither variant carries member material.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BatchOpenError {
+    /// Key state is absent while a result carries members that need opening.
+    KeyStateUnavailable,
+    /// A result lacks the record id its sealed members are bound to, or an
+    /// open failed, so the answer cannot serve opened.
+    OpenFailed,
+}
+
+/// Open the sealed members of one batch answer's results at a serve edge.
+///
+/// Fresh batch bodies, retained ingestion receipts, and their replays all
+/// name each record by `id` beside a `data` member map keyed by API name;
+/// this is the one per-record opening for every such results array. Entities
+/// without encrypted fields and results without a `data` map never touch key
+/// state, which resolves lazily on the first map that needs opening. Returns
+/// whether any map was opened, so a caller can serve unopened bytes through
+/// exactly as stored.
+///
+/// `retirement_possible` marks a release whose stored answer was produced
+/// under a package the database no longer holds active, the one situation a
+/// surviving sealed envelope can be retired ciphertext rather than caller
+/// data. Only such a release refuses when a member the entity would not open
+/// still parses as a sealed envelope; under an unchanged binding that value
+/// is plaintext the caller wrote and serves exactly as stored.
+pub(crate) fn open_batch_result_members(
+    entity: &crate::model::CompiledEntity,
+    results: &mut [Value],
+    service: Option<&FieldEncryptionService>,
+    retirement_possible: bool,
+) -> Result<bool, BatchOpenError> {
+    let entity_opens_members = entity
+        .fields
+        .values()
+        .any(|field| field.encryption.is_some());
+    let mut opened = false;
+    for item in results {
+        if entity_opens_members {
+            let record_id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|identifier| !identifier.is_empty())
+                .ok_or(BatchOpenError::OpenFailed)?
+                .to_owned();
+            if let Some(data) = item.get_mut("data").and_then(Value::as_object_mut) {
+                let service = service.ok_or(BatchOpenError::KeyStateUnavailable)?;
+                open_member_map(entity, &record_id, data, service, true)
+                    .map_err(|_| BatchOpenError::OpenFailed)?;
+                opened = true;
+            }
+        }
+        if retirement_possible {
+            if let Some(data) = item.get_mut("data").and_then(Value::as_object_mut) {
+                // A member the entity opens itself now holds its opened
+                // plaintext, so only the members the pass would leave
+                // untouched can decide between caller data and ciphertext a
+                // successor package retired: those fail the answer closed.
+                let survives = data.iter().any(|(key, member)| {
+                    !opens_member_key(entity, key) && parse_envelope_member(member).is_some()
+                });
+                if survives {
+                    return Err(BatchOpenError::OpenFailed);
+                }
+            }
+        }
+    }
+    Ok(opened)
+}
+
+/// Whether one API-named member is a field the entity opens itself.
+fn opens_member_key(entity: &crate::model::CompiledEntity, key: &str) -> bool {
+    entity
+        .stored_fields
+        .iter()
+        .any(|field| field.logical.encryption.is_some() && field.logical.api_name == key)
+}
+
 /// Default Transit request timeout, matching the attachment transports.
 const DEFAULT_TRANSIT_TIMEOUT_MILLISECONDS: u64 = 5_000;
 /// Upper bound on a configured Unix-socket path.

@@ -11,6 +11,7 @@ mod change_request_action_tests;
 mod change_request_read_tests;
 mod context;
 mod gis;
+mod ingestion;
 mod metadata;
 mod service;
 
@@ -197,6 +198,7 @@ fn route_set(service: Arc<HttpService>) -> Router {
 
     app.merge(attachments::routes(&service))
         .merge(gis::routes())
+        .merge(ingestion::routes(&service))
         .fallback(not_found)
         .method_not_allowed_fallback(not_found)
         .with_state(service)
@@ -332,6 +334,7 @@ async fn openapi(
     let has_request_actions = !action_input_schemas.is_empty();
     schemas.extend(action_input_schemas);
     actions::append_openapi(&visible_actions, &mut paths, &mut schemas);
+    ingestion::append_openapi(&service, &visible, &mut paths, &mut schemas);
     Json(json!({
         "openapi": "3.1.0",
         "info": {"title": service.registry.registry_id(), "version": service.registry.version()},
@@ -5071,6 +5074,7 @@ fn opened_held_body(
             }
         }
     };
+    let mut opened = false;
     if let Some(record) = root.get_mut("data").and_then(Value::as_object_mut) {
         // A single-record body names its record once, beside the domain data
         // its sealed members live in.
@@ -5090,27 +5094,28 @@ fn opened_held_body(
                 true,
             )
             .map_err(|_| ())?;
+            opened = true;
         }
     }
     if let Some(results) = root.get_mut("results").and_then(Value::as_array_mut) {
-        // A batch body names each record beside its item's domain data. The
-        // immediate-action body's results member is an object, not an array,
-        // and carries no domain data, so it never reaches this loop.
-        for item in results {
-            let record_id = item
-                .get("id")
-                .and_then(Value::as_str)
-                .filter(|identifier| !identifier.is_empty())
-                .ok_or(())?
-                .to_owned();
-            if let Some(data) = item.get_mut("data").and_then(Value::as_object_mut) {
-                let service = key_state()?;
-                crate::field_encryption::open_member_map(entity, &record_id, data, service, true)
-                    .map_err(|_| ())?;
-            }
-        }
+        // A batch body names each record beside its item's domain data, and
+        // the shared per-record opening serves it. The immediate-action
+        // body's results member is an object, not an array, and carries no
+        // domain data, so it never reaches the helper. An idempotency answer
+        // is stored under the package that produced it and the mutation
+        // boundary already verified the durable activation before this serve,
+        // so no package change can sit between the stored bytes and here:
+        // retirement is impossible and any envelope-shaped member is caller
+        // data, never ciphertext a successor retired.
+        opened |= crate::field_encryption::open_batch_result_members(
+            entity,
+            results,
+            field_encryption,
+            false,
+        )
+        .map_err(|_| ())?;
     }
-    if service.is_none() {
+    if !opened {
         // Nothing needed opening; the held bytes serve exactly as stored.
         return Ok(response.body().to_vec());
     }
@@ -5416,6 +5421,7 @@ fn mutation_problem(error: MutationError) -> Response {
             "idempotency.conflict",
             "The idempotency key is bound to another request.",
         ),
+        MutationError::IngestionRefusal(refusal) => ingestion::batch_refusal_problem(refusal),
         MutationError::Unavailable | MutationError::RetryableConflict => fixed_problem(
             StatusCode::SERVICE_UNAVAILABLE,
             "service.unavailable",

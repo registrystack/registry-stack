@@ -284,6 +284,16 @@ impl BRegBatchItem {
     }
 }
 
+impl BRegBatchOperation {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "create" => Some(Self::Create),
+            "patch" => Some(Self::Patch),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BRegBatchEnvelope<'a> {

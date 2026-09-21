@@ -118,6 +118,11 @@ pub enum BRegProblemCode {
     ActionRefused,
     AuthenticationRefused,
     IdempotencyConflict,
+    IngestionChunkMismatch,
+    IngestionProfileMismatch,
+    IngestionReceiptErased,
+    IngestionRunBlocked,
+    IngestionRunNotOpen,
     LookupUnresolved,
     MutationConflict,
     PreconditionFailed,
@@ -136,12 +141,17 @@ pub enum BRegProblemCode {
 }
 
 impl BRegProblemCode {
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 31] = [
         Self::ActionEvidenceFailed,
         Self::ActionHandlerFailed,
         Self::ActionRefused,
         Self::AuthenticationRefused,
         Self::IdempotencyConflict,
+        Self::IngestionChunkMismatch,
+        Self::IngestionProfileMismatch,
+        Self::IngestionReceiptErased,
+        Self::IngestionRunBlocked,
+        Self::IngestionRunNotOpen,
         Self::LookupUnresolved,
         Self::MutationConflict,
         Self::PreconditionFailed,
@@ -173,6 +183,11 @@ impl BRegProblemCode {
             Self::ActionRefused => "action.refused",
             Self::AuthenticationRefused => "authentication.refused",
             Self::IdempotencyConflict => "idempotency.conflict",
+            Self::IngestionChunkMismatch => "ingestion.chunk_mismatch",
+            Self::IngestionProfileMismatch => "ingestion.profile_mismatch",
+            Self::IngestionReceiptErased => "ingestion.receipt_erased",
+            Self::IngestionRunBlocked => "ingestion.run_blocked",
+            Self::IngestionRunNotOpen => "ingestion.run_not_open",
             Self::LookupUnresolved => "lookup.unresolved",
             Self::MutationConflict => "mutation.conflict",
             Self::PreconditionFailed => "precondition.failed",
@@ -202,7 +217,13 @@ impl BRegProblemCode {
             Self::ActionHandlerFailed => 500,
             Self::AuthenticationRefused => 401,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
-            Self::IdempotencyConflict | Self::MutationConflict => 409,
+            Self::IngestionProfileMismatch => 403,
+            Self::IdempotencyConflict
+            | Self::IngestionChunkMismatch
+            | Self::IngestionRunBlocked
+            | Self::IngestionRunNotOpen
+            | Self::MutationConflict => 409,
+            Self::IngestionReceiptErased => 410,
             Self::PreconditionFailed => 412,
             Self::UnsupportedMediaType => 415,
             Self::ActionRefused => 422,
@@ -219,8 +240,10 @@ impl BRegProblemCode {
         match self.status() {
             400 => "Bad Request",
             401 => "Unauthorized",
+            403 => "Forbidden",
             404 => "Not Found",
             409 => "Conflict",
+            410 => "Gone",
             412 => "Precondition Failed",
             415 => "Unsupported Media Type",
             422 => "Unprocessable Entity",
@@ -232,7 +255,11 @@ impl BRegProblemCode {
         }
     }
 
-    pub(crate) const fn detail(self) -> &'static str {
+    /// The sentence the service answers this code under. It is the catalogue's
+    /// own published sentence, so a caller can state what a matching problem
+    /// said without keeping a second copy of the catalogue.
+    #[must_use]
+    pub const fn detail(self) -> &'static str {
         match self {
             Self::ActionEvidenceFailed => "The declared Evidence dependency could not be accepted.",
             Self::ActionHandlerFailed => "The action handler could not produce an accepted result.",
@@ -241,6 +268,13 @@ impl BRegProblemCode {
             Self::ActionRefused => "The action was refused by a declared business rule.",
             Self::AuthenticationRefused => "The bearer credential is missing or refused.",
             Self::IdempotencyConflict => "The idempotency key is bound to another request.",
+            Self::IngestionChunkMismatch => "The chunk does not match the expected next chunk.",
+            Self::IngestionProfileMismatch => {
+                "The selected access profile does not match the run's bound profile."
+            }
+            Self::IngestionReceiptErased => "The stored receipt of the chunk was erased.",
+            Self::IngestionRunBlocked => "The active package no longer matches the run binding.",
+            Self::IngestionRunNotOpen => "The ingestion run is not open for this transition.",
             Self::LookupUnresolved => "The lookup did not resolve exactly one record.",
             Self::MutationConflict => "The mutation conflicts with current state.",
             Self::PreconditionFailed => "The mutation precondition failed.",
@@ -516,6 +550,51 @@ mod tests {
         assert!(BRegProblemCode::MutationConflict
             .accepts_detail(BRegProblemCode::MutationConflict.detail()));
         assert!(!BRegProblemCode::MutationConflict.accepts_detail("response-authored-canary"));
+    }
+
+    #[test]
+    fn ingestion_problem_codes_carry_their_wire_names_and_statuses() {
+        let expected: [(BRegProblemCode, &str, u16, &str); 5] = [
+            (
+                BRegProblemCode::IngestionProfileMismatch,
+                "ingestion.profile_mismatch",
+                403,
+                "Forbidden",
+            ),
+            (
+                BRegProblemCode::IngestionRunNotOpen,
+                "ingestion.run_not_open",
+                409,
+                "Conflict",
+            ),
+            (
+                BRegProblemCode::IngestionRunBlocked,
+                "ingestion.run_blocked",
+                409,
+                "Conflict",
+            ),
+            (
+                BRegProblemCode::IngestionChunkMismatch,
+                "ingestion.chunk_mismatch",
+                409,
+                "Conflict",
+            ),
+            (
+                BRegProblemCode::IngestionReceiptErased,
+                "ingestion.receipt_erased",
+                410,
+                "Gone",
+            ),
+        ];
+        for (code, wire_name, status, title) in expected {
+            assert_eq!(code.code(), wire_name);
+            assert_eq!(code.status(), status);
+            assert_eq!(code.title(), title);
+            assert!(
+                BRegProblemCode::ALL.contains(&code),
+                "{code} is not registered"
+            );
+        }
     }
 
     // app-developer-22: a missing record answered with `kind: "problem"` and

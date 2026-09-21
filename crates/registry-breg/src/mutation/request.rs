@@ -230,6 +230,7 @@ impl MutationCoordinator {
                         .map_err(|_| MutationError::InvalidRequest)?,
                 )
                 .into(),
+                key_domain: IdempotencyKeyDomain::Caller,
             },
         )?;
         let transaction = begin_record_transaction(
@@ -627,6 +628,7 @@ impl MutationCoordinator {
                 package_revision: &self.expected.package_revision,
                 response_fields: &input.response_fields,
                 canonical_request_digest: digest,
+                key_domain: IdempotencyKeyDomain::Caller,
             },
         )?;
         let transaction = begin_record_transaction(
@@ -794,6 +796,7 @@ impl MutationCoordinator {
                 package_revision: &self.expected.package_revision,
                 response_fields: &input.response_fields,
                 canonical_request_digest: digest,
+                key_domain: IdempotencyKeyDomain::Caller,
             },
         )?;
         let transaction = begin_record_transaction(

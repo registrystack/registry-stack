@@ -60,6 +60,15 @@ mod attachments;
 pub const AUTHORING_API_VERSION: &str = "registry.registrystack.org/v1alpha1";
 pub const MAX_BATCH_ITEMS: u16 = 100;
 pub const MAX_BATCH_BYTES: u32 = 2_097_152;
+/// The transport ceiling a chunk-submission request body is read under: the
+/// batch byte ceiling plus the chunk envelope's own members. A chunk's
+/// canonical batch body is bounded by the run's `maximumBytes` (whose highest
+/// configurable value is `MAX_BATCH_BYTES`), but the request that carries it
+/// adds the envelope around it: the chunk index, the two 64-character hex
+/// digests, their member names, and the JSON punctuation, which together stay
+/// far below this 1 KiB allowance. Reading at the bare batch ceiling would
+/// refuse a chunk the run's own bounds admit before it is ever parsed.
+pub const INGESTION_CHUNK_REQUEST_CEILING: u32 = MAX_BATCH_BYTES + 1024;
 /// The attempt budget starts at the claim's database timestamp and covers the claim
 /// commit and reload round trips before the request leaves, so this floor is a
 /// validation bound: samples and fixtures should use a realistic value such as 1000 ms.
@@ -81,6 +90,112 @@ pub const MAX_BUILD_ID_BYTES: u32 = 64;
 /// integration pins the equality.
 pub const MAX_WEBHOOK_PAYLOAD_BYTES: u32 = 1_048_576;
 pub const WEBHOOK_BACKOFF_MULTIPLIER: u8 = 2;
+
+/// One ingestion-run operation of the published HTTP surface, carrying the
+/// problem-response catalogue the operation's OpenAPI entry must publish.
+///
+/// Each operation's set is its closed response vocabulary: the handler's own
+/// admission refusals, the problem codes that operation's mutation-service
+/// ingestion errors map onto, and the shared admission envelope every
+/// secured route answers with (the bearer refusal, the authorization
+/// concealment, and the audit-gated unavailability). The OpenAPI builder
+/// publishes exactly these sets, and the ingestion contract test holds the
+/// published document to them, so the catalogue cannot drift from what the
+/// routes can actually answer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IngestionApiOperation {
+    CreateRun,
+    ListRuns,
+    ReadRun,
+    SubmitChunk,
+    CancelRun,
+    ChunkReceipt,
+}
+
+impl IngestionApiOperation {
+    /// Every ingestion operation the published document can carry.
+    pub const ALL: [Self; 6] = [
+        Self::CreateRun,
+        Self::ListRuns,
+        Self::ReadRun,
+        Self::SubmitChunk,
+        Self::CancelRun,
+        Self::ChunkReceipt,
+    ];
+
+    /// The `x-registry-operation` marker the operation's OpenAPI entry
+    /// carries, so the contract test can find the published entry.
+    #[must_use]
+    pub const fn openapi_marker(self) -> &'static str {
+        match self {
+            Self::CreateRun => "ingestionCreateRun",
+            Self::ListRuns => "ingestionListRuns",
+            Self::ReadRun => "ingestionReadRun",
+            Self::SubmitChunk => "ingestionSubmitChunk",
+            Self::CancelRun => "ingestionCancelRun",
+            Self::ChunkReceipt => "ingestionChunkReceipt",
+        }
+    }
+
+    /// Every problem response the operation can answer with.
+    #[must_use]
+    pub const fn problem_codes(self) -> &'static [crate::problem::ProblemCode] {
+        match self {
+            Self::CreateRun => &[
+                crate::problem::ProblemCode::RequestInvalid,
+                crate::problem::ProblemCode::AuthenticationRefused,
+                crate::problem::ProblemCode::IngestionProfileMismatch,
+                crate::problem::ProblemCode::ResourceNotFound,
+                crate::problem::ProblemCode::PreconditionFailed,
+                crate::problem::ProblemCode::UnsupportedMediaType,
+                crate::problem::ProblemCode::ServiceUnavailable,
+            ],
+            Self::ListRuns => &[
+                crate::problem::ProblemCode::RequestInvalid,
+                crate::problem::ProblemCode::AuthenticationRefused,
+                crate::problem::ProblemCode::ResourceNotFound,
+                crate::problem::ProblemCode::ServiceUnavailable,
+            ],
+            Self::ReadRun => &[
+                crate::problem::ProblemCode::RequestInvalid,
+                crate::problem::ProblemCode::AuthenticationRefused,
+                crate::problem::ProblemCode::IngestionProfileMismatch,
+                crate::problem::ProblemCode::ResourceNotFound,
+                crate::problem::ProblemCode::ServiceUnavailable,
+            ],
+            Self::SubmitChunk => &[
+                crate::problem::ProblemCode::RequestInvalid,
+                crate::problem::ProblemCode::AuthenticationRefused,
+                crate::problem::ProblemCode::IngestionProfileMismatch,
+                crate::problem::ProblemCode::ResourceNotFound,
+                crate::problem::ProblemCode::IngestionRunNotOpen,
+                crate::problem::ProblemCode::IngestionRunBlocked,
+                crate::problem::ProblemCode::IngestionChunkMismatch,
+                crate::problem::ProblemCode::IngestionReceiptErased,
+                crate::problem::ProblemCode::PreconditionFailed,
+                crate::problem::ProblemCode::UnsupportedMediaType,
+                crate::problem::ProblemCode::ServiceUnavailable,
+            ],
+            Self::CancelRun => &[
+                crate::problem::ProblemCode::RequestInvalid,
+                crate::problem::ProblemCode::AuthenticationRefused,
+                crate::problem::ProblemCode::IngestionProfileMismatch,
+                crate::problem::ProblemCode::ResourceNotFound,
+                crate::problem::ProblemCode::IngestionRunNotOpen,
+                crate::problem::ProblemCode::UnsupportedMediaType,
+                crate::problem::ProblemCode::ServiceUnavailable,
+            ],
+            Self::ChunkReceipt => &[
+                crate::problem::ProblemCode::RequestInvalid,
+                crate::problem::ProblemCode::AuthenticationRefused,
+                crate::problem::ProblemCode::IngestionProfileMismatch,
+                crate::problem::ProblemCode::ResourceNotFound,
+                crate::problem::ProblemCode::IngestionReceiptErased,
+                crate::problem::ProblemCode::ServiceUnavailable,
+            ],
+        }
+    }
+}
 
 type CollectedEntities = (
     BTreeMap<String, EntitySource>,

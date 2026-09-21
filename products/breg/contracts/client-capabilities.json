@@ -305,6 +305,33 @@
       ]
     },
     {
+      "id": "ingestion-runs",
+      "rust": [
+        "create_ingestion_run",
+        "list_ingestion_runs",
+        "read_ingestion_run",
+        "submit_ingestion_chunk",
+        "cancel_ingestion_run",
+        "ingestion_chunk_receipt"
+      ],
+      "node": [
+        "createIngestionRun",
+        "listIngestionRuns",
+        "readIngestionRun",
+        "submitIngestionChunk",
+        "cancelIngestionRun",
+        "ingestionChunkReceipt"
+      ],
+      "python": [
+        "create_ingestion_run",
+        "list_ingestion_runs",
+        "read_ingestion_run",
+        "submit_ingestion_chunk",
+        "cancel_ingestion_run",
+        "ingestion_chunk_receipt"
+      ]
+    },
+    {
       "id": "attachments",
       "rust": [
         "upload_attachment",

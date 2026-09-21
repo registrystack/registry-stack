@@ -75,3 +75,11 @@ traceability:
   - {id: BREG-SEC-72, state: enforced, negativeId: BREG-NEG-72, negativeTest: {path: crates/registry-breg/tests/field_encryption_contract.rs, name: change_request_paths_refuse_encrypted_fields}}
   - {id: BREG-SEC-73, state: enforced, negativeId: BREG-NEG-73, negativeTest: {path: crates/registry-breg/tests/postgres_field_encryption.rs, name: aad_binds_the_record_row}}
   - {id: BREG-SEC-74, state: enforced, negativeId: BREG-NEG-74, negativeTest: {path: crates/registry-breg/tests/postgres_field_encryption.rs, name: missing_field_encryption_provider_refuses_startup}}
+  - {id: BREG-SEC-75, state: enforced, negativeId: BREG-NEG-75, negativeTest: {path: crates/registry-breg/tests/postgres_ingestion_runs.rs, name: run_creation_refuses_mismatched_profiles_bindings_and_algorithms}}
+  - {id: BREG-SEC-76, state: enforced, negativeId: BREG-NEG-76, negativeTest: {path: crates/registry-breg/tests/postgres_ingestion_runs.rs, name: run_access_is_creator_scoped_and_possession_grants_nothing}}
+  - {id: BREG-SEC-77, state: enforced, negativeId: BREG-NEG-77, negativeTest: {path: crates/registry-breg/tests/postgres_ingestion_runs.rs, name: divergent_chunk_submissions_are_refused_without_moving_the_checkpoint}}
+  - {id: BREG-SEC-78, state: enforced, negativeId: BREG-NEG-78, negativeTest: {path: crates/registry-breg/tests/postgres_ingestion_runs.rs, name: lost_chunk_response_replays_original_receipt_without_duplicate_mutation}}
+  - {id: BREG-SEC-79, state: enforced, negativeId: BREG-NEG-79, negativeTest: {path: crates/registry-breg/tests/postgres_ingestion_runs.rs, name: package_change_blocks_the_run_and_keeps_it_inspectable}}
+  - {id: BREG-SEC-80, state: enforced, negativeId: BREG-NEG-80, negativeTest: {path: crates/registry-breg/tests/postgres_ingestion_runs.rs, name: run_rows_and_audit_never_carry_source_values}}
+  - {id: BREG-SEC-81, state: enforced, negativeId: BREG-NEG-81, negativeTest: {path: crates/registry-breg/tests/postgres_ingestion_runs.rs, name: erasing_record_history_erases_the_receipt_that_describes_it}}
+  - {id: BREG-SEC-82, state: enforced, negativeId: BREG-NEG-82, negativeTest: {path: crates/registry-breg/tests/postgres_ingestion_runs.rs, name: ingestion_run_journey_commits_resumes_and_replays_without_duplicates}}

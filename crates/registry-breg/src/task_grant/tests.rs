@@ -191,7 +191,9 @@ fn binding_debug_and_scalar_validation_preserve_privacy_and_exact_subjects() {
 #[test]
 fn write_idempotency_separates_grants_without_changing_read_authority() {
     use crate::{
-        idempotency::{canonical_claim_context, resolve_binding, IdempotencyBinding},
+        idempotency::{
+            canonical_claim_context, resolve_binding, IdempotencyBinding, IdempotencyKeyDomain,
+        },
         model::HttpMethod,
         postgres::ClaimContext,
     };
@@ -222,6 +224,7 @@ fn write_idempotency_separates_grants_without_changing_read_authority() {
                 package_revision: "package",
                 response_fields: &fields,
                 canonical_request_digest: [1; 32],
+                key_domain: IdempotencyKeyDomain::Caller,
             },
         )
         .unwrap()

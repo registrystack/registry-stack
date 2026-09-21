@@ -23,6 +23,8 @@ use crate::contract::{
     valid_crs84_point, valid_decimal_value, valid_structured_value, FieldTypeSource, MutationMode,
     Operation,
 };
+#[cfg(feature = "runtime")]
+use crate::model::CompiledRoute;
 use crate::model::{
     CompiledEntity, CompiledQueryKind, CompiledRegistry, CompiledStoredField, HttpMethod,
 };
@@ -474,7 +476,48 @@ impl DataImportPlan {
     }
 }
 
-fn resolve_import_binding<'a>(
+/// Whether the selected profile admits one item operation of a batch import,
+/// exactly as an admitted import binding requires it: the profile grants the
+/// operation, an access entry matches it, an item route serves the profile,
+/// and a patch stays confined to mutable entities. The durable run creation
+/// shares this decision so its announced operation is executable to the end
+/// of every chunk.
+pub(crate) fn ingestion_item_operation_admitted(
+    registry: &CompiledRegistry,
+    entity: &CompiledEntity,
+    profile_id: &str,
+    operation: DataImportOperation,
+) -> bool {
+    let Some(profile) = entity.access_profiles.get(profile_id) else {
+        return false;
+    };
+    let compiled = operation.compiled();
+    let access_matches = |candidate: Operation| {
+        registry.access().entries.iter().any(|entry| {
+            entry.entity_id == entity.id
+                && entry.operation == candidate
+                && entry.profile_ids.contains(profile_id)
+        })
+    };
+    let item_route_matches = registry.routes().routes.iter().any(|route| {
+        route.entity_id == entity.id
+            && route.operation == compiled
+            && route.access_profiles.iter().any(|id| id == profile_id)
+            && matches!(
+                (compiled, route.method),
+                (Operation::Create, HttpMethod::Post) | (Operation::Patch, HttpMethod::Patch)
+            )
+    });
+    !profile.anonymous
+        && profile.operations.contains(&Operation::Batch)
+        && profile.operations.contains(&compiled)
+        && access_matches(Operation::Batch)
+        && access_matches(compiled)
+        && item_route_matches
+        && (compiled != Operation::Patch || entity.mutation_mode == MutationMode::Mutable)
+}
+
+pub(crate) fn resolve_import_binding<'a>(
     registry: &'a CompiledRegistry,
     entity_id: &str,
     operation: DataImportOperation,
@@ -488,41 +531,14 @@ fn resolve_import_binding<'a>(
         .get(entity_id)
         .ok_or(DataError::InvalidBinding)?;
     let batch = entity.batch.as_ref().ok_or(DataError::InvalidBinding)?;
-    let profile = entity
-        .access_profiles
-        .get(profile_id)
-        .ok_or(DataError::InvalidBinding)?;
-    let operation = operation.compiled();
-    let access_matches = |candidate: Operation| {
-        registry.access().entries.iter().any(|entry| {
-            entry.entity_id == entity_id
-                && entry.operation == candidate
-                && entry.profile_ids.contains(profile_id)
-        })
-    };
     let batch_route = registry.routes().routes.iter().find(|route| {
         route.entity_id == entity_id
             && route.operation == Operation::Batch
             && route.method == HttpMethod::Post
             && route.access_profiles.iter().any(|id| id == profile_id)
     });
-    let item_route_matches = registry.routes().routes.iter().any(|route| {
-        route.entity_id == entity_id
-            && route.operation == operation
-            && route.access_profiles.iter().any(|id| id == profile_id)
-            && matches!(
-                (operation, route.method),
-                (Operation::Create, HttpMethod::Post) | (Operation::Patch, HttpMethod::Patch)
-            )
-    });
-    if profile.anonymous
-        || !profile.operations.contains(&Operation::Batch)
-        || !profile.operations.contains(&operation)
-        || !access_matches(Operation::Batch)
-        || !access_matches(operation)
+    if !ingestion_item_operation_admitted(registry, entity, profile_id, operation)
         || batch_route.is_none()
-        || !item_route_matches
-        || operation == Operation::Patch && entity.mutation_mode != MutationMode::Mutable
         || batch.maximum_items == 0
         || batch.maximum_bytes == 0
     {
@@ -768,6 +784,58 @@ fn plan_chunks(
     Ok(chunks)
 }
 
+/// The chunk-planning algorithm a durable ingestion run must be announced
+/// with. The run refuses any other algorithm so remaining source bytes are
+/// never reinterpreted under a different chunking contract.
+#[cfg(feature = "runtime")]
+pub(crate) const RUN_CHUNK_ALGORITHM_VERSION: &str = CHUNK_ALGORITHM_VERSION;
+
+/// The compiled batch route one ingestion run drives, under the same route
+/// lookup resolve_import_binding uses to admit a client-side plan.
+#[cfg(feature = "runtime")]
+pub(crate) fn ingestion_batch_route<'a>(
+    registry: &'a CompiledRegistry,
+    entity_id: &str,
+    profile_id: &str,
+) -> Option<&'a CompiledRoute> {
+    registry.routes().routes.iter().find(|route| {
+        route.entity_id == entity_id
+            && route.operation == Operation::Batch
+            && route.method == HttpMethod::Post
+            && route.access_profiles.iter().any(|id| id == profile_id)
+    })
+}
+
+/// Canonical batch body and digest for the items of one chunk. A durable run
+/// binds and stores exactly these bytes, and a submission must announce the
+/// digest this canonical body hashes to.
+#[cfg(feature = "runtime")]
+pub(crate) fn canonical_chunk_body(items: &[Value]) -> Result<(Vec<u8>, String), DataError> {
+    let body = canonicalize_json(&json!({ "items": items })).map_err(|_| DataError::InvalidItem)?;
+    let digest = sha256_hex(&body);
+    Ok((body, digest))
+}
+
+/// The server-derived idempotency key for one ingestion-run chunk attempt.
+/// Mirrors the client-side checkpoint derivation exactly, so a resubmitted
+/// chunk replays the same attempt whether the client or the run API drove it.
+pub(crate) fn ingestion_chunk_idempotency_key(
+    import_id: &str,
+    input_digest: &str,
+    chunk_index: u64,
+    chunk_digest: &str,
+) -> Result<String, DataError> {
+    let binding = canonicalize_json(&json!({
+        "domain": IDEMPOTENCY_DOMAIN,
+        "importId": import_id,
+        "inputDigest": input_digest,
+        "chunkIndex": chunk_index,
+        "chunkDigest": chunk_digest,
+    }))
+    .map_err(|_| DataError::InvalidBinding)?;
+    Ok(format!("breg-data-v1-{}", sha256_hex(&binding)))
+}
+
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DataImportCheckpoint {
@@ -936,15 +1004,12 @@ impl DataImportCheckpoint {
             .chunks
             .get(usize::try_from(chunk_index).map_err(|_| DataError::InvalidBinding)?)
             .ok_or(DataError::InvalidBinding)?;
-        let binding = canonicalize_json(&json!({
-            "domain": IDEMPOTENCY_DOMAIN,
-            "importId": self.import_id,
-            "inputDigest": self.input_digest,
-            "chunkIndex": chunk_index,
-            "chunkDigest": chunk.digest,
-        }))
-        .map_err(|_| DataError::InvalidBinding)?;
-        Ok(format!("breg-data-v1-{}", sha256_hex(&binding)))
+        ingestion_chunk_idempotency_key(
+            &self.import_id,
+            &self.input_digest,
+            chunk_index,
+            &chunk.digest,
+        )
     }
 
     pub fn commit_chunk(

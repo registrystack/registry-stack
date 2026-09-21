@@ -485,7 +485,7 @@ fn encode_pointer_segment(value: &str) -> String {
     value.replace('~', "~0").replace('/', "~1")
 }
 
-fn validate_json_values<'a>(
+pub(crate) fn validate_json_values<'a>(
     values: impl IntoIterator<Item = &'a Value>,
     initial_depth: usize,
 ) -> Result<(), BRegMutationRequestError> {
