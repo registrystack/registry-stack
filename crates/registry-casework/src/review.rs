@@ -2843,6 +2843,7 @@ impl PostgresStore {
                 holder: actor.principal.clone(),
             },
         };
+        let claim_event_id = Uuid::new_v4();
         {
             let actor_ref = actor_reference(&actor.principal);
             transaction
@@ -2851,7 +2852,7 @@ impl PostgresStore {
                         event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
                      VALUES($1,$2,$3,'task_claimed',$4,$5,$6)",
                     &[
-                        &Uuid::new_v4(),
+                        &claim_event_id,
                         &request_id,
                         &task_id,
                         &actor_ref,
@@ -2865,6 +2866,29 @@ impl PostgresStore {
                 )
                 .await?;
         }
+        // The claim reaches the external audit stream like every other
+        // mutation, in the same transaction. The record stays minimal: review
+        // history is erased at result expiry, so only who took responsibility
+        // survives in the chained audit.
+        transaction
+            .execute(
+                "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
+                &[
+                    &claim_event_id,
+                    &json!({
+                        "event": "casework.task_claimed",
+                        "eventId": claim_event_id,
+                        "requestId": request_id,
+                        "taskId": task_id,
+                        "actor": {
+                            "issuer": actor.principal.issuer,
+                            "subject": actor.principal.subject,
+                        },
+                        "profileId": actor.profile_id,
+                    }),
+                ],
+            )
+            .await?;
         insert_review_idempotency(
             &transaction,
             request_id,
@@ -3072,13 +3096,14 @@ impl PostgresStore {
             .map_err(map_reviewer_conflict)?;
         let actor_ref = actor_reference(&actor.principal);
         let target_ref = actor_reference(target);
+        let assignment_event_id = Uuid::new_v4();
         transaction
             .execute(
                 "INSERT INTO casework_review_history(
                     event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
                  VALUES($1,$2,$3,$4,$5,$6,$7)",
                 &[
-                    &Uuid::new_v4(),
+                    &assignment_event_id,
                     &request_id,
                     &task_id,
                     &if delegate {
@@ -3094,6 +3119,37 @@ impl PostgresStore {
                         "staffingBlocked": !eligible,
                     }),
                     &now,
+                ],
+            )
+            .await?;
+        // The ownership transfer reaches the external audit stream like every
+        // other mutation, in the same transaction. The record stays minimal:
+        // the private reason never leaves the review history row, and only who
+        // transferred responsibility to whom survives result expiry.
+        transaction
+            .execute(
+                "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
+                &[
+                    &assignment_event_id,
+                    &json!({
+                        "event": if delegate {
+                            "casework.task_delegated"
+                        } else {
+                            "casework.task_assigned"
+                        },
+                        "eventId": assignment_event_id,
+                        "requestId": request_id,
+                        "taskId": task_id,
+                        "actor": {
+                            "issuer": actor.principal.issuer,
+                            "subject": actor.principal.subject,
+                        },
+                        "profileId": actor.profile_id,
+                        "target": {
+                            "issuer": target.issuer,
+                            "subject": target.subject,
+                        },
+                    }),
                 ],
             )
             .await?;
@@ -3712,13 +3768,14 @@ impl PostgresStore {
             state: ReviewerTaskState::Open,
         };
         let actor_ref = actor_reference(&actor.principal);
+        let release_event_id = Uuid::new_v4();
         transaction
             .execute(
                 "INSERT INTO casework_review_history(
                     event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
                  VALUES($1,$2,$3,'task_released',$4,$5,$6)",
                 &[
-                    &Uuid::new_v4(),
+                    &release_event_id,
                     &request_id,
                     &task_id,
                     &actor_ref,
@@ -3727,6 +3784,28 @@ impl PostgresStore {
                         "previousHolderRef": &actor_ref,
                     }),
                     &now,
+                ],
+            )
+            .await?;
+        // The release reaches the external audit stream like every other
+        // mutation, in the same transaction. The record stays minimal: only
+        // who gave up responsibility survives result expiry.
+        transaction
+            .execute(
+                "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
+                &[
+                    &release_event_id,
+                    &json!({
+                        "event": "casework.task_released",
+                        "eventId": release_event_id,
+                        "requestId": request_id,
+                        "taskId": task_id,
+                        "actor": {
+                            "issuer": actor.principal.issuer,
+                            "subject": actor.principal.subject,
+                        },
+                        "profileId": actor.profile_id,
+                    }),
                 ],
             )
             .await?;

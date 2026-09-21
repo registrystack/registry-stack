@@ -2808,6 +2808,133 @@ async fn review_cancellation_reaches_the_audit_outbox_in_the_cancel_transaction(
 }
 
 #[tokio::test]
+async fn review_task_ownership_transitions_reach_the_audit_outbox() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("ownership-audit", "producer-ref-ownership-audit"),
+            "create-ownership-audit",
+        )
+        .await
+        .expect("create ownership audit review");
+    let request_id = created.accepted.request_id;
+    let task = task_id(&fixture, request_id, 0).await;
+    let assigned = fixture
+        .service_v1
+        .assign_review_task(
+            &fixture.supervisor,
+            task,
+            None,
+            "",
+            1,
+            AssignmentRequest {
+                assignee: fixture.reviewer_a.principal.clone(),
+                reason: Some("nominate for the audit trail".to_owned()),
+            },
+            "assign-ownership-audit",
+        )
+        .await
+        .expect("assign ownership audit task");
+    let delegated = fixture
+        .service_v1
+        .delegate_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            assigned.revision,
+            DelegateRequest {
+                delegate: fixture.reviewer_b.principal.clone(),
+                reason: Some("hand off for the audit trail".to_owned()),
+            },
+            "delegate-ownership-audit",
+        )
+        .await
+        .expect("delegate ownership audit task");
+    let released = fixture
+        .service_v1
+        .release_review_task(
+            &fixture.reviewer_b,
+            task,
+            delegated.revision,
+            "release-ownership-audit",
+        )
+        .await
+        .expect("release ownership audit task");
+    fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            released.revision,
+            "claim-ownership-audit",
+        )
+        .await
+        .expect("claim ownership audit task");
+    for (event, history_kind, actor, target) in [
+        (
+            "casework.task_assigned",
+            "task_assigned",
+            &fixture.supervisor,
+            Some(&fixture.reviewer_a),
+        ),
+        (
+            "casework.task_delegated",
+            "task_delegated",
+            &fixture.reviewer_a,
+            Some(&fixture.reviewer_b),
+        ),
+        (
+            "casework.task_released",
+            "task_released",
+            &fixture.reviewer_b,
+            None,
+        ),
+        (
+            "casework.task_claimed",
+            "task_claimed",
+            &fixture.reviewer_a,
+            None,
+        ),
+    ] {
+        // The outbox row shares the protected history row's event id, so the
+        // external audit chain records who took or transferred responsibility
+        // even after the review history is erased at result expiry.
+        let audit: serde_json::Value = fixture
+            .database
+            .query_one(
+                "SELECT a.audit_record FROM casework_audit_outbox a
+                 JOIN casework_review_history h ON h.event_id=a.event_id
+                 WHERE a.audit_record->>'event'=$1
+                   AND h.request_id=$2 AND h.task_id=$3 AND h.kind=$4",
+                &[&event, &request_id, &task, &history_kind],
+            )
+            .await
+            .unwrap_or_else(|error| panic!("committed {event} audit: {error}"))
+            .get(0);
+        assert_eq!(audit["actor"]["issuer"], actor.principal.issuer);
+        assert_eq!(audit["actor"]["subject"], actor.principal.subject);
+        assert_eq!(audit["profileId"], actor.profile_id);
+        assert_eq!(audit["requestId"], request_id.to_string());
+        assert_eq!(audit["taskId"], task.to_string());
+        match target {
+            Some(target) => {
+                assert_eq!(audit["target"]["issuer"], target.principal.issuer);
+                assert_eq!(audit["target"]["subject"], target.principal.subject);
+            }
+            None => assert!(audit.get("target").is_none()),
+        }
+        // The audit trail carries who took or transferred responsibility,
+        // not the private reason recorded beside it.
+        assert!(audit.get("reason").is_none());
+    }
+}
+
+#[tokio::test]
 async fn review_reads_check_access_before_disclosing_retention_expiry() {
     let fixture = fixture().await;
     let project = answer_project(false);
