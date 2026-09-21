@@ -184,3 +184,8 @@ entries:
       - {path: crates/registry-scheduling-core/src/policy.rs, name: moving_a_published_window_reports_the_stranded_commitments}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: records_replacement_refuses_to_move_a_window_with_standing_commitments}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: policy_publication_refuses_to_remove_an_offering_with_a_live_appointment}
+  - id: SCHEDULING-SEC-26
+    tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: records_replacement_refuses_a_window_staffed_by_an_exact_time_pool}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: policy_publication_refuses_an_exact_time_offering_on_a_deployed_windows_staffing}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: an_unpartitioned_shared_staffing_block_is_rejected}

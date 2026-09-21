@@ -43,7 +43,8 @@ use registry_platform_config::SecretResolver;
 use registry_scheduling_core::{
     assess_window_record_impact, evaluate_exact_time_admission, evaluate_hold_state,
     evaluate_window_admission, AdmissionRefusal, ExactTimeContext, LedgerClaim, LedgerKind,
-    LedgerSnapshot, PoolMember, SchedulingFacts, SchedulingPolicy, APPOINTMENT_CANCELLED_TRIGGER,
+    LedgerSnapshot, PolicyCheckReason, PoolMember, PublishedWindow, SchedulingDiagnostic,
+    SchedulingFacts, SchedulingPolicy, APPOINTMENT_CANCELLED_TRIGGER,
     APPOINTMENT_CONFIRMED_TRIGGER, APPOINTMENT_RESCHEDULED_TRIGGER,
 };
 use serde::{Deserialize, Serialize};
@@ -133,6 +134,12 @@ pub enum StoreError {
     },
     #[error("the proposed policy would strand standing commitments: {0}")]
     PolicyInUse(String),
+    /// A policy and the window records it governs contradict each other.
+    /// The authoring tool refuses the same combination against the files on
+    /// an operator's disk; this is that refusal taken at the write, where
+    /// both sides are the deployed ones.
+    #[error("the policy and the window records it governs disagree: {0}")]
+    CombinedInvariant(String),
     // Both carry the driver's own account of what went wrong. Neither the
     // pool nor the driver repeats the connection string in its message, so
     // naming the cause costs no credential.
@@ -751,6 +758,11 @@ impl PostgresStore {
         if row.get::<_, String>(0) != scheduling_id {
             return Err(StoreError::Corrupt);
         }
+        // The candidate policy answers for the window records this
+        // deployment already holds. Every supply anchor and the meta row are
+        // locked here, and a records swap takes the same two in the same
+        // order, so the records read cannot move under this decision.
+        refuse_combined_conflicts(policy, &deployed_windows(&transaction).await?)?;
         let revision;
         let stored_revision = row.get::<_, i64>(1);
         let stored_digest = row.get::<_, String>(2);
@@ -2599,6 +2611,78 @@ fn retained_policy(mut document: Value) -> Result<SchedulingPolicy, StoreError> 
     serde_json::from_value(document).map_err(|_| StoreError::Corrupt)
 }
 
+/// The combined policy-by-records contradictions a database write refuses.
+///
+/// `SchedulingPolicy::check_window_records` stays the single implementation
+/// of the rules; this narrows its findings to the ones that are a genuine
+/// disagreement between the two sides. Two of its reasons name an absence
+/// instead:
+///
+/// - `UnknownWindow` is a policy that references a window the deployment has
+///   not published yet. That is the ordinary bootstrap order, and the runtime
+///   already refuses each admission on such an offering loudly, so a write
+///   must not be held hostage to it.
+/// - `UnknownOffering` is a deployed window whose offering this publication
+///   retires. Refusing it would make an arrival offering impossible to
+///   withdraw, since the window records could only be removed afterwards.
+///
+/// Everything that remains is a statement one side makes that the other
+/// contradicts, and no ordering of the two writes makes it safe. In
+/// particular `SharedSupplyUnpartitioned`, where a pool staffs a window and
+/// also backs an exact-time offering: the two modes lock different anchors,
+/// so their capacity transactions never serialize and the ledger cannot see
+/// that it sold the same people twice.
+fn combined_conflicts(
+    policy: &SchedulingPolicy,
+    windows: &[PublishedWindow],
+) -> Vec<SchedulingDiagnostic> {
+    policy
+        .check_window_records(windows)
+        .into_iter()
+        .filter(|finding| {
+            !matches!(
+                finding.reason,
+                PolicyCheckReason::UnknownWindow | PolicyCheckReason::UnknownOffering
+            )
+        })
+        .collect()
+}
+
+/// The window records the deployment currently holds, in identifier order.
+async fn deployed_windows(
+    transaction: &deadpool_postgres::Transaction<'_>,
+) -> Result<Vec<PublishedWindow>, StoreError> {
+    transaction
+        .query(
+            "SELECT window_record FROM scheduling_windows ORDER BY window_id",
+            &[],
+        )
+        .await?
+        .iter()
+        .map(|row| {
+            serde_json::from_value::<PublishedWindow>(row.get(0)).map_err(|_| StoreError::Corrupt)
+        })
+        .collect()
+}
+
+/// The refusal carrying every contradiction, or `Ok(())` when there is none.
+fn refuse_combined_conflicts(
+    policy: &SchedulingPolicy,
+    windows: &[PublishedWindow],
+) -> Result<(), StoreError> {
+    let conflicts = combined_conflicts(policy, windows);
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+    Err(StoreError::CombinedInvariant(
+        conflicts
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", "),
+    ))
+}
+
 /// Replay a stored attempt: the same key with a different payload is
 /// refused as reused, an erased receipt as expired, and a retained one is
 /// answered exactly as it was.
@@ -2736,32 +2820,44 @@ pub(crate) async fn replace_facts_in_transaction(
             &[],
         )
         .await?;
-    let stored_id: String = transaction
+    let meta = transaction
         .query_one(
-            "SELECT scheduling_id FROM scheduling_meta WHERE singleton FOR UPDATE",
+            "SELECT scheduling_id, policy_revision, policy_digest FROM scheduling_meta \
+             WHERE singleton FOR UPDATE",
             &[],
         )
-        .await?
-        .get(0);
-    if stored_id != scheduling_id {
+        .await?;
+    if meta.get::<_, String>(0) != scheduling_id {
         return Err(StoreError::DeploymentIdentity);
+    }
+    // The incoming records answer to the policy deployed now, the same pair
+    // the authoring tool checks together offline. An empty digest is a
+    // deployment whose records are being seeded before any policy exists,
+    // and there is nothing yet for them to contradict.
+    let policy_digest: String = meta.get(2);
+    if !policy_digest.is_empty() {
+        let policy_revision: i64 = meta.get(1);
+        let document: Option<Value> = transaction
+            .query_opt(
+                "SELECT policy_document FROM scheduling_policy_revisions \
+                 WHERE policy_revision=$1 AND policy_digest=$2",
+                &[&policy_revision, &policy_digest],
+            )
+            .await?
+            .and_then(|stored| stored.get(0));
+        let Some(document) = document else {
+            return Err(StoreError::CombinedInvariant(
+                "the deployed policy document is unavailable; reapply the current policy before replacing the records"
+                    .to_owned(),
+            ));
+        };
+        refuse_combined_conflicts(&retained_policy(document)?, &facts.windows)?;
     }
     let occupied = occupied_resources_changed_by(transaction, facts).await?;
     if !occupied.is_empty() {
         return Err(StoreError::FactsInUse(occupied.join(", ")));
     }
-    let current_windows = transaction
-        .query(
-            "SELECT window_record FROM scheduling_windows ORDER BY window_id",
-            &[],
-        )
-        .await?
-        .iter()
-        .map(|row| {
-            serde_json::from_value::<registry_scheduling_core::PublishedWindow>(row.get(0))
-                .map_err(|_| StoreError::Corrupt)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let current_windows = deployed_windows(transaction).await?;
     let revision_heads = transaction
         .query(
             "SELECT window_id, window_record FROM scheduling_window_revision_heads ORDER BY window_id",

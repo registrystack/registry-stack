@@ -431,6 +431,29 @@ invariants:
     negativeTest:
       path: crates/registry-scheduling/tests/postgres_commitments.rs
       name: records_replacement_refuses_to_move_a_window_with_standing_commitments
+  - id: SCHEDULING-SEC-26
+    state: enforced
+    threat: >-
+      A deployment ends up holding a policy and window records that contradict
+      each other, most consequentially a pool that staffs a published window
+      while also backing an exact-time offering. The two modes anchor on
+      different supply rows, so their capacity transactions never serialize
+      and the ledger cannot observe that it sold the same staffing twice.
+    enforcementPoint: >-
+      Both database writes re-run the canonical combined check under the locks
+      they already hold: policy publication loads the deployed window records
+      before it writes a revision, and records replacement loads the deployed
+      policy document before it swaps the records. The two findings that name
+      an absence rather than a contradiction, a window not published yet and
+      an offering this publication retires, are excluded so that ordinary
+      operator sequencing in either order stays possible.
+    refusal: >-
+      Refuse the write, naming every contradicting field in the same authoring
+      vocabulary the offline check uses, and leave the policy revision, the
+      window records, and the facts revision unchanged.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments.rs
+      name: records_replacement_refuses_a_window_staffed_by_an_exact_time_pool
 deferred:
   - id: SCHEDULING-DEF-01
     subject: Full task-grant bounds re-checked inside the capacity transaction
@@ -482,21 +505,3 @@ deferred:
       The configuration reference says so explicitly rather than implying a
       sweep that does not run.
     recordedIn: products/scheduling/RUNTIME-CONFIG.md
-  - id: SCHEDULING-DEF-07
-    subject: Combined policy and records invariants re-checked at the database
-    state: deferred
-    reason: >-
-      The canonical validation of a policy against the published window records
-      it governs runs only in the authoring tooling, against the policy file on
-      the operator's disk. Neither database write repeats it: policy
-      publication fences offerings carrying active claims but never reads the
-      window records, and records replacement never reads the deployed policy.
-      An operator who publishes a policy their own tooling would refuse can
-      therefore back an exact-time offering with a pool that already staffs a
-      published window, and the two modes then draw on the same staffing
-      through separate anchor rows the capacity transaction cannot compare.
-    compensatingControl: >-
-      Every authored path runs the combined check before either document
-      reaches a deployment, and names the offending field in the operator's
-      own vocabulary. Reaching the gap means bypassing that tooling.
-    recordedIn: products/scheduling/SECURITY-REVIEW-NOTES.md

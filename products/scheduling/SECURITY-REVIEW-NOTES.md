@@ -259,10 +259,52 @@ request shapes stay strict. *Tests:*
 `a_reworded_title_or_detail_is_still_the_problem_the_code_names`
 (`crates/registry-scheduling-client/src/error.rs`).
 
+## The combined policy and records invariants at the database
+
+**Threat:** a deployment can come to hold a policy and window records
+that contradict each other. The consequential case is a pool that staffs
+a published window and also backs an exact-time offering: an exact-time
+claim locks the pool anchor, an arrival claim locks the window anchor,
+so the two capacity transactions never serialize and the ledger has no
+row on which to observe that it sold the same staffing twice.
+`SchedulingPolicy::check_window_records` is the canonical validation of
+the pair and refuses that combination with `shared-supply-unpartitioned`.
+Until this change it ran only in `schedulingctl`, against the files on an
+operator's disk, so an operator who edited the policy and restarted the
+runtime deployed the combination their own tooling refuses.
+
+**Enforcement:** both database writes re-run that same check under the
+locks they already hold. `apply_policy` loads the deployed window records
+before it writes a revision, and `replace_facts` loads the retained
+document of the deployed policy revision before it swaps the records.
+Neither reimplements the rules: they call the authoring implementation
+and narrow its findings to the contradictions. Two reasons name an
+absence rather than a contradiction and are excluded, because ordinary
+operator sequencing depends on both: `unknown-window`, a policy published
+before the records that serve it, which every admission on that offering
+already refuses loudly (SCHEDULING-SEC-02), and `unknown-offering`, a
+deployed window whose offering this publication retires, without which an
+arrival offering could never be withdrawn. Either write is refused whole,
+naming each contradicting field in the operator's own vocabulary, and
+leaves the policy revision, the window records, and the facts revision
+unchanged.
+
+**Tests:**
+`records_replacement_refuses_a_window_staffed_by_an_exact_time_pool` and
+`policy_publication_refuses_an_exact_time_offering_on_a_deployed_windows_staffing`
+(`crates/registry-scheduling/tests/postgres_commitments.rs`) take the
+refusal from each direction, and
+`an_unpartitioned_shared_staffing_block_is_rejected`
+(`crates/registry-scheduling-core/src/policy.rs`) holds the rule they
+share. The per-admission refusal remains as defense in depth:
+`a_window_record_must_belong_to_the_authorized_offering_and_location`
+plants its contradicting record directly in the tables, underneath the
+writes that now refuse to produce one.
+
 ## Known deferrals
 
-The matrix records five deferrals with their compensating controls.
-SCHEDULING-DEF-01 is stated in threat 2 above; the other four are
+The matrix records four deferrals with their compensating controls.
+SCHEDULING-DEF-01 is stated in threat 2 above; the other three are
 restated here as the index the matrix's `recordedIn` points at:
 
 - **SCHEDULING-DEF-04, the channel is not bound to the verified caller.**
@@ -277,23 +319,6 @@ restated here as the index the matrix's `recordedIn` points at:
   supporting index is partial rather than unique.
 - **SCHEDULING-DEF-06, retention scope.** Recorded in
   `RUNTIME-CONFIG.md`, which states plainly what the sweeps cover.
-- **SCHEDULING-DEF-07, the combined policy and records invariants are
-  not re-checked at the database.** `SchedulingPolicy::check_window_records`
-  validates a policy against the published window records it governs,
-  and among other rules refuses a window whose staffing pool also backs
-  an exact-time offering: the two modes count that staffing differently,
-  and an exact-time claim locks the pool anchor while an arrival claim
-  locks the window anchor, so the ledger has no row on which to observe
-  the conflict. That check runs only in `schedulingctl`, against the
-  policy file on disk. `apply_policy` locks every supply anchor and
-  fences offerings carrying active claims, but never reads
-  `scheduling_windows`; `replace_facts` swaps the window records without
-  reading the deployed policy. An operator who edits the policy and
-  restarts the runtime can therefore deploy the combination the
-  authoring check refuses. It is an operator path, not a caller-reachable
-  one, and the authoring refusal is the compensating control; closing it
-  means re-checking both directions inside the two transactions that
-  already hold the anchors locked.
 
 A change that closes one of these promotes the matrix entry in the same
 commit and rewrites this section with it.
