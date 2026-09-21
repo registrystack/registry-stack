@@ -192,6 +192,10 @@ class ProductContractTests(unittest.TestCase):
         self.assertIn("after: {workingDays: 5}", policy)
         self.assertIn('"authority": "casework-main"', source)
         self.assertIn('"policyId": "regional-review"', source)
+        # The pinned policyId must resolve to a declared reviewKinds entry;
+        # registrystack/registry-stack#1256 was a source description pinning a
+        # policyId that named no declared review kind.
+        self.assertIn("reviewKinds:\n  - id: regional-review", policy)
         self.assertIn('"onApproved": {"mode": "manual"}', source)
         self.assertIn('"field": "region"', source)
         self.assertIn('"requestEntity": "response-correction"', response_source)

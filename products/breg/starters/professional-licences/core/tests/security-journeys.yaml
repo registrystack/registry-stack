@@ -1,245 +1,179 @@
-{
-  "apiVersion": "registry.registrystack.org/breg-journeys/v1",
-  "journeys": [
-    {
-      "id": "starter-model-policy",
-      "steps": [
-        {
-          "id": "first-record",
-          "entity": "professional-license",
-          "accessProfile": "editor",
-          "claims": {
-            "principal": "synthetic-editor",
-            "scopes": [
-              "starter:editor"
-            ],
-            "purpose": "starter-learning"
-          },
-          "request": {
-            "operation": "create",
-            "data": {
-              "localIdentifier": "JOURNEY-FIRST-001",
-              "personReference": "https://people.example.org/people/journey-first-001",
-              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
-              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
-              "professionCode": "example-nursing",
-              "licenceStatus": "recorded-active",
-              "validFrom": "2026-01-01",
-              "validTo": "2026-12-31",
-              "licensedActivities": [
-                "example-assessment"
-              ],
-              "authorizationConditions": "Supervized community practice"
-            }
-          },
-          "expect": {
-            "outcome": "success",
-            "status": 201
-          },
-          "capture": "first-record"
-        },
-        {
-          "id": "unscoped-caller-cannot-create",
-          "entity": "professional-license",
-          "accessProfile": "editor",
-          "claims": {
-            "principal": "synthetic-reader",
-            "scopes": [],
-            "purpose": "starter-learning"
-          },
-          "request": {
-            "operation": "create",
-            "data": {
-              "localIdentifier": "JOURNEY-UNSCOPED",
-              "personReference": "https://people.example.org/people/journey-unscoped",
-              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
-              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
-              "professionCode": "example-nursing",
-              "licenceStatus": "recorded-active",
-              "validFrom": "2026-01-01",
-              "validTo": "2026-12-31",
-              "licensedActivities": [
-                "example-assessment"
-              ],
-              "authorizationConditions": "General supervised practice"
-            }
-          },
-          "expect": {
-            "outcome": "refusal",
-            "status": 404,
-            "problemCode": "resource.not_found"
-          }
-        },
-        {
-          "id": "missing-scope-cannot-read",
-          "entity": "professional-license",
-          "accessProfile": "reader",
-          "claims": {
-            "principal": "synthetic-reader",
-            "scopes": [],
-            "purpose": "starter-learning"
-          },
-          "request": {
-            "operation": "get",
-            "recordRef": "first-record"
-          },
-          "expect": {
-            "outcome": "refusal",
-            "status": 404,
-            "problemCode": "resource.not_found"
-          }
-        },
-        {
-          "id": "draft-correction",
-          "entity": "scope-correction",
-          "accessProfile": "editor",
-          "claims": {
-            "principal": "synthetic-editor",
-            "scopes": [
-              "starter:editor"
-            ],
-            "purpose": "starter-learning"
-          },
-          "request": {
-            "operation": "create",
-            "data": {
-              "record": {
-                "recordRef": "first-record"
-              },
-              "reason": "Correction to the recorded professional decision",
-              "supportingReference": "SYNTHETIC-SUPPORT-001",
-              "licensedActivities": [
-                "example-assessment"
-              ],
-              "authorizationConditions": "Supervised community practice"
-            }
-          },
-          "expect": {
-            "outcome": "success",
-            "status": 201
-          },
-          "capture": "draft"
-        },
-        {
-          "id": "unscoped-caller-cannot-read-review-material",
-          "entity": "scope-correction",
-          "accessProfile": "editor",
-          "claims": {
-            "principal": "synthetic-reader",
-            "scopes": [],
-            "purpose": "starter-learning"
-          },
-          "request": {
-            "operation": "get",
-            "recordRef": "draft"
-          },
-          "expect": {
-            "outcome": "refusal",
-            "status": 404,
-            "problemCode": "resource.not_found"
-          }
-        },
-        {
-          "id": "before-submit",
-          "entity": "scope-correction",
-          "accessProfile": "editor",
-          "claims": {
-            "principal": "synthetic-editor",
-            "scopes": [
-              "starter:editor"
-            ],
-            "purpose": "starter-learning"
-          },
-          "request": {
-            "operation": "get",
-            "recordRef": "draft"
-          },
-          "expect": {
-            "outcome": "success",
-            "status": 200
-          },
-          "capture": "before-submit"
-        },
-        {
-          "id": "submit-correction",
-          "entity": "scope-correction",
-          "accessProfile": "editor",
-          "claims": {
-            "principal": "synthetic-editor",
-            "scopes": [
-              "starter:editor"
-            ],
-            "purpose": "starter-learning"
-          },
-          "request": {
-            "operation": "submit_request",
-            "etagRef": "before-submit",
-            "recordRef": "before-submit"
-          },
-          "expect": {
-            "outcome": "success",
-            "status": 200
-          }
-        },
-        {
-          "id": "review",
-          "entity": "scope-correction",
-          "accessProfile": "reviewer",
-          "claims": {
-            "principal": "professional-review-supervisor",
-            "scopes": [
-              "starter:reviewer"
-            ],
-            "purpose": "starter-learning",
-            "actorKind": "human",
-            "requesterClient": "supervisor"
-          },
-          "request": {
-            "operation": "get",
-            "recordRef": "draft"
-          },
-          "expect": {
-            "outcome": "success",
-            "status": 200
-          },
-          "capture": "review"
-        },
-        {
-          "id": "approval-does-not-apply",
-          "entity": "professional-license",
-          "accessProfile": "editor",
-          "claims": {
-            "principal": "synthetic-editor",
-            "scopes": [
-              "starter:editor"
-            ],
-            "purpose": "starter-learning"
-          },
-          "request": {
-            "operation": "get",
-            "recordRef": "first-record"
-          },
-          "expect": {
-            "outcome": "success",
-            "status": 200,
-            "fields": {
-              "localIdentifier": "JOURNEY-FIRST-001",
-              "personReference": "https://people.example.org/people/journey-first-001",
-              "regulatorReference": "https://regulators.example.org/regulators/synthetic-council",
-              "jurisdictionReference": "https://jurisdictions.example.org/areas/synthetic-district",
-              "professionCode": "example-nursing",
-              "licenceStatus": "recorded-active",
-              "validFrom": "2026-01-01",
-              "validTo": "2026-12-31",
-              "licensedActivities": [
-                "example-assessment"
-              ],
-              "authorizationConditions": "Supervized community practice"
-            }
-          },
-          "capture": "approval-does-not-apply"
-        }
-      ]
-    }
-  ]
-}
+apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+  - id: starter-model-policy
+    steps:
+      - id: first-record
+        entity: professional-license
+        accessProfile: editor
+        claims:
+          principal: synthetic-editor
+          scopes:
+            - starter:editor
+          purpose: starter-learning
+        request:
+          operation: create
+          data:
+            localIdentifier: JOURNEY-FIRST-001
+            personReference: https://people.example.org/people/journey-first-001
+            regulatorReference: https://regulators.example.org/regulators/synthetic-council
+            jurisdictionReference: https://jurisdictions.example.org/areas/synthetic-district
+            professionCode: example-nursing
+            licenceStatus: recorded-active
+            validFrom: '2026-01-01'
+            validTo: '2026-12-31'
+            licensedActivities:
+              - example-assessment
+            authorizationConditions: Supervized community practice
+        expect:
+          outcome: success
+          status: 201
+        capture: first-record
+      - id: unscoped-caller-cannot-create
+        entity: professional-license
+        accessProfile: editor
+        claims:
+          principal: synthetic-reader
+          scopes: []
+          purpose: starter-learning
+        request:
+          operation: create
+          data:
+            localIdentifier: JOURNEY-UNSCOPED
+            personReference: https://people.example.org/people/journey-unscoped
+            regulatorReference: https://regulators.example.org/regulators/synthetic-council
+            jurisdictionReference: https://jurisdictions.example.org/areas/synthetic-district
+            professionCode: example-nursing
+            licenceStatus: recorded-active
+            validFrom: '2026-01-01'
+            validTo: '2026-12-31'
+            licensedActivities:
+              - example-assessment
+            authorizationConditions: General supervised practice
+        expect:
+          outcome: refusal
+          status: 404
+          problemCode: resource.not_found
+      - id: missing-scope-cannot-read
+        entity: professional-license
+        accessProfile: reader
+        claims:
+          principal: synthetic-reader
+          scopes: []
+          purpose: starter-learning
+        request:
+          operation: get
+          recordRef: first-record
+        expect:
+          outcome: refusal
+          status: 404
+          problemCode: resource.not_found
+      - id: draft-correction
+        entity: scope-correction
+        accessProfile: editor
+        claims:
+          principal: synthetic-editor
+          scopes:
+            - starter:editor
+          purpose: starter-learning
+        request:
+          operation: create
+          data:
+            record:
+              recordRef: first-record
+            reason: Correction to the recorded professional decision
+            supportingReference: SYNTHETIC-SUPPORT-001
+            licensedActivities:
+              - example-assessment
+            authorizationConditions: Supervised community practice
+        expect:
+          outcome: success
+          status: 201
+        capture: draft
+      - id: unscoped-caller-cannot-read-review-material
+        entity: scope-correction
+        accessProfile: editor
+        claims:
+          principal: synthetic-reader
+          scopes: []
+          purpose: starter-learning
+        request:
+          operation: get
+          recordRef: draft
+        expect:
+          outcome: refusal
+          status: 404
+          problemCode: resource.not_found
+      - id: before-submit
+        entity: scope-correction
+        accessProfile: editor
+        claims:
+          principal: synthetic-editor
+          scopes:
+            - starter:editor
+          purpose: starter-learning
+        request:
+          operation: get
+          recordRef: draft
+        expect:
+          outcome: success
+          status: 200
+        capture: before-submit
+      - id: submit-correction
+        entity: scope-correction
+        accessProfile: editor
+        claims:
+          principal: synthetic-editor
+          scopes:
+            - starter:editor
+          purpose: starter-learning
+        request:
+          operation: submit_request
+          etagRef: before-submit
+          recordRef: before-submit
+        expect:
+          outcome: success
+          status: 200
+      - id: review
+        entity: scope-correction
+        accessProfile: reviewer
+        claims:
+          principal: professional-review-supervisor
+          scopes:
+            - starter:reviewer
+          purpose: starter-learning
+          actorKind: human
+          requesterClient: supervisor
+        request:
+          operation: get
+          recordRef: draft
+        expect:
+          outcome: success
+          status: 200
+        capture: review
+      - id: approval-does-not-apply
+        entity: professional-license
+        accessProfile: editor
+        claims:
+          principal: synthetic-editor
+          scopes:
+            - starter:editor
+          purpose: starter-learning
+        request:
+          operation: get
+          recordRef: first-record
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            localIdentifier: JOURNEY-FIRST-001
+            personReference: https://people.example.org/people/journey-first-001
+            regulatorReference: https://regulators.example.org/regulators/synthetic-council
+            jurisdictionReference: https://jurisdictions.example.org/areas/synthetic-district
+            professionCode: example-nursing
+            licenceStatus: recorded-active
+            validFrom: '2026-01-01'
+            validTo: '2026-12-31'
+            licensedActivities:
+              - example-assessment
+            authorizationConditions: Supervized community practice
+        capture: approval-does-not-apply

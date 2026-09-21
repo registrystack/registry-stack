@@ -17,6 +17,15 @@ artifacts:
   - {path: contracts/package-layout.yaml, kind: package-layout, state: authored}
   - {path: contracts/security-invariant-matrix.yaml, kind: security-lifecycle, state: authored}
   - {path: contracts/security-test-traceability.yaml, kind: security-traceability, state: authored}
+  - {path: contracts/explain/README.md, kind: explain-wire-contract-guide, state: authored}
+  - {path: contracts/explain/ModelExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
+  - {path: contracts/explain/AccessExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
+  - {path: contracts/explain/AccessPreview.schema.json, kind: explain-wire-contract-schema, state: authored}
+  - {path: contracts/explain/RoutesExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
+  - {path: contracts/explain/QueriesExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
+  - {path: contracts/explain/ActionsExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
+  - {path: contracts/explain/ChangeRequestsExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
+  - {path: contracts/explain/EventsExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
   - {path: acceptance/asset-site-placement/registry.yaml, kind: authored-fixture, state: authored}
   - {path: acceptance/business-establishments, kind: authored-fixture, state: authored}
   - {path: acceptance/inspection, kind: authored-fixture, state: authored}

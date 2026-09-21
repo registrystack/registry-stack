@@ -33,15 +33,15 @@ fn published_starters_compile_with_reviewed_update_policy() {
     for (source, _) in STARTERS {
         let project = parse_project_yaml(source).expect("starter source parses");
         compile_project(&project, &[], CompileProfile::Production).expect("starter compiles");
-        let mut changed: serde_json::Value = serde_json::from_slice(source).unwrap();
+        let mut changed: serde_norway::Value = serde_norway::from_slice(source).unwrap();
         let editor = changed["accessProfiles"]
-            .as_array_mut()
+            .as_sequence_mut()
             .unwrap()
             .iter_mut()
             .find(|profile| profile["id"] == "editor")
             .unwrap();
         editor["permissions"][0]["operations"]
-            .as_array_mut()
+            .as_sequence_mut()
             .unwrap()
             .push("patch".into());
         let changed = parse_project_yaml(&serde_json::to_vec(&changed).unwrap()).unwrap();

@@ -37,9 +37,9 @@ use crate::model::{
 use crate::model::{
     ChangeRequestOperation, CompiledAccessEntry, CompiledAccessInventory,
     CompiledBboxQueryCapability, CompiledBlindIndex, CompiledChangeControl, CompiledDerivedField,
-    CompiledDerivedRelation, CompiledEntity, CompiledEventDelivery, CompiledEventDeliveryInventory,
-    CompiledField, CompiledFieldEncryption, CompiledGeoJsonBinding, CompiledHookHandler,
-    CompiledHookHandlerKind, CompiledLogicalField, CompiledManifestAuthority,
+    CompiledDerivedRelation, CompiledEntity, CompiledEntityModuleOrigins, CompiledEventDelivery,
+    CompiledEventDeliveryInventory, CompiledField, CompiledFieldEncryption, CompiledGeoJsonBinding,
+    CompiledHookHandler, CompiledHookHandlerKind, CompiledLogicalField, CompiledManifestAuthority,
     CompiledManifestDataService, CompiledManifestDataset, CompiledManifestDistribution,
     CompiledManifestProjection, CompiledManifestPublicService, CompiledMetadataEntity,
     CompiledMetadataEntry, CompiledMetadataInventory, CompiledModuleIdentity,
@@ -199,9 +199,7 @@ impl IngestionApiOperation {
 
 type CollectedEntities = (
     BTreeMap<String, EntitySource>,
-    DerivedOriginMap,
-    ChangeRequestOriginMap,
-    HookOriginMap,
+    CollectedOrigins,
     BTreeMap<String, CollectedActionSource>,
 );
 
@@ -252,19 +250,12 @@ pub fn compile_project_with_assets(
         &mut findings,
     );
     let (module_order, module_map) = order_modules(project, modules, &mut diagnostics);
-    let (
-        mut sources,
-        mut derived_origins,
-        mut change_request_origins,
-        mut hook_origins,
-        mut action_sources,
-    ) = collect_entities(project, &module_order, &module_map, &mut diagnostics);
+    let (mut sources, mut origins, mut action_sources) =
+        collect_entities(project, &module_order, &module_map, &mut diagnostics);
     apply_temporal_roles(&mut sources, &mut diagnostics);
     apply_extensions(
         &mut sources,
-        &mut derived_origins,
-        &mut change_request_origins,
-        &mut hook_origins,
+        &mut origins,
         &module_order,
         &module_map,
         &mut diagnostics,
@@ -276,13 +267,13 @@ pub fn compile_project_with_assets(
     crate::access::validate_access_requirements(&sources, &mut diagnostics);
     crate::membership::validate(&sources, &mut diagnostics);
     findings.extend(crate::access::access_findings(&sources));
-    validate_derived_assets(&sources, &derived_origins, assets, &mut diagnostics);
-    validate_hook_assets(&sources, &hook_origins, assets, &mut diagnostics);
+    validate_derived_assets(&sources, &origins.derived, assets, &mut diagnostics);
+    validate_hook_assets(&sources, &origins.hooks, assets, &mut diagnostics);
     if !diagnostics.is_empty() {
         return Err(CompileFailure::from_errors(diagnostics));
     }
 
-    let (mut entities, physical_names) = compile_entities(&sources, &derived_origins, assets)?;
+    let (mut entities, physical_names) = compile_entities(&sources, &origins, assets)?;
     crate::membership::compile(&mut entities);
     let owned_scripts = action_sources
         .values()
@@ -294,13 +285,13 @@ pub fn compile_project_with_assets(
                 .and_then(|handler| handler.script().map(str::to_owned))
                 .map(|script| (action.source_module.clone(), script))
         })
-        .chain(hook_handler_scripts(&sources, &hook_origins))
+        .chain(hook_handler_scripts(&sources, &origins.hooks))
         .collect();
     crate::change_request::compile_change_requests(
         project,
         &owned_scripts,
         &sources,
-        &change_request_origins,
+        &origins.change_requests,
         assets,
         &mut entities,
     )
@@ -325,7 +316,7 @@ pub fn compile_project_with_assets(
     .map_err(CompileFailure::from_one)?;
     let query_inventory = compile_query_inventory(&entities, &mut diagnostics);
     let event_delivery_inventory =
-        compile_event_delivery_inventory(&project.registry.id, &entities, &hook_origins, assets)
+        compile_event_delivery_inventory(&project.registry.id, &entities, &origins.hooks, assets)
             .map_err(CompileFailure::from_one)?;
     validate_manifest_projection(project, &entities, &mut diagnostics);
     if !diagnostics.is_empty() {
@@ -1332,6 +1323,34 @@ type ChangeRequestOriginMap = BTreeMap<String, Option<String>>;
 /// the delivery inventory resolves its bytes against the same asset namespace
 /// an action handler resolves against.
 type HookOriginMap = BTreeMap<(String, String), Option<String>>;
+/// Which module contributed one id-keyed member of an entity, by
+/// `(entity id, member id)`.
+type EntityMemberOriginMap = BTreeMap<(String, String), Option<String>>;
+/// Which module declared each entity, by entity id.
+type EntityOriginMap = BTreeMap<String, Option<String>>;
+
+/// Every origin map `collect_entities` and `apply_extensions` populate.
+/// `None` means the project root contributed the id; `Some(module)` names
+/// the contributing module. Folded into one struct so a declaring or
+/// extending entity threads one argument instead of a map per collection;
+/// `compile_entities` reads every field to attribute the module that
+/// contributed each part of a compiled entity, while
+/// `validate_derived_assets`, `validate_hook_assets`, `hook_handler_scripts`,
+/// `compile_change_requests`, and `compile_event_delivery_inventory` read
+/// only the one field their own asset or delivery resolution needs.
+#[derive(Default)]
+struct CollectedOrigins {
+    entities: EntityOriginMap,
+    fields: EntityMemberOriginMap,
+    constraints: EntityMemberOriginMap,
+    derived: DerivedOriginMap,
+    indexes: EntityMemberOriginMap,
+    access_profiles: EntityMemberOriginMap,
+    selector_profiles: EntityMemberOriginMap,
+    read_paths: EntityMemberOriginMap,
+    hooks: HookOriginMap,
+    change_requests: ChangeRequestOriginMap,
+}
 
 fn collect_entities(
     project: &RegistryProject,
@@ -1340,16 +1359,12 @@ fn collect_entities(
     errors: &mut Vec<Diagnostic>,
 ) -> CollectedEntities {
     let mut entities = BTreeMap::new();
-    let mut derived_origins = BTreeMap::new();
-    let mut change_request_origins = BTreeMap::new();
-    let mut hook_origins = BTreeMap::new();
+    let mut origins = CollectedOrigins::default();
     let mut actions = BTreeMap::new();
     for entity in &project.entities {
         insert_entity(
             &mut entities,
-            &mut derived_origins,
-            &mut change_request_origins,
-            &mut hook_origins,
+            &mut origins,
             entity,
             None,
             "project.entities[].id",
@@ -1364,9 +1379,7 @@ fn collect_entities(
             for entity in &module.entities {
                 insert_entity(
                     &mut entities,
-                    &mut derived_origins,
-                    &mut change_request_origins,
-                    &mut hook_origins,
+                    &mut origins,
                     entity,
                     Some(module.id.clone()),
                     "modules[].entities[].id",
@@ -1384,21 +1397,12 @@ fn collect_entities(
             }
         }
     }
-    (
-        entities,
-        derived_origins,
-        change_request_origins,
-        hook_origins,
-        actions,
-    )
+    (entities, origins, actions)
 }
 
-#[allow(clippy::too_many_arguments)] // Keep each origin map and its owner explicit.
 fn insert_entity(
     entities: &mut BTreeMap<String, EntitySource>,
-    derived_origins: &mut BTreeMap<(String, String), Option<String>>,
-    change_request_origins: &mut ChangeRequestOriginMap,
-    hook_origins: &mut HookOriginMap,
+    origins: &mut CollectedOrigins,
     entity: &EntitySource,
     module: Option<String>,
     path: &str,
@@ -1412,14 +1416,50 @@ fn insert_entity(
         ));
         return;
     }
+    origins.entities.insert(entity.id.clone(), module.clone());
+    for field in &entity.fields {
+        origins
+            .fields
+            .insert((entity.id.clone(), field.id.clone()), module.clone());
+    }
+    for constraint in &entity.constraints {
+        origins.constraints.insert(
+            (entity.id.clone(), derived_constraint_id(constraint)),
+            module.clone(),
+        );
+    }
     for derived in &entity.derived {
-        derived_origins.insert((entity.id.clone(), derived.id.clone()), module.clone());
+        origins
+            .derived
+            .insert((entity.id.clone(), derived.id.clone()), module.clone());
+    }
+    for index in &entity.indexes {
+        origins
+            .indexes
+            .insert((entity.id.clone(), index.id.clone()), module.clone());
+    }
+    for access in &entity.access_profiles {
+        origins
+            .access_profiles
+            .insert((entity.id.clone(), access.id.clone()), module.clone());
+    }
+    for selector in &entity.selector_profiles {
+        origins
+            .selector_profiles
+            .insert((entity.id.clone(), selector.id.clone()), module.clone());
+    }
+    for read_path in &entity.read_paths {
+        origins
+            .read_paths
+            .insert((entity.id.clone(), read_path.id.clone()), module.clone());
     }
     for hook in &entity.hooks {
-        hook_origins.insert((entity.id.clone(), hook.id.clone()), module.clone());
+        origins
+            .hooks
+            .insert((entity.id.clone(), hook.id.clone()), module.clone());
     }
     if entity.change_request.is_some() {
-        change_request_origins.insert(entity.id.clone(), module);
+        origins.change_requests.insert(entity.id.clone(), module);
     }
 }
 
@@ -1486,9 +1526,7 @@ fn apply_temporal_roles(
 
 fn apply_extensions(
     entities: &mut BTreeMap<String, EntitySource>,
-    derived_origins: &mut BTreeMap<(String, String), Option<String>>,
-    change_request_origins: &mut ChangeRequestOriginMap,
-    hook_origins: &mut HookOriginMap,
+    origins: &mut CollectedOrigins,
     module_order: &[String],
     modules: &BTreeMap<String, RegistryModule>,
     errors: &mut Vec<Diagnostic>,
@@ -1508,15 +1546,7 @@ fn apply_extensions(
                 ));
                 continue;
             };
-            merge_extension(
-                entity,
-                extension,
-                Some(module.id.clone()),
-                derived_origins,
-                change_request_origins,
-                hook_origins,
-                errors,
-            );
+            merge_extension(entity, extension, Some(module.id.clone()), origins, errors);
         }
     }
 }
@@ -1525,9 +1555,7 @@ fn merge_extension(
     entity: &mut EntitySource,
     extension: &EntityExtensionSource,
     module: Option<String>,
-    derived_origins: &mut BTreeMap<(String, String), Option<String>>,
-    change_request_origins: &mut ChangeRequestOriginMap,
-    hook_origins: &mut HookOriginMap,
+    origins: &mut CollectedOrigins,
     errors: &mut Vec<Diagnostic>,
 ) {
     if let Some(geojson) = &extension.geojson {
@@ -1554,6 +1582,7 @@ fn merge_extension(
             entity.access_requirements = Some(requirements.clone());
         }
     }
+    let existing_fields = entity.fields.len();
     merge_by_id(
         &mut entity.fields,
         &extension.fields,
@@ -1563,6 +1592,11 @@ fn merge_extension(
         "a field identifier is contributed more than once",
         errors,
     );
+    for field in entity.fields.iter().skip(existing_fields) {
+        origins
+            .fields
+            .insert((entity.id.clone(), field.id.clone()), module.clone());
+    }
     let existing_derived = entity.derived.len();
     merge_by_id(
         &mut entity.derived,
@@ -1574,8 +1608,11 @@ fn merge_extension(
         errors,
     );
     for derived in entity.derived.iter().skip(existing_derived) {
-        derived_origins.insert((entity.id.clone(), derived.id.clone()), module.clone());
+        origins
+            .derived
+            .insert((entity.id.clone(), derived.id.clone()), module.clone());
     }
+    let existing_indexes = entity.indexes.len();
     merge_by_id(
         &mut entity.indexes,
         &extension.indexes,
@@ -1585,6 +1622,12 @@ fn merge_extension(
         "an index identifier is contributed more than once",
         errors,
     );
+    for index in entity.indexes.iter().skip(existing_indexes) {
+        origins
+            .indexes
+            .insert((entity.id.clone(), index.id.clone()), module.clone());
+    }
+    let existing_access_profiles = entity.access_profiles.len();
     merge_by_id(
         &mut entity.access_profiles,
         &extension.access_profiles,
@@ -1594,6 +1637,11 @@ fn merge_extension(
         "an access profile identifier is contributed more than once",
         errors,
     );
+    for access in entity.access_profiles.iter().skip(existing_access_profiles) {
+        origins
+            .access_profiles
+            .insert((entity.id.clone(), access.id.clone()), module.clone());
+    }
     let existing_hooks = entity.hooks.len();
     merge_by_id(
         &mut entity.hooks,
@@ -1605,8 +1653,11 @@ fn merge_extension(
         errors,
     );
     for hook in entity.hooks.iter().skip(existing_hooks) {
-        hook_origins.insert((entity.id.clone(), hook.id.clone()), module.clone());
+        origins
+            .hooks
+            .insert((entity.id.clone(), hook.id.clone()), module.clone());
     }
+    let existing_selector_profiles = entity.selector_profiles.len();
     merge_by_id(
         &mut entity.selector_profiles,
         &extension.selector_profiles,
@@ -1616,6 +1667,16 @@ fn merge_extension(
         "a selector profile identifier is contributed more than once",
         errors,
     );
+    for selector in entity
+        .selector_profiles
+        .iter()
+        .skip(existing_selector_profiles)
+    {
+        origins
+            .selector_profiles
+            .insert((entity.id.clone(), selector.id.clone()), module.clone());
+    }
+    let existing_read_paths = entity.read_paths.len();
     merge_by_id(
         &mut entity.read_paths,
         &extension.read_paths,
@@ -1625,6 +1686,11 @@ fn merge_extension(
         "a read path identifier is contributed more than once",
         errors,
     );
+    for read_path in entity.read_paths.iter().skip(existing_read_paths) {
+        origins
+            .read_paths
+            .insert((entity.id.clone(), read_path.id.clone()), module.clone());
+    }
     merge_optional_capability(
         &mut entity.change_control,
         &extension.change_control,
@@ -1643,7 +1709,9 @@ fn merge_extension(
         errors,
     );
     if !had_change_request && entity.change_request.is_some() {
-        change_request_origins.insert(entity.id.clone(), module);
+        origins
+            .change_requests
+            .insert(entity.id.clone(), module.clone());
     }
 
     let mut known: BTreeSet<String> = entity
@@ -1652,7 +1720,11 @@ fn merge_extension(
         .map(derived_constraint_id)
         .collect();
     for constraint in &extension.constraints {
-        if known.insert(derived_constraint_id(constraint)) {
+        let id = derived_constraint_id(constraint);
+        if known.insert(id.clone()) {
+            origins
+                .constraints
+                .insert((entity.id.clone(), id), module.clone());
             entity.constraints.push(constraint.clone());
         } else {
             errors.push(Diagnostic::error(
@@ -5032,9 +5104,28 @@ fn webhook_retry_delays(initial_ms: u32, maximum_ms: u32, maximum_attempts: u8) 
         .collect()
 }
 
+/// Projects one entity's slice out of a whole-project `(entity_id, item_id) ->
+/// Option<module>` origin map, keeping only the ids that a module (rather
+/// than the project root) contributed.
+fn member_origins_for_entity(
+    origins: &EntityMemberOriginMap,
+    entity_id: &str,
+) -> BTreeMap<String, String> {
+    origins
+        .iter()
+        .filter_map(|((owner, member_id), module)| {
+            if owner == entity_id {
+                module.clone().map(|module| (member_id.clone(), module))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 fn compile_entities(
     sources: &BTreeMap<String, EntitySource>,
-    origins: &BTreeMap<(String, String), Option<String>>,
+    origins: &CollectedOrigins,
     assets: &[ModuleAssetSource],
 ) -> Result<(BTreeMap<String, CompiledEntity>, PhysicalNameInventory), CompileFailure> {
     let mut builder = PhysicalNameBuilder::new();
@@ -5120,6 +5211,7 @@ fn compile_entities(
         let mut derived_relations = BTreeMap::new();
         for derived in &source.derived {
             let owner = origins
+                .derived
                 .get(&(source.id.clone(), derived.id.clone()))
                 .cloned()
                 .flatten();
@@ -5304,10 +5396,22 @@ fn compile_entities(
                 policies: policy_names,
             },
         );
+        let source_module = origins.entities.get(&source.id).cloned().flatten();
+        let module_origins = CompiledEntityModuleOrigins {
+            fields: member_origins_for_entity(&origins.fields, &source.id),
+            constraints: member_origins_for_entity(&origins.constraints, &source.id),
+            hooks: member_origins_for_entity(&origins.hooks, &source.id),
+            derived_relations: member_origins_for_entity(&origins.derived, &source.id),
+            indexes: member_origins_for_entity(&origins.indexes, &source.id),
+            access_profiles: member_origins_for_entity(&origins.access_profiles, &source.id),
+            selector_profiles: member_origins_for_entity(&origins.selector_profiles, &source.id),
+            read_paths: member_origins_for_entity(&origins.read_paths, &source.id),
+        };
         entities.insert(
             source.id.clone(),
             CompiledEntity {
                 id: source.id.clone(),
+                source_module,
                 primary_dataset: Some(source.primary_dataset.clone()),
                 route: source.route.clone(),
                 mutation_mode: source.mutation_mode.clone(),
@@ -5343,6 +5447,7 @@ fn compile_entities(
                 access_profiles: profiles,
                 membership_boundaries: BTreeMap::new(),
                 hooks,
+                module_origins,
             },
         );
     }

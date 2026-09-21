@@ -810,6 +810,7 @@ mod tests {
             attachments: Default::default(),
             primary_dataset: None,
             id: "membership".to_owned(),
+            source_module: None,
             route: "memberships".to_owned(),
             mutation_mode: MutationMode::Mutable,
             tombstone: true,
@@ -842,6 +843,7 @@ mod tests {
             access_profiles: BTreeMap::new(),
             membership_boundaries: BTreeMap::new(),
             hooks: BTreeMap::new(),
+            module_origins: Default::default(),
         }
     }
 

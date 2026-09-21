@@ -1,598 +1,430 @@
-{
-  "apiVersion": "registry.registrystack.org/v1alpha1",
-  "kind": "RegistryProject",
-  "registry": {
-    "id": "professional-licences",
-    "canonicalBaseIri": "https://professional-licences.example.org",
-    "version": "0.1.0",
-    "defaultLanguage": "en"
-  },
-  "package": {
-    "environment": "local",
-    "instanceId": "professional-licences-starter",
-    "sequence": 1,
-    "sourceRevision": "professional-licences-core-0.1.0"
-  },
-  "manifestProjection": {
-    "accessProfile": "editor",
-    "classificationCeiling": "restricted",
-    "catalog": {
-      "baseUrl": "https://professional-licences.example.org",
-      "title": "Professional licence register",
-      "description": "Record professional licence decisions and review recorded activity and condition corrections.",
-      "publisher": {
-        "id": "synthetic-custodian",
-        "name": "Synthetic example custodian"
-      }
-    },
-    "publicService": {
-      "id": "directory-service",
-      "title": "Professional licence register"
-    },
-    "datasets": [
-      {
-        "id": "directory",
-        "title": "Professional licence register",
-        "description": "Record professional licence decisions and review recorded activity and condition corrections.",
-        "owner": "Synthetic example custodian",
-        "status": "active"
-      }
-    ],
-    "dataServices": [
-      {
-        "id": "directory-api",
-        "title": "Professional licence register",
-        "endpointUrl": "https://professional-licences.example.org",
-        "servesDatasets": [
-          "directory"
-        ]
-      }
-    ],
-    "distributions": [],
-    "entities": [
-      {
-        "id": "professional-license",
-        "title": "Professional License",
-        "conceptUri": "https://publicschema.org/ProfessionalLicense",
-        "identifiers": [
-          {
-            "field": "local-identifier",
-            "kind": "local"
-          }
-        ],
-        "fields": [
-          {
-            "id": "person-reference",
-            "concepts": [
-              "https://publicschema.org/registered_subject"
-            ]
-          },
-          {
-            "id": "regulator-reference",
-            "concepts": [
-              "https://publicschema.org/registration_authority"
-            ]
-          },
-          {
-            "id": "jurisdiction-reference",
-            "concepts": [
-              "https://publicschema.org/registration_jurisdiction"
-            ]
-          },
-          {
-            "id": "profession-code",
-            "concepts": [
-              "https://publicschema.org/profession_code"
-            ]
-          },
-          {
-            "id": "valid-from",
-            "concepts": [
-              "https://publicschema.org/valid_from"
-            ]
-          },
-          {
-            "id": "valid-to",
-            "concepts": [
-              "https://publicschema.org/valid_to"
-            ]
-          },
-          {
-            "id": "authorization-conditions",
-            "concepts": [
-              "https://publicschema.org/authorization_conditions"
-            ]
-          }
-        ]
-      }
-    ]
-  },
-  "entities": [
-    {
-      "id": "professional-license",
-      "primaryDataset": "directory",
-      "route": "professional-licenses",
-      "mutationMode": "mutable",
-      "classification": "restricted",
-      "fields": [
-        {
-          "id": "local-identifier",
-          "type": "string",
-          "required": true,
-          "classification": "restricted",
-          "apiName": "localIdentifier",
-          "minLength": 1,
-          "maxLength": 160
-        },
-        {
-          "id": "person-reference",
-          "type": "string",
-          "required": true,
-          "classification": "restricted",
-          "apiName": "personReference",
-          "minLength": 1,
-          "maxLength": 500
-        },
-        {
-          "id": "regulator-reference",
-          "type": "string",
-          "required": true,
-          "classification": "restricted",
-          "apiName": "regulatorReference",
-          "minLength": 1,
-          "maxLength": 500
-        },
-        {
-          "id": "jurisdiction-reference",
-          "type": "string",
-          "required": true,
-          "classification": "restricted",
-          "apiName": "jurisdictionReference",
-          "minLength": 1,
-          "maxLength": 500
-        },
-        {
-          "id": "profession-code",
-          "type": "vocabulary-code",
-          "required": true,
-          "classification": "restricted",
-          "apiName": "professionCode",
-          "vocabulary": "https://professional-licences.example.org/profession-codes",
-          "values": [
-            "example-nursing",
-            "example-engineering"
-          ]
-        },
-        {
-          "id": "licence-status",
-          "type": "vocabulary-code",
-          "required": true,
-          "classification": "restricted",
-          "apiName": "licenceStatus",
-          "vocabulary": "https://professional-licences.example.org/licence-statuses",
-          "values": [
-            "recorded-active",
-            "recorded-suspended",
-            "recorded-expired"
-          ]
-        },
-        {
-          "id": "valid-from",
-          "type": "date",
-          "required": true,
-          "classification": "restricted",
-          "apiName": "validFrom"
-        },
-        {
-          "id": "valid-to",
-          "type": "date",
-          "required": false,
-          "classification": "restricted",
-          "apiName": "validTo"
-        },
-        {
-          "id": "licensed-activities",
-          "type": "structured",
-          "required": true,
-          "classification": "restricted",
-          "apiName": "licensedActivities",
-          "maxBytes": 512,
-          "schema": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "enum": [
-                "example-assessment",
-                "example-advisory-services",
-                "example-practical-services"
-              ]
-            },
-            "minItems": 1,
-            "maxItems": 3,
-            "uniqueItems": true
-          }
-        },
-        {
-          "id": "authorization-conditions",
-          "type": "string",
-          "required": true,
-          "classification": "restricted",
-          "apiName": "authorizationConditions",
-          "maxLength": 500
-        }
-      ],
-      "changeControl": {
-        "requiredFor": [
-          "patch"
-        ]
-      },
-      "constraints": [
-        {
-          "kind": "unique",
-          "fields": [
-            "local-identifier"
-          ]
-        },
-        {
-          "kind": "compare",
-          "left": "valid-from",
-          "operator": "less_than_or_equal",
-          "right": "valid-to"
-        }
-      ]
-    },
-    {
-      "id": "scope-correction",
-      "primaryDataset": "directory",
-      "route": "scope-corrections",
-      "mutationMode": "mutable",
-      "classification": "restricted",
-      "fields": [
-        {
-          "id": "record",
-          "type": "reference",
-          "required": true,
-          "classification": "restricted",
-          "target": "professional-license"
-        },
-        {
-          "id": "licensed-activities",
-          "type": "structured",
-          "required": true,
-          "classification": "restricted",
-          "apiName": "licensedActivities",
-          "maxBytes": 512,
-          "schema": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "enum": [
-                "example-assessment",
-                "example-advisory-services",
-                "example-practical-services"
-              ]
-            },
-            "minItems": 1,
-            "maxItems": 3,
-            "uniqueItems": true
-          }
-        },
-        {
-          "id": "authorization-conditions",
-          "type": "string",
-          "required": true,
-          "classification": "restricted",
-          "apiName": "authorizationConditions",
-          "maxLength": 500
-        },
-        {
-          "id": "reason",
-          "type": "string",
-          "required": true,
-          "classification": "restricted",
-          "maxLength": 500,
-          "minLength": 1
-        },
-        {
-          "id": "supporting-reference",
-          "type": "string",
-          "required": true,
-          "classification": "restricted",
-          "apiName": "supportingReference",
-          "maxLength": 500,
-          "minLength": 1
-        }
-      ],
-      "changeRequest": {
-        "effects": [
-          {
-            "target": {
-              "fromField": "record"
-            },
-            "operation": "patch",
-            "set": {
-              "licensed-activities": {
-                "fromField": "licensed-activities"
-              },
-              "authorization-conditions": {
-                "fromField": "authorization-conditions"
-              }
-            }
-          }
-        ],
-        "review": {
-          "authority": "casework",
-          "policyId": "scope-correction"
-        },
-        "onApproved": {
-          "mode": "manual"
-        },
-        "retention": {
-          "mode": "operator_erase"
-        }
-      }
-    }
-  ],
-  "accessProfiles": [
-    {
-      "id": "reader",
-      "default": false,
-      "principalClaim": "registry_principal",
-      "requiredScopes": [
-        "starter:reader"
-      ],
-      "requiredPurposes": [
-        "starter-learning"
-      ],
-      "permissions": [
-        {
-          "entity": "professional-license",
-          "operations": [
-            "get",
-            "list"
-          ],
-          "readableFields": [
-            "profession-code",
-            "jurisdiction-reference",
-            "licence-status",
-            "valid-from",
-            "valid-to"
-          ],
-          "rowBoundaries": []
-        }
-      ]
-    },
-    {
-      "id": "editor",
-      "default": true,
-      "principalClaim": "registry_principal",
-      "requiredScopes": [
-        "starter:editor"
-      ],
-      "requiredPurposes": [
-        "starter-learning"
-      ],
-      "permissions": [
-        {
-          "entity": "professional-license",
-          "operations": [
-            "get",
-            "list",
-            "revisions",
-            "create"
-          ],
-          "readableFields": [
-            "local-identifier",
-            "person-reference",
-            "regulator-reference",
-            "jurisdiction-reference",
-            "profession-code",
-            "licence-status",
-            "valid-from",
-            "valid-to",
-            "licensed-activities",
-            "authorization-conditions"
-          ],
-          "rowBoundaries": [],
-          "revisionAccess": true,
-          "writableFields": [
-            "local-identifier",
-            "person-reference",
-            "regulator-reference",
-            "jurisdiction-reference",
-            "profession-code",
-            "licence-status",
-            "valid-from",
-            "valid-to",
-            "licensed-activities",
-            "authorization-conditions"
-          ],
-          "filterableFields": [
-            "local-identifier"
-          ]
-        },
-        {
-          "entity": "scope-correction",
-          "operations": [
-            "create",
-            "get",
-            "patch",
-            "submit_request",
-            "revise_request",
-            "cancel_request",
-            "list"
-          ],
-          "readableFields": [
-            "record",
-            "licensed-activities",
-            "authorization-conditions",
-            "reason",
-            "supporting-reference"
-          ],
-          "writableFields": [
-            "record",
-            "licensed-activities",
-            "authorization-conditions",
-            "reason",
-            "supporting-reference"
-          ],
-          "requestVisibility": "owner",
-          "rowBoundaries": [],
-          "readableRequestFields": [
-            "reason",
-            "review_state"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "reviewer",
-      "default": false,
-      "principalClaim": "registry_principal",
-      "requiredScopes": [
-        "starter:reviewer"
-      ],
-      "requiredPurposes": [
-        "starter-learning"
-      ],
-      "permissions": [
-        {
-          "entity": "professional-license",
-          "operations": [
-            "get",
-            "list",
-            "revisions"
-          ],
-          "readableFields": [
-            "local-identifier",
-            "person-reference",
-            "regulator-reference",
-            "jurisdiction-reference",
-            "profession-code",
-            "licence-status",
-            "valid-from",
-            "valid-to",
-            "licensed-activities",
-            "authorization-conditions"
-          ],
-          "rowBoundaries": [],
-          "revisionAccess": true,
-          "filterableFields": [
-            "local-identifier"
-          ]
-        },
-        {
-          "entity": "scope-correction",
-          "operations": [
-            "get",
-            "apply_request",
-            "list"
-          ],
-          "readableFields": [
-            "record",
-            "licensed-activities",
-            "authorization-conditions",
-            "reason",
-            "supporting-reference"
-          ],
-          "filterableFields": [
-            "record"
-          ],
-          "rowBoundaries": [],
-          "applyTargets": [
-            {
-              "entity": "professional-license",
-              "rowBoundaries": []
-            }
-          ],
-          "readableRequestFields": [
-            "reason",
-            "review_state"
-          ]
-        }
-      ],
-      "actorKind": "human",
-      "requesterClients": [
-        "staff",
-        "supervisor"
-      ]
-    },
-    {
-      "id": "holder",
-      "default": false,
-      "principalClaim": "registry_principal",
-      "requiredScopes": [
-        "starter:holder"
-      ],
-      "requiredPurposes": [
-        "starter-learning"
-      ],
-      "permissions": [
-        {
-          "entity": "professional-license",
-          "operations": [
-            "get",
-            "list"
-          ],
-          "readableFields": [
-            "local-identifier",
-            "person-reference",
-            "regulator-reference",
-            "jurisdiction-reference",
-            "profession-code",
-            "licence-status",
-            "valid-from",
-            "valid-to",
-            "licensed-activities",
-            "authorization-conditions"
-          ],
-          "rowBoundaries": [
-            {
-              "field": "person-reference",
-              "claim": "person_reference",
-              "operator": "equals"
-            }
-          ],
-          "filterableFields": [
-            "local-identifier"
-          ]
-        },
-        {
-          "entity": "scope-correction",
-          "operations": [
-            "create",
-            "get",
-            "patch",
-            "submit_request",
-            "revise_request",
-            "cancel_request",
-            "list"
-          ],
-          "readableFields": [
-            "record",
-            "licensed-activities",
-            "authorization-conditions",
-            "reason",
-            "supporting-reference"
-          ],
-          "writableFields": [
-            "record",
-            "licensed-activities",
-            "authorization-conditions",
-            "reason",
-            "supporting-reference"
-          ],
-          "requestVisibility": "owner",
-          "rowBoundaries": [],
-          "submitterTargets": [
-            "professional-license"
-          ],
-          "readableRequestFields": [
-            "reason",
-            "review_state"
-          ]
-        }
-      ]
-    }
-  ]
-}
+# Registry project for the professional-licences starter: the entities,
+# access profiles, and catalogue description that `bregctl check`
+# compiles into a running registry. Read MODEL.md alongside it for
+# the reasoning behind these choices. canonicalBaseIri below is a
+# reserved example.org name standing in for your registry's real
+# identity; replace it before you build a production package.
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: professional-licences
+  canonicalBaseIri: https://professional-licences.example.org
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: local
+  instanceId: professional-licences-starter
+  sequence: 1
+  sourceRevision: professional-licences-core-0.1.0
+manifestProjection:
+  accessProfile: editor
+  classificationCeiling: restricted
+  catalog:
+    baseUrl: https://professional-licences.example.org
+    title: Professional licence register
+    description: Record professional licence decisions and review recorded activity and condition corrections.
+    publisher:
+      id: synthetic-custodian
+      name: Synthetic example custodian
+  publicService:
+    id: directory-service
+    title: Professional licence register
+  datasets:
+    - id: directory
+      title: Professional licence register
+      description: Record professional licence decisions and review recorded activity and condition corrections.
+      owner: Synthetic example custodian
+      status: active
+  dataServices:
+    - id: directory-api
+      title: Professional licence register
+      endpointUrl: https://professional-licences.example.org
+      servesDatasets:
+        - directory
+  distributions: []
+  entities:
+    - id: professional-license
+      title: Professional License
+      conceptUri: https://publicschema.org/ProfessionalLicense
+      identifiers:
+        - field: local-identifier
+          kind: local
+      fields:
+        - id: person-reference
+          concepts:
+            - https://publicschema.org/registered_subject
+        - id: regulator-reference
+          concepts:
+            - https://publicschema.org/registration_authority
+        - id: jurisdiction-reference
+          concepts:
+            - https://publicschema.org/registration_jurisdiction
+        - id: profession-code
+          concepts:
+            - https://publicschema.org/profession_code
+        - id: valid-from
+          concepts:
+            - https://publicschema.org/valid_from
+        - id: valid-to
+          concepts:
+            - https://publicschema.org/valid_to
+        - id: authorization-conditions
+          concepts:
+            - https://publicschema.org/authorization_conditions
+entities:
+  - id: professional-license
+    primaryDataset: directory
+    route: professional-licenses
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - id: local-identifier
+        type: string
+        required: true
+        classification: restricted
+        apiName: localIdentifier
+        minLength: 1
+        maxLength: 160
+      - id: person-reference
+        type: string
+        required: true
+        classification: restricted
+        apiName: personReference
+        minLength: 1
+        maxLength: 500
+      - id: regulator-reference
+        type: string
+        required: true
+        classification: restricted
+        apiName: regulatorReference
+        minLength: 1
+        maxLength: 500
+      - id: jurisdiction-reference
+        type: string
+        required: true
+        classification: restricted
+        apiName: jurisdictionReference
+        minLength: 1
+        maxLength: 500
+      - id: profession-code
+        type: vocabulary-code
+        required: true
+        classification: restricted
+        apiName: professionCode
+        vocabulary: https://professional-licences.example.org/profession-codes
+        values:
+          - example-nursing
+          - example-engineering
+      - id: licence-status
+        type: vocabulary-code
+        required: true
+        classification: restricted
+        apiName: licenceStatus
+        vocabulary: https://professional-licences.example.org/licence-statuses
+        values:
+          - recorded-active
+          - recorded-suspended
+          - recorded-expired
+      - id: valid-from
+        type: date
+        required: true
+        classification: restricted
+        apiName: validFrom
+      - id: valid-to
+        type: date
+        required: false
+        classification: restricted
+        apiName: validTo
+      - id: licensed-activities
+        type: structured
+        required: true
+        classification: restricted
+        apiName: licensedActivities
+        maxBytes: 512
+        schema:
+          type: array
+          items:
+            type: string
+            enum:
+              - example-assessment
+              - example-advisory-services
+              - example-practical-services
+          minItems: 1
+          maxItems: 3
+          uniqueItems: true
+      - id: authorization-conditions
+        type: string
+        required: true
+        classification: restricted
+        apiName: authorizationConditions
+        maxLength: 500
+    changeControl:
+      requiredFor:
+        - patch
+    constraints:
+      - kind: unique
+        fields:
+          - local-identifier
+      - kind: compare
+        left: valid-from
+        operator: less_than_or_equal
+        right: valid-to
+  - id: scope-correction
+    primaryDataset: directory
+    route: scope-corrections
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - id: record
+        type: reference
+        required: true
+        classification: restricted
+        target: professional-license
+      - id: licensed-activities
+        type: structured
+        required: true
+        classification: restricted
+        apiName: licensedActivities
+        maxBytes: 512
+        schema:
+          type: array
+          items:
+            type: string
+            enum:
+              - example-assessment
+              - example-advisory-services
+              - example-practical-services
+          minItems: 1
+          maxItems: 3
+          uniqueItems: true
+      - id: authorization-conditions
+        type: string
+        required: true
+        classification: restricted
+        apiName: authorizationConditions
+        maxLength: 500
+      - id: reason
+        type: string
+        required: true
+        classification: restricted
+        maxLength: 500
+        minLength: 1
+      - id: supporting-reference
+        type: string
+        required: true
+        classification: restricted
+        apiName: supportingReference
+        maxLength: 500
+        minLength: 1
+    changeRequest:
+      effects:
+        - target:
+            fromField: record
+          operation: patch
+          set:
+            licensed-activities:
+              fromField: licensed-activities
+            authorization-conditions:
+              fromField: authorization-conditions
+      review:
+        authority: casework
+        policyId: scope-correction
+      onApproved:
+        mode: manual
+      retention:
+        mode: operator_erase
+accessProfiles:
+  - id: reader
+    default: false
+    principalClaim: registry_principal
+    requiredScopes:
+      - starter:reader
+    requiredPurposes:
+      - starter-learning
+    permissions:
+      - entity: professional-license
+        operations:
+          - get
+          - list
+        readableFields:
+          - profession-code
+          - jurisdiction-reference
+          - licence-status
+          - valid-from
+          - valid-to
+        rowBoundaries: []
+  - id: editor
+    default: true
+    principalClaim: registry_principal
+    requiredScopes:
+      - starter:editor
+    requiredPurposes:
+      - starter-learning
+    permissions:
+      - entity: professional-license
+        operations:
+          - get
+          - list
+          - revisions
+          - create
+        readableFields:
+          - local-identifier
+          - person-reference
+          - regulator-reference
+          - jurisdiction-reference
+          - profession-code
+          - licence-status
+          - valid-from
+          - valid-to
+          - licensed-activities
+          - authorization-conditions
+        rowBoundaries: []
+        revisionAccess: true
+        writableFields:
+          - local-identifier
+          - person-reference
+          - regulator-reference
+          - jurisdiction-reference
+          - profession-code
+          - licence-status
+          - valid-from
+          - valid-to
+          - licensed-activities
+          - authorization-conditions
+        filterableFields:
+          - local-identifier
+      - entity: scope-correction
+        operations:
+          - create
+          - get
+          - patch
+          - submit_request
+          - revise_request
+          - cancel_request
+          - list
+        readableFields:
+          - record
+          - licensed-activities
+          - authorization-conditions
+          - reason
+          - supporting-reference
+        writableFields:
+          - record
+          - licensed-activities
+          - authorization-conditions
+          - reason
+          - supporting-reference
+        requestVisibility: owner
+        rowBoundaries: []
+        readableRequestFields:
+          - reason
+          - review_state
+  - id: reviewer
+    default: false
+    principalClaim: registry_principal
+    requiredScopes:
+      - starter:reviewer
+    requiredPurposes:
+      - starter-learning
+    permissions:
+      - entity: professional-license
+        operations:
+          - get
+          - list
+          - revisions
+        readableFields:
+          - local-identifier
+          - person-reference
+          - regulator-reference
+          - jurisdiction-reference
+          - profession-code
+          - licence-status
+          - valid-from
+          - valid-to
+          - licensed-activities
+          - authorization-conditions
+        rowBoundaries: []
+        revisionAccess: true
+        filterableFields:
+          - local-identifier
+      - entity: scope-correction
+        operations:
+          - get
+          - apply_request
+          - list
+        readableFields:
+          - record
+          - licensed-activities
+          - authorization-conditions
+          - reason
+          - supporting-reference
+        filterableFields:
+          - record
+        rowBoundaries: []
+        applyTargets:
+          - entity: professional-license
+            rowBoundaries: []
+        readableRequestFields:
+          - reason
+          - review_state
+    actorKind: human
+    requesterClients:
+      - staff
+      - supervisor
+  - id: holder
+    default: false
+    principalClaim: registry_principal
+    requiredScopes:
+      - starter:holder
+    requiredPurposes:
+      - starter-learning
+    permissions:
+      - entity: professional-license
+        operations:
+          - get
+          - list
+        readableFields:
+          - local-identifier
+          - person-reference
+          - regulator-reference
+          - jurisdiction-reference
+          - profession-code
+          - licence-status
+          - valid-from
+          - valid-to
+          - licensed-activities
+          - authorization-conditions
+        rowBoundaries:
+          - field: person-reference
+            claim: person_reference
+            operator: equals
+        filterableFields:
+          - local-identifier
+      - entity: scope-correction
+        operations:
+          - create
+          - get
+          - patch
+          - submit_request
+          - revise_request
+          - cancel_request
+          - list
+        readableFields:
+          - record
+          - licensed-activities
+          - authorization-conditions
+          - reason
+          - supporting-reference
+        writableFields:
+          - record
+          - licensed-activities
+          - authorization-conditions
+          - reason
+          - supporting-reference
+        requestVisibility: owner
+        rowBoundaries: []
+        submitterTargets:
+          - professional-license
+        readableRequestFields:
+          - reason
+          - review_state

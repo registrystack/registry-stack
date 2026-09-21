@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/breg-explain/v1alpha1/QueriesExplanation.schema.json",
+  "title": "QueriesExplanation",
+  "description": "Wire shape of `explanation` for `bregctl explain queries`. Every node is reconstructed field by field by bregctl and is pinned in full, except `fieldType`, which is a passthrough of the compiled field-type source and is declared opaque wherever it appears.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "operations"],
+  "$defs": {
+    "fieldType": {
+      "type": "object",
+      "description": "Passthrough of the compiled field type. Shape follows FieldTypeSource and is outside this contract version."
+    },
+    "fieldSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "apiName", "sourceKind", "fieldType"],
+      "properties": {
+        "field": { "type": "string" },
+        "apiName": { "type": "string" },
+        "sourceKind": { "enum": ["stored", "derived"] },
+        "fieldType": { "$ref": "#/$defs/fieldType" }
+      }
+    }
+  },
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/breg-explain/v1alpha1"
+    },
+    "kind": {
+      "const": "QueriesExplanation"
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id", "routeId", "profile", "entity", "kind", "apiFields", "filterable",
+          "sortable", "allowCount", "selectors", "readPath", "wire", "bounds"
+        ],
+        "properties": {
+          "id": { "type": "string" },
+          "routeId": { "type": "string" },
+          "profile": { "type": "string" },
+          "entity": { "type": "string" },
+          "kind": { "enum": ["list", "current", "as_of", "snapshot"] },
+          "apiFields": { "type": "array", "items": { "$ref": "#/$defs/fieldSummary" } },
+          "selectors": { "type": "array", "items": { "$ref": "#/$defs/fieldSummary" } },
+          "filterable": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["apiName", "field", "fieldType", "operators", "wireOperators", "examples"],
+              "properties": {
+                "apiName": { "type": "string" },
+                "field": { "type": "string" },
+                "fieldType": { "$ref": "#/$defs/fieldType" },
+                "operators": {
+                  "type": "array",
+                  "items": {
+                    "enum": ["equals", "in", "range", "is_null", "is_not_null", "prefix", "contains"]
+                  }
+                },
+                "wireOperators": {
+                  "type": "array",
+                  "items": {
+                    "enum": ["eq", "ne", "in", "ge", "gt", "le", "lt", "eq null", "ne null", "startswith", "contains"]
+                  }
+                },
+                "examples": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          },
+          "sortable": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["apiName", "field", "fieldType", "directions", "examples"],
+              "properties": {
+                "apiName": { "type": "string" },
+                "field": { "type": "string" },
+                "fieldType": { "$ref": "#/$defs/fieldType" },
+                "directions": { "type": "array", "items": { "enum": ["asc"] } },
+                "examples": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          },
+          "allowCount": { "type": "boolean" },
+          "readPath": { "type": ["string", "null"] },
+          "wire": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "select", "filter", "orderBy", "pageSize", "count", "cursor", "accessProfile", "asOf"
+            ],
+            "properties": {
+              "select": { "const": "$select" },
+              "filter": { "const": "$filter" },
+              "orderBy": { "const": "$orderby" },
+              "pageSize": { "const": "$top" },
+              "count": { "const": "$count" },
+              "cursor": { "const": "$skiptoken" },
+              "accessProfile": { "const": "accessProfile" },
+              "asOf": { "const": "asOf" },
+              "bbox": { "const": "bbox" }
+            }
+          },
+          "bounds": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "maxPageSize", "maxTop", "maxSelectedFields", "maxFilterPayloadBytes",
+              "maxFilterDepth", "maxFilterNodes", "maxFilterPredicates", "maxInValues"
+            ],
+            "properties": {
+              "maxPageSize": { "type": "integer" },
+              "maxTop": { "type": "integer" },
+              "maxSelectedFields": { "type": "integer" },
+              "maxFilterPayloadBytes": { "type": "integer" },
+              "maxFilterDepth": { "type": "integer" },
+              "maxFilterNodes": { "type": "integer" },
+              "maxFilterPredicates": { "type": "integer" },
+              "maxInValues": { "type": "integer" }
+            }
+          },
+          "spatialQueries": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["bbox"],
+            "properties": {
+              "bbox": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "field", "apiName", "maximumLongitudeSpanDegrees", "maximumLatitudeSpanDegrees",
+                  "coordinateReferenceSystem", "requiresPostgis"
+                ],
+                "properties": {
+                  "field": { "type": "string" },
+                  "apiName": { "type": "string" },
+                  "maximumLongitudeSpanDegrees": { "type": "number" },
+                  "maximumLatitudeSpanDegrees": { "type": "number" },
+                  "coordinateReferenceSystem": { "const": "CRS84" },
+                  "requiresPostgis": { "const": true }
+                }
+              }
+            }
+          },
+          "gis": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["collectionId", "collectionPath", "itemsPath", "accessProfile", "representation"],
+            "properties": {
+              "collectionId": { "type": "string" },
+              "collectionPath": { "type": "string" },
+              "itemsPath": { "type": "string" },
+              "accessProfile": { "type": "string" },
+              "representation": { "const": "application/geo+json" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

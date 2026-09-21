@@ -6,8 +6,8 @@ use registry_casework::{
     PolicyPackageManifest, PostgresStore, RuntimeConfig, POLICY_PACKAGE_MANIFEST_FILE,
 };
 use registry_casework_core::{
-    AttemptSettlement, AttemptSettlementReport, CaseworkProject, SourceRetentionReport,
-    SourceRetentionSelector,
+    AttemptSettlement, AttemptSettlementReport, CaseworkProject, ReviewContextStrategy,
+    ReviewKindPurpose, SourcePolicy, SourceRetentionReport, SourceRetentionSelector,
 };
 use registry_platform_config::{SecretError, SecretProvider, SecretReference, SecretResolver};
 use serde_json::{json, Value};
@@ -590,7 +590,18 @@ pub(super) fn simulate(project: &Path, fixture: &Path) -> Result<Value> {
     crate::policy::simulate(project, &policy, fixture)
 }
 
-pub(super) fn package(project: &Path, output: &Path) -> Result<Value> {
+/// The compute-only half of a policy package: everything `package` and
+/// `package_dry_run` share before any filesystem write.
+struct PackageContents {
+    project: PathBuf,
+    manifest: PolicyPackageManifest,
+    inputs: Vec<(String, Vec<u8>)>,
+}
+
+/// Canonicalize the project, run every package validation, and assemble the
+/// exact inputs and identity a package would carry. Performs no writes, so
+/// both `package` and `package_dry_run` can share it.
+fn compute_package(project: &Path) -> Result<PackageContents> {
     let project = fs::canonicalize(project).context("resolving the Casework authoring project")?;
     let policy = load_and_check_policy(&project)?;
     check_source_descriptions(&project)?;
@@ -606,6 +617,39 @@ pub(super) fn package(project: &Path, output: &Path) -> Result<Value> {
     }
     let manifest = PolicyPackageManifest::build(inputs.clone())
         .context("building the Casework policy package identity")?;
+    Ok(PackageContents {
+        project,
+        manifest,
+        inputs,
+    })
+}
+
+/// Report the exact `policyDigest` and `files` a package of this project
+/// would carry, without writing anything.
+pub(super) fn package_dry_run(project: &Path) -> Result<Value> {
+    let PackageContents {
+        project, manifest, ..
+    } = compute_package(project)?;
+    Ok(json!({
+        "ok": true,
+        "command": "package",
+        "project": project,
+        "dryRun": true,
+        "policyDigest": manifest.policy_digest,
+        "files": manifest.files,
+        "runtimeConfigurationIncluded": false,
+        "secretsIncluded": false,
+        "networkAccess": false,
+        "databaseAccess": false,
+    }))
+}
+
+pub(super) fn package(project: &Path, output: &Path) -> Result<Value> {
+    let PackageContents {
+        project,
+        manifest,
+        inputs,
+    } = compute_package(project)?;
 
     if output.exists() {
         bail!("policy package output already exists");
@@ -648,6 +692,7 @@ pub(super) fn package(project: &Path, output: &Path) -> Result<Value> {
         "command": "package",
         "project": project,
         "output": output,
+        "dryRun": false,
         "policyDigest": manifest.policy_digest,
         "files": manifest.files,
         "runtimeConfigurationIncluded": false,
@@ -1099,12 +1144,104 @@ fn load_runtime(project: &Path, requested: Option<&Path>) -> Result<RuntimeSelec
 
 fn check_source_descriptions(project: &Path) -> Result<()> {
     let policy = load_and_check_policy(project)?;
-    for source in policy.sources {
+    for source in &policy.sources {
         let path = project_input_path(project, &source.description)?;
         let bytes = read_package_input(&path)?;
-        validate_breg_source_description(&source, &bytes).map_err(|_| {
+        validate_breg_source_description(source, &bytes).map_err(|_| {
             anyhow::anyhow!("source description {} does not match the exact BReg adapter contract bound to this source; repeat source add", path.display())
         })?;
+        check_source_review_binding(&policy, source, &path, &bytes)?;
+    }
+    Ok(())
+}
+
+/// Confirm the pinned description's declared review policy still resolves
+/// against this project's declared reviewKinds and reviewProducers,
+/// mirroring the assertions `caseworkctl source add` makes when a binding is
+/// first written: the named policy exists, its purpose is approval, its
+/// contextStrategy is source, and casework.yaml admits at least one
+/// reviewProducers[] entry whose sourceNamespaces contains this source's id
+/// and whose kinds contains the pinned policy id. `source add` additionally
+/// requires exactly one such entry, because it must choose the credentials it
+/// pins; repinning is not what this check guards, so it accepts several.
+/// `validate_breg_source_description` only confirms the description's shape
+/// matches the closed BReg adapter contract; it forwards `review.policyId`
+/// unchecked, so a later hand-edit of casework.yaml leaves the binding
+/// broken with no signal at authoring time. Removing, renaming, or
+/// repurposing the reviewKinds entry, or dropping or retargeting the
+/// producer that admits this source and policy, breaks it in exactly the
+/// way it breaks at runtime: the review submission names a policy Casework
+/// never declared, or arrives from a producer whose kinds and
+/// sourceNamespaces no longer cover it, which the Casework runtime forbids.
+/// Either way it is refused and dead-letters as a permanently failed
+/// background job. A second producer admitting the same pair is a different
+/// fault: the runtime resolves a producer by actor identity and is
+/// unaffected, but `source add` refuses to choose between two, so the
+/// project can no longer be repinned by the command that wrote the binding.
+///
+/// This check is offline and only re-derives what the pinned description
+/// already asserts about itself against the policy on disk right now. It
+/// cannot detect drift in the BReg registry.yaml this description was
+/// compiled from after that compilation happened: confirming that would
+/// require re-deriving `sourceRevision`, which this check does not do.
+/// Every refusal below names the pinned `sourceRevision` and is worded to
+/// claim only that the binding is broken as pinned, never that the pin has
+/// been verified current.
+fn check_source_review_binding(
+    policy: &CaseworkProject,
+    source: &SourcePolicy,
+    path: &Path,
+    bytes: &[u8],
+) -> Result<()> {
+    let root: Value = serde_json::from_slice(bytes)
+        .context("re-parsing a source description already validated as well-formed JSON")?;
+    let review = &root["request"]["review"];
+    if review.get("mode").and_then(Value::as_str) == Some("none") {
+        return Ok(());
+    }
+    let source_revision = root["sourceRevision"].as_str().context(
+        "source description sourceRevision was not a string despite passing description validation",
+    )?;
+    let policy_id = review["policyId"].as_str().context(
+        "source description review.policyId was not a string despite passing description validation",
+    )?;
+    let source_id = source.id.as_str();
+    let rendered_path = path.display();
+    let Some(kind) = policy.review_kinds.iter().find(|kind| kind.id == policy_id) else {
+        bail!(
+            "source {source_id} description {rendered_path} pins review.policyId {policy_id:?} at sourceRevision {source_revision:?}, but casework.yaml declares no reviewKinds[].id matching {policy_id:?} as pinned; declare a reviewKinds entry with id {policy_id:?} in casework.yaml, or re-run `caseworkctl source add` to repin a policy that resolves"
+        );
+    };
+    if kind.purpose != ReviewKindPurpose::Approval {
+        bail!(
+            "source {source_id} description {rendered_path} pins review.policyId {policy_id:?} at sourceRevision {source_revision:?}, which resolves to a reviewKinds entry whose purpose is not approval as pinned; set reviewKinds[].purpose to approval for {policy_id:?} in casework.yaml, or re-run `caseworkctl source add` to repin a policy that qualifies"
+        );
+    }
+    if kind.context_strategy != ReviewContextStrategy::Source {
+        bail!(
+            "source {source_id} description {rendered_path} pins review.policyId {policy_id:?} at sourceRevision {source_revision:?}, which resolves to a reviewKinds entry whose contextStrategy is not source as pinned; set reviewKinds[].contextStrategy to source for {policy_id:?} in casework.yaml, or re-run `caseworkctl source add` to repin a policy that qualifies"
+        );
+    }
+    // Mirrors the producer filter `caseworkctl source add` applies at
+    // crates/registry-caseworkctl/src/source_add.rs:450-464: an admitting
+    // producer is one whose sourceNamespaces contains this source's id and
+    // whose kinds contains the pinned policy id. Only the filter is mirrored,
+    // not `source add`'s exactly-one rule: that command has to pick the single
+    // identity it writes into the description, while the runtime resolves a
+    // producer by the authenticated actor's profile, issuer, and subject in
+    // ReviewRuntime::producer_for_actor. Two identities admitting one source
+    // and policy are a working failover pair, not a broken binding.
+    let admitted = policy.review_producers.iter().any(|producer| {
+        producer
+            .source_namespaces
+            .iter()
+            .any(|namespace| namespace.as_str() == source_id)
+            && producer.kinds.iter().any(|kind| kind.as_str() == policy_id)
+    });
+    if !admitted {
+        bail!(
+            "source {source_id} description {rendered_path} pins review.policyId {policy_id:?} at sourceRevision {source_revision:?}, but casework.yaml admits no reviewProducers[] entry whose sourceNamespaces includes {source_id:?} and whose kinds includes {policy_id:?} as pinned; declare a reviewProducers[] entry admitting source {source_id:?} for review kind {policy_id:?} in casework.yaml, or re-run `caseworkctl source add` to repin a policy a producer admits"
+        );
     }
     Ok(())
 }
@@ -1662,6 +1799,58 @@ mod tests {
     }
 
     #[test]
+    fn package_dry_run_reports_the_same_digest_without_writing() {
+        fn count_files(dir: &Path) -> usize {
+            let mut count = 0;
+            for entry in fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    count += count_files(&path);
+                } else {
+                    count += 1;
+                }
+            }
+            count
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        init(&project, "standalone-decision").unwrap();
+        let files_before = count_files(&project);
+
+        let output = root.path().join("package");
+        let dry = package_dry_run(&project).unwrap();
+        assert_eq!(dry["command"], "package");
+        assert_eq!(dry["dryRun"], true);
+        assert!(dry["policyDigest"].as_str().unwrap().starts_with("sha256:"));
+        assert!(dry.get("output").is_none());
+        assert!(!output.exists());
+        assert_eq!(count_files(&project), files_before);
+
+        let real = package(&project, &output).unwrap();
+        assert_eq!(real["dryRun"], false);
+        assert_eq!(real["policyDigest"], dry["policyDigest"]);
+        assert_eq!(real["files"], dry["files"]);
+    }
+
+    #[test]
+    fn package_dry_run_still_refuses_an_invalid_project() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        init(&project, "standalone-decision").unwrap();
+        let actual_policy = root.path().join("actual-casework.yaml");
+        fs::rename(project.join("casework.yaml"), &actual_policy).unwrap();
+        std::os::unix::fs::symlink(&actual_policy, project.join("casework.yaml")).unwrap();
+
+        let output = root.path().join("package");
+        let real_error = format!("{:#}", package(&project, &output).unwrap_err());
+        let dry_run_error = format!("{:#}", package_dry_run(&project).unwrap_err());
+        assert_eq!(real_error, dry_run_error);
+        assert!(dry_run_error.contains("regular file"), "{dry_run_error}");
+        assert!(!output.exists());
+    }
+
+    #[test]
     fn source_description_paths_cannot_leave_the_project() {
         let root = tempfile::tempdir().unwrap();
         assert!(project_input_path(root.path(), "../source.json").is_err());
@@ -1683,5 +1872,202 @@ mod tests {
         let config = RuntimeConfig::load(runtime).unwrap();
         assert_eq!(config.listener.bind, "127.0.0.1:8100".parse().unwrap());
         assert!(config.sources.contains_key("professional-licences"));
+    }
+
+    // registrystack/registry-stack#1256: a pinned BReg source description
+    // may name a review.policyId that resolves to no declared reviewKinds
+    // entry (or to one that cannot actually accept the submission). Nothing
+    // refused that at authoring time; the review request would instead be
+    // accepted and its background submission would silently dead-letter.
+    // `write_offline_project` reuses the same CASEWORK_YAML / BREG_SOURCE_DESCRIPTION
+    // fixture pair other tests in this module already build offline projects from.
+    fn write_offline_project(
+        casework_yaml: &str,
+        description: &str,
+    ) -> (tempfile::TempDir, PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("authored");
+        fs::create_dir_all(project.join("sources")).unwrap();
+        fs::write(project.join("casework.yaml"), casework_yaml).unwrap();
+        fs::write(
+            project.join("sources/professional-licences.json"),
+            description,
+        )
+        .unwrap();
+        (root, project)
+    }
+
+    #[test]
+    fn check_source_descriptions_refuses_an_unresolved_review_policy_id() {
+        let mut description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
+        description["request"]["review"]["policyId"] = json!("missing-review-kind");
+        let description = serde_json::to_string(&description).unwrap();
+        let (_root, project) = write_offline_project(CASEWORK_YAML, &description);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(error.contains("missing-review-kind"), "{error}");
+        assert!(error.contains("sha256:source-revision"), "{error}");
+    }
+
+    #[test]
+    fn check_source_descriptions_accepts_a_no_review_description_with_no_declared_review_kinds() {
+        let no_review_kinds_yaml = CASEWORK_YAML.split("reviewKinds:\n").next().unwrap();
+        let mut description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
+        description["request"]["review"] = json!({"mode": "none"});
+        let description = serde_json::to_string(&description).unwrap();
+        let (_root, project) = write_offline_project(no_review_kinds_yaml, &description);
+
+        check_source_descriptions(&project).unwrap();
+    }
+
+    #[test]
+    fn check_source_descriptions_accepts_a_policy_id_that_resolves_to_a_declared_kind() {
+        let (_root, project) = write_offline_project(CASEWORK_YAML, BREG_SOURCE_DESCRIPTION);
+
+        check_source_descriptions(&project).unwrap();
+    }
+
+    #[test]
+    fn check_source_descriptions_refuses_a_resolved_kind_with_the_wrong_context_strategy() {
+        let wrong_context_yaml =
+            CASEWORK_YAML.replace("contextStrategy: source", "contextStrategy: submitted");
+        let (_root, project) = write_offline_project(&wrong_context_yaml, BREG_SOURCE_DESCRIPTION);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(error.contains("contextStrategy"), "{error}");
+        assert!(error.contains("scope-correction"), "{error}");
+        assert!(!error.contains("no declared reviewKinds"), "{error}");
+    }
+
+    #[test]
+    fn check_source_descriptions_refuses_a_resolved_kind_with_the_wrong_purpose() {
+        // Swapping purpose alone would trip registry-casework-core's own
+        // AnswerOutcomes rule (an Answer-purpose kind needs a non-empty,
+        // all-Answered outcomes list) before this check ever ran, so the
+        // fixture also adds the minimal outcome that satisfies core's rule
+        // and keeps the fixture on the purpose branch this test targets.
+        let wrong_purpose_yaml = CASEWORK_YAML
+            .replace("purpose: approval", "purpose: answer")
+            .replace(
+                "reviewProducers:",
+                "    outcomes:\n      - id: answered\n        label: Answered\n        settlement: answered\n        reasonRequired: false\nreviewProducers:",
+            );
+        let (_root, project) = write_offline_project(&wrong_purpose_yaml, BREG_SOURCE_DESCRIPTION);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(error.contains("purpose"), "{error}");
+        assert!(error.contains("scope-correction"), "{error}");
+        assert!(!error.contains("no declared reviewKinds"), "{error}");
+    }
+
+    // A second reviewKinds entry, structurally identical to scope-correction's,
+    // so a producer's `kinds` can reference a real declared kind that is not
+    // the pinned policy id. registry-casework-core's own checks require every
+    // reviewProducers[].kinds[] entry to resolve to a declared reviewKinds
+    // entry, so a bogus kind id cannot stand in for this.
+    const OTHER_REVIEW_KIND_YAML: &str = r#"
+  - id: other-review
+    version: "1"
+    purpose: approval
+    contextStrategy: source
+    stages:
+      - id: review
+        queue: corrections
+        decidingProfiles: [staff]
+        requiredApprovals: 1
+    retention:
+      terminalDays: 30
+      accountabilityDays: 365
+    displaySchema:
+      type: object
+      additionalProperties: false
+      properties: {}
+"#;
+
+    #[test]
+    fn check_source_descriptions_refuses_when_no_producer_admits_this_source_namespace() {
+        // The only reviewProducers entry is renamed away from this source's
+        // id, the same shape as a producer being dropped outright: either
+        // way, zero producers admit this source and policy pair.
+        let renamed_namespace_yaml = CASEWORK_YAML.replace(
+            "sourceNamespaces: [professional-licences]",
+            "sourceNamespaces: [other-source]",
+        );
+        let (_root, project) =
+            write_offline_project(&renamed_namespace_yaml, BREG_SOURCE_DESCRIPTION);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(error.contains("admits no reviewProducers"), "{error}");
+        assert!(error.contains("professional-licences"), "{error}");
+        assert!(error.contains("scope-correction"), "{error}");
+        assert!(error.contains("sha256:source-revision"), "{error}");
+    }
+
+    #[test]
+    fn check_source_descriptions_refuses_when_no_producer_admits_this_review_kind() {
+        // The only reviewProducers entry still admits the source namespace,
+        // but its kinds[] now points at a different declared reviewKinds
+        // entry instead of the pinned policy id, so zero producers admit
+        // this source and policy pair.
+        let retargeted_kind_yaml = CASEWORK_YAML
+            .replacen(
+                "reviewProducers:\n",
+                &format!("{OTHER_REVIEW_KIND_YAML}reviewProducers:\n"),
+                1,
+            )
+            .replace("kinds: [scope-correction]", "kinds: [other-review]");
+        let (_root, project) =
+            write_offline_project(&retargeted_kind_yaml, BREG_SOURCE_DESCRIPTION);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(error.contains("admits no reviewProducers"), "{error}");
+        assert!(error.contains("professional-licences"), "{error}");
+        assert!(error.contains("scope-correction"), "{error}");
+    }
+
+    #[test]
+    fn check_source_descriptions_accepts_two_producer_identities_for_one_source_and_policy() {
+        // A second reviewProducers entry admits the same sourceNamespaces and
+        // kinds under a distinct id and subject: a failover integration beside
+        // the primary one. The runtime resolves a producer by the authenticated
+        // actor's profile, issuer, and subject, never by uniqueness, so both
+        // identities submit under the same pinned policy and neither shadows
+        // the other. Only `source add` needs exactly one, because it must pick
+        // the credentials it writes into the description.
+        let second_identity_yaml = CASEWORK_YAML.replace(
+            "    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n",
+            "    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n  - id: registry-breg-failover\n    profile: integration-requester\n    issuer: http://127.0.0.1:8091\n    subject: professional-review-breg-failover\n    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n",
+        );
+        let (_root, project) =
+            write_offline_project(&second_identity_yaml, BREG_SOURCE_DESCRIPTION);
+
+        check_source_descriptions(&project).unwrap();
+    }
+
+    #[test]
+    fn check_source_descriptions_accepts_the_producer_bound_to_this_source_and_policy_among_others()
+    {
+        // A second reviewProducers entry admits a different source
+        // namespace, proving the check selects the one producer actually
+        // bound to this source and policy rather than merely counting
+        // producers overall.
+        let extra_producer_yaml = CASEWORK_YAML.replace(
+            "    recoveryDays: 7\n",
+            "    recoveryDays: 7\n  - id: registry-breg-other\n    profile: integration-requester\n    issuer: http://127.0.0.1:8091\n    subject: professional-review-breg-other\n    sourceNamespaces: [other-source]\n    kinds: [scope-correction]\n    recoveryDays: 7\n",
+        );
+        let (_root, project) = write_offline_project(&extra_producer_yaml, BREG_SOURCE_DESCRIPTION);
+
+        check_source_descriptions(&project).unwrap();
+    }
+
+    #[test]
+    fn explain_refuses_the_same_unresolved_review_binding_as_check() {
+        let mut description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
+        description["request"]["review"]["policyId"] = json!("missing-review-kind");
+        let description = serde_json::to_string(&description).unwrap();
+        let (_root, project) = write_offline_project(CASEWORK_YAML, &description);
+
+        let error = format!("{:#}", explain(&project).unwrap_err());
+        assert!(error.contains("missing-review-kind"), "{error}");
     }
 }

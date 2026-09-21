@@ -5,6 +5,7 @@ accessProfiles:
   - {id: staff, principalClaim: sub, requiredScopes: [casework:staff], role: staff}
   - {id: supervisor, principalClaim: sub, requiredScopes: [casework:supervisor], role: supervisor}
   - {id: administrator, principalClaim: sub, requiredScopes: [casework:admin], role: administrator}
+  - {id: requester, principalClaim: sub, requiredScopes: [casework:request], role: requester}
 queues:
   - {id: triage, label: Triage}
   - {id: northern-review, label: Northern review}
@@ -33,6 +34,32 @@ sources:
       - entity: response-correction
         queue: corrections
         clock: response-budget
+reviewKinds:
+  - id: regional-review
+    version: "1"
+    purpose: approval
+    contextStrategy: source
+    stages:
+      - id: review
+        queue: corrections
+        decidingProfiles: [staff, supervisor]
+        requiredApprovals: 1
+    retention:
+      terminalDays: 30
+      accountabilityDays: 365
+    displaySchema:
+      type: object
+      additionalProperties: false
+      properties:
+        region: {type: string, enum: [north, south, islands]}
+reviewProducers:
+  - id: regional-breg
+    profile: requester
+    issuer: https://identity.example.test/realms/regional-review
+    subject: regional-review-breg
+    sourceNamespaces: [regional-register, response-register]
+    kinds: [regional-review]
+    recoveryDays: 7
 calendars:
   - id: office
     timezone: Asia/Bangkok

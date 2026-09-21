@@ -1,0 +1,395 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/breg-explain/v1alpha1/ActionsExplanation.schema.json",
+  "title": "ActionsExplanation",
+  "description": "Wire shape of `explanation` for `bregctl explain actions`. Every node is reconstructed field by field by bregctl and is pinned in full, except `fieldType` (a passthrough of the compiled field-type source) and `handler.possibleWrites`/`evidence.capabilities` (both raw passthroughs of compiled-model values), which are declared opaque. No tracked fixture exercises a WASM handler (`handler.kind == \"wasm\"`); that branch is pinned from source but unexercised by the test gate. No tracked fixture exercises a `clear` field mutation; that branch is likewise pinned but unexercised.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "actions"],
+  "$defs": {
+    "fieldType": {
+      "type": "object",
+      "description": "Passthrough of the compiled field type. Shape follows FieldTypeSource and is outside this contract version."
+    },
+    "fieldRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "apiName"],
+      "properties": {
+        "field": { "type": "string" },
+        "apiName": { "type": "string" }
+      }
+    },
+    "inputRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "apiName", "fieldType", "required", "classification"],
+      "properties": {
+        "input": { "type": "string" },
+        "apiName": { "type": "string" },
+        "fieldType": { "$ref": "#/$defs/fieldType" },
+        "required": { "type": "boolean" },
+        "classification": { "enum": ["public", "internal", "restricted"] }
+      }
+    },
+    "operation": {
+      "enum": [
+        "create", "get", "lookup", "list", "patch", "tombstone", "batch",
+        "revisions", "snapshot", "submit_request", "revise_request",
+        "cancel_request", "apply_request", "invoke"
+      ]
+    },
+    "rowBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim", "field", "operator"],
+      "properties": {
+        "claim": { "type": "string" },
+        "field": { "type": "string" },
+        "operator": { "enum": ["equals", "in"] }
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "kind", "method", "path", "operation", "accessProfiles",
+        "defaultAccessProfile", "requiresIdempotencyKey"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "enum": ["invoke", "target_conditions"] },
+        "method": { "const": "POST" },
+        "path": { "type": "string" },
+        "operation": { "$ref": "#/$defs/operation" },
+        "accessProfiles": { "type": "array", "items": { "type": "string" } },
+        "defaultAccessProfile": { "type": ["string", "null"] },
+        "requiresIdempotencyKey": { "type": "boolean" }
+      }
+    }
+  },
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/breg-explain/v1alpha1"
+    },
+    "kind": {
+      "const": "ActionsExplanation"
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id", "sourceModule", "contractFingerprint", "routes", "inputs", "effects",
+          "targets", "requiredConditionKeys", "permissions", "results", "bounds"
+        ],
+        "properties": {
+          "id": { "type": "string" },
+          "sourceModule": { "type": ["string", "null"] },
+          "contractFingerprint": { "type": "string" },
+          "routes": { "type": "array", "items": { "$ref": "#/$defs/route" } },
+          "inputs": { "type": "array", "items": { "$ref": "#/$defs/inputRef" } },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "operation", "target", "fields", "dependsOn"],
+              "properties": {
+                "id": { "type": "string" },
+                "operation": { "$ref": "#/$defs/operation" },
+                "target": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["entity", "binding"],
+                  "properties": {
+                    "entity": { "type": "string" },
+                    "binding": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["kind"],
+                          "properties": { "kind": { "const": "create" } }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["kind", "input"],
+                          "properties": {
+                            "kind": { "const": "existing" },
+                            "input": { "type": "string" }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "fields": {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["kind", "target", "value"],
+                        "properties": {
+                          "kind": { "const": "set" },
+                          "target": { "$ref": "#/$defs/fieldRef" },
+                          "value": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["kind"],
+                                "properties": { "kind": { "const": "computed" } }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["kind", "input"],
+                                "properties": {
+                                  "kind": { "const": "from_input" },
+                                  "input": { "$ref": "#/$defs/inputRef" }
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["kind", "effect", "targetEntity"],
+                                "properties": {
+                                  "kind": { "const": "from_effect" },
+                                  "effect": { "type": "string" },
+                                  "targetEntity": { "type": "string" }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["kind", "target"],
+                        "properties": {
+                          "kind": { "const": "clear" },
+                          "target": { "$ref": "#/$defs/fieldRef" }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "dependsOn": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["entity", "operation", "fields", "source", "conditionRequired"],
+              "properties": {
+                "entity": { "type": "string" },
+                "operation": { "$ref": "#/$defs/operation" },
+                "fields": { "type": "array", "items": { "$ref": "#/$defs/fieldRef" } },
+                "source": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["kind", "effect"],
+                      "properties": {
+                        "kind": { "const": "effect" },
+                        "effect": { "type": "string" }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["kind", "input"],
+                      "properties": {
+                        "kind": { "const": "input" },
+                        "input": { "$ref": "#/$defs/inputRef" }
+                      }
+                    }
+                  ]
+                },
+                "conditionRequired": { "type": "boolean" }
+              }
+            }
+          },
+          "requiredConditionKeys": { "type": "array", "items": { "type": "string" } },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "profile", "default", "anonymous", "requiredScopes", "requiredPurposes",
+                "operations", "targets", "results"
+              ],
+              "properties": {
+                "profile": { "type": "string" },
+                "default": { "type": "boolean" },
+                "anonymous": { "type": "boolean" },
+                "requiredScopes": { "type": "array", "items": { "type": "string" } },
+                "requiredPurposes": { "type": "array", "items": { "type": "string" } },
+                "operations": { "type": "array", "items": { "$ref": "#/$defs/operation" } },
+                "targets": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["entity", "rowBoundaries"],
+                    "properties": {
+                      "entity": { "type": "string" },
+                      "rowBoundaries": { "type": "array", "items": { "$ref": "#/$defs/rowBoundary" } }
+                    }
+                  }
+                },
+                "results": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["effect", "entity", "operation"],
+              "properties": {
+                "effect": { "type": "string" },
+                "entity": { "type": "string" },
+                "operation": { "$ref": "#/$defs/operation" }
+              }
+            }
+          },
+          "bounds": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["maximumTargets", "maximumFieldMutations", "maximumSnapshotBytes"],
+            "properties": {
+              "maximumTargets": { "type": "integer" },
+              "maximumFieldMutations": { "type": "integer" },
+              "maximumSnapshotBytes": { "type": "integer" }
+            }
+          },
+          "handler": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind", "abi", "entrypoint", "context", "inputKeys", "possibleWrites",
+              "refusals", "outcomes", "omittedSlots", "evaluation", "reads", "replay"
+            ],
+            "properties": {
+              "kind": { "enum": ["rhai", "wasm"] },
+              "abi": { "type": "string" },
+              "entrypoint": { "const": "handle" },
+              "context": { "const": "ctx.inputs" },
+              "inputKeys": { "const": "authored_ids" },
+              "possibleWrites": {
+                "type": "array",
+                "description": "Passthrough of the compiled handler's possible writes. Shape follows the compiled model and is outside this contract version.",
+                "items": { "type": "object" }
+              },
+              "refusals": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["code", "label"],
+                  "properties": {
+                    "code": { "type": "string" },
+                    "label": { "type": "string" }
+                  }
+                }
+              },
+              "outcomes": {
+                "type": "array",
+                "items": { "enum": ["effects", "refusal"] }
+              },
+              "omittedSlots": { "type": "string" },
+              "evaluation": { "type": "string" },
+              "reads": { "const": "supplied_inputs_only" },
+              "replay": { "const": "recover_committed_result_without_handler_evaluation" },
+              "scriptSha256": { "type": "string" },
+              "rhaiVersion": { "type": "string" },
+              "limits": {
+                "type": "object",
+                "description": "Passthrough of the compiled handler's limits. Shape follows the compiled model and is outside this contract version."
+              },
+              "moduleSha256": { "type": "string" },
+              "compatibility": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "minimumServer", "serversBeforeWasmSupport", "serversBuiltWithoutTheFeature", "moduleSha256"
+                ],
+                "properties": {
+                  "minimumServer": { "const": "registry-breg built with the wasm feature" },
+                  "serversBeforeWasmSupport": {
+                    "const": "refuse the package at load with a typed handler error and no state change"
+                  },
+                  "serversBuiltWithoutTheFeature": {
+                    "const": "load the package and fail each invocation with a typed handler failure"
+                  },
+                  "moduleSha256": { "type": "string" }
+                }
+              }
+            }
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "capabilities", "maximumCalls", "maximumCallsPerCapability", "maximumConcurrentEvaluations",
+              "maximumRetainedBytes", "maximumResponseBytes", "retentionSeconds",
+              "maximumAssertionLifetimeSeconds", "clockSkewSeconds", "maximumObservationAgeSeconds",
+              "defaultActionDeadlineMilliseconds", "deadline", "invocation", "disclosure", "lifecycle"
+            ],
+            "properties": {
+              "capabilities": {
+                "type": "array",
+                "description": "Passthrough of the action's declared Evidence capabilities. Shape follows the compiled model and is outside this contract version.",
+                "items": { "type": "object" }
+              },
+              "maximumCalls": { "type": "integer" },
+              "maximumCallsPerCapability": { "type": "integer" },
+              "maximumConcurrentEvaluations": { "type": "integer" },
+              "maximumRetainedBytes": { "type": "integer" },
+              "maximumResponseBytes": { "type": "integer" },
+              "retentionSeconds": { "type": "integer" },
+              "maximumAssertionLifetimeSeconds": { "type": "integer" },
+              "clockSkewSeconds": { "type": "integer" },
+              "maximumObservationAgeSeconds": { "type": "integer" },
+              "defaultActionDeadlineMilliseconds": { "type": "integer" },
+              "deadline": { "type": "string" },
+              "invocation": { "type": "string" },
+              "disclosure": { "type": "string" },
+              "lifecycle": { "type": "string" }
+            }
+          },
+          "requires": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["input", "entity", "field", "equals", "evaluated"],
+              "properties": {
+                "input": { "$ref": "#/$defs/inputRef" },
+                "entity": { "type": "string" },
+                "field": { "$ref": "#/$defs/fieldRef" },
+                "equals": {
+                  "description": "Passthrough of an arbitrary compiled comparison value; any JSON type is valid."
+                },
+                "evaluated": { "const": "before_effects_under_target_lock" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
