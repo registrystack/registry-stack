@@ -1385,6 +1385,20 @@ jobs:
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.casework_tutorial == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_DB: casework
+          POSTGRES_USER: casework
+          POSTGRES_PASSWORD: casework_test
+        options: >-
+          --health-cmd "pg_isready -U casework -d casework"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -1433,6 +1447,11 @@ jobs:
           # the unified Node and Python Casework facades; the maintained script
           # builds those candidate bindings and names them for the test.
           products/casework/scripts/check-review-journeys.sh
+
+      - name: Verify BReg, payment, and standalone review examples
+        env:
+          CASEWORK_REVIEW_EXAMPLES_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
+        run: products/casework/scripts/check-review-examples.sh
 
       - name: Execute the Registry Casework tutorial from a reader directory
         shell: bash
