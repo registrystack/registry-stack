@@ -5,7 +5,7 @@ fn quote(value: &str) -> String {
 }
 
 fn starter_source() -> Value {
-    let mut source: Value = serde_json::from_slice(include_bytes!(
+    let mut source: Value = serde_norway::from_slice(include_bytes!(
         "../../../../products/breg/starters/professional-licences/core/registry.yaml"
     ))
     .expect("starter parses");
@@ -35,7 +35,7 @@ fn starter() -> registry_breg::CompiledRegistry {
 }
 
 fn create_only_guard_starter() -> registry_breg::CompiledRegistry {
-    let mut source: Value = serde_json::from_slice(include_bytes!(
+    let mut source: Value = serde_norway::from_slice(include_bytes!(
         "../../../../products/breg/starters/professional-licences/core/registry.yaml"
     ))
     .expect("starter source parses");

@@ -5,7 +5,7 @@ use registry_breg::model::CompiledQueryFilterOperator;
 use serde_json::{json, Value};
 
 fn source() -> Value {
-    serde_json::from_slice(include_bytes!(
+    serde_norway::from_slice(include_bytes!(
         "../../../products/breg/starters/professional-licences/core/registry.yaml"
     ))
     .unwrap()
