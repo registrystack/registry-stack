@@ -304,13 +304,12 @@ lock, and applies every unapplied migration in order under its ledger, so a seco
 same database waits rather than racing it. Run it before the first `serve` and before rolling out a
 release that adds migrations.
 
-The unified review migration accepts a fresh database and the schema produced by the immediately
-preceding Casework release. It refuses a database containing incompatible legacy casework state
-with one generic migration error. This release has no in-place legacy conversion command. Do not
-delete rows, edit the migration ledger, or run migration SQL by hand. For a disposable local
-session, use `caseworkctl dev stop PROJECT --remove` and start it again. For an operated database,
-retain the old deployment long enough to finish or export required work, take the normal backup,
-and provision a fresh Casework database for the unified review package.
+The unified review schema arrives in a single migration that drops the experimental hosted-item
+tables from the earlier Casework release. No data is carried over. Do not delete rows, edit the
+migration ledger, or run migration SQL by hand. For a disposable local session, use `caseworkctl
+dev stop PROJECT --remove` and start it again. For an operated database, retain the old deployment
+long enough to export required work, take the normal backup, and provision a fresh Casework
+database for the unified review package.
 
 :::caution[Keep the migration credential off the serving host]
 The migration credential owns the schema, and the serving process never needs it. Supply it only

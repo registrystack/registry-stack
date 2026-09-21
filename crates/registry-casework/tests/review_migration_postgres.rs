@@ -7,7 +7,7 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Error, NoTls};
 use uuid::Uuid;
 
-const MIGRATIONS_1_TO_15: &[(i64, &str)] = &[
+const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../migrations/0001_casework.sql")),
     (2, include_str!("../migrations/0002_hosted_casework.sql")),
     (3, include_str!("../migrations/0003_assignment.sql")),
@@ -37,12 +37,39 @@ const MIGRATIONS_1_TO_15: &[(i64, &str)] = &[
         include_str!("../migrations/0013_sync_claim_indexes.sql"),
     ),
     (14, include_str!("../migrations/0014_task_grants.sql")),
-    (15, include_str!("../migrations/0015_hosted_result.sql")),
+    (15, include_str!("../migrations/0015_unified_reviews.sql")),
 ];
-const MIGRATION_16: &str = include_str!("../migrations/0016_unified_reviews.sql");
-const MIGRATION_17: &str = include_str!("../migrations/0017_unified_review_clock_runtime.sql");
-const MIGRATION_18: &str = include_str!("../migrations/0018_unified_review_retention.sql");
-const MIGRATION_19: &str = include_str!("../migrations/0019_review_kind_clock_identity.sql");
+
+/// Legacy hosted tables that the unified review migration (0015) drops
+/// outright, since no Casework database was ever deployed on the earlier
+/// experimental hosted-item schema.
+const DROPPED_LEGACY_TABLES: &[&str] = &[
+    "casework_hosted_items",
+    "casework_hosted_notes",
+    "casework_hosted_history",
+    "casework_hosted_actor_references",
+    "casework_hosted_terminal_events",
+    "casework_hosted_accountability",
+    "casework_hosted_idempotency",
+    "casework_hosted_idempotency_tombstones",
+    "casework_hosted_cursors",
+];
+
+const UNIFIED_REVIEW_TABLES: &[&str] = &[
+    "casework_review_requests",
+    "casework_review_submission_reservations",
+    "casework_review_tasks",
+    "casework_review_task_drafts",
+    "casework_review_decisions",
+    "casework_review_results",
+    "casework_review_terminal_events",
+    "casework_review_completion_outbox",
+    "casework_review_history",
+    "casework_review_accountability",
+    "casework_review_task_grants",
+    "casework_review_clock_occurrences",
+    "casework_review_clock_effects",
+];
 
 struct TestSchema {
     admin: Client,
@@ -96,7 +123,10 @@ impl TestSchema {
     }
 }
 
-async fn apply_versions_1_to_15(database: &mut Client) {
+/// Apply every migration, 0001 through the unified review migration 0015, in
+/// order under the ledger. Nothing in this suite tests a partial or refused
+/// application of that sequence, so failures panic immediately.
+async fn apply_full_migration_sequence(database: &mut Client) {
     database
         .batch_execute(
             "CREATE TABLE casework_schema_migrations (\
@@ -106,7 +136,7 @@ async fn apply_versions_1_to_15(database: &mut Client) {
         .await
         .expect("create migration ledger");
 
-    for (version, migration) in MIGRATIONS_1_TO_15 {
+    for (version, migration) in MIGRATIONS {
         let transaction = database.transaction().await.expect("begin migration");
         transaction
             .batch_execute(migration)
@@ -126,54 +156,6 @@ async fn apply_versions_1_to_15(database: &mut Client) {
     }
 }
 
-async fn apply_version_16(database: &mut Client) -> Result<(), Error> {
-    let transaction = database.transaction().await?;
-    transaction.batch_execute(MIGRATION_16).await?;
-    transaction
-        .execute(
-            "INSERT INTO casework_schema_migrations(version, applied_at) VALUES(16, now())",
-            &[],
-        )
-        .await?;
-    transaction.commit().await
-}
-
-async fn apply_version_17(database: &mut Client) -> Result<(), Error> {
-    let transaction = database.transaction().await?;
-    transaction.batch_execute(MIGRATION_17).await?;
-    transaction
-        .execute(
-            "INSERT INTO casework_schema_migrations(version, applied_at) VALUES(17, now())",
-            &[],
-        )
-        .await?;
-    transaction.commit().await
-}
-
-async fn apply_version_18(database: &mut Client) -> Result<(), Error> {
-    let transaction = database.transaction().await?;
-    transaction.batch_execute(MIGRATION_18).await?;
-    transaction
-        .execute(
-            "INSERT INTO casework_schema_migrations(version, applied_at) VALUES(18, now())",
-            &[],
-        )
-        .await?;
-    transaction.commit().await
-}
-
-async fn apply_version_19(database: &mut Client) -> Result<(), Error> {
-    let transaction = database.transaction().await?;
-    transaction.batch_execute(MIGRATION_19).await?;
-    transaction
-        .execute(
-            "INSERT INTO casework_schema_migrations(version, applied_at) VALUES(19, now())",
-            &[],
-        )
-        .await?;
-    transaction.commit().await
-}
-
 fn assert_sqlstate(error: &Error, expected: &SqlState, operation: &str) {
     assert_eq!(
         error.as_db_error().map(|database| database.code()),
@@ -183,187 +165,18 @@ fn assert_sqlstate(error: &Error, expected: &SqlState, operation: &str) {
     );
 }
 
-async fn insert_legacy_item(database: &Client, item_id: Uuid) {
+async fn table_exists(database: &Client, name: &str) -> bool {
     database
-        .execute(
-            "INSERT INTO casework_items(\
-                 item_id, source_id, subject_kind, subject_id, occurrence_kind, occurrence_key,\
-                 binding, state, queue_id, revision, first_observed_at, updated_at\
-             ) VALUES($1, 'legacy-source', 'record', $2, 'review', $2, $3,\
-                      'open', 'legacy-queue', 1, now(), now())",
-            &[
-                &item_id,
-                &item_id.to_string(),
-                &json!({"version": "legacy-1"}),
-            ],
-        )
+        .query_one("SELECT to_regclass($1) IS NOT NULL", &[&name])
         .await
-        .expect("insert legacy source item");
-}
-
-async fn insert_legacy_hosted_item(database: &Client, item_id: Uuid) {
-    database
-        .execute(
-            "INSERT INTO casework_hosted_items(\
-                 item_id, kind_id, kind_version, kind_policy_digest, kind_policy, queue_id,\
-                 state, revision, created_at, updated_at\
-             ) VALUES($1, 'legacy-kind', '1', 'sha256:legacy', $2, 'legacy-queue',\
-                      'open', 1, now(), now())",
-            &[&item_id, &json!({"kind": "legacy"})],
-        )
-        .await
-        .expect("insert legacy hosted item");
-}
-
-#[derive(Clone, Copy)]
-enum OccupiedLegacyTable {
-    SourceItems,
-    HostedItems,
-    TaskGrants,
-}
-
-impl OccupiedLegacyTable {
-    fn name(self) -> &'static str {
-        match self {
-            Self::SourceItems => "casework_items",
-            Self::HostedItems => "casework_hosted_items",
-            Self::TaskGrants => "casework_task_grants",
-        }
-    }
-
-    fn primary_key(self) -> &'static str {
-        match self {
-            Self::SourceItems | Self::HostedItems => "item_id",
-            Self::TaskGrants => "grant_id",
-        }
-    }
-}
-
-async fn insert_occupied_legacy_row(database: &Client, occupied: OccupiedLegacyTable) -> Uuid {
-    let row_id = Uuid::new_v4();
-    match occupied {
-        OccupiedLegacyTable::SourceItems => insert_legacy_item(database, row_id).await,
-        OccupiedLegacyTable::HostedItems => insert_legacy_hosted_item(database, row_id).await,
-        OccupiedLegacyTable::TaskGrants => {
-            let item_id = Uuid::new_v4();
-            insert_legacy_item(database, item_id).await;
-            database
-                .execute(
-                    "INSERT INTO casework_task_grants(\
-                         grant_id, item_id, approver_issuer, approver_subject, approver_profile,\
-                         approver_role, idempotency_key, request_hash, record, approved_at, expires_at\
-                     ) VALUES($1, $2, 'https://issuer.test', 'reviewer', 'staff', 'staff',\
-                              'legacy-key', 'legacy-hash', $3, now(), now() + interval '10 minutes')",
-                    &[&row_id, &item_id, &json!({"legacy": true})],
-                )
-                .await
-                .expect("insert legacy task grant");
-
-            // A healthy v15 task grant necessarily has a source item parent. Recreate an
-            // imported/drifted-but-ledgered v15 snapshot so this case proves the explicit
-            // task-grant guard rather than succeeding because the source-item guard fired.
-            database
-                .batch_execute(
-                    "ALTER TABLE casework_task_grants
-                         DROP CONSTRAINT casework_task_grants_item_id_fkey;
-                     DELETE FROM casework_items;
-                     ALTER TABLE casework_task_grants
-                         ADD CONSTRAINT casework_task_grants_item_id_fkey
-                         FOREIGN KEY (item_id) REFERENCES casework_items(item_id)
-                         ON DELETE CASCADE NOT VALID",
-                )
-                .await
-                .expect("isolate legacy task-grant occupancy");
-        }
-    }
-    row_id
-}
-
-async fn legacy_row_fingerprint(
-    database: &Client,
-    occupied: OccupiedLegacyTable,
-    row_id: Uuid,
-) -> String {
-    let query = format!(
-        "SELECT row_to_json(selected)::text FROM (SELECT * FROM {} WHERE {}=$1) selected",
-        occupied.name(),
-        occupied.primary_key()
-    );
-    database
-        .query_one(&query, &[&row_id])
-        .await
-        .expect("read retained legacy row")
+        .expect("inspect table existence")
         .get(0)
 }
 
-async fn assert_occupied_refusal(occupied: OccupiedLegacyTable) {
-    let mut fixture = TestSchema::create("review_cutover_refusal").await;
-    apply_versions_1_to_15(&mut fixture.database).await;
-    let row_id = insert_occupied_legacy_row(&fixture.database, occupied).await;
-    let before = legacy_row_fingerprint(&fixture.database, occupied, row_id).await;
-
-    let error = apply_version_16(&mut fixture.database)
-        .await
-        .expect_err("occupied legacy workflow state must refuse migration 16");
-    assert_sqlstate(
-        &error,
-        &SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
-        "occupied legacy cutover",
-    );
-
-    assert_eq!(
-        legacy_row_fingerprint(&fixture.database, occupied, row_id).await,
-        before,
-        "refused cutover must leave the legacy row unchanged"
-    );
-    let version_16_recorded: bool = fixture
-        .database
-        .query_one(
-            "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=16)",
-            &[],
-        )
-        .await
-        .expect("read refused migration ledger")
-        .get(0);
-    assert!(!version_16_recorded, "a refused migration is not ledgered");
-    let unified_tables: i64 = fixture
-        .database
-        .query_one(
-            "SELECT count(*)
-             FROM pg_class relations
-             JOIN pg_namespace schemas ON schemas.oid=relations.relnamespace
-             WHERE schemas.nspname=current_schema()
-               AND relations.relkind='r'
-               AND relations.relname LIKE 'casework_review_%'",
-            &[],
-        )
-        .await
-        .expect("inspect refused unified schema")
-        .get(0);
-    assert_eq!(
-        unified_tables, 0,
-        "a refused migration must not leave any unified-review table"
-    );
-
-    fixture.cleanup().await;
-}
-
 #[tokio::test]
-async fn fresh_database_applies_the_full_migration_sequence() {
+async fn fresh_database_migrates_through_unified_reviews() {
     let mut fixture = TestSchema::create("review_cutover_fresh").await;
-    apply_versions_1_to_15(&mut fixture.database).await;
-    apply_version_16(&mut fixture.database)
-        .await
-        .expect("apply unified review migration to an empty legacy schema");
-    apply_version_17(&mut fixture.database)
-        .await
-        .expect("apply unified review clock runtime migration");
-    apply_version_18(&mut fixture.database)
-        .await
-        .expect("apply unified review retention migration");
-    apply_version_19(&mut fixture.database)
-        .await
-        .expect("apply review-kind clock identity migration");
+    apply_full_migration_sequence(&mut fixture.database).await;
 
     let versions: Vec<i64> = fixture
         .database
@@ -376,302 +189,75 @@ async fn fresh_database_applies_the_full_migration_sequence() {
         .into_iter()
         .map(|row| row.get(0))
         .collect();
-    assert_eq!(versions, (1..=19).collect::<Vec<_>>());
+    assert_eq!(versions, (1..=15).collect::<Vec<_>>());
 
-    let missing_tables: Vec<String> = fixture
+    for table in UNIFIED_REVIEW_TABLES {
+        assert!(
+            table_exists(&fixture.database, table).await,
+            "unified review migration must create {table}"
+        );
+    }
+    for table in DROPPED_LEGACY_TABLES {
+        assert!(
+            !table_exists(&fixture.database, table).await,
+            "unified review migration must drop the legacy hosted table {table}"
+        );
+    }
+
+    let draft_pk_columns: Vec<String> = fixture
         .database
         .query(
-            "SELECT expected.name
-             FROM unnest(ARRAY[
-                 'casework_review_requests',
-                 'casework_review_submission_reservations',
-                 'casework_review_tasks',
-                 'casework_review_task_drafts',
-                 'casework_review_decisions',
-                 'casework_review_results',
-                 'casework_review_terminal_events',
-                 'casework_review_completion_outbox',
-                 'casework_review_history',
-                 'casework_review_accountability',
-                 'casework_review_clock_effects'
-             ]) AS expected(name)
-             WHERE to_regclass(expected.name) IS NULL",
+            "SELECT attname FROM pg_constraint
+             JOIN unnest(conkey) WITH ORDINALITY AS key(attnum, ord) ON true
+             JOIN pg_attribute ON pg_attribute.attrelid = conrelid AND pg_attribute.attnum = key.attnum
+             WHERE conrelid = 'casework_review_task_drafts'::regclass AND contype = 'p'
+             ORDER BY key.ord",
             &[],
         )
         .await
-        .expect("inspect unified review tables")
+        .expect("read task draft primary key columns")
         .into_iter()
         .map(|row| row.get(0))
         .collect();
-    assert!(
-        missing_tables.is_empty(),
-        "unified review migrations omitted tables: {missing_tables:?}"
+    assert_eq!(
+        draft_pk_columns,
+        vec!["task_id", "actor_issuer", "actor_subject"],
+        "a later holder's draft must not replace a prior holder's retained draft"
     );
 
-    fixture.cleanup().await;
-}
-
-#[tokio::test]
-async fn unified_review_schema_refuses_subject_clock_without_kind_identity() {
-    let mut fixture = TestSchema::create("review_subject_clock_identity").await;
-    apply_versions_1_to_15(&mut fixture.database).await;
-    apply_version_16(&mut fixture.database)
-        .await
-        .expect("apply unified review migration");
-    apply_version_17(&mut fixture.database)
-        .await
-        .expect("apply unified review clock runtime migration");
-    apply_version_18(&mut fixture.database)
-        .await
-        .expect("apply unified review retention migration");
-    apply_version_19(&mut fixture.database)
-        .await
-        .expect("apply review-kind clock identity migration");
-    let request_id = Uuid::new_v4();
-    insert_review_request(&fixture.database, request_id, false).await;
-    let error = fixture
-        .database
-        .execute(
-            "INSERT INTO casework_review_clock_occurrences(
-                clock_occurrence_id,clock_id,scope,correlation_key,
-                subject_source,subject_type,subject_id,request_id,policy_digest,
-                policy,state,anchor_at,due_at,created_at,updated_at)
-             VALUES($1,'deadline','subject','subject','source','record',$2,$3,$4,$5,
-                    'running',now(),now()+interval '1 hour',now(),now())",
-            &[
-                &Uuid::new_v4(),
-                &request_id.to_string(),
-                &request_id,
-                &format!("sha256:{}", "b".repeat(64)),
-                &json!({"clock":{"type":"subject"}}),
-            ],
-        )
-        .await
-        .expect_err("subject clock without a review-kind identity must be refused");
-    assert_sqlstate(
-        &error,
-        &SqlState::CHECK_VIOLATION,
-        "subject clock kind identity",
-    );
-
-    fixture.cleanup().await;
-}
-
-#[tokio::test]
-async fn review_kind_clock_identity_upgrade_refuses_legacy_subject_clocks() {
-    let mut fixture = TestSchema::create("review_subject_clock_upgrade").await;
-    apply_versions_1_to_15(&mut fixture.database).await;
-    apply_version_16(&mut fixture.database)
-        .await
-        .expect("apply original unified review migration");
-    apply_version_17(&mut fixture.database)
-        .await
-        .expect("apply unified review clock runtime migration");
-    apply_version_18(&mut fixture.database)
-        .await
-        .expect("apply unified review retention migration");
-
-    let request_id = Uuid::new_v4();
-    insert_review_request(&fixture.database, request_id, false).await;
-    fixture
-        .database
-        .execute(
-            "INSERT INTO casework_review_clock_occurrences(
-                clock_occurrence_id,clock_id,scope,correlation_key,
-                subject_source,subject_type,subject_id,request_id,policy_digest,
-                policy,state,anchor_at,due_at,created_at,updated_at,
-                reminders,steps)
-             VALUES($1,'deadline','subject','subject','source','record',$2,$3,$4,$5,
-                    'running',now(),now()+interval '1 hour',now(),now(),'[]','[]')",
-            &[
-                &Uuid::new_v4(),
-                &request_id.to_string(),
-                &request_id,
-                &format!("sha256:{}", "b".repeat(64)),
-                &json!({"clock":{"type":"subject"}}),
-            ],
-        )
-        .await
-        .expect("the original migration admits the ambiguous legacy identity");
-
-    let error = apply_version_19(&mut fixture.database)
-        .await
-        .expect_err("the identity upgrade must refuse ambiguous in-flight state");
-    assert_sqlstate(
-        &error,
-        &SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
-        "review-kind clock identity upgrade",
-    );
-    let version_19_recorded: bool = fixture
+    let context_bound: String = fixture
         .database
         .query_one(
-            "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=19)",
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint
+             WHERE conrelid = 'casework_review_requests'::regclass
+               AND conname = 'casework_review_requests_context_check'",
             &[],
         )
         .await
-        .expect("read refused migration ledger")
-        .get(0);
-    assert!(!version_19_recorded, "a refused migration is not ledgered");
-
-    fixture.cleanup().await;
-}
-
-#[tokio::test]
-async fn retention_migration_backfills_review_ownership_and_author_keys_drafts() {
-    let mut fixture = TestSchema::create("review_retention_upgrade").await;
-    apply_versions_1_to_15(&mut fixture.database).await;
-    apply_version_16(&mut fixture.database)
-        .await
-        .expect("apply unified review migration");
-    apply_version_17(&mut fixture.database)
-        .await
-        .expect("apply unified review clock runtime migration");
-
-    let request_id = Uuid::new_v4();
-    let task_id = Uuid::new_v4();
-    insert_review_request(&fixture.database, request_id, false).await;
-    insert_review_task(&fixture.database, task_id, request_id).await;
-    fixture
-        .database
-        .execute(
-            "UPDATE casework_review_requests
-             SET lifecycle='approved',active_stage_index=NULL,terminal_at=now(),
-                 result_available_until=now()+interval '1 day',
-                 accountability_retained_until=now()+interval '30 days'
-             WHERE request_id=$1",
-            &[&request_id],
-        )
-        .await
-        .expect("settle pre-upgrade review");
-    fixture
-        .database
-        .execute(
-            "INSERT INTO casework_review_accountability(
-                event_id,request_id,task_id,queue_id,actor_ref,actor_issuer,actor_subject,profile_id,
-                decision,occurred_at,retained_until)
-             VALUES($1,$2,$3,'review','actor-ref','https://issuer.test','reviewer-a','staff',
-                    'approve',now()-interval '20 days',now()-interval '1 day')",
-            &[&Uuid::new_v4(), &request_id, &task_id],
-        )
-        .await
-        .expect("insert early-stage accountability row");
-    fixture
-        .database
-        .execute(
-            "INSERT INTO casework_review_task_drafts(
-                task_id,actor_issuer,actor_subject,body,revision,updated_at)
-             VALUES($1,'https://issuer.test','reviewer-a','{}'::jsonb,1,now())",
-            &[&task_id],
-        )
-        .await
-        .expect("insert pre-upgrade draft");
-    let submission_digest = format!("sha256:{}", "a".repeat(64));
-    let producer_id = format!("producer-{request_id}");
-    fixture
-        .database
-        .execute(
-            "INSERT INTO casework_idempotency(
-                issuer,subject,profile_id,operation,resource,idempotency_key,request_hash,
-                response,created_at)
-             VALUES
-                ('https://rotated-issuer.test','rotated-producer-service','producer','review.create',$1,
-                 'create-key',$2,NULL,now()),
-                ('https://issuer.test','producer-service','producer','review.note.add',$3,
-                 'note-key','sha256:note','{}'::jsonb,now())",
-            &[
-                &format!("review-producer:{producer_id}"),
-                &submission_digest,
-                &format!("review-request:{request_id}"),
-            ],
-        )
-        .await
-        .expect("insert pre-upgrade review idempotency");
-
-    apply_version_18(&mut fixture.database)
-        .await
-        .expect("apply unified review retention migration");
-    let owned_rows: i64 = fixture
-        .database
-        .query_one(
-            "SELECT count(*) FROM casework_idempotency WHERE review_request_id=$1",
-            &[&request_id],
-        )
-        .await
-        .expect("count backfilled review idempotency ownership")
-        .get(0);
-    assert_eq!(owned_rows, 2);
-    let aligned_accountability: bool = fixture
-        .database
-        .query_one(
-            "SELECT a.retained_until=r.accountability_retained_until
-             FROM casework_review_accountability a
-             JOIN casework_review_requests r USING(request_id)
-             WHERE r.request_id=$1",
-            &[&request_id],
-        )
-        .await
-        .expect("read aligned accountability deadline")
+        .expect("read the request context size constraint")
         .get(0);
     assert!(
-        aligned_accountability,
-        "migration anchors early decisions to terminal settlement retention"
+        context_bound.contains("1048576"),
+        "request context must be bounded at one MiB, got: {context_bound}"
     );
-    fixture
-        .database
-        .execute(
-            "INSERT INTO casework_review_task_drafts(
-                task_id,actor_issuer,actor_subject,body,revision,updated_at)
-             VALUES($1,'https://issuer.test','reviewer-b','{}'::jsonb,1,now())",
-            &[&task_id],
-        )
-        .await
-        .expect("retain a second author's draft for one task");
-    let draft_count: i64 = fixture
+
+    let body_bound: String = fixture
         .database
         .query_one(
-            "SELECT count(*) FROM casework_review_task_drafts WHERE task_id=$1",
-            &[&task_id],
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint
+             WHERE conrelid = 'casework_review_task_drafts'::regclass
+               AND conname = 'casework_review_task_drafts_body_check'",
+            &[],
         )
         .await
-        .expect("count author-keyed drafts")
+        .expect("read the task draft body size constraint")
         .get(0);
-    assert_eq!(draft_count, 2);
-
-    let expanded = json!({"numbers": vec![1e100_f64; 1_000]});
-    fixture
-        .database
-        .execute(
-            "UPDATE casework_review_requests SET context=$2 WHERE request_id=$1",
-            &[&request_id, &expanded],
-        )
-        .await
-        .expect("store safely expanded submitted context");
-    fixture
-        .database
-        .execute(
-            "UPDATE casework_review_task_drafts SET body=$2
-             WHERE task_id=$1 AND actor_subject='reviewer-a'",
-            &[&task_id, &expanded],
-        )
-        .await
-        .expect("store safely expanded draft");
+    assert!(
+        body_bound.contains("1048576"),
+        "draft body must be bounded at one MiB, got: {body_bound}"
+    );
 
     fixture.cleanup().await;
-}
-
-#[tokio::test]
-async fn source_item_occupancy_refuses_without_data_loss() {
-    assert_occupied_refusal(OccupiedLegacyTable::SourceItems).await;
-}
-
-#[tokio::test]
-async fn hosted_item_occupancy_refuses_without_data_loss() {
-    assert_occupied_refusal(OccupiedLegacyTable::HostedItems).await;
-}
-
-#[tokio::test]
-async fn task_grant_occupancy_refuses_without_data_loss() {
-    assert_occupied_refusal(OccupiedLegacyTable::TaskGrants).await;
 }
 
 async fn insert_review_request(database: &Client, request_id: Uuid, completion: bool) {
@@ -719,6 +305,40 @@ async fn insert_review_task(database: &Client, task_id: Uuid, request_id: Uuid) 
         .expect("insert review task fixture");
 }
 
+#[tokio::test]
+async fn unified_review_schema_refuses_subject_clock_without_kind_identity() {
+    let mut fixture = TestSchema::create("review_subject_clock_identity").await;
+    apply_full_migration_sequence(&mut fixture.database).await;
+    let request_id = Uuid::new_v4();
+    insert_review_request(&fixture.database, request_id, false).await;
+    let error = fixture
+        .database
+        .execute(
+            "INSERT INTO casework_review_clock_occurrences(
+                clock_occurrence_id,clock_id,scope,correlation_key,
+                subject_source,subject_type,subject_id,request_id,policy_digest,
+                policy,state,anchor_at,due_at,created_at,updated_at)
+             VALUES($1,'deadline','subject','subject','source','record',$2,$3,$4,$5,
+                    'running',now(),now()+interval '1 hour',now(),now())",
+            &[
+                &Uuid::new_v4(),
+                &request_id.to_string(),
+                &request_id,
+                &format!("sha256:{}", "b".repeat(64)),
+                &json!({"clock":{"type":"subject"}}),
+            ],
+        )
+        .await
+        .expect_err("subject clock without a review-kind identity must be refused");
+    assert_sqlstate(
+        &error,
+        &SqlState::CHECK_VIOLATION,
+        "subject clock kind identity",
+    );
+
+    fixture.cleanup().await;
+}
+
 async fn expect_foreign_key_violation(
     database: &Client,
     statement: &str,
@@ -735,10 +355,7 @@ async fn expect_foreign_key_violation(
 #[tokio::test]
 async fn composite_foreign_keys_refuse_cross_request_substitution() {
     let mut fixture = TestSchema::create("review_fk").await;
-    apply_versions_1_to_15(&mut fixture.database).await;
-    apply_version_16(&mut fixture.database)
-        .await
-        .expect("apply unified review migration");
+    apply_full_migration_sequence(&mut fixture.database).await;
 
     let request_a = Uuid::new_v4();
     let request_b = Uuid::new_v4();
@@ -876,10 +493,7 @@ async fn expect_result_check_violation(
 #[tokio::test]
 async fn result_status_and_outcome_shapes_are_database_enforced() {
     let mut fixture = TestSchema::create("review_result_shape").await;
-    apply_versions_1_to_15(&mut fixture.database).await;
-    apply_version_16(&mut fixture.database)
-        .await
-        .expect("apply unified review migration");
+    apply_full_migration_sequence(&mut fixture.database).await;
 
     for (status, outcome, result) in [
         ("unknown", None, None),

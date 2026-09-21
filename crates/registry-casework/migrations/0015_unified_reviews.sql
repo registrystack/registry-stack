@@ -1,26 +1,19 @@
 -- Unified producer and standalone review model.
 --
--- The earlier source-item and hosted-item schemas were experimental and cannot
--- be translated without inventing a policy snapshot, producer correlation, or
--- task ownership. Refuse occupied legacy state. An operator must deliberately
--- finish or discard disposable workflow state before this migration runs.
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM casework_items LIMIT 1)
-       OR EXISTS (SELECT 1 FROM casework_hosted_items LIMIT 1)
-       OR EXISTS (SELECT 1 FROM casework_task_grants LIMIT 1)
-       OR EXISTS (SELECT 1 FROM casework_hosted_accountability LIMIT 1)
-       OR EXISTS (SELECT 1 FROM casework_hosted_actor_references LIMIT 1)
-       OR EXISTS (SELECT 1 FROM casework_hosted_idempotency_tombstones LIMIT 1)
-       OR EXISTS (SELECT 1 FROM casework_hosted_cursors LIMIT 1)
-    THEN
-        RAISE EXCEPTION USING
-            ERRCODE = '55000',
-            MESSAGE = 'legacy Casework workflow state cannot be migrated to unified reviews',
-            HINT = 'finish or export retained work under the old runtime, back up the database, then perform the documented deliberate cutover; disposable development state may be recreated explicitly';
-    END IF;
-END
-$$;
+-- The earlier source-item and hosted-item schemas were experimental and would
+-- require inventing a policy snapshot, producer correlation, or task
+-- ownership to translate their rows. No Casework database has been deployed
+-- on the earlier schema, so this migration drops the experimental hosted
+-- tables outright rather than converting them.
+DROP TABLE IF EXISTS casework_hosted_idempotency_tombstones;
+DROP TABLE IF EXISTS casework_hosted_idempotency;
+DROP TABLE IF EXISTS casework_hosted_cursors;
+DROP TABLE IF EXISTS casework_hosted_history;
+DROP TABLE IF EXISTS casework_hosted_notes;
+DROP TABLE IF EXISTS casework_hosted_terminal_events;
+DROP TABLE IF EXISTS casework_hosted_accountability;
+DROP TABLE IF EXISTS casework_hosted_items;
+DROP TABLE IF EXISTS casework_hosted_actor_references;
 
 CREATE TABLE casework_review_requests (
     request_id uuid PRIMARY KEY,
@@ -37,10 +30,11 @@ CREATE TABLE casework_review_requests (
     initiator_issuer text CHECK (initiator_issuer IS NULL OR octet_length(initiator_issuer) BETWEEN 1 AND 2048),
     initiator_subject text CHECK (initiator_subject IS NULL OR octet_length(initiator_subject) BETWEEN 1 AND 2048),
     context_strategy text NOT NULL CHECK (context_strategy IN ('submitted','source')),
-    context jsonb NOT NULL CHECK (octet_length(context::text) <= 65536),
     -- JCS admits compact exponent-form binary64 values that PostgreSQL jsonb
-    -- renders as expanded decimal text. One MiB covers the worst-case expansion
-    -- of an admitted 16 KiB canonical value while retaining a hard storage bound.
+    -- renders as expanded decimal text. One MiB safely covers numeric
+    -- exponent expansion of an admitted canonical value while retaining a
+    -- hard storage bound.
+    context jsonb NOT NULL CHECK (octet_length(context::text) <= 1048576),
     result_constraints jsonb CHECK (result_constraints IS NULL OR octet_length(result_constraints::text) <= 1048576),
     policy_id text NOT NULL CHECK (octet_length(policy_id) BETWEEN 1 AND 128),
     policy_version text NOT NULL CHECK (octet_length(policy_version) BETWEEN 1 AND 128),
@@ -60,6 +54,11 @@ CREATE TABLE casework_review_requests (
     terminal_at timestamptz,
     result_available_until timestamptz,
     accountability_retained_until timestamptz,
+    -- Result erasure precedes accountability erasure. Recording completion
+    -- here lets a bounded cleanup pass skip already-scrubbed requests instead
+    -- of continually relocking them while their minimized accountability
+    -- rows remain retained.
+    result_erased_at timestamptz,
     CHECK ((lifecycle = 'reviewing') = (terminal_at IS NULL)),
     CHECK ((lifecycle = 'reviewing') = (active_stage_index IS NOT NULL)),
     CHECK ((lifecycle = 'reviewing') = (result_available_until IS NULL)),
@@ -67,7 +66,11 @@ CREATE TABLE casework_review_requests (
     CHECK ((initiator_issuer IS NULL) = (initiator_subject IS NULL)),
     CHECK ((completion_destination IS NULL) = (completion_recipient_binding IS NULL)),
     CHECK (result_available_until IS NULL OR result_available_until > terminal_at),
-    CHECK (accountability_retained_until IS NULL OR accountability_retained_until >= result_available_until)
+    CHECK (accountability_retained_until IS NULL OR accountability_retained_until >= result_available_until),
+    CHECK (
+        result_erased_at IS NULL
+        OR (terminal_at IS NOT NULL AND result_available_until IS NOT NULL)
+    )
 );
 ALTER TABLE casework_review_requests
     ADD CONSTRAINT casework_review_requests_request_producer_unique
@@ -101,6 +104,9 @@ CREATE UNIQUE INDEX casework_review_request_subject_idx
 CREATE INDEX casework_review_request_retention_idx
     ON casework_review_requests(result_available_until, request_id)
     WHERE terminal_at IS NOT NULL;
+CREATE INDEX casework_review_requests_pending_result_erasure_idx
+    ON casework_review_requests(result_available_until,request_id)
+    WHERE terminal_at IS NOT NULL AND result_erased_at IS NULL;
 
 CREATE TABLE casework_review_submission_reservations (
     binding_digest text NOT NULL UNIQUE CHECK (binding_digest ~ '^sha256:[0-9a-f]{64}$'),
@@ -175,13 +181,18 @@ CREATE UNIQUE INDEX casework_review_task_holder_stage_idx
     ON casework_review_tasks(request_id, stage_index, holder_issuer, holder_subject)
     WHERE holder_issuer IS NOT NULL AND state IN ('open','claimed');
 
+-- Drafts are private to their authors. A later holder gets a separate draft
+-- rather than replacing the prior holder's retained private work.
 CREATE TABLE casework_review_task_drafts (
-    task_id uuid PRIMARY KEY REFERENCES casework_review_tasks(task_id) ON DELETE CASCADE,
+    task_id uuid NOT NULL REFERENCES casework_review_tasks(task_id) ON DELETE CASCADE,
     actor_issuer text NOT NULL CHECK (octet_length(actor_issuer) BETWEEN 1 AND 2048),
     actor_subject text NOT NULL CHECK (octet_length(actor_subject) BETWEEN 1 AND 2048),
-    body jsonb NOT NULL CHECK (octet_length(body::text) <= 16384),
+    -- See the context bound on casework_review_requests above; the same jsonb
+    -- expansion risk applies to a reviewer's private draft body.
+    body jsonb NOT NULL CHECK (octet_length(body::text) <= 1048576),
     revision bigint NOT NULL CHECK (revision > 0),
-    updated_at timestamptz NOT NULL
+    updated_at timestamptz NOT NULL,
+    PRIMARY KEY (task_id, actor_issuer, actor_subject)
 );
 
 CREATE TABLE casework_review_decisions (
@@ -333,6 +344,9 @@ CREATE INDEX casework_review_task_grants_active_idx
 CREATE INDEX casework_review_task_grants_task_idx
     ON casework_review_task_grants(task_id,approved_at,grant_id);
 
+-- Durable scheduling state for unified review activity clocks. The pinned
+-- holiday document and evaluated effects prevent a later holiday publication
+-- from silently rewriting an already-running occurrence.
 CREATE TABLE casework_review_clock_occurrences (
     clock_occurrence_id uuid PRIMARY KEY,
     clock_id text NOT NULL CHECK (octet_length(clock_id) BETWEEN 1 AND 128),
@@ -354,11 +368,55 @@ CREATE TABLE casework_review_clock_occurrences (
     completed_at timestamptz,
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL,
+    holiday_document jsonb,
+    reminders jsonb NOT NULL DEFAULT '[]'::jsonb,
+    steps jsonb NOT NULL DEFAULT '[]'::jsonb,
+    next_action_at timestamptz,
     UNIQUE(subject_source,subject_type,subject_id,clock_id,scope,correlation_key),
     CHECK ((state='paused') = (paused_at IS NOT NULL)),
-    CHECK ((state='completed') = (completed_at IS NOT NULL))
+    CHECK ((state='completed') = (completed_at IS NOT NULL)),
+    -- Subject clocks continue across versions of one review kind, but
+    -- concurrent review kinds for the same subject must keep independent time
+    -- budgets, so a subject-scope correlation key always carries its review
+    -- kind identity rather than sharing budget across review kinds.
+    CHECK (scope<>'subject' OR (
+        correlation_key LIKE 'review-kind:%'
+        AND octet_length(correlation_key)>octet_length('review-kind:')
+    ))
 );
 CREATE INDEX casework_review_clock_request_idx
     ON casework_review_clock_occurrences(request_id,clock_id,clock_occurrence_id);
 CREATE INDEX casework_review_clock_subject_idx
     ON casework_review_clock_occurrences(subject_source,subject_type,subject_id,clock_id);
+CREATE INDEX casework_review_clock_due_idx
+    ON casework_review_clock_occurrences(next_action_at,clock_occurrence_id)
+    WHERE scope='activity' AND state='running' AND next_action_at IS NOT NULL;
+CREATE INDEX casework_review_clock_missing_facts_idx
+    ON casework_review_clock_occurrences(updated_at,clock_occurrence_id)
+    WHERE scope='activity' AND state='source_facts_missing';
+
+CREATE TABLE casework_review_clock_effects (
+    clock_occurrence_id uuid NOT NULL
+        REFERENCES casework_review_clock_occurrences(clock_occurrence_id) ON DELETE CASCADE,
+    effect_kind text NOT NULL CHECK (effect_kind IN ('reminder','step')),
+    effect_id text NOT NULL CHECK (octet_length(effect_id) BETWEEN 1 AND 128),
+    event_id uuid NOT NULL UNIQUE,
+    applied_at timestamptz NOT NULL,
+    PRIMARY KEY (clock_occurrence_id,effect_kind,effect_id)
+);
+
+-- Review idempotency rows share the product-wide table, so retain explicit
+-- request ownership. This makes accountability-expiry deletion exact even
+-- after response payloads have already been scrubbed.
+ALTER TABLE casework_idempotency
+    ADD COLUMN review_request_id uuid;
+ALTER TABLE casework_idempotency
+    ADD CONSTRAINT casework_idempotency_review_request_fkey
+    FOREIGN KEY (review_request_id)
+    REFERENCES casework_review_requests(request_id) ON DELETE CASCADE;
+ALTER TABLE casework_idempotency
+    ADD CONSTRAINT casework_idempotency_review_owner_check
+    CHECK ((operation LIKE 'review.%') = (review_request_id IS NOT NULL));
+CREATE INDEX casework_idempotency_review_request_idx
+    ON casework_idempotency(review_request_id)
+    WHERE review_request_id IS NOT NULL;

@@ -40,17 +40,10 @@ const SOURCE_RECONCILIATION_PROGRESS_MIGRATION: &str =
 const ABSENCE_CURSORS_MIGRATION: &str = include_str!("../migrations/0012_absence_cursors.sql");
 const SYNC_CLAIM_INDEXES_MIGRATION: &str =
     include_str!("../migrations/0013_sync_claim_indexes.sql");
-const HOSTED_RESULT_MIGRATION: &str = include_str!("../migrations/0015_hosted_result.sql");
-const UNIFIED_REVIEWS_MIGRATION: &str = include_str!("../migrations/0016_unified_reviews.sql");
-const UNIFIED_REVIEW_CLOCK_RUNTIME_MIGRATION: &str =
-    include_str!("../migrations/0017_unified_review_clock_runtime.sql");
-const UNIFIED_REVIEW_RETENTION_MIGRATION: &str =
-    include_str!("../migrations/0018_unified_review_retention.sql");
-const REVIEW_KIND_CLOCK_IDENTITY_MIGRATION: &str =
-    include_str!("../migrations/0019_review_kind_clock_identity.sql");
+const UNIFIED_REVIEWS_MIGRATION: &str = include_str!("../migrations/0015_unified_reviews.sql");
 
 /// Every schema version in ledger order.
-const MIGRATIONS: [(i64, &str); 19] = [
+const MIGRATIONS: [(i64, &str); 15] = [
     (1, MIGRATION),
     (2, HOSTED_MIGRATION),
     (3, ASSIGNMENT_MIGRATION),
@@ -65,11 +58,7 @@ const MIGRATIONS: [(i64, &str); 19] = [
     (12, ABSENCE_CURSORS_MIGRATION),
     (13, SYNC_CLAIM_INDEXES_MIGRATION),
     (14, include_str!("../migrations/0014_task_grants.sql")),
-    (15, HOSTED_RESULT_MIGRATION),
-    (16, UNIFIED_REVIEWS_MIGRATION),
-    (17, UNIFIED_REVIEW_CLOCK_RUNTIME_MIGRATION),
-    (18, UNIFIED_REVIEW_RETENTION_MIGRATION),
-    (19, REVIEW_KIND_CLOCK_IDENTITY_MIGRATION),
+    (15, UNIFIED_REVIEWS_MIGRATION),
 ];
 
 /// Serializes operator-run migrations on one session lock. A second migrator
