@@ -11,9 +11,9 @@ use axum::http::{HeaderName, HeaderValue, Request, Response, StatusCode};
 use axum::routing::any;
 use axum::Router;
 use registry_breg_client::{
-    ingestion_prefix_digest, BRegBatchBuilder, BRegBatchError, BRegBatchOperation,
-    BRegCreateRequest, BRegDirectWrite, BRegEtag, BRegIdempotencyKey, BRegIngestionChunk,
-    BRegIngestionRunListQuery, BRegIngestionRunRequest, BRegIngestionRunStatus,
+    ingestion_chunk_digest, ingestion_prefix_digest, BRegBatchBuilder, BRegBatchError,
+    BRegBatchOperation, BRegCreateRequest, BRegDirectWrite, BRegEtag, BRegIdempotencyKey,
+    BRegIngestionChunk, BRegIngestionRunListQuery, BRegIngestionRunRequest, BRegIngestionRunStatus,
     BRegLifecycleOperation, BRegMetadataSelectionErrorKind, BRegPatchRequest, BRegPlanRefusal,
     BRegProblemCode, BRegProtocolFailure, BRegRecordFormat, BRegRecordOptions, BRegRefusalCode,
     BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError,
@@ -44,8 +44,6 @@ const REFUSAL_LABEL: &str = "At least one name part is required.";
 const INGESTION_PROFILE: &str = "importer.v1";
 const INGESTION_INPUT_DIGEST: &str =
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const INGESTION_CHUNK_DIGEST: &str =
-    "73b2e2a853c51aff25dafdf04d36e97d92a062c385fa2aa41f4a2b9814510aca";
 
 #[derive(Clone, Debug)]
 struct CapturedRequest {
@@ -2238,9 +2236,14 @@ fn ingestion_run_wire(status: &str) -> Value {
 }
 
 fn ingestion_receipt_wire() -> Value {
+    // The receipt digest is the digest of the exact canonical batch body the
+    // tests' chunk submits, the way a run binds a committed receipt.
     json!({
         "chunkIndex": 0,
-        "digest": INGESTION_CHUNK_DIGEST,
+        "digest": ingestion_chunk_digest(&[json!(
+            {"operation": "create", "data": {"legalName": "Example Ltd"}}
+        )])
+        .unwrap(),
         "replayed": false,
         "erased": false,
         "batch": {
@@ -2389,6 +2392,84 @@ async fn ingestion_exchanges_select_the_announced_run_access_profile() {
         .is_err());
     assert_eq!(fixture.requests.lock().unwrap().len(), before);
     assert_eq!(fixture.token.0.load(Ordering::SeqCst), tokens);
+}
+
+#[tokio::test]
+async fn ingestion_answers_are_bound_to_the_requested_run_and_chunk() {
+    // A structurally valid answer for another run or chunk would silently
+    // corrupt the caller's checkpoint or retained receipt, so every
+    // run-scoped exchange refuses a body that names another identity.
+    enum Exchange {
+        Submit,
+        Read,
+        Cancel,
+        Receipt,
+    }
+    let chunk = BRegIngestionChunk::new(
+        0,
+        vec![json!({"operation": "create", "data": {"legalName": "Example Ltd"}})],
+        ingestion_prefix_digest(b"source-prefix"),
+    )
+    .unwrap();
+    let run_id = Uuid::parse_str(RECORD_ID).unwrap();
+    let mut other_run = ingestion_run_wire("open");
+    other_run["runId"] = json!(OTHER_RECORD_ID);
+    let mut other_chunk_receipt = ingestion_receipt_wire();
+    other_chunk_receipt["chunkIndex"] = json!(1);
+    let mut other_digest_receipt = ingestion_receipt_wire();
+    other_digest_receipt["digest"] = json!(INGESTION_INPUT_DIGEST);
+
+    for (body, exchange) in [
+        (
+            json!({"run": other_run.clone(), "receipt": ingestion_receipt_wire()}),
+            Exchange::Submit,
+        ),
+        (
+            json!({"run": ingestion_run_wire("open"), "receipt": other_chunk_receipt.clone()}),
+            Exchange::Submit,
+        ),
+        (
+            json!({"run": ingestion_run_wire("open"), "receipt": other_digest_receipt.clone()}),
+            Exchange::Submit,
+        ),
+        (json!({"run": other_run.clone()}), Exchange::Read),
+        (json!({"run": other_run}), Exchange::Cancel),
+        (json!({"receipt": other_chunk_receipt}), Exchange::Receipt),
+    ] {
+        let fixture = test_client(vec![ingestion_response(StatusCode::OK, body)]).await;
+        let error = match exchange {
+            Exchange::Submit => fixture
+                .client
+                .submit_ingestion_chunk("company", run_id, &chunk, INGESTION_PROFILE)
+                .await
+                .expect_err("a submission for another run or chunk is refused"),
+            Exchange::Read => fixture
+                .client
+                .read_ingestion_run("company", run_id, None)
+                .await
+                .expect_err("a run answer naming another run is refused"),
+            Exchange::Cancel => fixture
+                .client
+                .cancel_ingestion_run("company", run_id, None)
+                .await
+                .expect_err("a cancellation naming another run is refused"),
+            Exchange::Receipt => fixture
+                .client
+                .ingestion_chunk_receipt("company", run_id, 0, INGESTION_PROFILE)
+                .await
+                .expect_err("a receipt for another chunk is refused"),
+        };
+        assert!(
+            matches!(
+                error,
+                BaseRegistryClientError::Protocol {
+                    failure: BRegProtocolFailure::Body,
+                    ..
+                }
+            ),
+            "the mismatched body is a protocol body failure"
+        );
+    }
 }
 
 #[tokio::test]

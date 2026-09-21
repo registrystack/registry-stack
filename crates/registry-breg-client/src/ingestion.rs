@@ -1388,6 +1388,46 @@ fn decode_envelope<T>(
     })
 }
 
+/// Bind a decoded run to the run the caller addressed. A structurally valid
+/// document for another run is a body mismatch the caller must not persist.
+fn bound_run(run: BRegIngestionRun, run_id: Uuid) -> Result<BRegIngestionRun, BRegIngestionError> {
+    if run.run_id() == run_id {
+        Ok(run)
+    } else {
+        Err(BRegIngestionError::InvalidResponse)
+    }
+}
+
+/// Bind a decoded receipt to the chunk the caller addressed.
+fn bound_receipt(
+    receipt: BRegIngestionChunkReceipt,
+    chunk_index: u64,
+) -> Result<BRegIngestionChunkReceipt, BRegIngestionError> {
+    if receipt.chunk_index() == chunk_index {
+        Ok(receipt)
+    } else {
+        Err(BRegIngestionError::InvalidResponse)
+    }
+}
+
+/// Bind a decoded submission to the run and chunk the caller submitted: the
+/// run it names, the submitted chunk index, and the submitted chunk digest,
+/// so an answer for another run or chunk can never become the caller's
+/// checkpoint or retained receipt.
+fn bound_submission(
+    submission: BRegIngestionChunkSubmission,
+    run_id: Uuid,
+    chunk: &BRegIngestionChunk,
+) -> Result<BRegIngestionChunkSubmission, BRegIngestionError> {
+    if submission.run().run_id() != run_id
+        || submission.receipt().chunk_index() != chunk.chunk_index()
+        || submission.receipt().digest() != chunk.digest()
+    {
+        return Err(BRegIngestionError::InvalidResponse);
+    }
+    Ok(submission)
+}
+
 impl BaseRegistryClient {
     /// Announce one whole input and open a durable ingestion run for it. The
     /// run request names the access profile the run travels under, and this
@@ -1462,7 +1502,10 @@ impl BaseRegistryClient {
             )
             .await?;
         decode_envelope(raw, reqwest::StatusCode::OK.as_u16(), &["run"], |object| {
-            BRegIngestionRun::from_value(take_member(object, "run")?)
+            bound_run(
+                BRegIngestionRun::from_value(take_member(object, "run")?)?,
+                run_id,
+            )
         })
     }
 
@@ -1500,7 +1543,13 @@ impl BaseRegistryClient {
             raw,
             reqwest::StatusCode::OK.as_u16(),
             &["run", "receipt"],
-            BRegIngestionChunkSubmission::from_members,
+            |object| {
+                bound_submission(
+                    BRegIngestionChunkSubmission::from_members(object)?,
+                    run_id,
+                    chunk,
+                )
+            },
         )
     }
 
@@ -1535,7 +1584,10 @@ impl BaseRegistryClient {
             )
             .await?;
         decode_envelope(raw, reqwest::StatusCode::OK.as_u16(), &["run"], |object| {
-            BRegIngestionRun::from_value(take_member(object, "run")?)
+            bound_run(
+                BRegIngestionRun::from_value(take_member(object, "run")?)?,
+                run_id,
+            )
         })
     }
 
@@ -1572,7 +1624,12 @@ impl BaseRegistryClient {
             raw,
             reqwest::StatusCode::OK.as_u16(),
             &["receipt"],
-            |object| BRegIngestionChunkReceipt::from_value(take_member(object, "receipt")?),
+            |object| {
+                bound_receipt(
+                    BRegIngestionChunkReceipt::from_value(take_member(object, "receipt")?)?,
+                    chunk_index,
+                )
+            },
         )
     }
 }
@@ -2236,6 +2293,83 @@ mod tests {
         assert_eq!(
             BRegIngestionRunListQuery::default().access_profile("profile\n"),
             Err(BRegIngestionError::InvalidBinding)
+        );
+    }
+
+    fn decode_receipt_wire(value: &Value) -> Result<BRegIngestionChunkReceipt, BRegIngestionError> {
+        let bytes = serde_json::to_vec(value).expect("wire value encodes");
+        let value = crate::strict_json::from_slice(&bytes)
+            .expect("wire value carries no duplicate members");
+        BRegIngestionChunkReceipt::from_value(value)
+    }
+
+    #[test]
+    fn a_submission_is_bound_to_the_requested_run_and_chunk() {
+        let chunk = BRegIngestionChunk::new(
+            0,
+            vec![json!({"operation": "create", "data": {"legalName": "Example Ltd"}})],
+            PREFIX_DIGEST,
+        )
+        .expect("chunk");
+        let run_id = Uuid::parse_str(RUN_ID).expect("a canonical run id");
+        let receipt_bound_to_chunk = |digest: &str| {
+            let mut receipt = receipt_wire();
+            receipt["digest"] = json!(digest);
+            receipt
+        };
+        let decode = |run: Value, receipt: Value| {
+            let mut wire = json!({"run": run, "receipt": receipt});
+            BRegIngestionChunkSubmission::from_members(wire.as_object_mut().expect("object"))
+                .expect("the submission decodes")
+        };
+        // The addressed run with the exact submitted chunk is returned.
+        let matching = decode(run_wire(), receipt_bound_to_chunk(chunk.digest()));
+        assert_eq!(
+            bound_submission(matching, run_id, &chunk),
+            Ok(decode(run_wire(), receipt_bound_to_chunk(chunk.digest())))
+        );
+
+        // A structurally valid answer for another run, another chunk index,
+        // or another digest is refused instead of persisted.
+        let mut other_run = run_wire();
+        other_run["runId"] = json!("00000000-0000-4000-8000-000000000009");
+        let mut other_chunk = receipt_bound_to_chunk(chunk.digest());
+        other_chunk["chunkIndex"] = json!(1);
+        for (run, receipt) in [
+            (other_run, receipt_bound_to_chunk(chunk.digest())),
+            (run_wire(), other_chunk),
+            // The receipt fixture carries a digest the submitted chunk never
+            // announced.
+            (run_wire(), receipt_wire()),
+        ] {
+            assert_eq!(
+                bound_submission(decode(run, receipt), run_id, &chunk),
+                Err(BRegIngestionError::InvalidResponse)
+            );
+        }
+    }
+
+    #[test]
+    fn a_run_answer_is_bound_to_the_requested_run() {
+        let run_id = Uuid::parse_str(RUN_ID).expect("a canonical run id");
+        let run = decode_wire(&run_wire()).expect("the run decodes");
+        assert_eq!(bound_run(run.clone(), run_id), Ok(run));
+
+        let mut other_run = run_wire();
+        other_run["runId"] = json!("00000000-0000-4000-8000-000000000009");
+        assert_eq!(
+            bound_run(decode_wire(&other_run).expect("the run decodes"), run_id),
+            Err(BRegIngestionError::InvalidResponse)
+        );
+    }
+
+    #[test]
+    fn a_receipt_answer_is_bound_to_the_requested_chunk() {
+        let receipt = decode_receipt_wire(&receipt_wire()).expect("the receipt decodes");
+        assert_eq!(bound_receipt(receipt.clone(), 0), Ok(receipt.clone()));
+        assert_eq!(
+            bound_receipt(receipt, 1),
+            Err(BRegIngestionError::InvalidResponse)
         );
     }
 
