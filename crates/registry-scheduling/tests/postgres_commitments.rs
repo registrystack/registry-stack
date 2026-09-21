@@ -42,7 +42,7 @@ use registry_scheduling_core::{
     location_closure_intervals, location_open_intervals, parse_policy_yaml, AdmissionRefusal,
     AdmissionRequest, CalendarExceptionRecord, Channel, ExceptionRecordKind, LocationRecord,
     OfferingPolicy, PartyCounts, PoolMember, PublishedWindow, RequiredUnitsPolicy, ResourcePool,
-    SchedulingFacts, SchedulingPolicy, WindowSubquota,
+    SchedulingFacts, SchedulingPolicy, WindowStaffing, WindowSubquota,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -4456,6 +4456,126 @@ async fn records_replacement_refuses_to_move_a_window_with_standing_commitments(
     assert!(refusal.to_string().contains(WINDOW_ID), "{refusal}");
 }
 
+/// A pool that staffs a window may not also back an exact-time offering: the
+/// two modes lock different anchors, so their capacity transactions never
+/// serialize against each other and the ledger cannot see that it sold the
+/// same people twice. The authoring check refuses that combination against a
+/// policy file, offline. The database write is the other place it has to
+/// hold, because an operator reaching `replace_facts` never passed the file
+/// through that tool.
+#[tokio::test]
+async fn records_replacement_refuses_a_window_staffed_by_an_exact_time_pool() {
+    let start = (Utc::now() + TimeDelta::days(2))
+        .with_nanosecond(0)
+        .expect("second precision");
+    let fx = fixture_publishing(
+        &policy_with_window(),
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+    )
+    .await;
+
+    let mut shared = records_with_window(start);
+    shared.windows[0].staffing = Some(WindowStaffing {
+        pool: "north-counter".to_owned(),
+        reserved_members: None,
+        because: "test".to_owned(),
+    });
+    let refusal = fx
+        .store
+        .replace_facts(SCHEDULING_ID, &shared, Uuid::new_v4(), operator_audit())
+        .await
+        .expect_err("a window may not be staffed by a pool an exact-time offering sells");
+    assert!(
+        refusal
+            .to_string()
+            .contains("windows[0].staffing.pool: shared-supply-unpartitioned"),
+        "{refusal}"
+    );
+
+    let (records, _) = fx
+        .store
+        .facts()
+        .await
+        .expect("the records after the refusal");
+    assert!(
+        records.windows.is_empty(),
+        "a refused swap writes no window record"
+    );
+}
+
+/// The same combined invariant, reached from the other side. The deployed
+/// records are legal under the deployed policy, and it is the next policy
+/// publication that puts an exact-time offering on the pool staffing a
+/// standing window. Fixing only one of the two writes leaves this direction
+/// open.
+#[tokio::test]
+async fn policy_publication_refuses_an_exact_time_offering_on_a_deployed_windows_staffing() {
+    let start = (Utc::now() + TimeDelta::days(2))
+        .with_nanosecond(0)
+        .expect("second precision");
+    let pools = [
+        "north-counter".to_owned(),
+        "two-counter".to_owned(),
+        "south-counter".to_owned(),
+    ];
+    let fx = fixture_publishing(&policy_with_window(), &pools).await;
+
+    // No exact-time offering sells `south-counter` under the deployed
+    // policy, so staffing the window from it is admissible today.
+    let mut staffed = records_with_window(start);
+    staffed.pools.push(ResourcePool {
+        id: "south-counter".to_owned(),
+        members: vec![PoolMember {
+            resource_id: "station-3".to_owned(),
+            capabilities: Vec::new(),
+            available: true,
+        }],
+    });
+    staffed.windows[0].staffing = Some(WindowStaffing {
+        pool: "south-counter".to_owned(),
+        reserved_members: None,
+        because: "test".to_owned(),
+    });
+    fx.store
+        .replace_facts(SCHEDULING_ID, &staffed, Uuid::new_v4(), operator_audit())
+        .await
+        .expect("a window staffed by a pool no exact-time offering sells");
+
+    let deployed = fx
+        .store
+        .scheduling_meta()
+        .await
+        .expect("the deployment metadata before the refusal");
+
+    let conflicting = parse_policy_yaml(
+        &policy_with_window().replace("pool: two-counter", "pool: south-counter"),
+    )
+    .expect("a policy moving an idle offering onto the window's staffing");
+    let digest = conflicting.policy_digest();
+    let refusal = fx
+        .store
+        .apply_policy(SCHEDULING_ID, &digest, &pools, &conflicting)
+        .await
+        .expect_err("an exact-time offering may not take a standing window's staffing");
+    assert!(
+        refusal
+            .to_string()
+            .contains("windows[0].staffing.pool: shared-supply-unpartitioned"),
+        "{refusal}"
+    );
+
+    let after = fx
+        .store
+        .scheduling_meta()
+        .await
+        .expect("the deployment metadata after the refusal");
+    assert_eq!(after, deployed, "a refused publication deploys nothing");
+    assert_ne!(
+        after.2, digest,
+        "the conflicting policy is not the deployed one"
+    );
+}
+
 #[tokio::test]
 async fn changed_window_records_must_advance_the_revision_even_after_removal() {
     let start = (Utc::now() + TimeDelta::days(2))
@@ -4587,6 +4707,37 @@ async fn changed_window_records_must_advance_the_revision_even_after_removal() {
         .expect("an exact unchanged reapply remains accepted");
 }
 
+/// Write one window record and its supply anchor straight into the tables,
+/// underneath `replace_facts` and the invariants it holds. A record that
+/// contradicts the deployed policy cannot be written through the store any
+/// more, so this is how a test still reaches the shape an older runtime, or
+/// a hand-edited table, can leave behind.
+async fn plant_window(fx: &Fixture, window: &PublishedWindow) {
+    let record = serde_json::to_value(window).expect("a serializable window record");
+    fx.admin
+        .execute(
+            "INSERT INTO scheduling_windows(window_id, window_record) VALUES($1,$2) \
+             ON CONFLICT(window_id) DO UPDATE SET window_record=EXCLUDED.window_record",
+            &[&window.id, &record],
+        )
+        .await
+        .expect("plant the window record");
+    fx.admin
+        .execute(
+            "INSERT INTO scheduling_supply(supply_id, kind) VALUES($1,'window') \
+             ON CONFLICT(supply_id) DO NOTHING",
+            &[&window.id],
+        )
+        .await
+        .expect("plant the window's supply anchor");
+}
+
+/// The per-admission check is defense in depth, not the only defense: both
+/// database writes refuse to produce a window record that contradicts the
+/// policy governing it. The records here are planted underneath those
+/// writes, so a deployment that carries such a pair from anywhere else still
+/// refuses every admission on it rather than committing capacity it cannot
+/// account for.
 #[tokio::test]
 async fn a_window_record_must_belong_to_the_authorized_offering_and_location() {
     let start = (Utc::now() + TimeDelta::hours(3))
@@ -4597,15 +4748,7 @@ async fn a_window_record_must_belong_to_the_authorized_offering_and_location() {
         &["north-counter".to_owned(), "two-counter".to_owned()],
     )
     .await;
-    fx.store
-        .replace_facts(
-            SCHEDULING_ID,
-            &records_with_window(start),
-            Uuid::new_v4(),
-            operator_audit(),
-        )
-        .await
-        .expect("seed the intentionally misbound operator record");
+    plant_window(&fx, &records_with_window(start).windows[0]).await;
     let caller = agent_token_for_service("registry-review");
     let mut request = arrival(&fx, start, None);
     request["admission"]["offering"] = json!(FOREIGN_WINDOW_OFFERING);
@@ -4625,15 +4768,7 @@ async fn a_window_record_must_belong_to_the_authorized_offering_and_location() {
     wrong_location.windows[0].revision = WINDOW_REVISION + 1;
     wrong_location.windows[0].offering = FOREIGN_WINDOW_OFFERING.to_owned();
     wrong_location.windows[0].location = "two-counter".to_owned();
-    fx.store
-        .replace_facts(
-            SCHEDULING_ID,
-            &wrong_location,
-            Uuid::new_v4(),
-            operator_audit(),
-        )
-        .await
-        .expect("seed the intentionally wrong-location operator record");
+    plant_window(&fx, &wrong_location.windows[0]).await;
     request["admission"]["windowRevision"] = json!(WINDOW_REVISION + 1);
     let (status, problem) = fx
         .post(
