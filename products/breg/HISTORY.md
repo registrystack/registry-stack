@@ -145,6 +145,63 @@ Projects maintained outside this repository need the same rewrite. The adopter
 demo in [`registrystack/solmara-lab`](https://github.com/registrystack/solmara-lab)
 authors the old member and is not updated by this change.
 
+# Breaking authoring change: changeRequest review moves to an external authority
+
+`changeRequest.review.mode` and `changeRequest.review.stages` were removed.
+Review authority for a change request is now delegated to an external review
+producer through the runtime's `reviewAuthorities` block: author
+`review.authority` naming that authority id and `review.policyId` naming the
+policy it evaluates. `application` was renamed to `onApproved`;
+`application.mode` is now `onApproved.mode`, still `manual` or `automatic`.
+
+Before:
+
+```yaml
+changeRequest:
+  review:
+    stages:
+      - id: review
+        approvals: 1
+        excludeSubmitter: true
+  application:
+    mode: manual
+```
+
+After:
+
+```yaml
+changeRequest:
+  review:
+    authority: casework
+    policyId: lot-number-correction
+  onApproved:
+    mode: manual
+```
+
+The `approve_request`, `reject_request`, and `request_revision` profile
+operations were removed; a profile now needs only `get` and `apply_request` to
+apply a reviewed request. The per-stage `reviewStages` permission targets were
+removed from apply profiles in favor of a top-level `applyTargets` list, and
+both the submitter and application profiles gained `readableRequestFields` for
+the fields the external reviewer needs to read, such as `reason` and
+`review_state`.
+
+Add a `reviewAuthorities` entry in runtime configuration for every authority id
+a project's `review.authority` names. Each entry requires `endpoint`,
+`profile`, `producerId`, and `recoveryDays`, authenticates with either
+`privateKeyJwt` or an opaque `tokenRef`, and a completion-notified authority
+also sets `completionTokenRef` and `completionRecipient`. `bregctl dev` and
+`source add --apply` write this block and the paired Casework producer binding
+automatically; see [Review BReg changes in Casework](../../docs/site/src/content/docs/tutorials/review-breg-changes-in-casework.mdx)
+for the full authoring and binding shape.
+
+`caseworkctl source add` writes the new shape. A registry still authoring
+`review.stages` or `application`, or a profile still granting the three
+retired operations, must be rewritten by hand: replace the review stage list
+with an authority binding, rename `application` to `onApproved`, remove the
+retired operations, and add a `reviewAuthorities` entry for the named
+authority.
+
 # Corrections and historical queries
 
 Base Registry Engine retains complete stored-record revisions. A successful mutation

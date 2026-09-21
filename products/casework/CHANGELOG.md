@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- BREAKING: replace hosted decisions with unified reviews. Remove `hosted.rs`
+  and its routes: `POST /v1/hosted-items` and the paired
+  `GET /v1/hosted-items/terminal`, `GET /v1/hosted-items/{itemId}`,
+  `GET`/`POST /v1/hosted-items/{itemId}/notes`,
+  `POST /v1/hosted-items/{itemId}/cancel`,
+  `GET /v1/hosted-accountability/{eventId}`,
+  `POST /v1/work-items/{itemId}/hosted-decisions`, and
+  `GET /v1/work-items/{itemId}/hosted-history`. Add `review.rs` and its routes:
+  `POST /v1/review-requests`, `GET /v1/review-kinds` and
+  `/v1/review-kinds/{kindId}`, `GET /v1/review-results`,
+  `GET /v1/review-tasks` and `/v1/review-tasks/{taskId}` with `context`,
+  `claim`, `assign`, `delegate`, `release`, `draft`, and `decisions`,
+  `GET /v1/review-requests/{requestId}` with `result`, `cancel`, `history`,
+  `clocks`, and `notes`, and `GET /v1/review-accountability/{eventId}`.
+  Casework now owns approval for BReg change requests through the
+  source-neutral producer contract (`registry-review-protocol`,
+  `registry-review-client`) instead of BReg holding review state itself. A
+  single `0015_unified_reviews.sql` migration creates the review schema and
+  drops the experimental `casework_hosted_*` tables; no hosted data is carried
+  over.
 - Review decisions can carry a structured result. A review kind declares an optional closed
   `resultSchema` beside its display schema, and an outcome may set `resultRequired`. A Requester may
   narrow declared top-level fields per request with `resultConstraints` at create time; the constraints

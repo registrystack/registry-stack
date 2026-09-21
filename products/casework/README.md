@@ -62,8 +62,11 @@ against the kind's bounded JSON Schema:
     "subject": "requester"
   },
   "context": {
-    "summary": "Review the 12 entries in the prepared batch",
-    "reference": "batch-0042"
+    "strategy": "submitted",
+    "snapshot": {
+      "summary": "Review the 12 entries in the prepared batch",
+      "reference": "batch-0042"
+    }
   }
 }
 ```

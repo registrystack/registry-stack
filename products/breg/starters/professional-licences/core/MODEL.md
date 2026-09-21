@@ -64,7 +64,7 @@ the local learning clients consistent across starters.
 | --- | --- | --- |
 | Reader | Get/list profession, jurisdiction, recorded status and validity dates only | No access |
 | Editor (registrar) | Create, get/list and inspect all-field history | List, create/edit own draft, submit, revise or cancel own requests |
-| Reviewer | Get/list and inspect all-field history | List, inspect, approve, reject, request revision and manually apply |
+| Maintainer | Get/list and inspect all-field history | List, inspect external review status; manually apply an exactly approved proposal |
 | Holder | Get/list own licences through exact trusted person-reference equality | List, create/edit, submit, revise or cancel own corrections against currently owned licences |
 
 Reader output omits the local identifier, person, regulator, activities and conditions.
@@ -84,10 +84,11 @@ review path. The fixed effect atomically replaces only licensedActivities and au
 external references, profession, status and dates remain unchanged. A different
 status or entitlement lifecycle needs its own reviewed institutional design.
 
-A distinct principal must approve; acquiring the reviewer profile cannot let a
-submitter approve their own request. Approval alone changes no licence.
-The reviewer applies the exact frozen effect with the target's expected
-revision. A stale target requires the native revision and review path.
+Registry Casework independently owns reviewer eligibility and separation from
+the submitter; acquiring the maintainer profile grants no reviewer authority.
+External approval alone changes no licence. The maintainer applies the exact
+frozen effect with the target's expected revision. A stale target requires the
+native revision and review path.
 Reasons and supporting references are restricted bounded text, not uploaded
 proof, verified external evidence or authority to license someone.
 
