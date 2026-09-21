@@ -42,7 +42,6 @@ pub(crate) async fn install(
     client: &impl GenericClient,
     runtime_role: &SqlIdentifier,
 ) -> Result<(), MutationError> {
-    refuse_occupied_legacy_approval_state(client).await?;
     client.batch_execute(
         "CREATE TABLE IF NOT EXISTS registry_internal.registry_request_state (
              request_entity_id text NOT NULL CHECK (request_entity_id <> ''),
@@ -225,47 +224,6 @@ pub(crate) async fn install(
             ))
             .await
             .map_err(|_| MutationError::Unavailable)?;
-    }
-    Ok(())
-}
-
-/// Old source-owned approval rows cannot be translated into external Casework
-/// evidence. Refuse the cutover until an operator resolves them explicitly.
-async fn refuse_occupied_legacy_approval_state(
-    client: &impl GenericClient,
-) -> Result<(), MutationError> {
-    let catalog = client
-        .query_one(
-            "SELECT to_regclass('registry_internal.registry_request_state') IS NOT NULL,
-                    to_regclass('registry_internal.registry_request_decisions') IS NOT NULL",
-            &[],
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
-    if catalog.get::<_, bool>(0) {
-        let occupied = client
-            .query_opt(
-                "SELECT 1 FROM registry_internal.registry_request_state
-                  WHERE state IN ('approved','rejected','needs_changes','canceled') LIMIT 1",
-                &[],
-            )
-            .await
-            .map_err(|_| MutationError::Unavailable)?;
-        if occupied.is_some() {
-            return Err(MutationError::Conflict);
-        }
-    }
-    if catalog.get::<_, bool>(1) {
-        let occupied = client
-            .query_opt(
-                "SELECT 1 FROM registry_internal.registry_request_decisions LIMIT 1",
-                &[],
-            )
-            .await
-            .map_err(|_| MutationError::Unavailable)?;
-        if occupied.is_some() {
-            return Err(MutationError::Conflict);
-        }
     }
     Ok(())
 }
@@ -1491,50 +1449,6 @@ mod tests {
             .expect("obsolete decision table lookup succeeds")
             .get::<_, bool>(0);
         assert!(obsolete_decisions_absent);
-        migration_task.abort();
-        database.cleanup().await;
-    }
-
-    #[tokio::test]
-    async fn occupied_legacy_approval_state_refuses_schema_cutover() {
-        load_postgres_env();
-        let database = TestDatabase::create(1).await;
-        let (migration, migration_task) = database.connect_migration().await;
-        migration
-            .batch_execute(
-                "CREATE TABLE registry_internal.registry_request_state (
-                     request_entity_id text NOT NULL,
-                     request_id uuid NOT NULL,
-                     owner_reference text NOT NULL,
-                     state text NOT NULL,
-                     proposal_version bigint NOT NULL,
-                     workflow_revision bigint NOT NULL,
-                     PRIMARY KEY (request_entity_id, request_id)
-                 );
-                 INSERT INTO registry_internal.registry_request_state
-                     (request_entity_id, request_id, owner_reference, state,
-                      proposal_version, workflow_revision)
-                 VALUES ('legacy-request', '00000000-0000-4000-8000-000000000001',
-                         'legacy-owner', 'approved', 1, 2);",
-            )
-            .await
-            .expect("occupied legacy state fixture installs");
-
-        assert_eq!(
-            install_mutation_schema(&migration, &database.runtime_role).await,
-            Err(MutationError::Conflict)
-        );
-        let state = migration
-            .query_one(
-                "SELECT state FROM registry_internal.registry_request_state
-                  WHERE request_entity_id = 'legacy-request'",
-                &[],
-            )
-            .await
-            .expect("refused cutover preserves legacy row")
-            .get::<_, String>(0);
-        assert_eq!(state, "approved");
-
         migration_task.abort();
         database.cleanup().await;
     }
