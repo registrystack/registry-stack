@@ -3171,6 +3171,117 @@ async fn a_permission_refused_before_the_transaction_writes_its_audit_row() {
     }
 }
 
+/// Every denied record in the pending journal as an (operation, reason) pair,
+/// in the order the journal wrote them.
+async fn denied_audit_entries(fx: &Fixture) -> Vec<(String, String)> {
+    fx.store
+        .pending_audit(100)
+        .await
+        .expect("the pending audit journal")
+        .into_iter()
+        .map(|(_, record)| record)
+        .filter(|record| record["outcome"] == "denied")
+        .map(|record| {
+            let field = |name: &str| {
+                record[name]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("an audit record names its {name}"))
+                    .to_owned()
+            };
+            (field("operation"), field("reason"))
+        })
+        .collect()
+}
+
+/// SCHEDULING-SEC-14: a commitment the ledger refuses inside the capacity
+/// transaction is as attributable as one it allows. A stale observed revision
+/// and a cancellation past its cutoff are each a decision about a named
+/// appointment under a grant the service already matched, so each leaves a
+/// denied record behind. Without them the journal shows the booking and not
+/// the refusals that followed it.
+#[tokio::test]
+async fn refusals_decided_inside_the_capacity_transaction_write_their_audit_rows() {
+    let fx = fixture().await;
+
+    // A stale observed revision, refused after the reschedule moved it on.
+    let from = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, appointment) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "audited-create",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, from)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let appointment_id = appointment["appointmentId"].as_str().unwrap().to_owned();
+    let observed = appointment["revision"].as_u64().unwrap();
+
+    let other = first_slot(&fx, OFFERING, 480, 620).await;
+    let (status, _) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/reschedule"),
+            &fx.agent,
+            "audited-resched-1",
+            json!({"observedRevision": observed, "admission": admission(&fx, OFFERING, other)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, problem) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/reschedule"),
+            &fx.agent,
+            "audited-resched-2",
+            json!({"observedRevision": observed, "admission": admission(&fx, OFFERING, other)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(problem["code"], "revision.mismatch");
+
+    // A cancellation inside the four-hour cutoff, refused by the same ledger.
+    let (near_id, near_revision) = booked(&fx, 90, 200, "audited-cancel-near").await;
+    let (status, problem) = fx
+        .post(
+            &format!("/v1/appointments/{near_id}/cancel"),
+            &fx.agent,
+            "audited-cancel-key",
+            json!({"observedRevision": near_revision, "reason": "caller cancelled"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(problem["code"], "cancellation.cutoff-passed");
+
+    let denied = denied_audit_entries(&fx).await;
+    assert_eq!(
+        denied,
+        vec![
+            (
+                "appointment.reschedule".to_owned(),
+                "authorization.profile".to_owned()
+            ),
+            (
+                "appointment.cancel".to_owned(),
+                "authorization.profile".to_owned()
+            ),
+        ],
+        "a refusal the capacity transaction decides is attributable afterwards"
+    );
+
+    // The record attributes the decision without repeating the caller.
+    for (_, record) in fx
+        .store
+        .pending_audit(100)
+        .await
+        .expect("the pending audit journal")
+    {
+        assert!(
+            !record.to_string().contains("principal-agent"),
+            "the audit record repeats the caller's raw identity"
+        );
+    }
+}
+
 /// The most octets the claim ledger stores for a caller-chosen duplicate key.
 /// It mirrors the CHECK in migration 0001; the edge refuses the same size
 /// first, so a caller who exceeds it is answered rather than told the service

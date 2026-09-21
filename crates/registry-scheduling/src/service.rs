@@ -1340,14 +1340,29 @@ impl SchedulingService {
                         }
                     }
                 }
-                if matches!(
-                    error,
-                    CommitError::Refused(_) | CommitError::HoldCeiling | CommitError::Unauthorized
-                ) {
-                    let reason = match error {
-                        CommitError::Unauthorized => "authorization.refused",
-                        _ => "authorization.profile",
-                    };
+                // Every commitment the ledger decides is attributable, refused
+                // as much as allowed. The match is exhaustive on purpose: a
+                // new variant must state which side it falls on rather than
+                // inherit silence from a wildcard.
+                let audited = match error {
+                    // Nothing was decided. The transaction failed, or the
+                    // environment moved and the caller retries against the
+                    // current records, so there is no verdict to attribute.
+                    CommitError::Store(_)
+                    | CommitError::Query(_)
+                    | CommitError::Hooks(_)
+                    | CommitError::FactsStale => None,
+                    // The idempotency layer refused the key, not the
+                    // commitment. The attempt receipt above already records
+                    // it, and the key says nothing about what a grant reaches.
+                    CommitError::KeyReused | CommitError::KeyExpired => None,
+                    CommitError::Unauthorized => Some("authorization.refused"),
+                    CommitError::Refused(_)
+                    | CommitError::HoldCeiling
+                    | CommitError::RevisionMismatch
+                    | CommitError::CutoffPassed => Some("authorization.profile"),
+                };
+                if let Some(reason) = audited {
                     self.record_refusal(audit_record(
                         &self.hasher,
                         &self.scheduling_id,

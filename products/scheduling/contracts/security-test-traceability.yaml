@@ -115,6 +115,7 @@ entries:
       - {path: crates/registry-scheduling/src/runtime.rs, name: a_pending_audit_record_is_stamped_with_its_identity_exactly_once}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_hold_confirms_into_an_appointment_with_attributable_history}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_permission_refused_before_the_transaction_writes_its_audit_row}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: refusals_decided_inside_the_capacity_transaction_write_their_audit_rows}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_audit_journal_is_read_in_the_order_it_was_written}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_audit_chain_continues_across_a_restart}
   - id: SCHEDULING-SEC-15

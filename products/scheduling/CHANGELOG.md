@@ -14,6 +14,13 @@
   the offering's service, its location, and the action, bounded to 64
   permissions of 32 actions with no wildcard. Only the grant's expiry is
   re-checked inside the capacity transaction.
+- Write one pseudonymized authorization audit record for every commitment
+  decision: the allowed case, the permission mismatches refused before the
+  capacity transaction opens, and the commitments that transaction refuses,
+  including an admission refusal, the hold ceiling, a lapsed grant, a stale
+  observed revision, and a cancellation past its cutoff. A failed transaction
+  and a replaced environment decided nothing and are not audited; an
+  idempotency key refusal is carried by the attempt receipt instead.
 - Document the maintained Casework approval and stock ThunderID exchange path,
   and feed its exact exchanged bearer through Scheduling's real authenticator
   before the adopter uses it for an appointment.
