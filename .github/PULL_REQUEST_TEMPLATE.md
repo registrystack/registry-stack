@@ -4,11 +4,14 @@
 
 Describe the change and the owning area it affects.
 
-## Checks
+## Evidence
 
-List the relevant checks you ran, or say why a check was skipped.
-For major functionality and bug fixes, mention the test or fixture that covers
-the change.
+For each claim this change makes, give the command that supports it and its
+result, or write `inconclusive` and say why. Name what the check proves:
+static reading, a unit or integration test, a product gate script, or a live
+journey against binaries built from this commit. A skipped check is listed
+with its reason, not omitted. For major functionality and bug fixes, name the
+test or fixture that covers the change.
 
 ## Notes
 
