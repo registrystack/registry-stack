@@ -229,7 +229,7 @@ fn occurrence_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "source_authorization",
-            description: "The caller can see the item's queue, and the source, re-read as this caller, still discloses the subject under the binding the item holds. A binding the source has moved refuses the action; a subject the source no longer discloses is reported as absent. Those hold on every caller event named here, the recovery settlements included, because one shared caller read enforces them for every entry point. The further check that the source still offers the operation being attempted is narrower, and holds only on the reservation, the one path that chooses an operation. A recovery re-executes the operation its attempt already prepared and never re-tests it against the set the source offers now; standing in its place is the saved preparation itself, matched on the recorded binding and idempotency key and executed under a single-flight lease. The operator settlement of an uncertain attempt raises two of these events with no caller and reads no source, so that path passes this layer without being checked here.",
+            description: "The caller can see the item's queue, and the source, re-read as this caller, still discloses the subject under the binding the item holds. A subject the source no longer discloses is reported as absent, and that holds on every caller event named here, the recovery settlements included, because the shared caller read settles it before this layer's own comparisons begin. The binding comparison is narrower than it reads: that same shared read returns the item untouched as soon as this caller holds a pending or uncertain attempt on it, skipping both the generation refusal and the active-occurrence refusal, so a moved binding refuses the paths that start an action but not the recovery of such an attempt. The decision path escapes that skip only because it runs a live-attempt check of its own immediately afterwards and refuses an uncertain attempt outright; a recovery has no equivalent and can have none, the live attempt being the one it exists to settle. Standing in this layer's place there is the source adapter's own comparison at execution, which refuses a saved binding that no longer matches the prepared one or the current generation. The further check that the source still offers the operation being attempted is narrower still, and holds only on the reservation, the one path that chooses an operation. A recovery re-executes the operation its attempt already prepared and never re-tests it against the set the source offers now; standing in its place is the saved preparation itself, matched on the recorded binding and idempotency key and executed under a single-flight lease. The operator settlement of an uncertain attempt raises two of these events with no caller and reads no source, so that path passes this layer without being checked here.",
             events: CALLER_EVENTS,
         },
         EnforcementLayer {
@@ -262,7 +262,7 @@ fn occurrence_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "attempt_fence",
-            description: "No occurrence changes while a pending or uncertain attempt is live on the item: a claim, release, or reservation is refused, a clock effect is deferred, and an observation is requeued. An attempt settlement is fenced by the execution token recorded on the attempt; a refusal by the executor also requires its lease to be live, recovery requires it to have expired, and the operator settlement of an uncertain attempt requires an expired lease and then issues a fresh token that fences the original executor out.",
+            description: "No occurrence changes while a pending or uncertain attempt is live on the item: a claim, release, or reservation is refused, and a clock effect is deferred. An observation is fenced wider than that and requeued rather than refused, because its check spans every item the source, subject kind, and subject identifier select: a live attempt on one of a subject's occurrences requeues an observation that would have updated another, and the subject stays queued for reconciliation. An attempt settlement is fenced by the execution token recorded on the attempt; a refusal by the executor also requires its lease to be live, recovery requires it to have expired, and the operator settlement of an uncertain attempt requires an expired lease and then issues a fresh token that fences the original executor out.",
             events: EVERY_OCCURRENCE_EVENT,
         },
         EnforcementLayer {
@@ -372,7 +372,7 @@ fn review_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "producer_submission_idempotency",
-            description: "A producer submitting a new review is admitted here, before any request row is locked. An advisory lock over the producer, the subject, and the review kind serializes that producer's concurrent submissions, and the submission's own idempotency record answers a retry under it: a recorded request hash differing from this one is refused as a conflict, and a record whose response has been retained away is refused as expired. The producer's priors that this submission supersedes are selected and locked only after that, so the settlements a supersession raises reach the request lock below having already passed this admission, not the one under the lock. The recovery route is admitted from its idempotency record too, and takes no lock at all.",
+            description: "A producer submitting a new review is admitted here, before any request row is locked. An advisory lock over the producer, the subject, and the review kind serializes that producer's concurrent submissions, and the submission's own idempotency record answers a retry under it: a recorded request hash differing from this one is refused as a conflict, and a record whose response has been retained away is refused as expired. The producer's priors that this submission supersedes are selected and locked only after that, so the settlements a supersession raises reach the request lock below having already passed this admission, not the one under the lock. The recovery route is admitted from its idempotency record too, and takes no request lock where that record answers it. It is not lock-free in general: the reservation it falls back to is keyed on the producer, the subject, and the kind alone, with no idempotency key among them, so a retry of an identical submission under a fresh key misses the record, finds the reservation, and locks the request row it names before rebuilding the response.",
             events: &["settle"],
         },
         EnforcementLayer {
@@ -913,7 +913,73 @@ mod tests {
         );
         assert!(
             source.contains("recovery settlements included"),
-            "disclosure and binding currency do hold on recovery: {source}"
+            "source disclosure does hold on recovery: {source}"
+        );
+    }
+
+    /// The shared caller read returns the item untouched as soon as the caller
+    /// holds a live attempt, skipping both binding refusals below it. The
+    /// decision path survives that only by re-checking for a live attempt
+    /// itself; a recovery cannot, since the live attempt is what it settles.
+    /// Reporting the binding as enforced on every caller event would claim a
+    /// guarantee exactly the recovery path does not have.
+    #[test]
+    fn the_binding_check_names_the_live_attempt_skip() {
+        let description = occurrence_lifecycle();
+        let source = layer(&description, "source_authorization").description;
+        for phrase in [
+            "returns the item untouched",
+            "pending or uncertain attempt",
+            "but not the recovery",
+            "source adapter's own comparison at execution",
+        ] {
+            assert!(
+                source.contains(phrase),
+                "{phrase:?} stopped being reported: {source}"
+            );
+        }
+    }
+
+    /// The claim, release and reservation fences are item-local, but the
+    /// observation fence spans every item selected by source, subject kind and
+    /// subject identifier. Reporting one scope for all four would understate
+    /// what an observation is refused for.
+    #[test]
+    fn the_observation_fence_is_subject_wide() {
+        let description = occurrence_lifecycle();
+        let fence = layer(&description, "attempt_fence").description;
+        assert!(
+            fence.contains("fenced wider than that"),
+            "the observation fence is not item-local: {fence}"
+        );
+        assert!(
+            fence.contains("subject identifier select"),
+            "the columns the wider fence spans stopped being reported: {fence}"
+        );
+        assert!(
+            fence.contains("another"),
+            "a live attempt on one occurrence requeues an observation of a sibling: {fence}"
+        );
+    }
+
+    /// The recovery route is lock-free only where its idempotency record
+    /// answers it. The reservation it falls back to carries no idempotency
+    /// key, so a retry under a fresh key locks the request row it names.
+    #[test]
+    fn the_recovery_route_names_the_lock_it_takes_on_a_fresh_key() {
+        let description = review_lifecycle();
+        let admission = layer(&description, "producer_submission_idempotency").description;
+        assert!(
+            !admission.contains("takes no lock at all"),
+            "the recovery route is not unconditionally lock-free: {admission}"
+        );
+        assert!(
+            admission.contains("no idempotency key among them"),
+            "the reservation key is what makes the fallback lock: {admission}"
+        );
+        assert!(
+            admission.contains("locks the request row"),
+            "the fallback lock stopped being reported: {admission}"
         );
     }
 

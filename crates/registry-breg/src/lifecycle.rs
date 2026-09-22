@@ -135,7 +135,7 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "apply_evidence_acquisition",
-            description: "An apply on an entity declaring Evidence application preconditions is routed the same way, after any review evidence above. In a transaction of its own, separate from the action's, it re-verifies everything it needs to derive the Evidence requests: the workflow must still be submitted, a recomputed action ETag must equal the caller's If-Match, the current proposal's version, effect digest, and contract fingerprint must match, the frozen application contract must still be the compiled one, and the frozen request values, the target rows, and the per-target predicates must all still hold, with the targets authorized by the same check the apply layer below runs. Those are the preconditions below re-run early, so a request that fails one is refused here rather than there. That transaction is then dropped before any remote call: the Evidence requests are resolved outside it, and a provider that cannot be reached, a resolution cancelled or timed out waiting for a concurrency permit, and a response that would exceed the retained-evidence budget are each refused with no row held. A receipt or an already-applied request short-circuits before any of this.",
+            description: "An apply on an entity declaring Evidence application preconditions is routed the same way, after any review evidence above. In a transaction of its own, separate from the action's, it re-verifies everything it needs to derive the Evidence requests: the workflow must still be submitted, a recomputed action ETag must equal the caller's If-Match, the current proposal's version, effect digest, and contract fingerprint must match, the frozen application contract must still be the compiled one, and the frozen request values, the target rows, and the per-target predicates must all still hold, with the targets authorized by the same check the apply layer below runs. Those are the preconditions below re-run early, so a request that fails one is refused here rather than there. That transaction is then dropped before any remote call, and with no row held the caller's task grant and the grant frozen on the proposal are each confirmed current and live, because acquiring a guard is itself a protected disclosure: a revoked grant is refused here, ahead of the provider, rather than at the grant layer below. The Evidence requests are resolved outside that transaction, and a provider that cannot be reached, a resolution cancelled or timed out waiting for a concurrency permit, and a response that would exceed the retained-evidence budget are each refused with no row held. A receipt or an already-applied request short-circuits before any of this.",
             events: &["apply"],
         },
         EnforcementLayer {
@@ -175,7 +175,7 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "action_etag",
-            description: "The caller's If-Match, which is mandatory, must equal the action ETag recomputed from the record and workflow as locked, so an action prepared against a request that has since moved is refused as a failed precondition. For submit this is the second such comparison: the preparation layer above made the first, against an unlocked read, before it planned the submission.",
+            description: "The caller's If-Match is mandatory, but this layer is not where that is enforced: presence and syntax are settled at the HTTP layer before any mutation path is entered, so a missing value refused as precondition-required and a malformed one refused as a failed precondition both beat every layer above, the review and Evidence paths, the apply preflight, submit planning, and the replay admission among them. Only a well-formed value reaches here, and it must equal the action ETag recomputed from the record and workflow as locked, so an action prepared against a request that has since moved is refused as a failed precondition. For submit this is the second such comparison: the preparation layer above made the first, against an unlocked read, before it planned the submission.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
@@ -652,6 +652,64 @@ mod tests {
         assert!(
             acquisition.contains("dropped before any remote call"),
             "the remote call holds no row, and that is the point: {acquisition}"
+        );
+        assert!(
+            acquisition.contains("protected disclosure"),
+            "both grants are checked before the provider is contacted: {acquisition}"
+        );
+    }
+
+    /// Acquiring a guard is a disclosure, so both grants are confirmed after
+    /// the read transaction commits and before the first provider call, not at
+    /// the grant layer further down. Reporting the grant check only there
+    /// would put it after remote I/O it actually precedes.
+    #[test]
+    fn the_acquisition_layer_checks_both_grants_before_the_provider() {
+        let lifecycle = request_lifecycle();
+        let index = |id: &str| {
+            lifecycle
+                .enforcement
+                .iter()
+                .position(|layer| layer.id == id)
+                .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
+        };
+        assert!(index("apply_evidence_acquisition") < index("task_grant"));
+        let acquisition = layer(&lifecycle, "apply_evidence_acquisition").description;
+        for phrase in [
+            "caller's task grant",
+            "frozen on the proposal",
+            "ahead of the provider",
+        ] {
+            assert!(
+                acquisition.contains(phrase),
+                "{phrase:?} stopped being reported: {acquisition}"
+            );
+        }
+    }
+
+    /// If-Match presence and syntax are settled by the HTTP dispatcher before
+    /// any mutation path runs, so a missing or malformed value outranks every
+    /// layer above this one. A layer claiming to be where the header is
+    /// required would report that refusal at the wrong position entirely.
+    #[test]
+    fn the_etag_layer_names_the_header_admission_that_precedes_it() {
+        let lifecycle = request_lifecycle();
+        let etag = layer(&lifecycle, "action_etag").description;
+        assert!(
+            etag.contains("this layer is not where that is enforced"),
+            "the mandatory header is enforced above, not here: {etag}"
+        );
+        assert!(
+            etag.contains("precondition-required"),
+            "a missing header and a stale one refuse differently: {etag}"
+        );
+        assert!(
+            etag.contains("beat every layer above"),
+            "the header admission outranks the layers listed before it: {etag}"
+        );
+        assert!(
+            etag.contains("second such comparison"),
+            "submit compares the value twice, and that stayed true: {etag}"
         );
     }
 
