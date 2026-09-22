@@ -107,7 +107,11 @@ const EVERY_EVENT: &[&str] = &["submit", "revise", "rebase", "cancel", "apply"];
 /// around a workflow transition, in the order they run. The event lists are the
 /// runtime's own gating: `admit_submitter_targets` is called for Submit and Revise
 /// (rebase is Revise with a flag), `action_requires_request_owner` is false only for
-/// Apply, and the receipt and task-status preflight runs only for Apply.
+/// Apply, and the receipt and task-status preflight runs only for Apply. The three
+/// apply-only layers between the task grant and the transition are the steps
+/// `apply_approved_request` runs in that order before it calls `RequestWorkflow::apply`:
+/// `authorize_targets`, `lock_and_verify_application_preconditions`, and the
+/// `apply_request_target` loop. No other action reaches them.
 fn request_enforcement() -> Vec<EnforcementLayer> {
     vec![
         EnforcementLayer {
@@ -119,6 +123,11 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
             id: "apply_preflight",
             description: "Before the transaction opens, a retained receipt for the same idempotent apply short-circuits to replay; otherwise the caller's task grant and the task grant frozen on the proposal are each confirmed current and live by the task-status check. Runs again on each retry of the transaction.",
             events: &["apply"],
+        },
+        EnforcementLayer {
+            id: "idempotency_replay",
+            description: "Inside the transaction, the idempotency row for this action's key is locked and read before the request row is. The stored binding covers the caller's If-Match, the target authority, and the canonical body, so a key already bound to a different request is refused as a conflict here, before any row is read, and so is a key whose stored result was erased, because erasure is permanent and keeps the key reserved. A binding that matches replays the stored response once row visibility and, where they apply, submitter targets have been re-checked. That replay returns without re-running the action ETag, request ownership, the in-transaction task grant check, the workflow transition, or the persist policy.",
+            events: EVERY_EVENT,
         },
         EnforcementLayer {
             id: "row_visibility",
@@ -146,13 +155,28 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
             events: EVERY_EVENT,
         },
         EnforcementLayer {
+            id: "apply_target_authorization",
+            description: "Apply authorizes the proposal's frozen targets before it writes any of them: each target the effects name is checked against the target authority the caller presented, under this caller's current authorization rather than the authorization held when the proposal was frozen.",
+            events: &["apply"],
+        },
+        EnforcementLayer {
+            id: "apply_preconditions",
+            description: "The frozen application preconditions are locked and verified against the records as they stand now, so a proposal whose observed targets have moved since it was approved is refused before any target row is written.",
+            events: &["apply"],
+        },
+        EnforcementLayer {
+            id: "apply_target_persistence",
+            description: "Each of the proposal's effects writes its own target row under that target's row-level policy. These are the first writes apply makes, and a row the target's policy refuses stops the apply here, before the workflow transition runs.",
+            events: &["apply"],
+        },
+        EnforcementLayer {
             id: "workflow_transition",
             description: "The edge's own guard, run by RequestWorkflow. A refused transition is reported by its workflow error.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
             id: "persist_policy",
-            description: "The first write is an UPDATE of the request row under the row-level UPDATE policy generated for this profile and operation, which admits only the source states the operation may leave (draft for submit; submitted for revise, rebase, and apply; draft or submitted for cancel, and for cancel only when the acting principal is the recorded owner). A transition the workflow accepted from any other state writes no row and is refused as a failed precondition.",
+            description: "The request row is then UPDATEd under the row-level UPDATE policy generated for this profile and operation, which admits only the source states the operation may leave (draft for submit; submitted for revise, rebase, and apply; draft or submitted for cancel, and for cancel only when the acting principal is the recorded owner). A transition the workflow accepted from any other state writes no row and is refused as a failed precondition. This is the first write for submit, revise, rebase, and cancel; apply has already written its target rows by this point.",
             events: EVERY_EVENT,
         },
     ]
@@ -295,11 +319,15 @@ mod tests {
             vec![
                 "route_admission",
                 "apply_preflight",
+                "idempotency_replay",
                 "row_visibility",
                 "submitter_targets",
                 "action_etag",
                 "request_ownership",
                 "task_grant",
+                "apply_target_authorization",
+                "apply_preconditions",
+                "apply_target_persistence",
                 "workflow_transition",
                 "persist_policy",
             ]
@@ -325,7 +353,14 @@ mod tests {
     #[test]
     fn selective_layers_cover_exactly_the_events_the_runtime_gates() {
         let lifecycle = request_lifecycle();
-        assert_eq!(layer(&lifecycle, "apply_preflight").events, ["apply"]);
+        for id in [
+            "apply_preflight",
+            "apply_target_authorization",
+            "apply_preconditions",
+            "apply_target_persistence",
+        ] {
+            assert_eq!(layer(&lifecycle, id).events, ["apply"], "{id}");
+        }
         assert_eq!(
             layer(&lifecycle, "submitter_targets").events,
             ["submit", "revise", "rebase"]
@@ -336,6 +371,7 @@ mod tests {
         );
         for id in [
             "route_admission",
+            "idempotency_replay",
             "row_visibility",
             "action_etag",
             "task_grant",
@@ -347,6 +383,43 @@ mod tests {
                 ["submit", "revise", "rebase", "cancel", "apply"],
                 "{id}"
             );
+        }
+    }
+
+    /// The replay layer's value is the list of layers it skips, so the layers it
+    /// names must still be layers this report declares. A rename that leaves the
+    /// prose behind would otherwise ship a skip-set naming nothing.
+    #[test]
+    fn the_replay_layer_names_layers_this_report_still_declares() {
+        let lifecycle = request_lifecycle();
+        let replay = layer(&lifecycle, "idempotency_replay").description;
+        let ids: BTreeSet<&str> = lifecycle.enforcement.iter().map(|layer| layer.id).collect();
+        let skipped = [
+            ("action_etag", "the action ETag"),
+            ("request_ownership", "request ownership"),
+            ("task_grant", "the in-transaction task grant check"),
+            ("workflow_transition", "the workflow transition"),
+            ("persist_policy", "the persist policy"),
+        ];
+        let replay_index = lifecycle
+            .enforcement
+            .iter()
+            .position(|layer| layer.id == "idempotency_replay")
+            .expect("replay layer");
+        for (id, prose) in skipped {
+            assert!(ids.contains(id), "{id} is no longer declared");
+            assert!(
+                replay.contains(prose),
+                "the replay layer stopped naming {id}"
+            );
+            let index = lifecycle
+                .enforcement
+                .iter()
+                .position(|layer| layer.id == id)
+                .expect("declared layer");
+            // A skipped layer is reported after the replay, which is what makes
+            // the skip an ordering fact rather than a claim.
+            assert!(index > replay_index, "{id} is not after the replay layer");
         }
     }
 

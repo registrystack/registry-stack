@@ -218,18 +218,23 @@ fn occurrence_enforcement() -> Vec<EnforcementLayer> {
             events: &["claim", "release", "attempt_reserved"],
         },
         EnforcementLayer {
+            id: "erased_item_idempotency_preflight",
+            description: "Before the source is re-read, a retry naming an item that has already been erased is answered from the retained idempotency record alone: a recorded request hash differing from this one is refused as a conflict, and a record whose response has been retained away is refused as expired. It runs only against an erased item and only for a caller who currently serves that item's queue in the role the operation needs, so a live item passes it and reaches the source and queue layers below.",
+            events: &["claim", "release", "attempt_reserved"],
+        },
+        EnforcementLayer {
             id: "source_authorization",
-            description: "The caller can see the item's queue, and the source, re-read as this caller, still discloses the subject under the binding the item holds and still offers the operation being attempted. A binding the source has moved refuses the action; a subject the source no longer discloses is reported as absent.",
+            description: "The caller can see the item's queue, and the source, re-read as this caller, still discloses the subject under the binding the item holds and still offers the operation being attempted. A binding the source has moved refuses the action; a subject the source no longer discloses is reported as absent. The operator settlement of an uncertain attempt raises two of these events with no caller and reads no source, so that path passes this layer without being checked here.",
             events: CALLER_EVENTS,
         },
         EnforcementLayer {
             id: "queue_and_holder_authority",
-            description: "The actor is a staff member of a team serving the item's queue; a supervisor serving that queue may release another person's holding but may not claim or reserve. A claim refuses an item already held, and a release or reservation refuses anyone but the recorded holder.",
+            description: "The actor is a staff member of a team serving the item's queue; a supervisor serving that queue may release another person's holding but may not claim or reserve. A claim refuses an item already held. A release refuses an item nobody holds, and refuses a staff member who is not the recorded holder, but the supervisor above may release whoever holds it. A reservation refuses anyone but the recorded holder.",
             events: &["claim", "release", "attempt_reserved"],
         },
         EnforcementLayer {
             id: "idempotency_admission",
-            description: "A retried mutation whose recorded request hash differs from this one is refused as a conflict, and a retry whose stored response retention has erased, including the item itself, is refused as expired.",
+            description: "A retried mutation whose recorded request hash differs from this one is refused as a conflict, and a retry whose stored response retention has erased, including the item itself, is refused as expired. For claim, release, and reservation against an already erased item, the preflight layer above has answered this before the source was read.",
             events: CALLER_EVENTS,
         },
         EnforcementLayer {
@@ -358,6 +363,11 @@ fn review_enforcement() -> Vec<EnforcementLayer> {
         EnforcementLayer {
             id: "request_lock_and_lifecycle",
             description: "The review request row is locked before anything is decided, and an event against a request not still in reviewing, or whose subject is not the one the caller named, is refused; a repeated cancellation returns the terminal result already recorded rather than settling twice. Supersession selects only the producer's own reviewing requests, under a lock that serializes that producer's submissions and settlements.",
+            events: EVERY_REVIEW_EVENT,
+        },
+        EnforcementLayer {
+            id: "request_idempotency_admission",
+            description: "With the request row locked, a retry is answered from its recorded idempotency record before any queue, revision, holder, or decision check runs: a recorded request hash differing from this one is refused as a conflict, and a record whose response has been retained away is refused as expired.",
             events: EVERY_REVIEW_EVENT,
         },
         EnforcementLayer {
@@ -685,6 +695,7 @@ mod tests {
             vec![
                 "caller_authentication",
                 "caller_revision_precondition",
+                "erased_item_idempotency_preflight",
                 "source_authorization",
                 "queue_and_holder_authority",
                 "idempotency_admission",
@@ -741,6 +752,10 @@ mod tests {
             ["claim", "release", "attempt_reserved"]
         );
         assert_eq!(
+            layer(&description, "erased_item_idempotency_preflight").events,
+            ["claim", "release", "attempt_reserved"]
+        );
+        assert_eq!(
             layer(&description, "source_authorization").events,
             caller_events
         );
@@ -773,6 +788,7 @@ mod tests {
             for id in [
                 "caller_authentication",
                 "caller_revision_precondition",
+                "erased_item_idempotency_preflight",
                 "source_authorization",
                 "queue_and_holder_authority",
                 "idempotency_admission",
@@ -801,6 +817,25 @@ mod tests {
         let fence = layer(&description, "attempt_fence").description;
         assert!(fence.contains("execution token"), "{fence}");
         assert!(fence.contains("lease"), "{fence}");
+        // The operator settlement reaches this layer's events without a caller
+        // and without a source read, so the layer has to say so rather than
+        // report a source check that path never runs.
+        let source = layer(&description, "source_authorization").description;
+        assert!(source.contains("operator"), "{source}");
+    }
+
+    /// A supervisor serving the queue may release another person's holding, so
+    /// the layer that grants that exception must not also state a blanket
+    /// recorded-holder rule that would take it back.
+    #[test]
+    fn the_holder_layer_keeps_the_supervisor_release_exception() {
+        let description = occurrence_lifecycle();
+        let holder = layer(&description, "queue_and_holder_authority").description;
+        assert!(holder.contains("supervisor"), "{holder}");
+        assert!(
+            !holder.contains("a release or reservation refuses anyone but the recorded holder"),
+            "the blanket rule contradicts the supervisor exception: {holder}"
+        );
     }
 
     #[test]
@@ -1002,6 +1037,7 @@ mod tests {
                 "producer_or_reviewer_admission",
                 "review_source_preflight",
                 "request_lock_and_lifecycle",
+                "request_idempotency_admission",
                 "reviewer_queue_authority",
                 "task_revision_and_holder",
                 "decision_eligibility",

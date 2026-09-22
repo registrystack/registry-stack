@@ -454,6 +454,45 @@ fn reordering_or_thinning_the_lifecycle_fails_the_contract() {
         schema.validate(&layer_with_unknown_event).is_err(),
         "a layer naming an event the machine does not raise must fail the schema: {layer_with_unknown_event:#?}"
     );
+
+    // Which events a layer covers is the layer's whole claim, so a legal event
+    // name in the wrong layer has to fail as loudly as an unknown one. The
+    // apply preflight runs for apply alone; saying it runs for submit is a
+    // different machine reported under the same layer names.
+    let layer_with_wrong_event = lifecycle(&|machine| {
+        machine["enforcement"][1]["events"] =
+            Value::Array(vec![Value::String("submit".to_owned())]);
+    });
+    assert!(
+        schema.validate(&layer_with_wrong_event).is_err(),
+        "an apply-only layer claiming submit must fail the schema: {layer_with_wrong_event:#?}"
+    );
+
+    let layer_with_widened_events = lifecycle(&|machine| {
+        machine["enforcement"][4]["events"] = Value::Array(vec![
+            Value::String("submit".to_owned()),
+            Value::String("revise".to_owned()),
+            Value::String("rebase".to_owned()),
+            Value::String("cancel".to_owned()),
+        ]);
+    });
+    assert!(
+        schema.validate(&layer_with_widened_events).is_err(),
+        "widening the submitter-target layer to cancel must fail the schema: {layer_with_widened_events:#?}"
+    );
+
+    // The events run in the order the machine raises them, so a reordered list
+    // is a reordered machine even though every name in it is legal.
+    let layer_with_reordered_events = lifecycle(&|machine| {
+        let events = machine["enforcement"][0]["events"]
+            .as_array_mut()
+            .expect("events");
+        events.reverse();
+    });
+    assert!(
+        schema.validate(&layer_with_reordered_events).is_err(),
+        "reversing a layer's event list must fail the schema: {layer_with_reordered_events:#?}"
+    );
 }
 
 /// The lifecycle report names no revision, because no project produced it.
