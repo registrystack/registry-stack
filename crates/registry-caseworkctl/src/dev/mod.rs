@@ -95,6 +95,18 @@ pub struct DevArgs {
     start: StartArgs,
 }
 
+impl DevArgs {
+    pub(super) fn report_kind(&self) -> &'static str {
+        match self.action.as_ref() {
+            Some(DevAction::Events(_)) => "DevEventsReport",
+            Some(DevAction::Grant(_)) => "DevGrantReport",
+            Some(DevAction::Identity(_)) => "DevIdentityReport",
+            Some(DevAction::Token(_)) => "DevTokenReport",
+            Some(DevAction::Start(_) | DevAction::Stop(_)) | None => "DevReport",
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum DevAction {
     /// Start or reuse the project's retained local database and services.

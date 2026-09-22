@@ -6,6 +6,7 @@ caseworkctl_bin=${CASEWORKCTL_BIN:-"$repo_root/target/debug/caseworkctl"}
 
 cd "$repo_root"
 python3 products/casework/scripts/generate_openapi.py --check
+python3 products/casework/scripts/generate_cli_schemas.py --check
 python3 products/casework/scripts/check_dependency_direction.py
 python3 products/casework/scripts/check_database_test_isolation.py
 python3 -m unittest discover -s products/casework/scripts -p 'test_*.py'

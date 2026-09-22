@@ -6,6 +6,10 @@ registry source for submitted-context reviews, or connect governed sources such
 as Base Registry Engine. A project may configure either surface or both.
 Source-backed holders can also [approve bounded agent tasks](TASK_GRANTS.md).
 
+Machine-readable `caseworkctl --format json` output is versioned by the
+[`caseworkctl` JSON wire contract](contracts/cli/README.md). Each report carries
+an `apiVersion` and `kind` and is checked against its command-specific schema.
+
 ## Standalone unified reviews
 
 Create the source-free starter, then inspect its effective configuration:
