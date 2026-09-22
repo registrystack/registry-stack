@@ -14,18 +14,14 @@ ignore = [
     # RUSTSEC-2026-0249: `smartstring` 1.0.1 is unmaintained and has no patched
     # release. Its safe `From<String>` conversion has reported undefined
     # behavior (bodil/smartstring#49), also reproduced through Rhai's
-    # `ImmutableString` (rhaiscript/rhai#816). Rhai 1.26.1 pulls it into
+    # `ImmutableString` (rhaiscript/rhai#816). Rhai 1.25.1 pulls it into
     # Evidence, its authoring tools, and the shared language server exposed
     # through `relayctl`, where the affected owned-string conversion is
-    # reachable. Evidence accepts governed, hash-covered scripts only and
-    # bounds adapter strings, arrays, and maps before converting them for Rhai;
-    # these controls limit exposure but do not remove the reported unsoundness.
-    # This ignore records accepted residual risk, not a fix. Reviewed 2026-09-22
-    # after selector-aware extraction added another bounded conversion path.
-    # Review by 2026-10-06, when Rhai replaces `smartstring`, if a maintained
-    # patched release appears, after further changes to Evidence's Rhai string
-    # flow, before accepting untrusted scripts, or if upstream publishes further
-    # security findings.
+    # reachable. This ignore records accepted residual risk, not a fix.
+    # Reviewed 2026-08-13. Review when Rhai replaces `smartstring`, if a
+    # maintained patched release appears, after changes to Evidence's Rhai
+    # string flow, before accepting untrusted scripts, or if upstream publishes
+    # further security findings.
     "RUSTSEC-2026-0249",
     # The following advisories all arrive through the Typst rendering tree
     # (`typst`/`typst-pdf`/`krilla`/`typst-library`), which
