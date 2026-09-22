@@ -219,7 +219,7 @@ fn occurrence_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "caller_revision_precondition",
-            description: "The If-Match header is present and well formed before any row is read, and inside the transaction the locked item row still carries the revision, source binding, and activity the caller saw. Neither recover route carries an If-Match, and no attempt settlement compares the item revision.",
+            description: "The If-Match header is present and well formed before any row is read, and inside the transaction the locked item row still carries the revision, source binding, and activity the caller saw. Only the header check happens at this position. The comparison against the locked row runs much later: on the claim and release paths it follows both the idempotency admission and the holder-state refusals below, so an exact retry of an operation that already succeeded is answered from its record rather than refused for the revision having moved since; on the reservation path it follows the holder and queue checks and precedes the reducer. Neither recover route carries an If-Match, and no attempt settlement compares the item revision.",
             events: &["claim", "release", "attempt_reserved"],
         },
         EnforcementLayer {
@@ -1164,6 +1164,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The If-Match header is checked before any row is read, but the revision
+    /// it carries is compared against the locked row only after the idempotency
+    /// admission. Reporting both at the header's position would promise that an
+    /// exact retry is refused as a revision conflict, when the record answers it
+    /// first.
+    #[test]
+    fn the_revision_layer_separates_the_header_check_from_the_locked_comparison() {
+        let description = occurrence_lifecycle();
+        let revision = layer(&description, "caller_revision_precondition").description;
+        assert!(
+            revision.contains("Only the header check happens at this position"),
+            "the two halves stopped being distinguished: {revision}"
+        );
+        assert!(
+            revision.contains("follows both the idempotency admission"),
+            "the locked comparison must say what it runs after: {revision}"
+        );
     }
 
     /// Queue membership is checked before the idempotency admission and the
