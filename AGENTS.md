@@ -506,3 +506,7 @@ Docs site (from `docs/site/`): `npm test` and `npm run check`.
 `CONTRIBUTING.md` (policies in full), `README.md` (orientation),
 `ROADMAP.md` (direction), `docs/site/AGENTS.md` (docs subtree),
 `release/VERIFY.md` and `release/REPEATABLE-BUILDS.md` (release evidence).
+
+A checkout may carry git-ignored, locally installed workflow skills under
+`.claude/skills/`. When that directory exists, load the skill matching the
+change before editing; this file routes, the skill carries the workflow.
