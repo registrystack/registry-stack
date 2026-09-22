@@ -34,6 +34,7 @@ use registry_breg::{
     GeneratedArtifacts, RegistryModule, RegistryProject,
 };
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
+use registry_platform_hooks::HookHandlerSource;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -1029,6 +1030,7 @@ struct SuccessReport {
     /// revision here.
     #[serde(skip_serializing_if = "Option::is_none")]
     revision: Option<String>,
+    #[serde(serialize_with = "serialize_findings")]
     findings: Vec<ToolDiagnostic>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     artifacts: Vec<ArtifactReport>,
@@ -1119,6 +1121,36 @@ struct ToolDiagnostic {
     path: String,
     message: String,
     suggested_action: SuggestedAction,
+}
+
+/// A successful report already identifies these entries as `findings`, so its
+/// elements do not repeat the constant `finding` severity. Refusal reports keep
+/// the complete diagnostic envelope because they can contain findings or errors.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolFinding<'a> {
+    code: &'a str,
+    artifact: DiagnosticArtifact,
+    path: &'a str,
+    message: &'a str,
+    suggested_action: SuggestedAction,
+}
+
+fn serialize_findings<S>(findings: &[ToolDiagnostic], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    findings
+        .iter()
+        .map(|finding| ToolFinding {
+            code: &finding.code,
+            artifact: finding.artifact,
+            path: &finding.path,
+            message: &finding.message,
+            suggested_action: finding.suggested_action,
+        })
+        .collect::<Vec<_>>()
+        .serialize(serializer)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -1516,6 +1548,7 @@ struct DiffSuccessReport {
     command: &'static str,
     profile: ProfileArg,
     baseline_assurance: BaselineAssurance,
+    #[serde(serialize_with = "serialize_findings")]
     findings: Vec<ToolDiagnostic>,
     #[serde(flatten)]
     diff: CompiledRegistryDiff,
@@ -5995,11 +6028,21 @@ fn load_project_planner_asset_files(
     let mut wasm_module_paths = BTreeMap::new();
     for action in &project.actions {
         partition_handler_source(
-            action.handler.as_ref(),
+            action.handler.as_ref().map(|handler| &handler.handler),
             &format!("actions[{}]", action.id),
             &mut paths,
             &mut wasm_module_paths,
         );
+    }
+    for entity in &project.entities {
+        for hook in &entity.hooks {
+            partition_handler_source(
+                hook.handler.as_ref(),
+                &format!("entities[{}].hooks[{}]", entity.id, hook.id),
+                &mut paths,
+                &mut wasm_module_paths,
+            );
+        }
     }
     let mut assets = load_planner_asset_files(project_directory, paths)?;
     assets.extend(load_wasm_module_asset_files(
@@ -6157,11 +6200,37 @@ fn load_module_asset_files(
     let mut wasm_module_paths = BTreeMap::new();
     for action in &module.actions {
         partition_handler_source(
-            action.handler.as_ref(),
+            action.handler.as_ref().map(|handler| &handler.handler),
             &format!("modules[{module_id}].actions[{}]", action.id),
             &mut planner_paths,
             &mut wasm_module_paths,
         );
+    }
+    for entity in &module.entities {
+        for hook in &entity.hooks {
+            partition_handler_source(
+                hook.handler.as_ref(),
+                &format!(
+                    "modules[{module_id}].entities[{}].hooks[{}]",
+                    entity.id, hook.id
+                ),
+                &mut planner_paths,
+                &mut wasm_module_paths,
+            );
+        }
+    }
+    for extension in &module.extend_entities {
+        for hook in &extension.hooks {
+            partition_handler_source(
+                hook.handler.as_ref(),
+                &format!(
+                    "modules[{module_id}].extendEntities[{}].hooks[{}]",
+                    extension.entity, hook.id
+                ),
+                &mut planner_paths,
+                &mut wasm_module_paths,
+            );
+        }
     }
     assets.extend(load_planner_asset_files(module_directory, planner_paths)?);
     assets.extend(load_wasm_module_asset_files(
@@ -6172,28 +6241,31 @@ fn load_module_asset_files(
     Ok(assets)
 }
 
-/// Split one action handler's declared source reference into its asset family:
+/// Split one handler's declared source reference into its asset family:
 /// a Rhai script for rhai handlers, a WASM module for wasm handlers. An absent
 /// reference contributes nothing here; the compiler refuses the incomplete
 /// shape with its own diagnostic.
 fn partition_handler_source(
-    handler: Option<&registry_breg::contract::ActionHandlerSource>,
+    handler: Option<&HookHandlerSource>,
     declaring_path: &str,
     planner_paths: &mut BTreeMap<String, String>,
     wasm_module_paths: &mut BTreeMap<String, String>,
 ) {
     let Some(handler) = handler else { return };
-    if let Some(script) = handler.script() {
-        planner_paths.insert(
-            script.to_owned(),
-            format!("{declaring_path}.handler.script"),
-        );
-    }
-    if let Some(module) = handler.module() {
-        wasm_module_paths.insert(
-            module.to_owned(),
-            format!("{declaring_path}.handler.module"),
-        );
+    match handler {
+        HookHandlerSource::Rhai { script, .. } => {
+            planner_paths.insert(
+                script.to_owned(),
+                format!("{declaring_path}.handler.script"),
+            );
+        }
+        HookHandlerSource::Wasm { module, .. } => {
+            wasm_module_paths.insert(
+                module.to_owned(),
+                format!("{declaring_path}.handler.module"),
+            );
+        }
+        HookHandlerSource::Url { .. } => {}
     }
 }
 
@@ -6646,7 +6718,7 @@ entities:
       - {id: code, type: string, required: true, minLength: 1, maxLength: 64, classification: public}
       - {id: label, type: string, required: true, maxLength: 200, classification: public}
     constraints:
-      - {kind: unique, fields: [code]}
+      - {id: record-group-code-unique, kind: unique, fields: [code]}
 
   # The registry's records. `group` is a reference: the server stores the target
   # record's identifier and refuses a value that names no `record-group`.
@@ -6671,7 +6743,7 @@ entities:
       - {id: group, type: reference, target: record-group, classification: internal}
       - {id: status, type: vocabulary-code, vocabulary: record-status, classification: internal}
     constraints:
-      - {kind: unique, fields: [code]}
+      - {id: record-code-unique, kind: unique, fields: [code]}
     # A selector profile names an exact-match question a caller may ask by
     # value, rather than a filter over a listing. Every field it names must
     # refuse the empty value, which is why `code` declares `minLength: 1` above.

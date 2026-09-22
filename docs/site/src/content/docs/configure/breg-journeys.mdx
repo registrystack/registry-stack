@@ -45,6 +45,9 @@ Authoring check passed.
 Two people holding the same revision hold the same project.
 An error is a declaration the compiler cannot compile, printed as an `error` row carrying its code, its document path, and its message, and the command exits with status 1.
 A finding is an advisory attached to a document path: the project compiles, but a reviewer must read it.
+In JSON output, the `findings[]` array carries that classification and each element omits the
+constant `severity` field. Refusal reports use `diagnostics[]` and retain `severity`, including when
+`--deny-findings` promotes findings to a refusal.
 The project `init` wrote reports both findings on purpose: `access.profile.unrestricted_collection`, because its `operator` profile lists every record, and `access.profile.unrestricted_rows`, because its `evidence-source` profile looks up any record by code.
 
 Two flags change what counts as a failure, and a review gate wants both:

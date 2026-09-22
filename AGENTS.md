@@ -120,6 +120,16 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `release/` | Release manifests, schemas, notes, validation and conformance tooling, and the release source-model proof |
 | `external/` | Historical external-input records and policy for reviewing any reintroduction |
 
+Before editing crates in these areas, also read the owning guide:
+
+- `registry-discovery*`: `products/discovery/AGENTS.md`
+- `registry-manifest-*`: `products/manifest/AGENTS.md`
+- `registry-platform-*`: `products/platform/AGENTS.md`
+- `registry-relay*`: `products/relay-v2/AGENTS.md`
+- `registry-evidence*` and `registry-language-server`: `products/evidence/AGENTS.md`
+- product clients, their language bindings, `registry-record`, and
+  `registry-stack-client*`: `crates/CLIENTS.md` plus the owning product guide
+
 Relay V2 is implemented by `registry-relay-v2` and `registry-relayctl`. Its
 approved contracts, coequal acceptance projects, and gates live under
 `products/relay-v2`.

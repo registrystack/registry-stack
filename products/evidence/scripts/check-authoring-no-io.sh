@@ -93,7 +93,11 @@ probe="$workspace/probe"
 mkdir -p -- "$probe"
 cp -- "$configuration" "$probe/clippy.toml"
 
-driver=$(rustup which clippy-driver)
+driver=${CLIPPY_DRIVER_BIN:-$(rustup which clippy-driver)}
+if [[ ! -x "$driver" ]]; then
+  printf 'CLIPPY_DRIVER_BIN is not executable: %s\n' "$driver" >&2
+  exit 2
+fi
 
 # Each probe is compiled alone, so a verdict below belongs to exactly one shape
 # rather than to whichever line of a larger file happened to produce it.

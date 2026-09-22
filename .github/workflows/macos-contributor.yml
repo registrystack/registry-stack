@@ -1,0 +1,88 @@
+name: macOS contributor gates
+
+on:
+  schedule:
+    - cron: "17 23 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
+jobs:
+  direct-cargo-binaries:
+    name: Direct Cargo binaries and database-free gates
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # napi-rs CLI 3.8.2 requires Node 22.13 or later.
+          node-version: 22.20.0
+          cache: npm
+          cache-dependency-path: crates/registry-discovery-client-node/package-lock.json
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.11.16"
+
+      - name: Prepare Python gate dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv venv --python "$(command -v python3)" .macos-contributor-venv
+          uv pip install --python .macos-contributor-venv/bin/python PyYAML==6.0.2
+          echo "$PWD/.macos-contributor-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          key: macos-contributor
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test Cargo runtime-library resolution
+        run: >-
+          python3 -m unittest
+          scripts/test_cargo_runtime_library_path.py
+          scripts/test_cargo_runtime_script_contracts.py
+
+      - name: Build and execute Cargo binaries directly
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/cargo-runtime-library-path.sh
+          registry_cargo_build "$PWD" --locked \
+            -p registry-bregctl \
+            -p registry-caseworkctl \
+            -p registry-schedulingctl \
+            -p registry-relayctl \
+            -p registry-evidencectl \
+            -p registry-discoveryctl
+          for binary in bregctl caseworkctl schedulingctl relayctl evidencectl discoveryctl; do
+            "target/debug/${binary}" --version
+          done
+
+      - name: Verify database-free product gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          products/casework/scripts/check-checkpoint.sh
+          products/scheduling/scripts/check-checkpoint.sh
+          products/relay-v2/scripts/check-generated.sh
+          products/evidence/scripts/check-authoring-no-io.sh
+
+      - name: Verify the Discovery adopter tutorial
+        run: products/discovery/scripts/test-adopter-tutorial.sh

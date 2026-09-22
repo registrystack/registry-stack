@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repository=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+. "$repository/scripts/cargo-runtime-library-path.sh"
 target_dir="${DISCOVERY_TUTORIAL_TARGET_DIR:-$repository/target/discovery-tutorial-source}"
 profile="${DISCOVERY_TUTORIAL_CARGO_PROFILE:-ci}"
 work_root=$(mktemp -d "${TMPDIR:-/tmp}/discovery-adopter-tutorial.XXXXXX")
@@ -49,14 +50,12 @@ esac
 profile_dir="$profile"
 if [[ -z "${DISCOVERY_BIN:-}" || -z "${DISCOVERYCTL_BIN:-}" ]]; then
 	printf '%s\n' '[checkout] building discovery and discoveryctl from locked source'
-	(
-		cd "$repository"
-		CARGO_BUILD_RUSTC_WRAPPER='' CARGO_INCREMENTAL=0 \
-			CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
-			CARGO_TARGET_DIR="$target_dir" \
-			cargo build --quiet --locked --profile "$profile" \
-				-p registry-discovery -p registry-discoveryctl
-	)
+	CARGO_BUILD_RUSTC_WRAPPER='' CARGO_INCREMENTAL=0 \
+		CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
+		CARGO_TARGET_DIR="$target_dir" \
+		registry_cargo_build "$repository" --manifest-path "$repository/Cargo.toml" \
+		--quiet --locked --profile "$profile" \
+		-p registry-discovery -p registry-discoveryctl
 	DISCOVERY_BIN="$target_dir/$profile_dir/discovery"
 	DISCOVERYCTL_BIN="$target_dir/$profile_dir/discoveryctl"
 fi
@@ -189,6 +188,14 @@ fi
 printf '%s\n' '[handoff] adopter-owned Evidence trust accepted; native assertion verified'
 printf '%s\n' '[handoff] adopter-owned Relay trust accepted; native list response verified'
 
+# The Node and Python bindings are Cargo-built native libraries too. On macOS,
+# prepare their exact AWS-LC FIPS output in this script process before invoking
+# either host directly. SIP strips DYLD_* variables from protected executables,
+# so the Python bootstrap explicitly preloads the library from the helper's
+# non-DYLD carrier.
+registry_prepare_cargo_runtime "$repository" --manifest-path "$repository/Cargo.toml" \
+	--locked -p registry-discovery-client-node
+
 node_log="$work_root/node-handoff.log"
 if ! (
 	cd "$repository/crates/registry-discovery-client-node"
@@ -196,7 +203,7 @@ if ! (
 	CARGO_BUILD_RUSTC_WRAPPER='' CARGO_INCREMENTAL=0 \
 		CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
 		npm run build:debug
-	npm test
+	node --test __test__/*.test.js
 ) >"$node_log" 2>&1; then
 	printf '%s\n' 'the Node.js structural validation, acceptance, and renewal tests failed' >&2
 	sed -n '1,200p' "$node_log" >&2
