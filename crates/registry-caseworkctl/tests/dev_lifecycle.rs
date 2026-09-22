@@ -263,7 +263,7 @@ struct Session {
 
 impl Session {
     fn ctl(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_caseworkctl"))
+        Command::new(candidate_binary("CASEWORKCTL_BIN", "caseworkctl"))
             .args(["--format", "json"])
             .args(args)
             // The journal assertion below needs the default service event even
@@ -374,6 +374,19 @@ impl Drop for Session {
 /// One binary this test drives, built from this workspace beside the
 /// `caseworkctl` under test.
 fn prerequisite(name: &str) -> PathBuf {
+    let override_name = match name {
+        "casework" => "CASEWORK_BIN",
+        other => panic!("no candidate binary override is defined for {other}"),
+    };
+    if let Some(path) = env::var_os(override_name) {
+        let path = PathBuf::from(path);
+        assert!(
+            path.is_file(),
+            "{override_name} does not exist: {}",
+            path.display()
+        );
+        return path;
+    }
     let path = Path::new(env!("CARGO_BIN_EXE_caseworkctl"))
         .parent()
         .expect("the test binary has a build directory")
@@ -384,6 +397,22 @@ fn prerequisite(name: &str) -> PathBuf {
         path.display()
     );
     path
+}
+
+fn candidate_binary(override_name: &str, name: &str) -> PathBuf {
+    if let Some(path) = env::var_os(override_name) {
+        let path = PathBuf::from(path);
+        assert!(
+            path.is_file(),
+            "{override_name} does not exist: {}",
+            path.display()
+        );
+        return path;
+    }
+    Path::new(env!("CARGO_BIN_EXE_caseworkctl"))
+        .parent()
+        .expect("the test binary has a build directory")
+        .join(name)
 }
 
 /// Three distinct loopback ports nothing is listening on: bind `127.0.0.1:0`,

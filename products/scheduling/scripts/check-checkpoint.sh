@@ -3,7 +3,14 @@ set -eu
 
 # shellcheck disable=SC1007  # the space after CDPATH= is the POSIX empty-assignment idiom the sibling products use
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-schedulingctl_bin=${SCHEDULINGCTL_BIN:-"$repo_root/target/debug/schedulingctl"}
+prepare_schedulingctl_runtime=0
+if [ -z "${SCHEDULINGCTL_BIN:-}" ]; then
+  schedulingctl_bin="$repo_root/target/debug/schedulingctl"
+  prepare_schedulingctl_runtime=1
+else
+  schedulingctl_bin=$SCHEDULINGCTL_BIN
+fi
+. "$repo_root/scripts/cargo-runtime-library-path.sh"
 
 cd "$repo_root"
 python3 products/scheduling/scripts/generate_openapi.py --check
@@ -21,6 +28,9 @@ CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
 if [ ! -x "$schedulingctl_bin" ]; then
   echo "build schedulingctl first or set SCHEDULINGCTL_BIN" >&2
   exit 2
+fi
+if [ "$prepare_schedulingctl_runtime" -eq 1 ]; then
+  registry_prepare_cargo_runtime "$repo_root" --locked -p registry-schedulingctl
 fi
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/scheduling-checkpoint.XXXXXX")

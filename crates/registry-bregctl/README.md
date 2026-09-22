@@ -135,3 +135,9 @@ JSON failures expose only CLI-owned diagnostics with the stable keys
 path. `suggestedAction` is a closed snake-case identifier and never contains
 authored or deployed values. Human diagnostics retain the existing
 `severity/code/path/message` rendering.
+
+Successful JSON reports put advisories in `findings[]`. Each finding has
+`code`, `artifact`, `path`, `message`, and `suggestedAction`; it omits
+`severity` because membership in `findings[]` already identifies the entry as
+a finding. A refusal keeps `severity` on every `diagnostics[]` entry, including
+findings promoted to a refusal by `check --deny-findings`.

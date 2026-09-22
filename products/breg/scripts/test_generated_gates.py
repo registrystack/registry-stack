@@ -120,13 +120,14 @@ class GeneratedGateTests(unittest.TestCase):
         adopter_gate = (SCRIPT_DIR / "test-adopter-workflow.sh").read_text(encoding="utf-8")
         self.assertIn("mktemp -d", adopter_gate)
         self.assertIn('export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"', adopter_gate)
-        self.assertIn('bregctl="$repository_root/target/debug/bregctl"', adopter_gate)
-        self.assertIn('breg="$repository_root/target/debug/breg"', adopter_gate)
-        self.assertIn('cargo build --manifest-path "$repository_root/Cargo.toml" --locked', adopter_gate)
+        self.assertIn('bregctl=${BREGCTL_BIN:-"$repository_root/target/debug/bregctl"}', adopter_gate)
+        self.assertIn('breg=${BREG_BIN:-"$repository_root/target/debug/breg"}', adopter_gate)
+        self.assertIn("registry_cargo_build", adopter_gate)
         self.assertIn("-p registry-bregctl", adopter_gate)
         self.assertIn("-p registry-breg", adopter_gate)
         self.assertIn("server_hash_before", adopter_gate)
         self.assertIn("server_hash_after", adopter_gate)
+        self.assertIn('BREG_SKIP_BUILD=1 "$script_dir/test-historical-workflow.sh"', adopter_gate)
         self.assertNotIn("cargo run", adopter_gate)
         self.assertNotIn("--signing-key", adopter_gate)
 
@@ -188,6 +189,12 @@ class GeneratedGateTests(unittest.TestCase):
             self.assertIn(marker, adopter_gate)
         self.assertNotIn('"psql", admin, "-d", database', adopter_gate)
         self.assertNotIn('"scope": "registry:records"', adopter_gate)
+
+        historical_gate = (SCRIPT_DIR / "test-historical-workflow.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('if [[ "${BREG_SKIP_BUILD:-0}" != "1" ]]', historical_gate)
+        self.assertIn("registry_prepare_cargo_runtime", historical_gate)
 
     def test_postgres_tls_script_hands_off_public_ca_material_without_retaining_keys(self) -> None:
         tls_gate = (SCRIPT_DIR / "test-postgres-tls.sh").read_text(encoding="utf-8")

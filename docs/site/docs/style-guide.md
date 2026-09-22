@@ -310,7 +310,12 @@ This applies to every page that touches a standard or a contract.
   but remains disabled until frontmatter and technical terms are fully covered. Vale
   suggestions and warnings run in CI so style drift is visible before v0 ships.
 - **Link check** runs in CI.
-- **Tutorial gates** run the commands a tutorial documents, in a clean container, and fail when a documented command stops working. They prove the procedure, not the prose: they do not parse sentences, count sections, or require a page to keep a particular wording. Rewording a step, adding its reason, or adding a recovery path cannot break them, so edit wording freely and let the gate check the commands.
+- **Tutorial checks** separate dry-run extraction or classification from execution.
+  `npm run check` runs the tutorial dry runs; these do not execute the documented journeys.
+  To verify a journey works, use its executable runner or a reader run, checking the runner's
+  registration, exclusions, and inputs to establish which steps it covers.
+  The checks do not assess whether the prose explains a step's reason, consequences, or recovery.
+  Those judgments belong to the writing review.
 - **Astro build** and **Redocly lint** must pass.
 - **Standards register validation** asserts that every `current` standards entry has an `official_url`, a `claim_level`, a `used_by` list, and at least one `evidence_docs` link.
 

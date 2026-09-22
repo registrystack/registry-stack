@@ -2,17 +2,28 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-caseworkctl_bin=${CASEWORKCTL_BIN:-"$repo_root/target/debug/caseworkctl"}
+prepare_caseworkctl_runtime=0
+if [ -z "${CASEWORKCTL_BIN:-}" ]; then
+  caseworkctl_bin="$repo_root/target/debug/caseworkctl"
+  prepare_caseworkctl_runtime=1
+else
+  caseworkctl_bin=$CASEWORKCTL_BIN
+fi
+. "$repo_root/scripts/cargo-runtime-library-path.sh"
 
 cd "$repo_root"
 python3 products/casework/scripts/generate_openapi.py --check
 python3 products/casework/scripts/generate_cli_schemas.py --check
 python3 products/casework/scripts/check_dependency_direction.py
+python3 products/casework/scripts/check_database_test_isolation.py
 python3 -m unittest discover -s products/casework/scripts -p 'test_*.py'
 
 if [ ! -x "$caseworkctl_bin" ]; then
   echo "build caseworkctl first or set CASEWORKCTL_BIN" >&2
   exit 2
+fi
+if [ "$prepare_caseworkctl_runtime" -eq 1 ]; then
+  registry_prepare_cargo_runtime "$repo_root" --locked -p registry-caseworkctl
 fi
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/casework-checkpoint.XXXXXX")

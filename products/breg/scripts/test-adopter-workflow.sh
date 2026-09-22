@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repository_root=$(cd -- "$script_dir/../../.." && pwd)
+. "$repository_root/scripts/cargo-runtime-library-path.sh"
 fixture="$repository_root/products/breg/acceptance/asset-site-placement"
 baseline="$repository_root/products/breg/generated/asset-site-placement"
 temporary_root=""
@@ -103,8 +104,8 @@ export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
 export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
 
-bregctl="$repository_root/target/debug/bregctl"
-breg="$repository_root/target/debug/breg"
+bregctl=${BREGCTL_BIN:-"$repository_root/target/debug/bregctl"}
+breg=${BREG_BIN:-"$repository_root/target/debug/breg"}
 
 sha256_file() {
   python3 - "$1" <<'PY'
@@ -522,10 +523,19 @@ Path(output).write_bytes(body)
 PY
 }
 
-cargo build --manifest-path "$repository_root/Cargo.toml" --locked \
-  -p registry-bregctl \
-  -p registry-breg \
-  --features registry-breg/runtime
+if [[ "${BREG_SKIP_BUILD:-0}" != "1" ]]; then
+  registry_cargo_build "$repository_root" \
+    --manifest-path "$repository_root/Cargo.toml" --locked \
+    -p registry-bregctl \
+    -p registry-breg \
+    --features registry-breg/runtime
+fi
+for binary in "$bregctl" "$breg"; do
+  if [[ ! -x "$binary" ]]; then
+    printf 'candidate BReg binary is not executable: %s\n' "$binary" >&2
+    exit 2
+  fi
+done
 export SSL_CERT_FILE="$adopter_tls_ca_pem_path"
 
 server_hash_before=$(sha256_file "$breg")

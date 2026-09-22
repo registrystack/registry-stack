@@ -193,6 +193,25 @@ cargo deny check
 products/relay-v2/scripts/check-contracts.sh
 ```
 
+On macOS, the workspace's FIPS build of AWS-LC is a dynamic library in Cargo's
+fingerprinted build output. Product gate scripts prepare the exact directory
+from Cargo's `build-script-executed` message before they execute a built binary,
+so they need no manual loader configuration. For a direct development run,
+prefer `cargo run`. To execute `target/debug/<binary>` yourself, source the same
+helper in that terminal and build through it first:
+
+```bash
+. scripts/cargo-runtime-library-path.sh
+registry_cargo_build "$PWD" --locked -p registry-caseworkctl
+./target/debug/caseworkctl --version
+```
+
+Do not disable the workspace `fips` feature, force a static AWS-LC FIPS build on
+macOS, or select a dylib by globbing `target/*/build`: those approaches either
+weaken the production-equivalent crypto path, fail on macOS, or can select a
+stale module. A gate binary override such as `CASEWORKCTL_BIN` or `RELAYCTL_BIN`
+must be independently runnable, including any runtime libraries it needs.
+
 The root gate runs the full `cargo deny check`, advisories included. Open
 RUSTSEC advisories with no upstream fix are ignored in `deny.toml` with a
 scoped rationale and a review trigger; a newly published advisory fails CI

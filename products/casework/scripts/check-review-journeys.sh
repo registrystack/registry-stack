@@ -15,6 +15,7 @@ set -eu
 # wheel proof; release package assembly remains separately gated.
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+. "$repo_root/scripts/cargo-runtime-library-path.sh"
 
 case "$(uname -s):$(uname -m)" in
   Darwin:arm64)
@@ -48,7 +49,18 @@ fi
 
 cd "$repo_root"
 
-cargo build --locked -p registry-casework -p registry-caseworkctl
+if [ -z "${CASEWORK_BIN:-}" ] || [ -z "${CASEWORKCTL_BIN:-}" ]; then
+  registry_cargo_build "$repo_root" --locked -p registry-casework -p registry-caseworkctl
+fi
+CASEWORK_BIN=${CASEWORK_BIN:-"$repo_root/target/debug/casework"}
+CASEWORKCTL_BIN=${CASEWORKCTL_BIN:-"$repo_root/target/debug/caseworkctl"}
+export CASEWORK_BIN CASEWORKCTL_BIN
+for binary in "$CASEWORK_BIN" "$CASEWORKCTL_BIN"; do
+  if [ ! -x "$binary" ]; then
+    echo "candidate Casework binary is not executable: $binary" >&2
+    exit 2
+  fi
+done
 
 (
   cd crates/registry-casework-client-node

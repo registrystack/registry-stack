@@ -1776,6 +1776,17 @@ class CiChangesTest(unittest.TestCase):
         outputs = classify(self.workspace, (".github/scripts/ci_event_routing.py",))
         self.assertEqual(outputs["rust_packages"], sorted(self.workspace.package_names))
 
+    def test_cargo_runtime_helper_changes_select_complete_rust_proof(self) -> None:
+        for path in (
+            "scripts/cargo-runtime-library-path.sh",
+            "scripts/cargo_runtime_library_path.py",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertEqual(
+                    outputs["rust_packages"], sorted(self.workspace.package_names)
+                )
+
     def test_run_all_does_not_rebuild_immutable_archives_without_changed_paths(self) -> None:
         outputs = classify(self.workspace, (), run_all=True)
         self.assertTrue(outputs["docs"])
