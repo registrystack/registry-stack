@@ -113,6 +113,26 @@ Darwin/arm64 | Darwin/aarch64)
 	;;
 esac
 
+# FIPS on macOS uses shared libraries. From v0.33 each executable and its
+# libraries travel together in one checksum-covered archive.
+macos_bundle=0
+if [ "$os_label" = "macos" ]; then
+	IFS=. read -r release_major release_minor release_patch <<<"${version#v}"
+	if ((release_major > 0 || release_minor >= 33)); then
+		macos_bundle=1
+		need tar
+	fi
+fi
+
+asset_name() {
+	local stem="${1}-${version}-${os_label}-${arch_label}"
+	if [ "$macos_bundle" -eq 1 ]; then
+		printf '%s.tar.gz\n' "$stem"
+	else
+		printf '%s\n' "$stem"
+	fi
+}
+
 # BEGIN generated libc preflight
 # Generated from release/glibc-floor.env by
 # release/scripts/render-installer-libc-preflight.py. Do not edit by hand.
@@ -184,26 +204,6 @@ if [ "$os_label" = "linux" ]; then
 fi
 
 # END generated libc preflight
-
-# FIPS on macOS uses shared libraries. From v0.33 each executable and its
-# libraries travel together in one checksum-covered archive.
-macos_bundle=0
-if [ "$os_label" = "macos" ]; then
-	IFS=. read -r release_major release_minor release_patch <<<"${version#v}"
-	if ((release_major > 0 || release_minor >= 33)); then
-		macos_bundle=1
-		need tar
-	fi
-fi
-
-asset_name() {
-	local stem="${1}-${version}-${os_label}-${arch_label}"
-	if [ "$macos_bundle" -eq 1 ]; then
-		printf '%s.tar.gz\n' "$stem"
-	else
-		printf '%s\n' "$stem"
-	fi
-}
 base_url="https://github.com/${repo}/releases/download/${version}"
 verify_url="https://github.com/${repo}/blob/${version}/release/VERIFY.md"
 tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t evidencectl)"
