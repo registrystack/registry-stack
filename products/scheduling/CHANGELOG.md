@@ -2,10 +2,12 @@
 
 ## Unreleased
 
+## v0.33.0 - 2026-09-22
+
 - Publish the scheduling MVP: published openings, exact-time offerings over
   interchangeable resource pools, published arrival windows with channel
   subquotas, holds, and accountable appointments, over PostgreSQL. The
-  contract is unreleased and carries no frozen compatibility promise.
+  contract is pre-1.0 and may change in a later minor release.
 - Keep the capacity ledger inside the runtime's own transaction. A hold or
   appointment is created, moved, or released only inside that transaction, and
   no other product may write the ledger; eligibility stays with the source

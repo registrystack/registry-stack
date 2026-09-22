@@ -2,11 +2,18 @@
 
 ## Unreleased
 
+## v0.33.0 - 2026-09-22
+
 - Read a token response that states an empty `scope` as granting no scope
   instead of refusing it as malformed. Keycloak states `"scope": ""` for a
   grant whose client scopes are all kept out of the token scope; a
   private-key-JWT provider that requested no scope now uses that credential,
   and one that requested scopes refuses it as narrowed.
+- Add the shared hook declaration, signed delivery envelope, retained delivery
+  worker, and product apply seam used by BReg and Casework.
+- Add the feature-gated Rhai and WebAssembly execution adapters used by BReg
+  action handlers. The WebAssembly feature remains non-default in the shared
+  platform crate and is enabled by BReg's default feature set.
 
 ## v0.32.0 - 2026-09-15
 

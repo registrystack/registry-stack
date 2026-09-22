@@ -18,6 +18,75 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+## v0.33.0 beta-45
+
+- Registry Scheduling joins the release with published openings, exact-time
+  offerings, arrival windows, holds, and accountable appointments. Each
+  commitment requires a task grant bounded to the offering's service,
+  location, and action. The release publishes a Scheduling container image,
+  without a binary or installer asset. See the
+  [Registry Scheduling API](../reference/apis/registry-scheduling/).
+
+{/* Evidence: crates/registry-scheduling/src/service.rs;
+    crates/registry-scheduling/src/auth.rs;
+    release/scripts/release_candidate.py, _candidate_image_names() and _relay_v2_payload_inventory(). */}
+
+- BREAKING: Registry Casework replaces hosted decisions with source-neutral
+  review requests, tasks, kinds, results, and accountability. Base Registry
+  Engine (BReg) delegates governed change-request review to Casework through a
+  review authority binding. The Casework migration drops the experimental
+  hosted tables without carrying their data forward. See
+  [review BReg changes in Casework](../tutorials/review-breg-changes-in-casework/).
+
+{/* Evidence: crates/registry-casework/migrations/0015_unified_reviews.sql;
+    crates/registry-casework/src/review.rs;
+    crates/registry-breg/src/review_store.rs. */}
+
+- BREAKING: BReg entity `events` are now shared `hooks`, and deliveries carry a
+  signed hook envelope instead of the earlier bare body. Rewrite each entity
+  declaration, drain the existing outbox before upgrading, update receivers,
+  and regenerate project locks. BReg now requires PostgreSQL 17 or newer.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, EntitySource;
+    crates/registry-platform-hooks/src/envelope.rs;
+    crates/registry-breg/src/postgres/schema.rs, verify_postgres_17_or_newer(). */}
+
+- BReg ships WebAssembly action handlers enabled by default, field encryption
+  for restricted fields, and durable resumable ingestion runs. Existing Rhai
+  and declarative action handlers keep working. See
+  [field encryption for restricted fields](../explanation/breg-field-encryption/)
+  and the [BReg client capabilities](../reference/breg-client-capabilities/).
+
+{/* Evidence: crates/registry-breg/Cargo.toml, features;
+    crates/registry-breg/src/field_encryption.rs;
+    crates/registry-breg/src/api/ingestion.rs. */}
+
+- Registry Render is available from source with offline CLI, HTTP service, and
+  Rust library modes for deterministic Typst PDF rendering. v0.33.0 does not
+  publish a Render release asset or container image. See the
+  [Registry Render overview](../start/registry-render/).
+
+{/* Evidence: crates/registry-render/src/cli.rs, Command;
+    crates/registry-render/src/lib.rs, render;
+    release/manifests/registry-stack-beta-45.yaml, artifacts. */}
+
+- Evidence tooling adds machine-readable reports, an offline-complete starter,
+  and self-checking local target generation. Object answer schemas must now
+  declare `properties` and `additionalProperties: false`.
+
+{/* Evidence: crates/registry-evidencectl/src/lib.rs, OutputFormat;
+    crates/registry-evidence-authoring/src/validate.rs;
+    products/breg/evidence/offline-starter/. */}
+
+- The BReg clients expose typed applied-request results and durable ingestion
+  runs. `bregctl explain` and `caseworkctl` machine-readable output now use
+  versioned, closed JSON report contracts.
+
+{/* Evidence: crates/registry-breg-client/src/lifecycle.rs;
+    crates/registry-breg-client/src/ingestion.rs;
+    products/breg/contracts/explain/;
+    products/casework/contracts/cli/. */}
+
 ## v0.32.0 beta-44
 
 - Exchanged access tokens carry `registry_assertion_issuer`, derived from the

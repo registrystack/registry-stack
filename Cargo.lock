@@ -4820,7 +4820,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "registry-breg"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -4884,7 +4884,7 @@ dependencies = [
 
 [[package]]
 name = "registry-breg-client"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -4909,7 +4909,7 @@ dependencies = [
 
 [[package]]
 name = "registry-breg-client-node"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "napi",
  "napi-build",
@@ -4926,7 +4926,7 @@ dependencies = [
 
 [[package]]
 name = "registry-breg-client-py"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -4942,7 +4942,7 @@ dependencies = [
 
 [[package]]
 name = "registry-bregctl"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anstream",
  "anstyle",
@@ -4991,7 +4991,7 @@ dependencies = [
 
 [[package]]
 name = "registry-casework"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5042,7 +5042,7 @@ dependencies = [
 
 [[package]]
 name = "registry-casework-breg"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -5067,7 +5067,7 @@ dependencies = [
 
 [[package]]
 name = "registry-casework-client"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5092,7 +5092,7 @@ dependencies = [
 
 [[package]]
 name = "registry-casework-client-node"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "napi",
  "napi-build",
@@ -5107,7 +5107,7 @@ dependencies = [
 
 [[package]]
 name = "registry-casework-client-py"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -5121,7 +5121,7 @@ dependencies = [
 
 [[package]]
 name = "registry-casework-core"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5142,7 +5142,7 @@ dependencies = [
 
 [[package]]
 name = "registry-caseworkctl"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5175,7 +5175,7 @@ dependencies = [
 
 [[package]]
 name = "registry-cli-docs"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "clap",
  "registry-breg",
@@ -5197,7 +5197,7 @@ dependencies = [
 
 [[package]]
 name = "registry-cli-reference"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "clap",
  "serde",
@@ -5205,7 +5205,7 @@ dependencies = [
 
 [[package]]
 name = "registry-discovery"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "axum",
  "axum-test",
@@ -5233,7 +5233,7 @@ dependencies = [
 
 [[package]]
 name = "registry-discovery-client"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -5265,7 +5265,7 @@ dependencies = [
 
 [[package]]
 name = "registry-discovery-client-node"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "napi",
  "napi-build",
@@ -5278,7 +5278,7 @@ dependencies = [
 
 [[package]]
 name = "registry-discovery-client-py"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -5291,7 +5291,7 @@ dependencies = [
 
 [[package]]
 name = "registry-discovery-profile"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "registry-platform-canonical-json",
  "serde",
@@ -5303,7 +5303,7 @@ dependencies = [
 
 [[package]]
 name = "registry-discoveryctl"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "axum",
  "clap",
@@ -5328,7 +5328,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "assert-json-diff",
  "async-trait",
@@ -5387,7 +5387,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-authoring"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "jsonschema",
@@ -5401,7 +5401,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-client"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -5428,7 +5428,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-client-node"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -5452,7 +5452,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-client-py"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -5476,7 +5476,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-oid4vci"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5513,7 +5513,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-verifier"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -5533,7 +5533,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidencectl"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -5573,7 +5573,7 @@ dependencies = [
 
 [[package]]
 name = "registry-language-server"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -5592,7 +5592,7 @@ dependencies = [
 
 [[package]]
 name = "registry-linkml"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -5602,7 +5602,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-cli"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "registry-manifest-core",
  "serde",
@@ -5613,7 +5613,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-core"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "oxiri",
  "oxjsonld",
@@ -5628,7 +5628,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-audit"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "async-trait",
  "hmac 0.13.0",
@@ -5650,7 +5650,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "base64 0.22.1",
  "proptest",
@@ -5667,11 +5667,11 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-buildinfo"
-version = "0.32.0"
+version = "0.33.0"
 
 [[package]]
 name = "registry-platform-calendar"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -5680,7 +5680,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-canonical-json"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "ryu-js",
  "serde",
@@ -5690,7 +5690,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-config"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "base64 0.22.1",
  "registry-platform-crypto",
@@ -5706,7 +5706,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5733,7 +5733,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-hooks"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "async-trait",
  "hex",
@@ -5753,7 +5753,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httpsec"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "axum",
  "http",
@@ -5769,7 +5769,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5803,7 +5803,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oidc"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -5819,7 +5819,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-script"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "rhai",
  "serde",
@@ -5829,7 +5829,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -5847,7 +5847,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sqlite"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "rusqlite",
  "rustix 1.1.4",
@@ -5860,7 +5860,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-testing"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5883,7 +5883,7 @@ dependencies = [
 
 [[package]]
 name = "registry-record"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -5893,7 +5893,7 @@ dependencies = [
 
 [[package]]
 name = "registry-relay-client"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5913,7 +5913,7 @@ dependencies = [
 
 [[package]]
 name = "registry-relay-client-node"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "axum",
  "napi",
@@ -5930,7 +5930,7 @@ dependencies = [
 
 [[package]]
 name = "registry-relay-client-py"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -5946,11 +5946,11 @@ dependencies = [
 
 [[package]]
 name = "registry-relay-http-contract"
-version = "0.32.0"
+version = "0.33.0"
 
 [[package]]
 name = "registry-relay-v2"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -6006,7 +6006,7 @@ dependencies = [
 
 [[package]]
 name = "registry-relayctl"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "clap",
  "hex",
@@ -6023,7 +6023,7 @@ dependencies = [
 
 [[package]]
 name = "registry-render"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -6061,7 +6061,7 @@ dependencies = [
 
 [[package]]
 name = "registry-review-client"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "axum",
  "chrono",
@@ -6080,7 +6080,7 @@ dependencies = [
 
 [[package]]
 name = "registry-review-protocol"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "chrono",
  "registry-platform-canonical-json",
@@ -6093,7 +6093,7 @@ dependencies = [
 
 [[package]]
 name = "registry-scheduling"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -6139,7 +6139,7 @@ dependencies = [
 
 [[package]]
 name = "registry-scheduling-client"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "axum",
  "chrono",
@@ -6156,7 +6156,7 @@ dependencies = [
 
 [[package]]
 name = "registry-scheduling-core"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "chrono",
  "registry-platform-calendar",
@@ -6172,7 +6172,7 @@ dependencies = [
 
 [[package]]
 name = "registry-schedulingctl"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6193,7 +6193,7 @@ dependencies = [
 
 [[package]]
 name = "registry-stack-client"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "registry-breg-client",
  "registry-casework-client",
@@ -6206,7 +6206,7 @@ dependencies = [
 
 [[package]]
 name = "registry-thunderid-tooling"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.4.3",
