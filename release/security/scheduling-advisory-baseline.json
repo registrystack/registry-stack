@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "service": "breg",
+  "service": "scheduling",
   "runtime": {
     "image": "gcr.io/distroless/cc-debian13:nonroot@sha256:c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c",
     "layer_ids": [
@@ -27,19 +27,20 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:eb1c6f6d0fd86c36a6fb6a6f3da49ba6925fe3538f7597c18ce8944746e946c6",
+      "sha256:8353c69184dcf0e3edb575df9eacb53343c651d78b3dbbc30efaefdd1c1cdd3c",
       "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
       "user": "65532",
       "entrypoint": [
-        "/usr/local/bin/breg"
+        "/usr/local/bin/scheduling"
       ],
       "command": [
-        "--config",
-        "/etc/breg/runtime.yaml"
+        "--runtime-config",
+        "/etc/registry-scheduling/runtime.yaml",
+        "serve"
       ],
-      "working_dir": "/etc/breg",
+      "working_dir": "/var/lib/registry-scheduling",
       "environment": [
         "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"
@@ -47,11 +48,11 @@
       "healthcheck": null,
       "args_escaped": true,
       "exposed_ports": [
-        "8080/tcp"
+        "8105/tcp"
       ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:a66b272a90b900ea90b22cf3ff828d89b8e2d993e7dcd6a5bfe0d6b2b3ba7948"
+    "definition_digest": "sha256:fb6df3af0cec28a46e2f05b77314cccacbf2c23b6f1e5e6e4eb433e2e0736a5c"
   },
   "policies": [
     {
@@ -74,7 +75,6 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.33.0 Linux AMD64 BReg local reproduction is exact rehearsal run 35711552030 at source 6a460c2cf66bc9d286cbe4a5454571c392488c05. Its executable imports none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. The one review-required address-taken dlsym use is Wasmtime's Intel JIT profiler availability probe and only selects NotifyEvent and Initialize. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian still records this Trixie version as vulnerable and fixes only forky and sid.",
       "reviewed_at": "2026-09-22",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
@@ -89,17 +89,18 @@
         "material_finding_changed",
         "package_version_changed",
         "rootfs_evidence_mismatch",
-        "runtime_config_changed",
-        "runtime_base_changed"
+        "runtime_base_changed",
+        "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:a66b272a90b900ea90b22cf3ff828d89b8e2d993e7dcd6a5bfe0d6b2b3ba7948",
-      "component_layer_id": "sha256:eb1c6f6d0fd86c36a6fb6a6f3da49ba6925fe3538f7597c18ce8944746e946c6",
+      "runtime_definition_digest": "sha256:fb6df3af0cec28a46e2f05b77314cccacbf2c23b6f1e5e6e4eb433e2e0736a5c",
+      "component_layer_id": "sha256:8353c69184dcf0e3edb575df9eacb53343c651d78b3dbbc30efaefdd1c1cdd3c",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.33.0 Linux AMD64 Scheduling local reproduction is exact rehearsal run 35711552030 at source 6a460c2cf66bc9d286cbe4a5454571c392488c05. Its executable imports none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. The exposure report has no review-required dynamic lookup. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian still records this Trixie version as vulnerable and fixes only forky and sid.",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:9299a1beece6ad8de828a7fbb72cbd109901e5f6f638f71e80fe31f1f78b7a90",
+        "reference_image_digest": "sha256:74f49c852500729542a73b6e057fe201f13b9f0aae5f51ba775e72a2f4903331",
         "reference_source_revision": "6a460c2cf66bc9d286cbe4a5454571c392488c05",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:a66b272a90b900ea90b22cf3ff828d89b8e2d993e7dcd6a5bfe0d6b2b3ba7948",
+        "runtime_definition_digest": "sha256:fb6df3af0cec28a46e2f05b77314cccacbf2c23b6f1e5e6e4eb433e2e0736a5c",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -118,11 +119,11 @@
             "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
           },
           {
-            "path": "/usr/local/bin/breg",
-            "sha256": "sha256:61d9835ece3402fb5600a02dda3eae4e7ee5bf7d0acebb268e166350d3b705b2"
+            "path": "/usr/local/bin/scheduling",
+            "sha256": "sha256:16cd6ac6345d92f61d9f9f31671c37aaf93748a8438d8f0e47d34f54575311cd"
           }
         ],
-        "definition_digest": "sha256:48a8a94eb657eed350b8b1c344068fff17f2abaac867038c524412cddda8fa70"
+        "definition_digest": "sha256:314e66a3557d845286963ce50e8fd709cf1ef5607ba989fe530e12515d8e12c7"
       }
     },
     {
@@ -132,7 +133,6 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix; Grype reports wont-fix. The reviewed v0.33.0 Linux AMD64 BReg local reproduction is exact rehearsal run 35711552030 at source 6a460c2cf66bc9d286cbe4a5454571c392488c05. Its executable neither imports nor contains strfmon or strfmon_l. The one review-required address-taken dlsym use is Wasmtime's Intel JIT profiler availability probe and only selects NotifyEvent and Initialize. No caller-controlled right-justified monetary-format width path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian fixes the issue only in forky and sid.",
       "reviewed_at": "2026-09-22",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
@@ -147,17 +147,18 @@
         "material_finding_changed",
         "package_version_changed",
         "rootfs_evidence_mismatch",
-        "runtime_config_changed",
-        "runtime_base_changed"
+        "runtime_base_changed",
+        "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:a66b272a90b900ea90b22cf3ff828d89b8e2d993e7dcd6a5bfe0d6b2b3ba7948",
-      "component_layer_id": "sha256:eb1c6f6d0fd86c36a6fb6a6f3da49ba6925fe3538f7597c18ce8944746e946c6",
+      "runtime_definition_digest": "sha256:fb6df3af0cec28a46e2f05b77314cccacbf2c23b6f1e5e6e4eb433e2e0736a5c",
+      "component_layer_id": "sha256:8353c69184dcf0e3edb575df9eacb53343c651d78b3dbbc30efaefdd1c1cdd3c",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix; Grype reports wont-fix. The reviewed v0.33.0 Linux AMD64 Scheduling local reproduction is exact rehearsal run 35711552030 at source 6a460c2cf66bc9d286cbe4a5454571c392488c05. Its executable neither imports nor contains strfmon or strfmon_l. The exposure report has no review-required dynamic lookup. No caller-controlled right-justified monetary-format width path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian fixes the issue only in forky and sid.",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:9299a1beece6ad8de828a7fbb72cbd109901e5f6f638f71e80fe31f1f78b7a90",
+        "reference_image_digest": "sha256:74f49c852500729542a73b6e057fe201f13b9f0aae5f51ba775e72a2f4903331",
         "reference_source_revision": "6a460c2cf66bc9d286cbe4a5454571c392488c05",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:a66b272a90b900ea90b22cf3ff828d89b8e2d993e7dcd6a5bfe0d6b2b3ba7948",
+        "runtime_definition_digest": "sha256:fb6df3af0cec28a46e2f05b77314cccacbf2c23b6f1e5e6e4eb433e2e0736a5c",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -176,11 +177,11 @@
             "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
           },
           {
-            "path": "/usr/local/bin/breg",
-            "sha256": "sha256:61d9835ece3402fb5600a02dda3eae4e7ee5bf7d0acebb268e166350d3b705b2"
+            "path": "/usr/local/bin/scheduling",
+            "sha256": "sha256:16cd6ac6345d92f61d9f9f31671c37aaf93748a8438d8f0e47d34f54575311cd"
           }
         ],
-        "definition_digest": "sha256:48a8a94eb657eed350b8b1c344068fff17f2abaac867038c524412cddda8fa70"
+        "definition_digest": "sha256:314e66a3557d845286963ce50e8fd709cf1ef5607ba989fe530e12515d8e12c7"
       }
     },
     {
@@ -190,7 +191,6 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.33.0 Linux AMD64 BReg local reproduction is exact rehearsal run 35711552030 at source 6a460c2cf66bc9d286cbe4a5454571c392488c05. Its executable neither links libz nor contains libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. The one review-required address-taken dlsym use is Wasmtime's Intel JIT profiler availability probe and only selects NotifyEvent and Initialize. No vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian still lists no fixed zlib package for Trixie.",
       "reviewed_at": "2026-09-22",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
@@ -205,17 +205,18 @@
         "material_finding_changed",
         "package_version_changed",
         "rootfs_evidence_mismatch",
-        "runtime_config_changed",
-        "runtime_base_changed"
+        "runtime_base_changed",
+        "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:a66b272a90b900ea90b22cf3ff828d89b8e2d993e7dcd6a5bfe0d6b2b3ba7948",
+      "runtime_definition_digest": "sha256:fb6df3af0cec28a46e2f05b77314cccacbf2c23b6f1e5e6e4eb433e2e0736a5c",
       "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
+      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.33.0 Linux AMD64 Scheduling local reproduction is exact rehearsal run 35711552030 at source 6a460c2cf66bc9d286cbe4a5454571c392488c05. Its executable neither links libz nor contains libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. The exposure report has no review-required dynamic lookup. No vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian still lists no fixed zlib package for Trixie.",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:9299a1beece6ad8de828a7fbb72cbd109901e5f6f638f71e80fe31f1f78b7a90",
+        "reference_image_digest": "sha256:74f49c852500729542a73b6e057fe201f13b9f0aae5f51ba775e72a2f4903331",
         "reference_source_revision": "6a460c2cf66bc9d286cbe4a5454571c392488c05",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:a66b272a90b900ea90b22cf3ff828d89b8e2d993e7dcd6a5bfe0d6b2b3ba7948",
+        "runtime_definition_digest": "sha256:fb6df3af0cec28a46e2f05b77314cccacbf2c23b6f1e5e6e4eb433e2e0736a5c",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -234,11 +235,11 @@
             "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
           },
           {
-            "path": "/usr/local/bin/breg",
-            "sha256": "sha256:61d9835ece3402fb5600a02dda3eae4e7ee5bf7d0acebb268e166350d3b705b2"
+            "path": "/usr/local/bin/scheduling",
+            "sha256": "sha256:16cd6ac6345d92f61d9f9f31671c37aaf93748a8438d8f0e47d34f54575311cd"
           }
         ],
-        "definition_digest": "sha256:48a8a94eb657eed350b8b1c344068fff17f2abaac867038c524412cddda8fa70"
+        "definition_digest": "sha256:314e66a3557d845286963ce50e8fd709cf1ef5607ba989fe530e12515d8e12c7"
       }
     }
   ]
