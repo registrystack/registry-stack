@@ -3,6 +3,16 @@
 //! a review settles into. Both are exposed as plain data so a caller (for
 //! example an `explain` endpoint) can render or diff them without embedding
 //! lifecycle knowledge of its own.
+//!
+//! Each edge's `guard` states only what the state machine itself checks: for
+//! an occurrence, that the `(state, event)` pair is in the reducer's table; for
+//! a review request, the quorum arithmetic `record_review_decision` runs after
+//! it has accepted a decision. Everything the runtime checks around that, from
+//! the caller's token to the row lock the write is made under, is reported once
+//! per machine in `enforcement`, in execution order, with the events each layer
+//! covers. A layer is a named place the runtime can refuse, not an enumeration
+//! of every check made there: the exact predicates live in the runtime crate
+//! and change without notice.
 
 use registry_review_protocol::ReviewRequestLifecycle;
 use serde::Serialize;
@@ -16,6 +26,7 @@ pub struct LifecycleDescription {
     pub label: &'static str,
     pub states: Vec<LifecycleState>,
     pub transitions: Vec<LifecycleTransition>,
+    pub enforcement: Vec<EnforcementLayer>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -35,7 +46,22 @@ pub struct LifecycleTransition {
     pub from: &'static str,
     pub event: &'static str,
     pub to: &'static str,
+    /// What the state machine itself checks before it moves the state. Nothing
+    /// the runtime checks around it appears here; that is `enforcement`.
     pub guard: &'static str,
+}
+
+/// One place the runtime can refuse an event, in execution order within
+/// `LifecycleDescription::enforcement`. `events` names every event the layer
+/// runs for; an event absent from the list passes the layer without being
+/// checked there. Where an event is raised on more than one path and the layer
+/// gates only some of them, the description says which.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnforcementLayer {
+    pub id: &'static str,
+    pub description: &'static str,
+    pub events: &'static [&'static str],
 }
 
 /// Build a lifecycle description from a declared state and transition list.
@@ -52,6 +78,7 @@ fn describe(
     initial_state_ids: &[&'static str],
     state_ids: &[&'static str],
     transitions: Vec<LifecycleTransition>,
+    enforcement: Vec<EnforcementLayer>,
 ) -> LifecycleDescription {
     let states = state_ids
         .iter()
@@ -80,6 +107,7 @@ fn describe(
         label,
         states,
         transitions,
+        enforcement,
     }
 }
 
@@ -117,28 +145,122 @@ fn occurrence_event_id(event: OccurrenceEvent) -> &'static str {
     }
 }
 
-/// What the store actually checks before each occurrence event is raised.
-/// The reducer itself is unguarded and total over `(state, event)`; legality
-/// is enforced one layer up, and it is enforced differently per event, so
-/// these sentences are selected by event rather than shared across the table.
-/// An authoritative observation is the case that matters most: it carries no
-/// actor at all, so attaching the claim path's holder and queue-authority
-/// checks to it would describe a check that never runs.
+/// What the reducer itself checks: that the `(state, event)` pair is in its
+/// fixed table. It is a pure function that sees no actor, revision, attempt,
+/// holder, queue, binding, or source, so the guard names the state the
+/// occurrence must already be in and nothing else. The runtime's checks around
+/// the call are `occurrence_enforcement`.
 fn occurrence_guard(event: OccurrenceEvent) -> &'static str {
     match event {
-        OccurrenceEvent::Claim => "Raised by a staff actor with authority over the item's queue, on an item that is unheld and still active, at the caller's expected revision, and only while no attempt is live.",
-        OccurrenceEvent::Release => "Raised on two paths that check different things. A human release requires staff authority over the queue or supervisor authority, the item held and still active, the caller's expected revision, and no live attempt. The clock-driven reassignment path carries no actor and checks none of those: it requires the item active and not synchronizing, no live attempt, the source occurrence still current against a fresh read, a served target queue, and an unclaimed clock effect.",
-        OccurrenceEvent::AttemptReserved => "Raised by the item's current holder with staff authority over its queue, at the caller's expected revision and against an action binding that still matches, and only while no other attempt is live.",
-        OccurrenceEvent::AttemptUncertain => "Raised by the actor recorded on the attempt itself, fenced by that attempt's execution token. The item's holder and queue authority are not re-checked here.",
-        OccurrenceEvent::AttemptCompleted => "Raised on two mutually exclusive paths. The executing path is raised by the actor recorded on the attempt, fenced by that attempt's execution token, and requires a receipt naming a positive source revision. The operator path settles an uncertain attempt whose lease has already expired: it carries no actor, is fenced by no token, and clears the receipt rather than requiring one. Neither path re-checks the item's holder or queue authority.",
-        OccurrenceEvent::AttemptRefused => "Raised on two mutually exclusive paths: by the attempt's own actor under a still-live lease, or by an operator settling an uncertain attempt whose lease has already expired. Neither re-checks the item's holder or queue authority.",
-        OccurrenceEvent::ObserveOpen
-        | OccurrenceEvent::ObserveWaitingApplicant
+        OccurrenceEvent::Claim => "the occurrence is open",
+        OccurrenceEvent::Release | OccurrenceEvent::AttemptReserved => {
+            "the occurrence is claimed"
+        }
+        OccurrenceEvent::AttemptUncertain
+        | OccurrenceEvent::AttemptCompleted
+        | OccurrenceEvent::AttemptRefused => "the occurrence is synchronizing",
+        OccurrenceEvent::ObserveOpen => {
+            "the occurrence is in any active state; a claimed occurrence keeps its holding through an open readback"
+        }
+        OccurrenceEvent::ObserveWaitingApplicant
         | OccurrenceEvent::ObserveWaitingApplication
         | OccurrenceEvent::Complete
         | OccurrenceEvent::Supersede
-        | OccurrenceEvent::Cancel => "Raised by an authoritative observation of the source, which carries no actor and is checked against no queue authority: it requires the source binding generation to match, the observed revision to be monotonic against the revision already applied, and no attempt to be live.",
+        | OccurrenceEvent::Cancel => "the occurrence is in any active state",
     }
+}
+
+/// The events a caller raises over HTTP. The other six are raised by an
+/// authoritative observation of the source, which carries no caller.
+const CALLER_EVENTS: &[&str] = &[
+    "claim",
+    "release",
+    "attempt_reserved",
+    "attempt_uncertain",
+    "attempt_completed",
+    "attempt_refused",
+];
+
+/// Every occurrence event, in `OccurrenceEvent::ALL` order.
+const EVERY_OCCURRENCE_EVENT: &[&str] = &[
+    "claim",
+    "release",
+    "attempt_reserved",
+    "attempt_uncertain",
+    "attempt_completed",
+    "attempt_refused",
+    "observe_open",
+    "observe_waiting_applicant",
+    "observe_waiting_application",
+    "complete",
+    "supersede",
+    "cancel",
+];
+
+/// The layers the runtime runs around an occurrence transition, in the order a
+/// caller-authenticated request meets them. Two paths do not start at the
+/// first layer: reconciliation enters at the source-binding layer, and so does
+/// the clock-driven release. The event lists are the runtime's own gating, not
+/// a choice this module makes: neither recover route carries an If-Match and
+/// neither attempt settlement compares the item revision, so the revision layer
+/// stops at reservation; the operator path that settles an uncertain attempt
+/// carries no caller at all.
+fn occurrence_enforcement() -> Vec<EnforcementLayer> {
+    vec![
+        EnforcementLayer {
+            id: "caller_authentication",
+            description: "The bearer token, the selected Casework profile, and its scopes verify; a token that impersonates or carries a registry grant is refused for any non-Requester profile, and the session must be a verified human. Gates the human paths only: the clock-driven release, the operator settlement of an uncertain attempt, and every observation carry no caller.",
+            events: CALLER_EVENTS,
+        },
+        EnforcementLayer {
+            id: "caller_revision_precondition",
+            description: "The If-Match header is present and well formed before any row is read, and inside the transaction the locked item row still carries the revision, source binding, and activity the caller saw. Neither recover route carries an If-Match, and no attempt settlement compares the item revision.",
+            events: &["claim", "release", "attempt_reserved"],
+        },
+        EnforcementLayer {
+            id: "source_authorization",
+            description: "The caller can see the item's queue, and the source, re-read as this caller, still discloses the subject under the binding the item holds and still offers the operation being attempted. A binding the source has moved refuses the action; a subject the source no longer discloses is reported as absent.",
+            events: CALLER_EVENTS,
+        },
+        EnforcementLayer {
+            id: "queue_and_holder_authority",
+            description: "The actor is a staff member of a team serving the item's queue; a supervisor serving that queue may release another person's holding but may not claim or reserve. A claim refuses an item already held, and a release or reservation refuses anyone but the recorded holder.",
+            events: &["claim", "release", "attempt_reserved"],
+        },
+        EnforcementLayer {
+            id: "idempotency_admission",
+            description: "A retried mutation whose recorded request hash differs from this one is refused as a conflict, and a retry whose stored response retention has erased, including the item itself, is refused as expired.",
+            events: CALLER_EVENTS,
+        },
+        EnforcementLayer {
+            id: "source_binding_currency",
+            description: "An observation is applied only when it is the newest authoritative reading of the subject under the current binding generation: a stale generation is refused, an older revision is dropped, and an unchanged revision and etag reconciles clocks only. A source may never assert the claimed or synchronizing state. A clock effect additionally requires the subject, the observation, and its own recorded generation, revision, and etag to all be current.",
+            events: &[
+                "observe_open",
+                "observe_waiting_applicant",
+                "observe_waiting_application",
+                "complete",
+                "supersede",
+                "cancel",
+                "release",
+            ],
+        },
+        EnforcementLayer {
+            id: "attempt_fence",
+            description: "No occurrence changes while a pending or uncertain attempt is live on the item: a claim, release, or reservation is refused, a clock effect is deferred, and an observation is requeued. An attempt settlement is fenced by the execution token recorded on the attempt; a refusal by the executor also requires its lease to be live, recovery requires it to have expired, and the operator settlement of an uncertain attempt requires an expired lease and then issues a fresh token that fences the original executor out.",
+            events: EVERY_OCCURRENCE_EVENT,
+        },
+        EnforcementLayer {
+            id: "lifecycle_transition",
+            description: "The edge's own guard, run by the reducer: the (state, event) pair is in the fixed table. In practice this refuses every event against a completed, superseded, or cancelled occurrence and every caller event raised from the wrong active state.",
+            events: EVERY_OCCURRENCE_EVENT,
+        },
+        EnforcementLayer {
+            id: "persist_serialization",
+            description: "Every write runs in a transaction that already holds a row lock on the item, and on the subject or clock occurrence where one is involved, so a concurrent writer is serialized behind this one rather than filtered at write time; the clock path claims its effect once only. There is no row-level security and no persist-time state filter on this machine.",
+            events: EVERY_OCCURRENCE_EVENT,
+        },
+    ]
 }
 
 /// The states in which the store can create an occurrence record outright.
@@ -175,6 +297,7 @@ pub fn occurrence_lifecycle() -> LifecycleDescription {
         OCCURRENCE_INITIAL_STATES,
         &state_ids,
         transitions,
+        occurrence_enforcement(),
     )
 }
 
@@ -197,19 +320,72 @@ const REVIEW_SETTLE_EVENT: &str = "settle";
 const REVIEW_RECORD_EVENT: &str = "record_decision";
 const REVIEW_ADVANCE_EVENT: &str = "advance_stage";
 
-/// What a decision must satisfy before the engine looks at the decision at
-/// all: the checks `record_review_decision` makes, the revision precondition
-/// the store compares against the locked task row, and the source preflight
-/// the runtime runs ahead of both. Every edge a decision raises carries all
-/// three, so the sentence is written once and concatenated onto each of the
-/// six rather than drifting six ways.
-///
-/// The four decision kinds raise six edges between them, because an approval
-/// may be recorded, may advance a stage, or may settle the request.
-macro_rules! review_decision_gate {
-    () => {
-        "The task's current revision is a mandatory If-Match precondition, compared against the locked task row before the decision is recorded, so a decision refuses with a revision conflict when another operation has already advanced that task. Raised on a task on the active stage that the reviewer holds, under a deciding profile that both the stage and the task allow, on a request still in reviewing and not already settled, with no earlier decision on that task, no earlier decision by the same reviewer in this stage, and the stage's initiator and previous-stage-reviewer exclusions satisfied. Where the review kind takes its context from a source, the runtime first re-reads that source as the deciding caller and refuses unless the view still matches the subject, binding version and integrity digest pinned on the request and the authoritative occurrence is still reviewable, so a caller who has lost source access, or an occurrence withdrawn, superseded or still synchronizing at the source, blocks the decision even when every check above passes."
-    };
+const EVERY_REVIEW_EVENT: &[&str] = &[
+    REVIEW_RECORD_EVENT,
+    REVIEW_ADVANCE_EVENT,
+    REVIEW_SETTLE_EVENT,
+];
+
+/// The layers the runtime runs around a review request transition, in the
+/// order a decision meets them. `settle` is one event with six targets, and
+/// only four of them are raised by a decision: `cancelled` is the producer
+/// withdrawing its request and `superseded` is the producer replacing it, and
+/// both reach the persist filter directly. A layer that runs only on the
+/// decision path therefore says so in its description rather than pretending
+/// a reviewer check gates a requester's cancellation.
+fn review_enforcement() -> Vec<EnforcementLayer> {
+    macro_rules! decision_path_only {
+        ($text:literal) => {
+            concat!($text, " Gates the decision path only: record_decision, advance_stage, and the settle to approved, rejected, changes_requested, or answered, not cancelled or superseded.")
+        };
+    }
+    vec![
+        EnforcementLayer {
+            id: "caller_authentication",
+            description: "The bearer token, the selected Casework profile, and its scopes verify. A reviewer profile additionally refuses a token that impersonates or carries a registry grant and any session that is not a verified human; a Requester producer profile is exempt from both.",
+            events: EVERY_REVIEW_EVENT,
+        },
+        EnforcementLayer {
+            id: "producer_or_reviewer_admission",
+            description: "The caller's role and profile are admitted for the path: a decision requires a human staff member or supervisor, while cancellation and creation require a Requester whose profile, issuer, and subject match a declared review producer covering the request's kind and source namespace. A source-profile header is refused outright on the creation and cancellation routes, and on a decision it is refused or required according to the policy's context strategy.",
+            events: EVERY_REVIEW_EVENT,
+        },
+        EnforcementLayer {
+            id: "review_source_preflight",
+            description: decision_path_only!("Where the review kind takes its context from a source, the subject re-read as the deciding caller must still be the subject, binding version, and integrity digest pinned on the request, its disclosure must pass the policy's display rules, and the authoritative occurrence must still be reviewable: active or completed, never synchronizing. A record whose result has been erased or has expired is refused as well."),
+            events: EVERY_REVIEW_EVENT,
+        },
+        EnforcementLayer {
+            id: "request_lock_and_lifecycle",
+            description: "The review request row is locked before anything is decided, and an event against a request not still in reviewing, or whose subject is not the one the caller named, is refused; a repeated cancellation returns the terminal result already recorded rather than settling twice. Supersession selects only the producer's own reviewing requests, under a lock that serializes that producer's submissions and settlements.",
+            events: EVERY_REVIEW_EVENT,
+        },
+        EnforcementLayer {
+            id: "reviewer_queue_authority",
+            description: decision_path_only!("The reviewer's role is neither Administrator nor Requester, their profile appears in at least one stage's deciding profiles, and they are a staff or supervisor member of a team serving the task's queue; the membership rows are locked so a concurrent membership change cannot race the decision."),
+            events: EVERY_REVIEW_EVENT,
+        },
+        EnforcementLayer {
+            id: "task_revision_and_holder",
+            description: decision_path_only!("The caller's If-Match, which is mandatory, equals the revision of the locked task row, so a decision on a task another operation has advanced is refused as a revision conflict, and the task is held by this reviewer: an unheld task, a task held by someone else, and a task already decided are each refused."),
+            events: EVERY_REVIEW_EVENT,
+        },
+        EnforcementLayer {
+            id: "decision_eligibility",
+            description: decision_path_only!("Everything the engine checks before it counts the decision as a vote: the policy verifies, the request is not already settled, the stage, request, and task identities agree, the deciding profile is listed by both the stage and the task, neither this task nor this reviewer has already decided in the stage, the initiator and previous-stage-reviewer exclusions hold, and the decision kind is one the stage's purpose allows, with its outcome validated against the policy."),
+            events: EVERY_REVIEW_EVENT,
+        },
+        EnforcementLayer {
+            id: "stage_quorum_progression",
+            description: decision_path_only!("The edge's own guard, run by the engine once it has accepted the decision: a non-approving decision settles the request at once, and an approval is counted against the stage's required approvals to decide whether the request stays in the stage, advances, or settles as approved."),
+            events: EVERY_REVIEW_EVENT,
+        },
+        EnforcementLayer {
+            id: "settlement_persist_filter",
+            description: "The terminal write updates the request row only where its lifecycle is still reviewing, closes every open or claimed task on the request, and applies the settled status's clock effects. Every caller reaches it holding the row lock and having compared the lifecycle above, so the filter is a backstop rather than the check that refuses.",
+            events: &[REVIEW_SETTLE_EVENT],
+        },
+    ]
 }
 
 /// Describe the review request lifecycle: seven states and eight edges, all
@@ -218,22 +394,22 @@ macro_rules! review_decision_gate {
 /// Six of the eight are raised by a reviewer's decision, and only four of
 /// those settle the request. Which of `approved`, `rejected`,
 /// `changes_requested`, or `answered` a given review reaches is decided by
-/// `record_review_decision` against the adopter's configured review policy
-/// (quorum, stage advancement, deciding profiles, initiator and
-/// previous-stage-reviewer exclusions). That decision is policy-dependent and
-/// deliberately not enumerated here.
+/// `record_review_decision` against the adopter's configured review policy.
+/// The guards state the arithmetic that engine runs once it has accepted a
+/// decision, and nothing it checks before accepting one; that is
+/// `review_enforcement`.
 ///
 /// The other two decision edges return to `reviewing`, and omitting them
 /// would report that every decision settles the request. An approval that
-/// leaves the active stage short of its quorum is recorded and moves no
-/// stage; an approval that meets the quorum while a later stage exists closes
-/// the active stage's tasks and opens the next stage's.
+/// leaves the active stage short of its required approvals is recorded and
+/// moves no stage; an approval that meets them while a later stage remains
+/// advances the stage.
 ///
 /// The last two are not decisions at all and must not be described as if they
-/// were. `cancelled` is the requester withdrawing their own request, and
+/// were. `cancelled` is the producer withdrawing its own request, and
 /// `superseded` is applied automatically to a prior reviewing request when the
 /// same admitted producer creates a replacement for the same subject and
-/// policy. Neither path consults a stage, a quorum, or an exclusion.
+/// policy. Neither path consults a reviewer, a stage, or a quorum.
 pub fn review_lifecycle() -> LifecycleDescription {
     let state_ids: Vec<&'static str> = [
         ReviewRequestLifecycle::Reviewing,
@@ -253,67 +429,49 @@ pub fn review_lifecycle() -> LifecycleDescription {
             from: reviewing,
             event: REVIEW_RECORD_EVENT,
             to: reviewing,
-            guard: concat!(
-                review_decision_gate!(),
-                " An approval that leaves the stage's approvals short of the stage's required approvals is recorded against the task and moves no stage."
-            ),
+            guard: "an approval that leaves the active stage's approvals short of the stage's required approvals; it is recorded against the task and moves no stage",
         },
         LifecycleTransition {
             from: reviewing,
             event: REVIEW_ADVANCE_EVENT,
             to: reviewing,
-            guard: concat!(
-                review_decision_gate!(),
-                " An approval that meets the active stage's required approvals while a later stage exists closes that stage's remaining tasks, undecided or unclaimed alike, and opens the next stage's."
-            ),
+            guard: "the approval that meets the active stage's required approvals while a later stage remains; the next stage becomes the active one",
         },
         LifecycleTransition {
             from: reviewing,
             event: REVIEW_SETTLE_EVENT,
             to: review_lifecycle_state_id(ReviewRequestLifecycle::Approved),
-            guard: concat!(
-                review_decision_gate!(),
-                " On an approval-purpose policy, the approval that meets the last stage's required approvals settles the request as approved; approval carries no outcome and no result."
-            ),
+            guard: "the approval that meets the required approvals of the last stage",
         },
         LifecycleTransition {
             from: reviewing,
             event: REVIEW_SETTLE_EVENT,
             to: review_lifecycle_state_id(ReviewRequestLifecycle::Rejected),
-            guard: concat!(
-                review_decision_gate!(),
-                " On an approval-purpose policy, a rejection settles the request on its own without reaching any quorum, and must carry an outcome the policy declares, with a result when that outcome requires one."
-            ),
+            guard: "a rejection, which as a non-approving decision settles the request at once regardless of quorum",
         },
         LifecycleTransition {
             from: reviewing,
             event: REVIEW_SETTLE_EVENT,
             to: review_lifecycle_state_id(ReviewRequestLifecycle::ChangesRequested),
-            guard: concat!(
-                review_decision_gate!(),
-                " On an approval-purpose policy, a changes-requested decision settles the request on its own without reaching any quorum, and must carry an outcome the policy declares, with a result when that outcome requires one."
-            ),
+            guard: "a changes-requested decision, which as a non-approving decision settles the request at once regardless of quorum",
         },
         LifecycleTransition {
             from: reviewing,
             event: REVIEW_SETTLE_EVENT,
             to: review_lifecycle_state_id(ReviewRequestLifecycle::Answered),
-            guard: concat!(
-                review_decision_gate!(),
-                " On an answer-purpose policy, an answer settles the request on its own without reaching any quorum, and must carry an outcome the policy declares, with a result when that outcome requires one."
-            ),
+            guard: "an answer, which as a non-approving decision settles the request at once regardless of quorum",
         },
         LifecycleTransition {
             from: reviewing,
             event: REVIEW_SETTLE_EVENT,
             to: review_lifecycle_state_id(ReviewRequestLifecycle::Cancelled),
-            guard: "Settlement only applies to a request still in reviewing; cancellation is the requester withdrawing their own request, is raised by no reviewer and through no task, consults no stage, quorum, or exclusion, and carries no outcome and no result.",
+            guard: "the producer withdrew its own request; no reviewer, stage, or quorum is consulted",
         },
         LifecycleTransition {
             from: reviewing,
             event: REVIEW_SETTLE_EVENT,
             to: review_lifecycle_state_id(ReviewRequestLifecycle::Superseded),
-            guard: "Settlement only applies to a request still in reviewing; supersession is applied automatically when a replacement request is created for the same subject and policy by the same admitted producer, matched on that producer's id, issuer and subject, so a request one producer creates never supersedes another producer's; it is raised by no reviewer and through no task, consults no stage, quorum, or exclusion, and carries no outcome and no result.",
+            guard: "the same admitted producer, matched on its id, issuer and subject, created a replacement request for the same subject, type, and policy, so a request one producer creates never supersedes another producer's; no reviewer, stage, or quorum is consulted",
         },
     ];
     describe(
@@ -322,6 +480,7 @@ pub fn review_lifecycle() -> LifecycleDescription {
         &[reviewing],
         &state_ids,
         transitions,
+        review_enforcement(),
     )
 }
 
@@ -438,55 +597,210 @@ mod tests {
         );
     }
 
-    /// The guard is the only place the report says what the runtime checks
-    /// before an edge fires, so one shared sentence across every edge would
-    /// be wrong wherever the checks differ. An authoritative observation in
-    /// particular carries no actor at all, so it must not claim the holder
-    /// and queue-authority checks a claim makes.
-    #[test]
-    fn occurrence_guards_are_selected_by_event_not_shared_by_every_edge() {
-        let description = occurrence_lifecycle();
-        let guards: BTreeSet<&str> = description
+    fn layer<'a>(description: &'a LifecycleDescription, id: &str) -> &'a EnforcementLayer {
+        description
+            .enforcement
+            .iter()
+            .find(|layer| layer.id == id)
+            .unwrap_or_else(|| panic!("{} has no {id} layer", description.id))
+    }
+
+    fn declared_events(description: &LifecycleDescription) -> BTreeSet<&'static str> {
+        description
             .transitions
             .iter()
-            .map(|edge| edge.guard)
-            .collect();
-        assert!(
-            guards.len() > 1,
-            "one guard across every edge cannot be accurate: {guards:#?}"
-        );
+            .map(|edge| edge.event)
+            .collect()
+    }
 
+    /// The reducer is a pure function of `(state, event)` that sees no actor,
+    /// revision, attempt, holder, queue, or source, so a guard may state only
+    /// which state the occurrence must already be in. Everything else the
+    /// runtime checks is a reported layer, and a guard that restated one
+    /// would put a caller-only check on the observation path that carries no
+    /// caller.
+    #[test]
+    fn occurrence_guards_state_the_reducer_condition_and_restate_no_layer() {
+        let description = occurrence_lifecycle();
         for edge in &description.transitions {
-            let observation = edge.event.starts_with("observe_")
-                || matches!(edge.event, "complete" | "supersede" | "cancel");
-            if observation {
-                for claimed in ["staff authority", "supervisor authority", "current holder"] {
-                    assert!(
-                        !edge.guard.contains(claimed),
-                        "{} claims {claimed:?}, which the observation path never checks: {}",
-                        edge.event,
-                        edge.guard
-                    );
-                }
+            assert!(!edge.guard.is_empty(), "{edge:?}");
+            for phrase in [
+                "actor",
+                "authority",
+                "holder",
+                "revision",
+                "If-Match",
+                "attempt is live",
+                "execution token",
+                "lease",
+                "operator",
+                "clock",
+                "source binding",
+                "queue",
+            ] {
                 assert!(
-                    edge.guard.contains("carries no actor"),
-                    "{} should say it carries no actor: {}",
-                    edge.event,
-                    edge.guard
+                    !edge.guard.contains(phrase),
+                    "{edge:?} restates an enforcement layer: {phrase:?}"
                 );
             }
         }
-
-        let claim = description
-            .transitions
-            .iter()
-            .find(|edge| edge.event == "claim")
-            .expect("the table has a claim edge");
-        assert!(
-            claim.guard.contains("authority over the item's queue"),
-            "claim does check queue authority: {}",
-            claim.guard
+        let by_event = |event: &str| -> BTreeSet<&str> {
+            description
+                .transitions
+                .iter()
+                .filter(|edge| edge.event == event)
+                .map(|edge| edge.guard)
+                .collect()
+        };
+        assert_eq!(
+            by_event("claim"),
+            BTreeSet::from(["the occurrence is open"])
         );
+        assert_eq!(
+            by_event("attempt_completed"),
+            BTreeSet::from(["the occurrence is synchronizing"])
+        );
+        assert_eq!(
+            by_event("observe_open"),
+            BTreeSet::from([
+                "the occurrence is in any active state; a claimed occurrence keeps its holding through an open readback",
+            ])
+        );
+    }
+
+    /// The layers are reported in the order a caller-authenticated request
+    /// meets them, with the reducer placed where it sits among them, and
+    /// each names at least one event the table raises and no event it does
+    /// not.
+    #[test]
+    fn occurrence_enforcement_layers_are_ordered_and_name_declared_events() {
+        let description = occurrence_lifecycle();
+        let ids: Vec<&str> = description
+            .enforcement
+            .iter()
+            .map(|layer| layer.id)
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                "caller_authentication",
+                "caller_revision_precondition",
+                "source_authorization",
+                "queue_and_holder_authority",
+                "idempotency_admission",
+                "source_binding_currency",
+                "attempt_fence",
+                "lifecycle_transition",
+                "persist_serialization",
+            ]
+        );
+        let events = declared_events(&description);
+        for layer in &description.enforcement {
+            assert!(!layer.events.is_empty(), "{layer:?}");
+            assert!(!layer.description.is_empty(), "{layer:?}");
+            for event in layer.events {
+                assert!(
+                    events.contains(event),
+                    "{layer:?} names an undeclared event"
+                );
+            }
+        }
+    }
+
+    /// Which events a layer covers is what the runtime does, not a choice
+    /// this module makes. The six observation events and the clock-driven
+    /// release carry no caller, so no caller layer may list them; neither
+    /// recover route carries an If-Match and neither settlement compares the
+    /// item revision, so the revision layer stops at reservation; and only
+    /// the attempt fence, the reducer, and the row locks run for everything.
+    #[test]
+    fn occurrence_layers_cover_exactly_the_events_the_runtime_gates() {
+        let description = occurrence_lifecycle();
+        let caller_events = [
+            "claim",
+            "release",
+            "attempt_reserved",
+            "attempt_uncertain",
+            "attempt_completed",
+            "attempt_refused",
+        ];
+        let observation_events = [
+            "observe_open",
+            "observe_waiting_applicant",
+            "observe_waiting_application",
+            "complete",
+            "supersede",
+            "cancel",
+        ];
+        assert_eq!(
+            layer(&description, "caller_authentication").events,
+            caller_events
+        );
+        assert_eq!(
+            layer(&description, "caller_revision_precondition").events,
+            ["claim", "release", "attempt_reserved"]
+        );
+        assert_eq!(
+            layer(&description, "source_authorization").events,
+            caller_events
+        );
+        assert_eq!(
+            layer(&description, "queue_and_holder_authority").events,
+            ["claim", "release", "attempt_reserved"]
+        );
+        assert_eq!(
+            layer(&description, "idempotency_admission").events,
+            caller_events
+        );
+        let mut currency = observation_events.to_vec();
+        currency.push("release");
+        assert_eq!(
+            layer(&description, "source_binding_currency").events,
+            currency
+        );
+        let every: Vec<&str> = OccurrenceEvent::ALL
+            .into_iter()
+            .map(occurrence_event_id)
+            .collect();
+        for id in [
+            "attempt_fence",
+            "lifecycle_transition",
+            "persist_serialization",
+        ] {
+            assert_eq!(layer(&description, id).events, every, "{id}");
+        }
+        for event in observation_events {
+            for id in [
+                "caller_authentication",
+                "caller_revision_precondition",
+                "source_authorization",
+                "queue_and_holder_authority",
+                "idempotency_admission",
+            ] {
+                assert!(
+                    !layer(&description, id).events.contains(&event),
+                    "{id} lists {event}, which carries no caller"
+                );
+            }
+        }
+    }
+
+    /// Two events reach the reducer on a path with no caller at all: the
+    /// clock reassigns a claimed item, and an operator settles an uncertain
+    /// attempt whose lease has expired. The layers that gate the human path
+    /// say so, or a reader would take the caller checks as covering every
+    /// raise of the event.
+    #[test]
+    fn layers_name_the_caller_free_paths_they_do_not_gate() {
+        let description = occurrence_lifecycle();
+        let authentication = layer(&description, "caller_authentication").description;
+        assert!(authentication.contains("clock"), "{authentication}");
+        assert!(authentication.contains("operator"), "{authentication}");
+        let revision = layer(&description, "caller_revision_precondition").description;
+        assert!(revision.contains("recover"), "{revision}");
+        let fence = layer(&description, "attempt_fence").description;
+        assert!(fence.contains("execution token"), "{fence}");
+        assert!(fence.contains("lease"), "{fence}");
     }
 
     #[test]
@@ -564,7 +878,7 @@ mod tests {
             staying[0]
         );
         assert!(
-            staying[1].guard.contains("a later stage exists"),
+            staying[1].guard.contains("a later stage remains"),
             "{:?}",
             staying[1]
         );
@@ -584,58 +898,6 @@ mod tests {
         assert!(!reviewing.unreachable);
     }
 
-    /// `settle_uncertain_attempt` emits `AttemptCompleted` from an operator
-    /// decision on an expired lease: no original actor, no execution token,
-    /// and it clears the receipt. A guard describing only the executor path
-    /// would report a fence and a receipt that path does not have.
-    #[test]
-    fn attempt_completed_describes_the_operator_path_as_well_as_the_executor() {
-        let description = occurrence_lifecycle();
-        let completed: Vec<&LifecycleTransition> = description
-            .transitions
-            .iter()
-            .filter(|edge| edge.event == "attempt_completed")
-            .collect();
-        assert!(!completed.is_empty());
-        for edge in &completed {
-            assert!(edge.guard.contains("two"), "{edge:?}");
-            assert!(edge.guard.contains("operator"), "{edge:?}");
-            assert!(edge.guard.contains("expired"), "{edge:?}");
-        }
-        let uncertain = description
-            .transitions
-            .iter()
-            .find(|edge| edge.event == "attempt_uncertain")
-            .expect("an attempt_uncertain edge");
-        assert_ne!(uncertain.guard, completed[0].guard);
-        assert!(!uncertain.guard.contains("operator"), "{uncertain:?}");
-    }
-
-    /// `check_task_holder` refuses `ReviewerTaskState::Open` outright. Calling
-    /// the reviewer "the holder of an open task" stated the opposite of the
-    /// task state the engine requires.
-    #[test]
-    fn review_decision_edges_require_a_held_task_not_an_open_one() {
-        for edge in review_lifecycle()
-            .transitions
-            .iter()
-            .filter(|edge| edge.event != "settle" || edge.to != "cancelled")
-        {
-            assert!(!edge.guard.contains("open task"), "{edge:?}");
-        }
-        let recorded = review_lifecycle()
-            .transitions
-            .into_iter()
-            .find(|edge| edge.event == "record_decision")
-            .expect("a record_decision edge");
-        assert!(
-            recorded
-                .guard
-                .contains("a task on the active stage that the reviewer holds"),
-            "{recorded:?}"
-        );
-    }
-
     #[test]
     fn every_review_request_lifecycle_variant_appears_in_the_review_table() {
         let description = review_lifecycle();
@@ -653,26 +915,59 @@ mod tests {
         }
     }
 
-    /// A decision on a source-context review kind also has to survive a fresh
-    /// source read; a guard that stops at the task and policy checks would
-    /// report the transition as permitted after source access is gone.
+    /// `record_review_decision` decides four things and nothing else: a
+    /// non-approving decision settles at once, an approval short of the
+    /// stage's required approvals is recorded, an approval meeting them on
+    /// the last stage settles as approved, and one meeting them earlier
+    /// advances the stage. Cancellation and supersession never reach it. A
+    /// guard may say only that; the task, holder, revision, queue, source,
+    /// and eligibility checks are reported layers.
     #[test]
-    fn every_decision_edge_names_the_source_preflight() {
+    fn review_guards_state_the_machine_condition_and_restate_no_layer() {
         let description = review_lifecycle();
         for edge in &description.transitions {
-            let decision = edge.guard.contains("that the reviewer holds");
-            assert_eq!(
-                decision,
-                edge.guard.contains("takes its context from a source"),
-                "{edge:?}"
+            assert!(!edge.guard.is_empty(), "{edge:?}");
+            for phrase in [
+                "If-Match",
+                "revision",
+                "holds",
+                "held",
+                "deciding profile",
+                "exclusion",
+                "re-reads",
+                "source access",
+                "queue",
+                "already settled",
+                "still in reviewing",
+            ] {
+                assert!(
+                    !edge.guard.contains(phrase),
+                    "{edge:?} restates an enforcement layer: {phrase:?}"
+                );
+            }
+        }
+        let guard = |to: &str, event: &str| -> &'static str {
+            description
+                .transitions
+                .iter()
+                .find(|edge| edge.to == to && edge.event == event)
+                .unwrap_or_else(|| panic!("no {event} edge to {to}"))
+                .guard
+        };
+        assert!(guard("reviewing", "record_decision").contains("approval"));
+        assert!(guard("reviewing", "advance_stage").contains("later stage remains"));
+        assert!(guard("approved", "settle").contains("last stage"));
+        for to in ["rejected", "changes_requested", "answered"] {
+            let guard = guard(to, "settle");
+            assert!(guard.contains("regardless of quorum"), "{to}: {guard}");
+        }
+        for to in ["cancelled", "superseded"] {
+            let guard = guard(to, "settle");
+            assert!(
+                guard.contains("no reviewer, stage, or quorum"),
+                "{to}: {guard}"
             );
         }
-        let decisions = description
-            .transitions
-            .iter()
-            .filter(|edge| edge.guard.contains("takes its context from a source"))
-            .count();
-        assert_eq!(decisions, 6);
     }
 
     /// Two admitted producers may hold requests for the same subject and
@@ -685,23 +980,82 @@ mod tests {
             .find(|edge| edge.to == "superseded")
             .expect("superseded edge")
             .guard;
-        assert!(guard.contains("by the same admitted producer"), "{guard}");
+        assert!(guard.contains("the same admitted producer"), "{guard}");
         assert!(guard.contains("id, issuer and subject"), "{guard}");
     }
 
-    /// A held task is not enough: another operation may have advanced it
-    /// between the reviewer reading it and deciding, and the store refuses
-    /// that with a revision conflict before the decision is recorded.
+    /// The layers are reported in the order a decision meets them, with the
+    /// quorum arithmetic placed where it sits among them, and each names at
+    /// least one event the table raises and no event it does not.
     #[test]
-    fn every_decision_edge_names_the_revision_precondition() {
+    fn review_enforcement_layers_are_ordered_and_name_declared_events() {
         let description = review_lifecycle();
-        for edge in &description.transitions {
-            let decision = edge.guard.contains("that the reviewer holds");
-            assert_eq!(
-                decision,
-                edge.guard.contains("mandatory If-Match precondition"),
-                "{edge:?}"
+        let ids: Vec<&str> = description
+            .enforcement
+            .iter()
+            .map(|layer| layer.id)
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                "caller_authentication",
+                "producer_or_reviewer_admission",
+                "review_source_preflight",
+                "request_lock_and_lifecycle",
+                "reviewer_queue_authority",
+                "task_revision_and_holder",
+                "decision_eligibility",
+                "stage_quorum_progression",
+                "settlement_persist_filter",
+            ]
+        );
+        let events = declared_events(&description);
+        for layer in &description.enforcement {
+            assert!(!layer.events.is_empty(), "{layer:?}");
+            assert!(!layer.description.is_empty(), "{layer:?}");
+            for event in layer.events {
+                assert!(
+                    events.contains(event),
+                    "{layer:?} names an undeclared event"
+                );
+            }
+        }
+    }
+
+    /// `settle` is one event with six targets, two of which (cancelled and
+    /// superseded) are raised by no decision. A layer that lists `settle` and
+    /// runs only on the decision path therefore has to say which settlements
+    /// it gates, or the report claims a reviewer check on a requester
+    /// cancellation.
+    #[test]
+    fn decision_only_layers_say_which_settlements_they_gate() {
+        let description = review_lifecycle();
+        let every = ["record_decision", "advance_stage", "settle"];
+        for id in [
+            "caller_authentication",
+            "producer_or_reviewer_admission",
+            "request_lock_and_lifecycle",
+        ] {
+            assert_eq!(layer(&description, id).events, every, "{id}");
+        }
+        for id in [
+            "review_source_preflight",
+            "reviewer_queue_authority",
+            "task_revision_and_holder",
+            "decision_eligibility",
+            "stage_quorum_progression",
+        ] {
+            let layer = layer(&description, id);
+            assert_eq!(layer.events, every, "{id}");
+            assert!(
+                layer.description.contains("not cancelled or superseded"),
+                "{id} runs only on the decision path and must say so: {}",
+                layer.description
             );
         }
+        assert_eq!(
+            layer(&description, "settlement_persist_filter").events,
+            ["settle"]
+        );
     }
 }

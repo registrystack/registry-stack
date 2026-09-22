@@ -83,4 +83,33 @@ mod tests {
             }
         }
     }
+
+    /// The enforcement layers are the only place the report says what the
+    /// runtime checks around a transition, so each machine carries them in
+    /// order and every layer names the events it covers.
+    #[test]
+    fn every_reported_machine_carries_ordered_enforcement_layers() {
+        let report = lifecycle().expect("lifecycle reports");
+        for lifecycle in report["lifecycles"]
+            .as_array()
+            .expect("lifecycles is an array")
+        {
+            let layers = lifecycle["enforcement"]
+                .as_array()
+                .expect("enforcement is an array");
+            assert!(!layers.is_empty(), "{lifecycle:#?}");
+            for layer in layers {
+                for key in ["id", "description", "events"] {
+                    assert!(layer.get(key).is_some(), "layer {layer:#?} names {key}");
+                }
+                assert!(
+                    !layer["events"]
+                        .as_array()
+                        .expect("events is an array")
+                        .is_empty(),
+                    "layer {layer:#?} applies to at least one event"
+                );
+            }
+        }
+    }
 }
