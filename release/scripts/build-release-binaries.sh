@@ -130,6 +130,41 @@ prepare_zig_toolchain() {
   export "CARGO_TARGET_${cargo_target_env}_LINKER=${release_zig_wrapper_root}/zig-cc"
 }
 
+# A release binary must be a function of the source tree, not of the checkout
+# it was built in. Several vendored build scripts run `git rev-parse HEAD` and
+# bake the answer into the crate they build, and CARGO_HOME sits inside the
+# mounted repository, so without the discovery ceiling the outer invocation
+# sets they resolve this repository's own HEAD. Every commit then produces
+# different release bytes, and an image advisory fingerprint recorded in one
+# commit can never match the candidate built from the next one.
+#
+# The ceiling is the control; this reads the staged payload back and refuses a
+# build where a commit reached the output anyway, through a path the ceiling
+# does not cover. It looks for the exact commit, so a build script that embeds
+# only an abbreviation of it passes here and is caught by the ceiling instead.
+check_source_commit_absent() {
+  local commit="${RELEASE_SOURCE_COMMIT:-}"
+  if [[ ! "${commit}" =~ ^[0-9a-f]{40}$ ]]; then
+    # A checkout with no commit has none to embed, so there is nothing to find.
+    printf 'source commit unknown, so staged binaries were not checked for it\n' >&2
+    return 0
+  fi
+  local failures=0
+  local binary
+  for binary in "$@"; do
+    if grep -qaF -- "${commit}" "${binary}"; then
+      printf '%s embeds the source commit %s; the build read the checkout git state\n' \
+        "${binary}" "${commit}" >&2
+      failures=$((failures + 1))
+    fi
+  done
+  if [[ "${failures}" -ne 0 ]]; then
+    printf 'source commit check failed for %d of %d binaries\n' "${failures}" "$#" >&2
+    return 1
+  fi
+  printf 'no staged binary embeds the source commit %s\n' "${commit}"
+}
+
 build_payload() {
   export RUSTFLAGS="${RELEASE_RUSTFLAGS:?RELEASE_RUSTFLAGS is required}"
   prepare_zig_toolchain
@@ -212,6 +247,7 @@ build_payload() {
   shopt -u nullglob
   if [[ "${#staged_binaries[@]}" -gt 0 ]]; then
     "${script_dir}/check-glibc-floor.sh" "${staged_binaries[@]}"
+    check_source_commit_absent "${staged_binaries[@]}"
   fi
 }
 
@@ -222,6 +258,7 @@ if [[ "${RELEASE_BUILDER_READY:-0}" -eq 1 ]]; then
   if [[ "${repo_root}" != "/workspace" ||
         "${CARGO_HOME:-}" != "/workspace/.cargo-home" ||
         "${CARGO_TARGET_DIR:-}" != "/workspace/target" ||
+        "${GIT_CEILING_DIRECTORIES:-}" != "/workspace" ||
         "${RELEASE_TAG:-}" != "${tag}" ||
         "${REGISTRY_RELEASE_TAG:-}" != "${tag}" ]]; then
     printf 'RELEASE_BUILDER_READY is internal to the canonical builder container\n' >&2
@@ -269,6 +306,16 @@ mkdir -p "${repo_root}/dist/bin" "${repo_root}/dist/image-bin"
 # when release binaries are stripped. Mount host state at canonical container
 # paths and remap those paths so independent hosts produce identical bytes.
 release_rustflags="--remap-path-prefix=/workspace/.cargo-home=/cargo-home --remap-path-prefix=/workspace=/source"
+# Build scripts must not read this checkout's git state: see
+# check_source_commit_absent above. GIT_CEILING_DIRECTORIES below stops
+# repository discovery at the mount point, which reaches every build script
+# because Cargo runs them below the repository root, and RELEASE_SOURCE_COMMIT
+# is the commit the staged payload is then checked against. A release build is
+# told its exact source commit; a local build reads the checkout it is in.
+release_source_commit="${RELEASE_SOURCE_SHA:-}"
+if [[ ! "${release_source_commit}" =~ ^[0-9a-f]{40}$ ]]; then
+  release_source_commit="$(git -C "${repo_root}" rev-parse HEAD 2>/dev/null || true)"
+fi
 casework_args=()
 if [[ "${include_casework_override}" -eq 1 ]]; then
   casework_args+=(--include-casework)
@@ -289,6 +336,8 @@ docker run --rm \
   --workdir /workspace \
   --env CARGO_HOME=/workspace/.cargo-home \
   --env CARGO_TARGET_DIR=/workspace/target \
+  --env GIT_CEILING_DIRECTORIES=/workspace \
+  --env RELEASE_SOURCE_COMMIT="${release_source_commit}" \
   --env CARGO_INCREMENTAL=0 \
   --env CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-always}" \
   --env HOME=/workspace \

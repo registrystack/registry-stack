@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -542,6 +543,8 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
                 self.assertIn(f"{self.root / 'target'}:/workspace/target", run)
                 self.assertIn("CARGO_HOME=/workspace/.cargo-home", run)
                 self.assertIn("CARGO_TARGET_DIR=/workspace/target", run)
+                self.assertIn("GIT_CEILING_DIRECTORIES=/workspace", run)
+                self.assertIn(f"RELEASE_SOURCE_COMMIT={'1' * 40}", run)
                 self.assertEqual(
                     [
                         "/workspace/release/scripts/build-release-binaries.sh",
@@ -780,6 +783,96 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertEqual(len(calls), 1)
         self.assertFalse(Path(calls[0]["env"]["HOST_CC"]).parent.exists())
+
+
+class SourceCheckoutIndependenceTest(unittest.TestCase):
+    """A release binary must be a function of the source, not of the checkout.
+
+    Several vendored build scripts run ``git rev-parse HEAD`` and bake the
+    answer into the crate they build. The canonical builder mounts the
+    repository at ``/workspace`` with ``CARGO_HOME`` inside it, so unless
+    repository discovery stops at that mount point those build scripts resolve
+    this repository: every commit then produces different release bytes, and an
+    image fingerprint recorded in one commit can never match the candidate
+    built from the next one.
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.addCleanup(self.temporary.cleanup)
+        self.scripts = self.root / "release/scripts"
+        self.scripts.mkdir(parents=True)
+        shutil.copy2(BINARY_RECIPE, self.scripts / BINARY_RECIPE.name)
+        self.recipe = (self.scripts / BINARY_RECIPE.name).read_text(encoding="utf-8")
+
+    def staged(self, name: str, content: bytes) -> Path:
+        path = self.root / name
+        path.write_bytes(content)
+        return path
+
+    def run_check(
+        self, *binaries: Path, commit: str | None
+    ) -> subprocess.CompletedProcess[str]:
+        # Load the recipe's definitions, stopping before Docker's outer entry
+        # point, and call the staged-payload check the way build_payload does.
+        definitions = self.recipe.split("\n# The outer invocation prepares", 1)[0]
+        probe = self.scripts / "probe-source-commit.sh"
+        arguments = " ".join(shlex.quote(str(path)) for path in binaries)
+        probe.write_text(f"{definitions}\ncheck_source_commit_absent {arguments}\n")
+        environment = {name: value for name, value in os.environ.items()}
+        environment.pop("RELEASE_SOURCE_COMMIT", None)
+        if commit is not None:
+            environment["RELEASE_SOURCE_COMMIT"] = commit
+        return subprocess.run(
+            ["bash", str(probe), "0.33.0"],
+            cwd=self.root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_clean_payload_passes_and_names_the_commit_it_was_checked_against(
+        self,
+    ) -> None:
+        commit = "4" * 40
+        result = self.run_check(
+            self.staged("breg", b"\x7fELF fixture payload\n"), commit=commit
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            f"no staged binary embeds the source commit {commit}", result.stdout
+        )
+
+    def test_embedded_commit_fails_the_build_and_names_only_the_binary(self) -> None:
+        commit = "4" * 40
+        clean = self.staged("relay", b"\x7fELF fixture payload\n")
+        tainted = self.staged(
+            "breg", b"\x7fELF " + commit.encode("ascii") + b" payload\n"
+        )
+        result = self.run_check(clean, tainted, commit=commit)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(f"{tainted} embeds the source commit {commit}", result.stderr)
+        self.assertNotIn(f"{clean} embeds", result.stderr)
+        self.assertIn("source commit check failed for 1 of 2 binaries", result.stderr)
+
+    def test_unknown_commit_reports_that_the_payload_was_not_checked(self) -> None:
+        result = self.run_check(
+            self.staged("breg", b"\x7fELF fixture payload\n"), commit=None
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "source commit unknown, so staged binaries were not checked", result.stderr
+        )
+
+    def test_canonical_container_contract_requires_the_discovery_ceiling(self) -> None:
+        # The outer invocation sets the ceiling; this holds the inner half, so
+        # a payload can never be built in a container that left it out.
+        guard = self.recipe.split(
+            'if [[ "${RELEASE_BUILDER_READY:-0}" -eq 1 ]]; then', 1
+        )[1].split("build_payload", 1)[0]
+        self.assertIn('"${GIT_CEILING_DIRECTORIES:-}" != "/workspace"', guard)
 
 
 if __name__ == "__main__":
