@@ -27,6 +27,7 @@ CANDIDATE_PACKAGES = (
     "evidence-candidate",
     "mint-candidate",
     "relay-candidate",
+    "scheduling-candidate",
 )
 PUBLIC_PACKAGES = (
     # Retired public names stay denylisted so cleanup can never delete history.
