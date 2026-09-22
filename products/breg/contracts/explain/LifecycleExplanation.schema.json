@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://registrystack.org/breg-explain/v1alpha1/LifecycleExplanation.schema.json",
   "title": "LifecycleExplanation",
-  "description": "Wire shape of `explanation` for `bregctl explain lifecycle`, which reports the request lifecycle the engine enforces. This kind is pinned in full, identifiers included: the request machine does not vary by project, so its own id, its five state ids, its five event names, and the size of its table are constrained here unconditionally, and a rename fails the contract test rather than passing it. `LifecycleDescription` in `registry-breg` exists to be this payload rather than to model anything the engine computes, so a change to its fields is a deliberate change to this contract and not the incidental drift that makes a compiled-model passthrough opaque. `lifecycle` is the one subject that takes no PROJECT: the lifecycle is engine behaviour and does not vary by project, so the report carries no `revision`.",
+  "description": "Wire shape of `explanation` for `bregctl explain lifecycle`, which reports the request lifecycle the engine enforces. This kind is pinned in full, identifiers and positions included: the request machine does not vary by project, so its own id, its five states with every fact derived from the edge list pinned to the value that derivation must produce, its six edges, and its twenty enforcement layers, each with the exact event list it runs for, are all constrained here by position and unconditionally, and a rename, a reordering, or a dropped entry fails the contract test rather than passing it. `LifecycleDescription` in `registry-breg` exists to be this payload rather than to model anything the engine computes, so a change to its fields is a deliberate change to this contract and not the incidental drift that makes a compiled-model passthrough opaque. `lifecycle` is the one subject that takes no PROJECT: the lifecycle is engine behaviour and does not vary by project, so the report carries no `revision`.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "kind", "lifecycles"],
@@ -20,53 +20,508 @@
       "maxItems": 1,
       "items": {
         "allOf": [
-          { "$ref": "#/$defs/lifecycle" },
-          { "$ref": "#/$defs/requestLifecyclePin" }
+          {
+            "$ref": "#/$defs/lifecycle"
+          },
+          {
+            "$ref": "#/$defs/requestLifecyclePin"
+          }
         ]
       }
     }
   },
   "$defs": {
     "requestLifecyclePin": {
-      "$comment": "Applied unconditionally to the single entry `bregctl explain lifecycle` emits, never behind an `if` on the value being pinned: a condition keyed on `id` goes false the moment the machine is renamed, so the rename the constraint exists to reject would fall through to the generic shape and validate. The request lifecycle is engine behaviour rather than project configuration, so its id, its state ids, its event names, and the size of its table are wire contract in the same way the field names are, and changing any of them is a breaking change for every consumer that must fail here rather than merely update a Rust unit test alongside the rename.",
+      "$comment": "Applied unconditionally to the single entry `bregctl explain lifecycle` emits, never behind an `if` on the value being pinned: a condition keyed on `id` goes false the moment the machine is renamed, so the rename the constraint exists to reject would fall through to the generic shape and validate. Every list is pinned with `prefixItems` and `items: false` rather than an enum over its vocabulary: an enum admits the same names in a different order, or one entry duplicated in place of another, and each of those is a different machine reported under the same names. The request lifecycle is engine behaviour rather than project configuration, so its id, its states, its edges, and the order of its enforcement layers are wire contract in the same way the field names are, and changing any of them is a breaking change for every consumer that must fail here rather than merely update a Rust unit test alongside the change.",
       "type": "object",
-      "required": ["id"],
+      "required": ["id", "states", "transitions", "enforcement"],
       "properties": {
-        "id": { "const": "request" },
+        "id": {
+          "const": "request"
+        },
         "states": {
-          "minItems": 5,
-          "maxItems": 5,
-          "items": {
-            "properties": {
-              "id": {
-                "enum": ["draft", "submitted", "cancelled", "applied", "superseded"]
+          "prefixItems": [
+            {
+              "properties": {
+                "id": {
+                  "const": "draft"
+                },
+                "initial": { "const": true },
+                "terminal": { "const": false },
+                "unreachable": { "const": false },
+                "incomingTransitions": { "const": 2 },
+                "outgoingTransitions": { "const": 2 }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "submitted"
+                },
+                "initial": { "const": false },
+                "terminal": { "const": false },
+                "unreachable": { "const": false },
+                "incomingTransitions": { "const": 1 },
+                "outgoingTransitions": { "const": 4 }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "cancelled"
+                },
+                "initial": { "const": false },
+                "terminal": { "const": true },
+                "unreachable": { "const": false },
+                "incomingTransitions": { "const": 2 },
+                "outgoingTransitions": { "const": 0 }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "applied"
+                },
+                "initial": { "const": false },
+                "terminal": { "const": true },
+                "unreachable": { "const": false },
+                "incomingTransitions": { "const": 1 },
+                "outgoingTransitions": { "const": 0 }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "superseded"
+                },
+                "initial": { "const": false },
+                "terminal": { "const": true },
+                "unreachable": { "const": true },
+                "incomingTransitions": { "const": 0 },
+                "outgoingTransitions": { "const": 0 }
               }
             }
-          }
+          ],
+          "items": false,
+          "minItems": 5
         },
         "transitions": {
-          "minItems": 7,
-          "maxItems": 7,
-          "items": {
-            "properties": {
-              "from": {
-                "enum": ["draft", "submitted", "cancelled", "applied", "superseded"]
-              },
-              "to": {
-                "enum": ["draft", "submitted", "cancelled", "applied", "superseded"]
-              },
-              "event": {
-                "enum": ["submit", "revise", "rebase", "cancel", "apply"]
+          "prefixItems": [
+            {
+              "properties": {
+                "from": {
+                  "const": "draft"
+                },
+                "event": {
+                  "const": "submit"
+                },
+                "to": {
+                  "const": "submitted"
+                }
+              }
+            },
+            {
+              "properties": {
+                "from": {
+                  "const": "submitted"
+                },
+                "event": {
+                  "const": "revise"
+                },
+                "to": {
+                  "const": "draft"
+                }
+              }
+            },
+            {
+              "properties": {
+                "from": {
+                  "const": "submitted"
+                },
+                "event": {
+                  "const": "rebase"
+                },
+                "to": {
+                  "const": "draft"
+                }
+              }
+            },
+            {
+              "properties": {
+                "from": {
+                  "const": "draft"
+                },
+                "event": {
+                  "const": "cancel"
+                },
+                "to": {
+                  "const": "cancelled"
+                }
+              }
+            },
+            {
+              "properties": {
+                "from": {
+                  "const": "submitted"
+                },
+                "event": {
+                  "const": "cancel"
+                },
+                "to": {
+                  "const": "cancelled"
+                }
+              }
+            },
+            {
+              "properties": {
+                "from": {
+                  "const": "submitted"
+                },
+                "event": {
+                  "const": "apply"
+                },
+                "to": {
+                  "const": "applied"
+                }
               }
             }
-          }
+          ],
+          "items": false,
+          "minItems": 6
+        },
+        "enforcement": {
+          "prefixItems": [
+            {
+              "properties": {
+                "id": {
+                  "const": "caller_authentication"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "submit" },
+                    { "const": "revise" },
+                    { "const": "rebase" },
+                    { "const": "cancel" },
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 5
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "route_admission"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "submit" },
+                    { "const": "revise" },
+                    { "const": "rebase" },
+                    { "const": "cancel" },
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 5
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "review_evidence_load"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "apply_evidence_acquisition"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "apply_preflight"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "request_header_lookup"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "submit" },
+                    { "const": "revise" },
+                    { "const": "rebase" },
+                    { "const": "cancel" },
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 5
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "submit_preparation"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "submit" }
+                  ],
+                  "items": false,
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "idempotency_replay"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "submit" },
+                    { "const": "revise" },
+                    { "const": "rebase" },
+                    { "const": "cancel" },
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 5
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "row_visibility"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "submit" },
+                    { "const": "revise" },
+                    { "const": "rebase" },
+                    { "const": "cancel" },
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 5
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "submitter_targets"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "submit" },
+                    { "const": "revise" },
+                    { "const": "rebase" }
+                  ],
+                  "items": false,
+                  "minItems": 3
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "applied_recovery"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "action_etag"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "submit" },
+                    { "const": "revise" },
+                    { "const": "rebase" },
+                    { "const": "cancel" },
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 5
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "request_ownership"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "submit" },
+                    { "const": "revise" },
+                    { "const": "rebase" },
+                    { "const": "cancel" }
+                  ],
+                  "items": false,
+                  "minItems": 4
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "task_grant"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "submit" },
+                    { "const": "revise" },
+                    { "const": "rebase" },
+                    { "const": "cancel" },
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 5
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "submit_commit_preconditions"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "submit" }
+                  ],
+                  "items": false,
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "apply_target_authorization"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "apply_preconditions"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "apply_target_persistence"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "workflow_transition"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "submit" },
+                    { "const": "revise" },
+                    { "const": "rebase" },
+                    { "const": "cancel" },
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 5
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "persist_policy"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "submit" },
+                    { "const": "revise" },
+                    { "const": "rebase" },
+                    { "const": "cancel" },
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 5
+                }
+              }
+            }
+          ],
+          "items": false,
+          "minItems": 20
         }
       }
     },
     "lifecycle": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "label", "states", "transitions"],
+      "required": ["id", "label", "states", "transitions", "enforcement"],
       "properties": {
         "id": {
           "type": "string",
@@ -79,13 +534,51 @@
         "states": {
           "type": "array",
           "minItems": 1,
-          "items": { "$ref": "#/$defs/state" }
+          "items": {
+            "$ref": "#/$defs/state"
+          }
         },
         "transitions": {
           "type": "array",
           "description": "Every edge, in declaration order. An array rather than a map keyed by state, because two distinct transitions may share a `from` and a `to` (the request lifecycle's `revise` and `rebase` both run `submitted` to `draft`) and because a transition may be a self-transition. Keying by state pair would silently drop one of a colliding pair and render a self-transition as a no-op.",
           "minItems": 1,
-          "items": { "$ref": "#/$defs/transition" }
+          "items": {
+            "$ref": "#/$defs/transition"
+          }
+        },
+        "enforcement": {
+          "type": "array",
+          "description": "Every place the runtime can refuse an event, in the order the runtime runs them, with the workflow transition placed where it sits among them. A layer is a named refusal point, not an enumeration of the checks made there: the report says that a request-ownership layer runs before the transition for four of the five events, not the predicate it evaluates. Reported once per machine rather than restated on each edge, because a per-edge sentence can only be an incomplete copy of this list.",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/enforcementLayer"
+          }
+        }
+      }
+    },
+    "enforcementLayer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "events"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable identifier for the layer, for example `action_etag`."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What the layer refuses and where it runs, in prose. Names the layer; it does not reproduce its predicate."
+        },
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "description": "The events this layer runs for. An event absent from the list passes the layer without being checked there."
         }
       }
     },
@@ -148,7 +641,7 @@
         },
         "guard": {
           "type": "string",
-          "description": "What the engine checks before it runs this transition. Prose, not a machine-evaluable expression: the guards are procedural code, so this names them rather than reproducing them. Selected by event, and by path where one event is raised on more than one path with different checks, so two edges carry the same text only when the same checks really run for both.",
+          "description": "What the state machine itself checks before it runs this transition, and nothing the runtime checks around that call: the layers in `enforcement` are the rest. Prose, not a machine-evaluable expression: the guards are procedural code, so this names them rather than reproducing them. Selected by event, and by path where one event is raised on more than one path with different checks, so two edges carry the same text only when the same checks really run for both.",
           "minLength": 1
         }
       }

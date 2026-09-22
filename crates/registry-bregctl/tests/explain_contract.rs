@@ -356,7 +356,185 @@ fn renaming_a_lifecycle_state_or_event_fails_the_contract() {
     };
     assert!(
         schema.validate(&extra_edge).is_err(),
-        "an eighth edge must fail the schema: {extra_edge:#?}"
+        "a seventh edge must fail the schema: {extra_edge:#?}"
+    );
+}
+
+/// `initial`, `terminal`, `unreachable`, and the two transition counts are
+/// derived from the edge list rather than written down, so pinning the states
+/// by id alone would leave the derivation itself unpinned: a report calling
+/// `draft` terminal or `superseded` reachable would still validate, and the
+/// contract would say nothing about the one part of the state list a code
+/// change can silently get wrong. Each derived fact is pinned to the value the
+/// derivation must produce, and this test is what proves the pin bites.
+#[test]
+fn flipping_a_derived_lifecycle_fact_fails_the_contract() {
+    let report = explain_lifecycle_report();
+    let schema = load_schema("LifecycleExplanation");
+    let state = |id: &str, field: &str, value: Value| {
+        let mut explanation = report["explanation"].clone();
+        let states = explanation["lifecycles"][0]["states"]
+            .as_array_mut()
+            .expect("states array");
+        let entry = states
+            .iter_mut()
+            .find(|state| state["id"] == id)
+            .unwrap_or_else(|| panic!("{id} is reported"));
+        assert_ne!(entry[field], value, "{id}.{field} already reports the edit");
+        entry[field] = value;
+        explanation
+    };
+
+    for (id, field, value) in [
+        ("draft", "terminal", Value::Bool(true)),
+        ("draft", "initial", Value::Bool(false)),
+        ("applied", "terminal", Value::Bool(false)),
+        ("superseded", "unreachable", Value::Bool(false)),
+        ("cancelled", "unreachable", Value::Bool(true)),
+        ("submitted", "outgoingTransitions", Value::from(3)),
+        ("submitted", "incomingTransitions", Value::from(2)),
+        ("superseded", "incomingTransitions", Value::from(1)),
+    ] {
+        let edited = state(id, field, value.clone());
+        assert!(
+            schema.validate(&edited).is_err(),
+            "{id}.{field} reported as {value} must fail the schema: {edited:#?}"
+        );
+    }
+}
+
+/// The table is pinned by position, not only by vocabulary. A schema that
+/// constrained each entry to an enum of the known ids would still admit a
+/// table with the states reordered, `revise` and `rebase` swapped, or an
+/// edge replaced by a duplicate of another, and every one of those is a
+/// different machine reported under the same names. The enforcement layers
+/// are pinned the same way because their order is what the report says
+/// about the runtime: a layer moved is a different claim about when the
+/// engine refuses.
+#[test]
+fn reordering_or_thinning_the_lifecycle_fails_the_contract() {
+    let report = explain_lifecycle_report();
+    let schema = load_schema("LifecycleExplanation");
+    let lifecycle = |edit: &dyn Fn(&mut Value)| {
+        let mut explanation = report["explanation"].clone();
+        edit(&mut explanation["lifecycles"][0]);
+        explanation
+    };
+
+    let swapped_states = lifecycle(&|machine| {
+        machine["states"].as_array_mut().expect("states").swap(0, 1);
+    });
+    assert!(
+        schema.validate(&swapped_states).is_err(),
+        "reordering the states must fail the schema: {swapped_states:#?}"
+    );
+
+    let swapped_edges = lifecycle(&|machine| {
+        let edges = machine["transitions"].as_array_mut().expect("transitions");
+        assert_eq!(edges[1]["event"], Value::String("revise".to_owned()));
+        assert_eq!(edges[2]["event"], Value::String("rebase".to_owned()));
+        edges.swap(1, 2);
+    });
+    assert!(
+        schema.validate(&swapped_edges).is_err(),
+        "swapping the revise and rebase edges must fail the schema: {swapped_edges:#?}"
+    );
+
+    let duplicated_edge = lifecycle(&|machine| {
+        let edges = machine["transitions"].as_array_mut().expect("transitions");
+        edges[5] = edges[4].clone();
+    });
+    assert!(
+        schema.validate(&duplicated_edge).is_err(),
+        "replacing the apply edge with a second cancel edge must fail the schema: {duplicated_edge:#?}"
+    );
+
+    let no_enforcement = lifecycle(&|machine| {
+        machine
+            .as_object_mut()
+            .expect("machine object")
+            .remove("enforcement");
+    });
+    assert!(
+        schema.validate(&no_enforcement).is_err(),
+        "a machine without its enforcement layers must fail the schema: {no_enforcement:#?}"
+    );
+
+    let dropped_layer = lifecycle(&|machine| {
+        machine["enforcement"]
+            .as_array_mut()
+            .expect("enforcement")
+            .pop();
+    });
+    assert!(
+        schema.validate(&dropped_layer).is_err(),
+        "dropping the persist layer must fail the schema: {dropped_layer:#?}"
+    );
+
+    let swapped_layers = lifecycle(&|machine| {
+        machine["enforcement"]
+            .as_array_mut()
+            .expect("enforcement")
+            .swap(0, 1);
+    });
+    assert!(
+        schema.validate(&swapped_layers).is_err(),
+        "reordering the enforcement layers must fail the schema: {swapped_layers:#?}"
+    );
+
+    let layer_without_events = lifecycle(&|machine| {
+        machine["enforcement"][0]["events"] = Value::Array(Vec::new());
+    });
+    assert!(
+        schema.validate(&layer_without_events).is_err(),
+        "a layer that applies to no event must fail the schema: {layer_without_events:#?}"
+    );
+
+    let layer_with_unknown_event = lifecycle(&|machine| {
+        machine["enforcement"][0]["events"] = Value::Array(vec![Value::String("merge".to_owned())]);
+    });
+    assert!(
+        schema.validate(&layer_with_unknown_event).is_err(),
+        "a layer naming an event the machine does not raise must fail the schema: {layer_with_unknown_event:#?}"
+    );
+
+    // Which events a layer covers is the layer's whole claim, so a legal event
+    // name in the wrong layer has to fail as loudly as an unknown one. The
+    // apply preflight runs for apply alone; saying it runs for submit is a
+    // different machine reported under the same layer names.
+    let layer_with_wrong_event = lifecycle(&|machine| {
+        machine["enforcement"][1]["events"] =
+            Value::Array(vec![Value::String("submit".to_owned())]);
+    });
+    assert!(
+        schema.validate(&layer_with_wrong_event).is_err(),
+        "an apply-only layer claiming submit must fail the schema: {layer_with_wrong_event:#?}"
+    );
+
+    let layer_with_widened_events = lifecycle(&|machine| {
+        machine["enforcement"][4]["events"] = Value::Array(vec![
+            Value::String("submit".to_owned()),
+            Value::String("revise".to_owned()),
+            Value::String("rebase".to_owned()),
+            Value::String("cancel".to_owned()),
+        ]);
+    });
+    assert!(
+        schema.validate(&layer_with_widened_events).is_err(),
+        "widening the submitter-target layer to cancel must fail the schema: {layer_with_widened_events:#?}"
+    );
+
+    // The events run in the order the machine raises them, so a reordered list
+    // is a reordered machine even though every name in it is legal.
+    let layer_with_reordered_events = lifecycle(&|machine| {
+        let events = machine["enforcement"][0]["events"]
+            .as_array_mut()
+            .expect("events");
+        events.reverse();
+    });
+    assert!(
+        schema.validate(&layer_with_reordered_events).is_err(),
+        "reversing a layer's event list must fail the schema: {layer_with_reordered_events:#?}"
     );
 }
 

@@ -1640,7 +1640,7 @@ fn change_request_action_expression(
     .join(" AND ")
 }
 
-fn change_request_action_state_exists_expression(
+pub(crate) fn change_request_action_state_exists_expression(
     operation: Operation,
     command: PolicyCommand,
 ) -> String {
