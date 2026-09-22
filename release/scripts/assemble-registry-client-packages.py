@@ -18,6 +18,9 @@ Prerequisites this script does not perform:
   * the Node bindings selected for this version, built for this platform from
     `crates/registry-{discovery,evidence,relay,breg,casework}-client-node`:
     `npm ci && npm run build:debug` (or `npm run build` for a release build)
+    For a release at version 0.33.0 or later on macOS, set the package's
+    compatibility floor before every native build:
+    `MACOSX_DEPLOYMENT_TARGET=11.0 npm run build`.
   * a maturin for the Python half; `--maturin` defaults to the command on
     `PATH`, while the release workflows pass the pinned executable from
     `release/requirements/maturin-1.9.6.txt` into a virtual environment

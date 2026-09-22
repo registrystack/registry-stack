@@ -865,6 +865,9 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         self.assertIn("release-isolated-clients", cache_key)
         self.assertIn("release-isolated-clients", restore_key)
+        macos_recipe = "${{ matrix.asset == 'macos-arm64' && 'macos-deployment-11.0-' || '' }}"
+        self.assertIn(macos_recipe, cache_key)
+        self.assertIn(macos_recipe, restore_key)
         self.assertIn(".github/workflows/release-candidate.yml", cache_key)
         self.assertIn("go-1.24.4", cache_key)
         self.assertIn("go-1.24.4", restore_key)
@@ -1357,6 +1360,7 @@ class MacOSFipsWorkflowStructureTest(unittest.TestCase):
             self.assertIn('[[ "${RUNNER_OS}" == macOS ]] &&', build)
             self.assertIn("client_major > 0 || client_minor >= 33", build)
             self.assertIn("export AWS_LC_FIPS_SYS_STATIC=0", build)
+            self.assertIn("export MACOSX_DEPLOYMENT_TARGET=11.0", build)
         self.assertIn('--macos-library-root "${CARGO_TARGET_DIR}"', python)
         self.assertIn('"${macos_wheel_args[@]}"', python)
         bundle = "release/scripts/bundle-client-macos-fips.py"

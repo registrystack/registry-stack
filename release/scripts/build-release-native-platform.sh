@@ -60,7 +60,10 @@ if ((version_major > 0 || version_minor >= 33)); then
   bundle_fips=1
   # AWS-LC FIPS supports a shared module on macOS. It refuses static macOS
   # builds, so package that module with every executable from v0.33 onward.
+  # CMake otherwise inherits the host SDK minimum for the shared dylib, which
+  # can be newer than the macOS 11 release contract carried by the binaries.
   export AWS_LC_FIPS_SYS_STATIC=0
+  export MACOSX_DEPLOYMENT_TARGET=11.0
 else
   # Historical shards retain their original standalone executable contract.
   export AWS_LC_FIPS_SYS_STATIC=1

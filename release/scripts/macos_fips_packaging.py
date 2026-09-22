@@ -20,6 +20,8 @@ from typing import Sequence
 
 FIPS_DYLIB = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 SUPPORTED_SOURCE_PREFIX = "@rpath/"
+MACOS_DEPLOYMENT_TARGET = (11, 0, 0)
+MACOS_DEPLOYMENT_TARGET_TEXT = "11.0"
 
 
 class PackagingError(ValueError):
@@ -63,6 +65,45 @@ def _load_commands(path: Path) -> list[str]:
             raise PackagingError(f"cannot parse otool load command for {path}: {entry}")
         commands.append(command)
     return commands
+
+
+def _deployment_version(value: str, path: Path) -> tuple[int, int, int]:
+    parts = value.split(".")
+    if len(parts) not in (2, 3) or any(not part.isdigit() for part in parts):
+        raise PackagingError(
+            f"cannot parse macOS deployment target for {path}: {value}"
+        )
+    return tuple(int(part) for part in [*parts, *(["0"] * (3 - len(parts)))])
+
+
+def _assert_supported_macos_deployment_target(path: Path) -> None:
+    output = _run(["otool", "-l", str(path)])
+    minimums: list[str] = []
+    for block in re.split(r"(?m)^Load command [0-9]+\s*$", output):
+        command = re.search(r"(?m)^\s*cmd\s+(\S+)\s*$", block)
+        if command is None:
+            continue
+        if command.group(1) == "LC_BUILD_VERSION":
+            platform = re.search(r"(?m)^\s*platform\s+(\S+)\s*$", block)
+            minimum = re.search(r"(?m)^\s*minos\s+(\S+)\s*$", block)
+            if platform is None or platform.group(1).upper() not in {"1", "MACOS"}:
+                raise PackagingError(f"Mach-O build platform is not macOS: {path}")
+            if minimum is None:
+                raise PackagingError(f"Mach-O has no macOS deployment target: {path}")
+            minimums.append(minimum.group(1))
+        elif command.group(1) == "LC_VERSION_MIN_MACOSX":
+            minimum = re.search(r"(?m)^\s*version\s+(\S+)\s*$", block)
+            if minimum is None:
+                raise PackagingError(f"Mach-O has no macOS deployment target: {path}")
+            minimums.append(minimum.group(1))
+    if not minimums:
+        raise PackagingError(f"Mach-O has no macOS deployment target: {path}")
+    for minimum in minimums:
+        if _deployment_version(minimum, path) > MACOS_DEPLOYMENT_TARGET:
+            raise PackagingError(
+                f"macOS deployment target {minimum} exceeds supported "
+                f"{MACOS_DEPLOYMENT_TARGET_TEXT}: {path}"
+            )
 
 
 def _fips_load_commands(path: Path, *, library: bool = False) -> dict[str, str]:
@@ -157,6 +198,7 @@ def bundle_macos_fips(
         raise PackagingError("macOS consumers must be unique")
     for consumer in normalized_consumers:
         _regular_file(consumer, "macOS consumer")
+        _assert_supported_macos_deployment_target(consumer)
 
     direct_loads: dict[Path, dict[str, str]] = {}
     pending: deque[str] = deque()
@@ -176,6 +218,7 @@ def bundle_macos_fips(
         source = _resolve_library(name, library_roots)
         if source.name != name:
             raise PackagingError(f"AWS-LC FIPS library basename changed: {source}")
+        _assert_supported_macos_deployment_target(source)
         resolved[name] = source
         loads = _fips_load_commands(source, library=True)
         library_loads[name] = loads

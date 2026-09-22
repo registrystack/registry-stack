@@ -738,9 +738,11 @@ jobs:
             ~/.cargo/git
             target/release-client-python
             target/release-client-node
-          key: registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ hashFiles('.github/workflows/release-candidate.yml', 'rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/macos_fips_packaging.py', 'release/scripts/bundle-client-macos-fips.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
+          # AWS-LC does not track the deployment-target environment variable.
+          # Exclude caches configured before the macOS 11 compatibility pin.
+          key: registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-deployment-11.0-' || '' }}${{ hashFiles('.github/workflows/release-candidate.yml', 'rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/macos_fips_packaging.py', 'release/scripts/bundle-client-macos-fips.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
           restore-keys: |
-            registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-
+            registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-deployment-11.0-' || '' }}
 
       - name: Build Python client wheels
         shell: bash
@@ -760,6 +762,7 @@ jobs:
           if [[ "${RUNNER_OS}" == macOS ]] &&
               (( client_major > 0 || client_minor >= 33 )); then
             export AWS_LC_FIPS_SYS_STATIC=0
+            export MACOSX_DEPLOYMENT_TARGET=11.0
           fi
           unified_client=0
           if (( client_major > 0 || client_minor > 26 ||
@@ -924,6 +927,7 @@ jobs:
           if [[ "${RUNNER_OS}" == macOS ]] &&
               (( client_major > 0 || client_minor >= 33 )); then
             export AWS_LC_FIPS_SYS_STATIC=0
+            export MACOSX_DEPLOYMENT_TARGET=11.0
           fi
           unified_client=0
           if (( client_major > 0 || client_minor > 26 ||

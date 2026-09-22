@@ -36,6 +36,16 @@ class MacosFipsPackagingTest(unittest.TestCase):
 import sys
 from pathlib import Path
 path = Path(sys.argv[-1])
+if sys.argv[1] == "-l":
+    for line in path.read_text().splitlines():
+        if line.startswith("minos="):
+            print("Load command 0")
+            print("      cmd LC_BUILD_VERSION")
+            print("  cmdsize 32")
+            print(" platform 1")
+            print(f"    minos {line.split('=', 1)[1]}")
+            print("      sdk 26.5")
+    raise SystemExit(0)
 print(f"{path}:")
 for line in path.read_text().splitlines():
     if line.startswith(("id=", "load=")):
@@ -70,8 +80,13 @@ path.write_text(body.replace(old, new))
         path.chmod(0o755)
 
     @staticmethod
-    def _macho(path: Path, *loads: str, identity: str | None = None) -> None:
-        lines = []
+    def _macho(
+        path: Path,
+        *loads: str,
+        identity: str | None = None,
+        minimum: str | None = "11.0",
+    ) -> None:
+        lines = [] if minimum is None else [f"minos={minimum}"]
         if identity is not None:
             lines.append(f"id={identity}")
         lines.extend(f"load={load}" for load in loads)
@@ -92,6 +107,7 @@ path.write_text(body.replace(old, new))
         self._macho(
             libraries / WRAPPER,
             identity=f"@rpath/{WRAPPER}",
+            minimum="10.15",
         )
         destination = package / "registry_client" / ".dylibs"
 
@@ -164,6 +180,43 @@ path.write_text(body.replace(old, new))
         self._macho(libraries / CRYPTO, identity=f"@rpath/{CRYPTO}")
         with self.assertRaisesRegex(MODULE.PackagingError, "unsupported.*load"):
             MODULE.bundle_macos_fips([consumer], [libraries], self.root / "destination")
+
+    def test_newer_consumer_or_library_deployment_target_is_refused(self) -> None:
+        for subject in ("consumer", "library"):
+            with self.subTest(subject=subject):
+                consumer = self.root / subject / "consumer"
+                libraries = self.root / subject / "build"
+                self._macho(
+                    consumer,
+                    f"@rpath/{CRYPTO}",
+                    minimum="26.0" if subject == "consumer" else "11.0",
+                )
+                self._macho(
+                    libraries / CRYPTO,
+                    identity=f"@rpath/{CRYPTO}",
+                    minimum="26.0" if subject == "library" else "10.15",
+                )
+                with self.assertRaisesRegex(
+                    MODULE.PackagingError,
+                    "macOS deployment target 26.0 exceeds supported 11.0",
+                ):
+                    MODULE.bundle_macos_fips(
+                        [consumer],
+                        [libraries],
+                        self.root / subject / "destination",
+                    )
+
+    def test_missing_deployment_target_is_refused(self) -> None:
+        consumer = self.root / "consumer-without-minimum"
+        self._macho(consumer, f"@rpath/{CRYPTO}", minimum=None)
+        libraries = self.root / "build-with-minimum"
+        self._macho(libraries / CRYPTO, identity=f"@rpath/{CRYPTO}")
+        with self.assertRaisesRegex(
+            MODULE.PackagingError, "Mach-O has no macOS deployment target"
+        ):
+            MODULE.bundle_macos_fips(
+                [consumer], [libraries], self.root / "missing-minimum"
+            )
 
     def test_archive_is_deterministic_and_strictly_extractable(self) -> None:
         binary = self.root / "evidence"

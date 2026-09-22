@@ -117,6 +117,8 @@ major, minor, patch = (int(part) for part in version.split("."))
 archive_release = major > 0 or minor >= 33
 if archive_release and os.environ.get("AWS_LC_FIPS_SYS_STATIC") != "0":
     raise SystemExit(44)
+if archive_release and os.environ.get("MACOSX_DEPLOYMENT_TARGET") != "11.0":
+    raise SystemExit(46)
 if not archive_release and os.environ.get("AWS_LC_FIPS_SYS_STATIC") != "1":
     raise SystemExit(45)
 binary_version = os.environ.get("FAKE_BINARY_VERSION", version)
@@ -169,6 +171,14 @@ import sys
 from pathlib import Path
 
 path = Path(sys.argv[-1])
+if sys.argv[1] == "-l":
+    print("Load command 0")
+    print("      cmd LC_BUILD_VERSION")
+    print("  cmdsize 32")
+    print(" platform 1")
+    print("    minos 11.0")
+    print("      sdk 26.5")
+    raise SystemExit(0)
 print(f"{path}:")
 state = path.with_name(path.name + ".fips-load")
 if path.suffix == ".dylib":
