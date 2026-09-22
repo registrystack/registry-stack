@@ -865,6 +865,9 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         self.assertIn("release-isolated-clients", cache_key)
         self.assertIn("release-isolated-clients", restore_key)
+        macos_recipe = "${{ matrix.asset == 'macos-arm64' && 'macos-deployment-11.0-' || '' }}"
+        self.assertIn(macos_recipe, cache_key)
+        self.assertIn(macos_recipe, restore_key)
         self.assertIn(".github/workflows/release-candidate.yml", cache_key)
         self.assertIn("go-1.24.4", cache_key)
         self.assertIn("go-1.24.4", restore_key)
@@ -1343,8 +1346,35 @@ class NativeBenchmarkWorkflowStructureTest(unittest.TestCase):
         self.assertIn("registry-stack.release-native-benchmark.v1", merge_run)
         self.assertIn("purpose=review_only", merge_run)
         self.assertIn("group=merged", merge_run)
-        self.assertIn("stat.S_IMODE(binary.stat().st_mode) != 0o755", merge_run)
+        self.assertIn('0o644 if binary.name.endswith(".tar.gz") else 0o755', merge_run)
+        self.assertIn("stat.S_IMODE(binary.stat().st_mode) != expected_mode", merge_run)
         self.assertEqual(text.count("actions/upload-artifact@"), 2)
+
+
+class MacOSFipsWorkflowStructureTest(unittest.TestCase):
+    def test_candidate_packages_shared_fips_before_client_publication(self) -> None:
+        _, document = workflow("release-candidate.yml")
+        python = step_run(document, "clients", "Build Python client wheels")
+        node = step_run(document, "clients", "Build Node client packages")
+        for build in (python, node):
+            self.assertIn('[[ "${RUNNER_OS}" == macOS ]] &&', build)
+            self.assertIn("client_major > 0 || client_minor >= 33", build)
+            self.assertIn("export AWS_LC_FIPS_SYS_STATIC=0", build)
+            self.assertIn("export MACOSX_DEPLOYMENT_TARGET=11.0", build)
+        self.assertIn('--macos-library-root "${CARGO_TARGET_DIR}"', python)
+        self.assertIn('"${macos_wheel_args[@]}"', python)
+        bundle = "release/scripts/bundle-client-macos-fips.py"
+        pack = '(cd "${GITHUB_WORKSPACE}/crates/registry-stack-client-node" && npm pack'
+        self.assertLess(node.index(bundle), node.index(pack))
+        self.assertIn('--library-directory "${platform_dir}"', node)
+
+    def test_installed_client_smokes_cannot_use_build_directory_libraries(self) -> None:
+        _, document = workflow("release-candidate.yml")
+        for name in ("Smoke Python client wheels", "Smoke Node client packages"):
+            smoke = step_run(document, "clients", name)
+            self.assertIn("unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_INSERT_LIBRARIES", smoke)
+            self.assertIn('mv -- "${build_root}" "${hidden_build_root}"', smoke)
+            self.assertIn('trap \'mv -- "${hidden_build_root}" "${build_root}"\' EXIT', smoke)
 
 
 class PublicationWorkflowStructureTest(unittest.TestCase):

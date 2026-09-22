@@ -7,6 +7,7 @@ import json
 import os
 import stat
 import subprocess
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +22,7 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 VERSION = "0.31.0"
+ARCHIVE_VERSION = "0.33.0"
 SOURCE_SHA = subprocess.run(
     ["git", "rev-parse", "HEAD"],
     cwd=ROOT,
@@ -111,8 +113,14 @@ args = sys.argv[1:]
 version = os.environ["FAKE_VERSION"]
 if os.environ.get("REGISTRY_RELEASE_TAG") != f"v{version}":
     raise SystemExit(43)
-if os.environ.get("AWS_LC_FIPS_SYS_STATIC") != "1":
+major, minor, patch = (int(part) for part in version.split("."))
+archive_release = major > 0 or minor >= 33
+if archive_release and os.environ.get("AWS_LC_FIPS_SYS_STATIC") != "0":
     raise SystemExit(44)
+if archive_release and os.environ.get("MACOSX_DEPLOYMENT_TARGET") != "11.0":
+    raise SystemExit(46)
+if not archive_release and os.environ.get("AWS_LC_FIPS_SYS_STATIC") != "1":
+    raise SystemExit(45)
 binary_version = os.environ.get("FAKE_BINARY_VERSION", version)
 log = Path(os.environ["FAKE_CARGO_LOG"])
 calls = []
@@ -125,6 +133,10 @@ if os.environ.get("FAKE_CARGO_FAIL_CALL") == str(len(calls) + 1):
 target = args[args.index("--target") + 1]
 output = Path(os.environ["CARGO_TARGET_DIR"]) / target / "release"
 output.mkdir(parents=True, exist_ok=True)
+if archive_release:
+    artifacts = output / "build/aws-lc-fips-sys-fixture/out/build/artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    (artifacts / "libaws_lc_fips_0_14_2_crypto.dylib").write_text("fixture dylib\\n")
 packages = [args[index + 1] for index, value in enumerate(args) if value == "-p"]
 binaries = {
     "registry-relayctl": "relayctl",
@@ -156,9 +168,30 @@ fi
             """#!/usr/bin/env python3
 import os
 import sys
+from pathlib import Path
 
-print(f"{sys.argv[-1]}:")
-if os.environ.get("FAKE_OTOOL_FIPS_SHARED") == "1":
+path = Path(sys.argv[-1])
+if sys.argv[1] == "-l":
+    print("Load command 0")
+    print("      cmd LC_BUILD_VERSION")
+    print("  cmdsize 32")
+    print(" platform 1")
+    print("    minos 11.0")
+    print("      sdk 26.5")
+    raise SystemExit(0)
+print(f"{path}:")
+state = path.with_name(path.name + ".fips-load")
+if path.suffix == ".dylib":
+    print(
+        f"\t@rpath/{path.name} "
+        "(compatibility version 0.0.0, current version 0.0.0)"
+    )
+elif state.exists():
+    print(
+        f"\t{state.read_text().strip()} "
+        "(compatibility version 0.0.0, current version 0.0.0)"
+    )
+elif os.environ.get("FAKE_OTOOL_FIPS_SHARED") == "1":
     print(
         "\t@rpath/libaws_lc_fips_0_14_2_crypto.dylib "
         "(compatibility version 0.0.0, current version 0.0.0)"
@@ -167,11 +200,30 @@ else:
     print(
         "\t/usr/lib/libSystem.B.dylib "
         "(compatibility version 1.0.0, current version 1356.0.0)"
-    )
+        )
 """,
             encoding="utf-8",
         )
         self.fake_otool.chmod(0o755)
+        self.fake_install_name_tool = self.root / "install_name_tool"
+        self.fake_install_name_tool.write_text(
+            """#!/usr/bin/env python3
+import sys
+from pathlib import Path
+
+if sys.argv[1] != "-change":
+    raise SystemExit(2)
+old, new, filename = sys.argv[2:]
+path = Path(filename)
+if path.suffix != ".dylib":
+    path.with_name(path.name + ".fips-load").write_text(new + "\\n")
+""",
+            encoding="utf-8",
+        )
+        self.fake_install_name_tool.chmod(0o755)
+        self.fake_codesign = self.root / "codesign"
+        self.fake_codesign.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        self.fake_codesign.chmod(0o755)
 
     def build(
         self,
@@ -204,7 +256,8 @@ else:
             environment["FAKE_CARGO_FAIL_CALL"] = str(fail_call)
         if binary_version is not None:
             environment["FAKE_BINARY_VERSION"] = binary_version
-        if fips_shared:
+        parsed = tuple(int(part) for part in version.split("."))
+        if fips_shared or parsed >= (0, 33, 0):
             environment["FAKE_OTOOL_FIPS_SHARED"] = "1"
         result = subprocess.run(
             [
@@ -296,7 +349,10 @@ else:
             output=merged,
         )
         expected = sorted(path.name for path in (all_output / "platform").iterdir())
-        self.assertEqual(expected, sorted(path.name for path in (merged / "platform").iterdir()))
+        self.assertEqual(
+            sorted(expected),
+            sorted(path.name for path in (merged / "platform").iterdir()),
+        )
         for name in expected:
             whole = all_output / "platform" / name
             combined = merged / "platform" / name
@@ -400,6 +456,81 @@ else:
         self.assertEqual([BREG_ARGS], calls)
         self.assertIn("unpackaged AWS-LC-FIPS dylib", result.stderr)
         self.assertFalse(output.exists())
+
+    def test_v0_33_packages_each_binary_with_its_fips_runtime(self) -> None:
+        first, output, calls = self.build(
+            "all", version=ARCHIVE_VERSION, name="archive-all"
+        )
+        self.assertEqual(0, first.returncode, first.stderr)
+        self.assertEqual(
+            [CORE_ARGS, BREG_ARGS, BREGCTL_ARGS, CASEWORK_RUNTIME_ARGS, CASEWORKCTL_ARGS],
+            calls,
+        )
+        expected = [
+            *MODULE.rosters(ARCHIVE_VERSION)["core"],
+            *MODULE.rosters(ARCHIVE_VERSION)["breg"],
+            *MODULE.rosters(ARCHIVE_VERSION)["bregctl"],
+            *MODULE.rosters(ARCHIVE_VERSION)["casework"],
+        ]
+        self.assertEqual(
+            expected,
+            [
+                line.split("  ", 1)[1]
+                for line in (output / "SHA256SUMS").read_text().splitlines()
+            ],
+        )
+        self.assertTrue(all(name.endswith(".tar.gz") for name in expected))
+        self.assertTrue(
+            (output / "RELEASE_NATIVE_PLATFORM_SHARD")
+            .read_text()
+            .startswith("registry-stack.release-native-platform-shard.v2\n")
+        )
+        asset = expected[0]
+        executable = asset.removesuffix(".tar.gz")
+        with tarfile.open(output / "platform" / asset, "r:gz") as package:
+            self.assertEqual(
+                [
+                    executable,
+                    "libaws_lc_fips_0_14_2_crypto.dylib",
+                    "THIRD_PARTY_NOTICES",
+                ],
+                package.getnames(),
+            )
+
+        second, repeated, _ = self.build(
+            "all", version=ARCHIVE_VERSION, name="archive-repeat"
+        )
+        self.assertEqual(0, second.returncode, second.stderr)
+        for name in expected:
+            self.assertEqual(
+                (output / "platform" / name).read_bytes(),
+                (repeated / "platform" / name).read_bytes(),
+            )
+
+        shards = {}
+        for group in ("core", "breg", "bregctl", "casework"):
+            result, shard, _ = self.build(
+                group, version=ARCHIVE_VERSION, name=f"archive-{group}"
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            shards[group] = shard
+        merged = self.root / "archive-merged"
+        MODULE.merge(
+            version=ARCHIVE_VERSION,
+            source_sha=SOURCE_SHA,
+            purpose="review_only",
+            core=shards["core"],
+            breg=shards["breg"],
+            bregctl=shards["bregctl"],
+            casework=shards["casework"],
+            output=merged,
+        )
+        self.assertEqual(
+            sorted(expected),
+            sorted(path.name for path in (merged / "platform").iterdir()),
+        )
+        for name in expected:
+            self.assertEqual(0o644, stat.S_IMODE((merged / "platform" / name).stat().st_mode))
 
     def test_merge_rejects_invalid_inputs_before_exposing_output(self) -> None:
         mutations = {

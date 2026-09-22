@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import importlib.util
 import io
 import subprocess
 import sys
@@ -16,6 +17,18 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release/scripts/assemble-registry-client-wheel.py"
 PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework")
 TAG = "cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64"
+
+
+def load_module():
+    spec = importlib.util.spec_from_file_location(
+        "assemble_registry_client_wheel", SCRIPT
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load module spec from {SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class AssembleRegistryClientWheelTest(unittest.TestCase):
@@ -204,6 +217,53 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
         second = self.run_assembler()
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertEqual(first_bytes, Path(second.stdout.strip()).read_bytes())
+
+    def test_macos_extensions_are_relinked_before_wheel_recording(self) -> None:
+        module = load_module()
+        files = {
+            f"registry_client/{product}/native.abi3.so": product.encode()
+            for product in PRODUCTS
+        }
+        files["registry_client/discovery/client.py"] = b"class Client: pass\n"
+        seen: dict[str, object] = {}
+
+        def fake_bundle(*, consumers, library_roots, library_directory):
+            seen["consumers"] = [
+                path.relative_to(library_directory.parents[1]).as_posix()
+                for path in consumers
+            ]
+            seen["library_roots"] = list(library_roots)
+            for consumer in consumers:
+                consumer.write_bytes(consumer.read_bytes() + b" signed")
+            library_directory.mkdir(parents=True)
+            (library_directory / "libaws_lc_fips_crypto.dylib").write_bytes(
+                b"signed crypto"
+            )
+            return ["libaws_lc_fips_crypto.dylib"]
+
+        module.bundle_macos_fips = fake_bundle
+        bundled = module.bundle_macos_wheel_files(files, [Path("/cargo-target")])
+
+        self.assertEqual(
+            seen["consumers"],
+            sorted(
+                f"registry_client/{product}/native.abi3.so" for product in PRODUCTS
+            ),
+        )
+        self.assertEqual(seen["library_roots"], [Path("/cargo-target")])
+        for product in PRODUCTS:
+            self.assertEqual(
+                bundled[f"registry_client/{product}/native.abi3.so"],
+                product.encode() + b" signed",
+            )
+        self.assertEqual(
+            bundled["registry_client/.dylibs/libaws_lc_fips_crypto.dylib"],
+            b"signed crypto",
+        )
+        self.assertEqual(
+            bundled["registry_client/discovery/client.py"],
+            b"class Client: pass\n",
+        )
 
 
 if __name__ == "__main__":

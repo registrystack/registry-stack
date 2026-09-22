@@ -77,6 +77,15 @@ adapter separates AWS-LC's textual-assembly and dependency-file passes to
 accommodate Zig 0.12.1, and the existing symbol audit retains the published ABI
 boundary.
 
+On macOS arm64, `aws-lc-fips-sys` builds its shared libraries. Starting with
+v0.33.0, each native executable asset is an archive that keeps the executable,
+the exact shared libraries it loads, and the applicable notices together.
+Installers for macOS-supported toolsets extract each archive into a private
+installation directory and expose the command without separating it from that
+library closure. Node.js and Python
+client packages embed the same required libraries inside their existing package
+formats, so their install commands do not change.
+
 ## Maintenance and Security Signals
 
 At review time the crate showed active maintenance: 57 published versions
@@ -104,12 +113,14 @@ claim about Registry Stack itself.
 ## License Obligations
 
 The `OpenSSL` license term imposes attribution and notice conditions on
-redistribution of the vendored OpenSSL-derived code. Binary release
-artifacts that statically link the FIPS module therefore need the OpenSSL
-attribution and disclaimer in their accompanying documentation. Images and
-client packages carry `THIRD_PARTY_NOTICES` inside the artifact. From v0.33.0,
-the GitHub Release publishes the same checksum-covered file alongside the
-standalone native binaries. Release notes need not duplicate the full notice.
+redistribution of the vendored OpenSSL-derived code. Binary release artifacts
+therefore need the OpenSSL attribution and disclaimer in their accompanying
+documentation. Images carry `THIRD_PARTY_NOTICES` inside the artifact. Client
+packages embed the applicable notices with their native libraries. From
+v0.33.0, each macOS arm64 native executable archive also carries the notices
+beside its executable and shared AWS-LC-FIPS libraries. The full archive is
+checksum-covered by the release. Release notes need not duplicate the full
+notice.
 
 ## Accepted Risk and Controls
 

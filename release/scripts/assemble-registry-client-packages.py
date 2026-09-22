@@ -18,6 +18,9 @@ Prerequisites this script does not perform:
   * the Node bindings selected for this version, built for this platform from
     `crates/registry-{discovery,evidence,relay,breg,casework}-client-node`:
     `npm ci && npm run build:debug` (or `npm run build` for a release build)
+    For a release at version 0.33.0 or later on macOS, set the package's
+    compatibility floor before every native build:
+    `MACOSX_DEPLOYMENT_TARGET=11.0 npm run build`.
   * a maturin for the Python half; `--maturin` defaults to the command on
     `PATH`, while the release workflows pass the pinned executable from
     `release/requirements/maturin-1.9.6.txt` into a virtual environment
@@ -44,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import shlex
 import shutil
@@ -63,6 +67,7 @@ import client_registry
 ROOT = Path(__file__).resolve().parents[2]
 PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework")
 NODE_PRODUCTS = PRODUCTS
+MACOS_SHARED_FIPS_MINIMUM_VERSION = (0, 33, 0)
 # BReg and Casework publish no standalone wheel, so their internal wheels use
 # explicit native stems. The other product wheels retain their historical stems.
 WHEEL_STEMS = {
@@ -134,7 +139,12 @@ def facade_version(root: Path) -> str:
 
 
 def node_steps(
-    root: Path, version: str, napi_platform: str, work_dir: Path, output_dir: Path
+    root: Path,
+    version: str,
+    napi_platform: str,
+    work_dir: Path,
+    output_dir: Path,
+    macos_library_roots: tuple[Path, ...] = (),
 ) -> list[Step]:
     facade = root / "crates" / "registry-stack-client-node"
     staging = work_dir / "node-root"
@@ -188,6 +198,33 @@ def node_steps(
                 root,
             )
         )
+    if (
+        napi_platform == "darwin-arm64"
+        and client_registry.release_version(version)
+        >= MACOS_SHARED_FIPS_MINIMUM_VERSION
+    ):
+        platform_directory = staging / "npm" / napi_platform
+        roots = macos_library_roots or (root / "target",)
+        bundle = [
+            "python3",
+            str(root / "release" / "scripts" / "bundle-client-macos-fips.py"),
+            "--library-directory",
+            str(platform_directory),
+        ]
+        for product in NODE_PRODUCTS:
+            bundle += [
+                "--consumer",
+                str(platform_directory / f"{product}-client.{napi_platform}.node"),
+            ]
+        for library_root in roots:
+            bundle += ["--library-root", str(library_root)]
+        steps.append(
+            Step(
+                "bundle the shared macOS FIPS libraries with the native addons",
+                tuple(bundle),
+                root,
+            )
+        )
     steps.append(
         Step(
             "pack the public root package",
@@ -222,6 +259,7 @@ def python_steps(
     zig_python: str | None = None,
     python_profile: str = "release",
     include_casework: bool = False,
+    macos_library_roots: tuple[Path, ...] = (),
 ) -> list[Step]:
     if python_profile not in ("release", "ci"):
         raise ValueError(f"unsupported Python build profile: {python_profile}")
@@ -287,6 +325,13 @@ def python_steps(
             f"--{product}-wheel",
             str(built / f"{WHEEL_STEMS[product]}-{version}-{wheel_tag}.whl"),
         ]
+    if (
+        napi_platform == "darwin-arm64"
+        and client_registry.release_version(version)
+        >= MACOS_SHARED_FIPS_MINIMUM_VERSION
+    ):
+        for library_root in macos_library_roots or (root / "target",):
+            assemble += ["--macos-library-root", str(library_root)]
     steps.append(
         Step("assemble the one public wheel", tuple(assemble), root),
     )
@@ -304,6 +349,7 @@ def plan(
     zig_python: str | None = None,
     python_profile: str = "release",
     include_casework: bool = False,
+    macos_library_roots: tuple[Path, ...] = (),
 ) -> list[Step]:
     if not client_registry.includes_casework(
         version, include_casework=include_casework
@@ -314,7 +360,14 @@ def plan(
         )
     steps: list[Step] = []
     if artifacts in ("all", "node"):
-        steps += node_steps(root, version, napi_platform, work_dir, output_dir)
+        steps += node_steps(
+            root,
+            version,
+            napi_platform,
+            work_dir,
+            output_dir,
+            macos_library_roots,
+        )
     if artifacts in ("all", "python"):
         steps += python_steps(
             root,
@@ -326,6 +379,7 @@ def plan(
             zig_python,
             python_profile,
             include_casework,
+            macos_library_roots,
         )
     return steps
 
@@ -365,6 +419,13 @@ def main() -> int:
         action="store_true",
         help="include Casework in an explicit local candidate before version 0.30.0",
     )
+    parser.add_argument(
+        "--macos-library-root",
+        action="append",
+        type=Path,
+        default=[],
+        help="root searched for shared AWS-LC-FIPS dylibs in a macOS build",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -378,6 +439,17 @@ def main() -> int:
             maturin = resolve_executable(maturin)
         except ValueError as exc:
             parser.error(str(exc))
+    macos_library_roots = tuple(args.macos_library_root)
+    if (
+        napi_platform == "darwin-arm64"
+        and client_registry.release_version(version)
+        >= MACOS_SHARED_FIPS_MINIMUM_VERSION
+        and not macos_library_roots
+    ):
+        configured_target = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
+        if not configured_target.is_absolute():
+            configured_target = ROOT / configured_target
+        macos_library_roots = (configured_target.resolve(),)
 
     try:
         steps = plan(
@@ -391,6 +463,7 @@ def main() -> int:
             args.zig_python,
             args.python_profile,
             args.include_casework,
+            macos_library_roots,
         )
     except (ValueError, client_registry.ClientRegistryError) as exc:
         parser.error(str(exc))

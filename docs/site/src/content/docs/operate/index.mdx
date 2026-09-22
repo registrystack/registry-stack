@@ -37,9 +37,7 @@ a binding cannot be observed.
 
 ## Obtain the runtime
 
-The installer installs the `relay` and `relayctl` binaries together and
-accepts the platforms in
-[platform support](../explanation/known-limitations/#platform-support):
+The installer installs the Linux amd64 `relay` and `relayctl` binaries together:
 
 ```sh
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh | bash
@@ -64,13 +62,21 @@ The container image is `ghcr.io/registrystack/relay:v0.26.1`, built on
 distroless nonroot. It exposes port 8080, runs `relay serve --runtime
 /etc/relay/runtime.yaml` by default, and probes itself with `relay healthcheck`.
 
-`relayctl` also ships as a plain release binary for each platform in
-[platform support](../explanation/known-limitations/#platform-support):
-`relayctl-<tag>-linux-amd64`, `relayctl-<tag>-linux-arm64`, and
-`relayctl-<tag>-macos-arm64`. Take the asset directly when the combined
-installer does not support the target platform, or build it from source.
+`relayctl` also ships for each platform in
+[platform support](../explanation/known-limitations/#platform-support).
+The Linux assets are the plain `relayctl-<tag>-linux-amd64` and
+`relayctl-<tag>-linux-arm64` executables. Starting with v0.33.0,
+`relayctl-<tag>-macos-arm64.tar.gz` contains the macOS executable, its shared AWS-LC-FIPS
+libraries, and third-party notices. Extract the complete macOS bundle into one private directory
+and keep its contents together. Releases through v0.32.0 retain their plain macOS binary assets.
+Take the applicable asset directly when the combined installer does not support the target
+platform, or build it from source.
 Operators who prefer to place `relay` themselves take the
 `relay-<tag>-linux-amd64` asset the same way.
+
+{/* Evidence: crates/registry-relay-v2/install.sh;
+    release/scripts/release_candidate.py, _relay_v2_payload_inventory;
+    release/scripts/macos_fips_packaging.py, archive_macos_fips_binary. */}
 
 ## Record operator-owned inputs
 

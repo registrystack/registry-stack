@@ -36,11 +36,15 @@ in the publication window:
 npm run check:archives
 ```
 
-`src/data/archive-lock.yaml` is append-only. New entries bind one archived
-docset to the SHA-256 of its deterministic bundle, canonical-root tree, and
-version-prefixed tree. Historical single-tree entries remain valid.
-Existing entries must never be edited or removed. `npm run
-check:archive-lock -- --base-ref origin/main` enforces that invariant.
+`src/data/archive-lock.yaml` retains every archive entry. Each entry binds one
+archived docset to the SHA-256 of its deterministic bundle, canonical-root tree,
+and version-prefixed tree; historical single-tree entries remain valid.
+Published and historical entries are immutable. Before publication, only the
+entry for the current prepared workspace release may be refreshed, and only
+when its manifest and candidate docset match and the exact tag is proven absent
+from the authoritative Registry Stack origin. Tag lookup failures stop the
+check. Entries may never be removed. `npm run check:archive-lock -- --base-ref
+origin/main` enforces these rules.
 Historical archives retain their sealed search output. New release archives
 carry Pagefind and machine-readable discovery files built once by the release
 workflow.

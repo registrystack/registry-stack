@@ -21,6 +21,7 @@ ASSET = "macos-arm64"
 RUST_TOOLCHAIN = "1.95.0"
 PURPOSES = {"candidate_input", "review_only"}
 MINT_RETIREMENT_VERSION = (0, 31, 0)
+MACOS_FIPS_ARCHIVE_MINIMUM_VERSION = (0, 33, 0)
 
 
 class ShardError(ValueError):
@@ -53,6 +54,11 @@ def rosters(version: str) -> dict[str, list[str]]:
             f"casework-{tag}-{ASSET}",
             f"caseworkctl-{tag}-{ASSET}",
         ]
+    if parsed >= MACOS_FIPS_ARCHIVE_MINIMUM_VERSION:
+        core = [f"{name}.tar.gz" for name in core]
+        breg = [f"{name}.tar.gz" for name in breg]
+        bregctl = [f"{name}.tar.gz" for name in bregctl]
+        casework = [f"{name}.tar.gz" for name in casework]
     return {
         "core": core,
         "breg": breg,
@@ -106,14 +112,20 @@ def validate_shard(
     actual_assets = {entry.name for entry in platform.iterdir()} if platform.exists() else set()
     if actual_assets != set(expected_assets):
         raise ShardError(
-            f"{name} shard binary inventory mismatch: expected {expected_assets}, "
+            f"{name} shard asset inventory mismatch: expected {expected_assets}, "
             f"found {sorted(actual_assets)}"
         )
 
     metadata = root / "RELEASE_NATIVE_PLATFORM_SHARD"
     require_regular_file(metadata)
+    parsed_version = tuple(int(part) for part in version.split("."))
+    format_version = (
+        "v2"
+        if parsed_version >= MACOS_FIPS_ARCHIVE_MINIMUM_VERSION
+        else "v1"
+    )
     expected_metadata = (
-        "registry-stack.release-native-platform-shard.v1\n"
+        f"registry-stack.release-native-platform-shard.{format_version}\n"
         f"purpose={purpose}\n"
         f"source_sha={source_sha}\n"
         f"version={version}\n"
@@ -228,7 +240,12 @@ def merge(
         for asset in final_roster:
             destination = platform / asset
             shutil.copyfile(sources[asset], destination)
-            destination.chmod(0o755)
+            destination.chmod(
+                0o644
+                if tuple(int(part) for part in version.split("."))
+                >= MACOS_FIPS_ARCHIVE_MINIMUM_VERSION
+                else 0o755
+            )
         os.replace(temporary, output)
     except BaseException:
         shutil.rmtree(temporary, ignore_errors=True)

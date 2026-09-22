@@ -106,6 +106,26 @@ Darwin/arm64 | Darwin/aarch64)
 	;;
 esac
 
+# FIPS on macOS uses shared libraries. From v0.33 each executable and its
+# libraries travel together in one checksum-covered archive.
+macos_bundle=0
+if [ "$os_label" = "macos" ]; then
+	IFS=. read -r release_major release_minor release_patch <<<"${version#v}"
+	if ((release_major > 0 || release_minor >= 33)); then
+		macos_bundle=1
+		need tar
+	fi
+fi
+
+asset_name() {
+	local stem="${1}-${version}-${os_label}-${arch_label}"
+	if [ "$macos_bundle" -eq 1 ]; then
+		printf '%s.tar.gz\n' "$stem"
+	else
+		printf '%s\n' "$stem"
+	fi
+}
+
 # BEGIN generated libc preflight
 # Generated from release/glibc-floor.env by
 # release/scripts/render-installer-libc-preflight.py. Do not edit by hand.
@@ -211,7 +231,7 @@ else
 fi
 
 for binary in "${binaries[@]}"; do
-	asset="${binary}-${version}-${os_label}-${arch_label}"
+	asset="$(asset_name "$binary")"
 	if ! download "$base_url/$asset" "$tmpdir/$asset"; then
 		printf 'Could not read the published %s %s binary for %s/%s.\n' \
 			"$binary" "$version" "$os_label" "$arch_label" >&2
@@ -257,7 +277,7 @@ verify_asset() {
 }
 
 for binary in "${binaries[@]}"; do
-	verify_asset "${binary}-${version}-${os_label}-${arch_label}"
+	verify_asset "$(asset_name "$binary")"
 done
 printf 'Integrity checks passed: %s binaries matched SHA256SUMS.\n' "${#binaries[@]}"
 cat <<EOF
@@ -268,6 +288,49 @@ that verified directory:
   $verify_url
 
 EOF
+
+# Check the complete flat archive roster before extracting any file. Each
+# binary keeps its own libraries, including when independently built toolset
+# members contain different module bytes with the same library basename.
+validate_macos_bundle() {
+	local binary="$1"
+	local stem="${binary}-${version}-${os_label}-${arch_label}"
+	local archive="$tmpdir/$(asset_name "$binary")"
+	if ! tar -tzf "$archive" >"$tmpdir/$binary.members" ||
+		! awk -v executable="$stem" '
+			{
+				if (seen[$0]++) { bad = 1; exit }
+				if ($0 == executable) { binaries++; next }
+				if ($0 == "THIRD_PARTY_NOTICES") { notices++; next }
+				if ($0 ~ /^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$/) {
+					libraries++; next
+				}
+				bad = 1; exit
+			}
+			END { exit (bad || binaries != 1 || notices != 1 || libraries < 1) }
+		' "$tmpdir/$binary.members"; then
+		echo "Refusing an invalid macOS bundle roster: ${archive##*/}" >&2
+		exit 1
+	fi
+	if ! tar -tvzf "$archive" >"$tmpdir/$binary.types" ||
+		! awk '
+			$NF == "THIRD_PARTY_NOTICES" {
+				if ($1 != "-rw-r--r--") bad = 1
+				next
+			}
+			$1 != "-rwxr-xr-x" { bad = 1 }
+			END { exit bad }
+		' "$tmpdir/$binary.types"; then
+		echo "Refusing non-regular files or unexpected modes in ${archive##*/}" >&2
+		exit 1
+	fi
+}
+
+if [ "$macos_bundle" -eq 1 ]; then
+	for binary in "${binaries[@]}"; do
+		validate_macos_bundle "$binary"
+	done
+fi
 
 mkdir -p "$install_dir"
 stage_dir="$(mktemp -d "$install_dir/.casework-toolset.XXXXXX")"
@@ -293,8 +356,23 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 for binary in "${binaries[@]}"; do
-	cp "$tmpdir/${binary}-${version}-${os_label}-${arch_label}" "$stage_dir/$binary"
-	chmod 0755 "$stage_dir/$binary"
+	if [ "$macos_bundle" -eq 1 ]; then
+		stem="${binary}-${version}-${os_label}-${arch_label}"
+		bundle_dir="$stage_dir/$binary.bundle"
+		mkdir "$bundle_dir"
+		tar -xzf "$tmpdir/$(asset_name "$binary")" -C "$bundle_dir"
+		chmod 0755 "$bundle_dir" "$bundle_dir/$stem" "$bundle_dir"/*.dylib
+		ln -s "$binary.bundle/$stem" "$stage_dir/$binary"
+		observed_version="$(env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH \
+			-u DYLD_INSERT_LIBRARIES "$stage_dir/$binary" --version)"
+		if [ "$observed_version" != "$binary ${version#v}" ]; then
+			echo "The staged macOS $binary has an unexpected version." >&2
+			exit 1
+		fi
+	else
+		cp "$tmpdir/$(asset_name "$binary")" "$stage_dir/$binary"
+		chmod 0755 "$stage_dir/$binary"
+	fi
 done
 
 replace_path() {

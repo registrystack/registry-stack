@@ -96,13 +96,15 @@ The table describes the release roster from `v0.31.0`. Registry Mint was publish
 - On supported container hosts, the container alternative is limited to the published service
   images listed above. Each image is `linux/amd64`, and no multi-architecture index is published,
   so an arm64 host runs one under emulation.
-- For standalone executables, installer scripts and raw binaries are the only distribution
-  channels. There is no Homebrew formula, no `cargo binstall` target, no apt, apk, yum, or Nix
-  package, and no winget or Scoop package.
+- For standalone executables, installer scripts, plain Linux binaries, and the v0.33.0-or-later
+  macOS arm64 bundles are the only distribution channels. Each macOS bundle keeps one executable
+  with its shared AWS-LC-FIPS libraries and notices. There is no Homebrew formula, no
+  `cargo binstall` target, no apt, apk, yum, or Nix package, and no winget or Scoop package.
 
 {/* Evidence: crates/registry-breg/install.sh; crates/registry-evidencectl/install.sh;
     crates/registry-relay-v2/install.sh; release/docker/Dockerfile.builder;
     release/scripts/build-release-binaries.sh; release/scripts/build-release-image.sh;
+    release/scripts/macos_fips_packaging.py, archive_macos_fips_binary;
     crates/registry-stack-client-node/npm/linux-arm64-gnu/package.json. */}
 
 ## Base Registry Engine limits

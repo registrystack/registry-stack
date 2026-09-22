@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +16,10 @@ import { getDocset, loadDocsets } from './docsets.mjs';
 
 const run = promisify(execFile);
 const sha256Pattern = /^[0-9a-f]{64}$/;
+const versionPattern = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+const releaseIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const releaseRepository = 'registrystack/registry-stack';
+const releaseRemote = `https://github.com/${releaseRepository}.git`;
 
 function isLockBackedDocset(docset) {
   return (
@@ -77,18 +81,147 @@ export function validateArchiveLock(lock, docsets) {
   return errors;
 }
 
-export function assertArchiveLockImmutable(baseLock, currentLock) {
+export function assertArchiveLockImmutable(
+  baseLock,
+  currentLock,
+  { mutableArchiveId = null } = {},
+) {
   const errors = [];
   for (const [id, entry] of Object.entries(baseLock?.archives ?? {})) {
     if (!currentLock?.archives || !(id in currentLock.archives)) {
       errors.push(`immutable archive lock entry ${id} was removed`);
       continue;
     }
-    if (canonicalJson(entry) !== canonicalJson(currentLock.archives[id])) {
+    if (
+      canonicalJson(entry) !== canonicalJson(currentLock.archives[id]) &&
+      id !== mutableArchiveId
+    ) {
       errors.push(`immutable archive lock entry ${id} was changed`);
     }
   }
   return errors;
+}
+
+function changedBaseArchiveEntries(baseLock, currentLock) {
+  const changed = [];
+  const removed = [];
+  for (const [id, entry] of Object.entries(baseLock?.archives ?? {})) {
+    if (!currentLock?.archives || !(id in currentLock.archives)) {
+      removed.push(id);
+    } else if (canonicalJson(entry) !== canonicalJson(currentLock.archives[id])) {
+      changed.push(id);
+    }
+  }
+  return { changed, removed };
+}
+
+function workspacePackageVersion(source) {
+  let section = null;
+  for (const line of source.split(/\r?\n/)) {
+    const heading = /^\s*\[([^\]]+)\]\s*(?:#.*)?$/.exec(line);
+    if (heading) {
+      section = heading[1];
+      continue;
+    }
+    if (section !== 'workspace.package') continue;
+    const version = /^\s*version\s*=\s*"([^"]+)"\s*(?:#.*)?$/.exec(line);
+    if (version) {
+      if (!versionPattern.test(version[1])) {
+        throw new Error('workspace package version must be canonical semantic version text');
+      }
+      return version[1];
+    }
+  }
+  throw new Error('Cargo.toml must declare workspace.package.version');
+}
+
+async function preparedCandidateArchiveId(repoRoot, docsets) {
+  const version = workspacePackageVersion(
+    await readFile(resolve(repoRoot, 'Cargo.toml'), 'utf8'),
+  );
+  const manifestDirectory = resolve(repoRoot, 'release/manifests');
+  const manifests = [];
+  for (const name of (await readdir(manifestDirectory)).sort()) {
+    if (!/^registry-stack-.+[.]yaml$/.test(name)) continue;
+    const manifest = YAML.parse(await readFile(resolve(manifestDirectory, name), 'utf8'));
+    if (manifest?.stack?.version === version) manifests.push({ name, manifest });
+  }
+  if (manifests.length !== 1) return null;
+  const { name, manifest } = manifests[0];
+  const releaseId = manifest.stack.release;
+  const id = `v${version}`;
+  if (
+    typeof releaseId !== 'string' ||
+    !releaseIdPattern.test(releaseId) ||
+    name !== `registry-stack-${releaseId}.yaml` ||
+    manifest.stack.source_repo !== releaseRepository ||
+    manifest.stack.source_tag !== id ||
+    manifest.artifacts?.['registry-docs'] !== version
+  ) {
+    return null;
+  }
+  const candidates = docsets.docsets.filter((docset) => docset.id === id);
+  if (candidates.length !== 1) return null;
+  const candidate = candidates[0];
+  const stack = candidate.products?.['registry-stack'];
+  if (
+    candidate.status !== 'archived' ||
+    candidate.availability !== 'candidate' ||
+    stack?.version !== id ||
+    stack?.ref !== (manifest.stack.source_ref ?? id)
+  ) {
+    return null;
+  }
+  return id;
+}
+
+async function releaseTagState(tag, runCommand) {
+  const reference = `refs/tags/${tag}`;
+  try {
+    const { stdout, stderr } = await runCommand(
+      'git',
+      ['ls-remote', '--exit-code', '--refs', '--tags', releaseRemote, reference],
+      {
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+        maxBuffer: 1024 * 1024,
+        timeout: 15_000,
+      },
+    );
+    const lines = stdout.trim().split('\n').filter(Boolean);
+    const expected = new RegExp(`^[0-9a-f]{40}(?:[0-9a-f]{24})?\\t${reference.replaceAll('.', '[.]')}$`);
+    if (stderr.trim() || lines.length !== 1 || !expected.test(lines[0])) {
+      throw new Error('git ls-remote returned ambiguous output');
+    }
+    return 'present';
+  } catch (error) {
+    if (
+      error?.code === 2 &&
+      !(error.stdout ?? '').trim() &&
+      !(error.stderr ?? '').trim()
+    ) {
+      return 'absent';
+    }
+    throw new Error(`cannot prove release tag ${tag} is absent on ${releaseRepository}`, {
+      cause: error,
+    });
+  }
+}
+
+export async function assertArchiveLockImmutableForRepository(
+  baseLock,
+  currentLock,
+  { repoRoot, docsets, runCommand = run },
+) {
+  const { changed, removed } = changedBaseArchiveEntries(baseLock, currentLock);
+  let mutableArchiveId = null;
+  if (removed.length === 0 && changed.length === 1) {
+    const candidateId = await preparedCandidateArchiveId(repoRoot, docsets);
+    if (candidateId === changed[0]) {
+      const state = await releaseTagState(candidateId, runCommand);
+      if (state === 'absent') mutableArchiveId = candidateId;
+    }
+  }
+  return assertArchiveLockImmutable(baseLock, currentLock, { mutableArchiveId });
 }
 
 export function addArchiveLockEntry(lock, docsetId, result) {
@@ -140,8 +273,14 @@ export async function checkArchiveLock({
   });
   const errors = validateArchiveLock(lock, docsets);
   if (baseRef) {
-    const baseLock = await archiveLockAtGitRef(baseRef, resolve(docsRoot, '../..'));
-    if (baseLock) errors.push(...assertArchiveLockImmutable(baseLock, lock));
+    const repoRoot = resolve(docsRoot, '../..');
+    const baseLock = await archiveLockAtGitRef(baseRef, repoRoot);
+    if (baseLock) {
+      errors.push(...await assertArchiveLockImmutableForRepository(baseLock, lock, {
+        repoRoot,
+        docsets,
+      }));
+    }
   }
   if (errors.length > 0) throw new Error(errors.join('\n'));
   return { docsets, lock };

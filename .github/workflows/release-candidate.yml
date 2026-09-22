@@ -631,6 +631,29 @@ jobs:
             --source-sha "${{ needs.validate.outputs.source_sha }}" \
             --version "${{ needs.validate.outputs.version }}" \
             --output candidate-native-shard
+          # These groups contain complete installer toolsets. Exercise the
+          # relocated release bytes while the Cargo output is unavailable.
+          if [[ "${{ matrix.group }}" == core || "${{ matrix.group }}" == casework ]]; then
+            installer_assets="${RUNNER_TEMP}/macos-installer-assets"
+            installer_destination="${RUNNER_TEMP}/macos-installer-bin"
+            mkdir -p "${installer_assets}"
+            cp candidate-native-shard/platform/* "${installer_assets}/"
+            cp candidate-native-shard/SHA256SUMS "${installer_assets}/"
+            mv target target.installer-smoke-hidden
+            trap 'mv target.installer-smoke-hidden target' EXIT
+            unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_INSERT_LIBRARIES
+            if [[ "${{ matrix.group }}" == core ]]; then
+              EVIDENCECTL_VERSION="${{ needs.validate.outputs.tag }}" \
+              EVIDENCECTL_ASSET_DIR="${installer_assets}" \
+              EVIDENCECTL_INSTALL_DIR="${installer_destination}" \
+                bash crates/registry-evidencectl/install.sh
+            else
+              CASEWORK_VERSION="${{ needs.validate.outputs.tag }}" \
+              CASEWORK_ASSET_DIR="${installer_assets}" \
+              CASEWORK_INSTALL_DIR="${installer_destination}" \
+                bash crates/registry-casework/install.sh
+            fi
+          fi
 
       - name: Upload native macOS release shard
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -715,9 +738,11 @@ jobs:
             ~/.cargo/git
             target/release-client-python
             target/release-client-node
-          key: registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ hashFiles('.github/workflows/release-candidate.yml', 'rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
+          # AWS-LC does not track the deployment-target environment variable.
+          # Exclude caches configured before the macOS 11 compatibility pin.
+          key: registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-deployment-11.0-' || '' }}${{ hashFiles('.github/workflows/release-candidate.yml', 'rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/macos_fips_packaging.py', 'release/scripts/bundle-client-macos-fips.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
           restore-keys: |
-            registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-
+            registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-deployment-11.0-' || '' }}
 
       - name: Build Python client wheels
         shell: bash
@@ -734,6 +759,11 @@ jobs:
           built_wheel_dir="${RUNNER_TEMP}/built-client-wheels"
           mkdir -p "${wheel_dir}" "${built_wheel_dir}"
           IFS=. read -r client_major client_minor client_patch <<<"${CLIENT_VERSION}"
+          if [[ "${RUNNER_OS}" == macOS ]] &&
+              (( client_major > 0 || client_minor >= 33 )); then
+            export AWS_LC_FIPS_SYS_STATIC=0
+            export MACOSX_DEPLOYMENT_TARGET=11.0
+          fi
           unified_client=0
           if (( client_major > 0 || client_minor > 26 ||
                 (client_minor == 26 && client_patch >= 1) )); then
@@ -811,7 +841,13 @@ jobs:
                 "${built_wheel_dir}/registry_casework_client_native-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl"
               )
             fi
+            macos_wheel_args=()
+            if [[ "${RUNNER_OS}" == macOS ]] &&
+                (( client_major > 0 || client_minor >= 33 )); then
+              macos_wheel_args=(--macos-library-root "${CARGO_TARGET_DIR}")
+            fi
             python3 release/scripts/assemble-registry-client-wheel.py \
+              "${macos_wheel_args[@]}" \
               --version "${CLIENT_VERSION}" \
               --output-dir "${wheel_dir}" \
               --discovery-wheel "${built_wheel_dir}/registry_discovery_client-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
@@ -837,6 +873,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_INSERT_LIBRARIES
+          if [[ "${RUNNER_OS}" == macOS ]]; then
+            build_root="${GITHUB_WORKSPACE}/target/release-client-python"
+            hidden_build_root="${build_root}.smoke-hidden"
+            mv -- "${build_root}" "${hidden_build_root}"
+            trap 'mv -- "${hidden_build_root}" "${build_root}"' EXIT
+          fi
           IFS=. read -r client_major client_minor client_patch <<<"${CLIENT_VERSION}"
           if (( client_major > 0 || client_minor > 26 ||
                 (client_minor == 26 && client_patch >= 1) )); then
@@ -881,6 +924,11 @@ jobs:
         run: |
           set -euo pipefail
           IFS=. read -r client_major client_minor client_patch <<<"${CLIENT_VERSION}"
+          if [[ "${RUNNER_OS}" == macOS ]] &&
+              (( client_major > 0 || client_minor >= 33 )); then
+            export AWS_LC_FIPS_SYS_STATIC=0
+            export MACOSX_DEPLOYMENT_TARGET=11.0
+          fi
           unified_client=0
           if (( client_major > 0 || client_minor > 26 ||
                 (client_minor == 26 && client_patch >= 1) )); then
@@ -961,6 +1009,17 @@ jobs:
               cp "${GITHUB_WORKSPACE}/crates/registry-${client}-client-node/${client}-client.${{ matrix.napi_platform }}.node" \
                 "${platform_dir}/"
             done
+            if [[ "${RUNNER_OS}" == macOS ]] &&
+                (( client_major > 0 || client_minor >= 33 )); then
+              macos_consumer_args=()
+              for client in "${platform_clients[@]}"; do
+                macos_consumer_args+=(--consumer "${platform_dir}/${client}-client.${{ matrix.napi_platform }}.node")
+              done
+              python3 release/scripts/bundle-client-macos-fips.py \
+                "${macos_consumer_args[@]}" \
+                --library-root "${CARGO_TARGET_DIR}" \
+                --library-directory "${platform_dir}"
+            fi
             (cd "${GITHUB_WORKSPACE}/crates/registry-stack-client-node" && npm pack \
               "./npm/${{ matrix.napi_platform }}" \
               --ignore-scripts --pack-destination "${RUNNER_TEMP}")
@@ -974,6 +1033,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_INSERT_LIBRARIES
+          if [[ "${RUNNER_OS}" == macOS ]]; then
+            build_root="${GITHUB_WORKSPACE}/target/release-client-node"
+            hidden_build_root="${build_root}.smoke-hidden"
+            mv -- "${build_root}" "${hidden_build_root}"
+            trap 'mv -- "${hidden_build_root}" "${build_root}"' EXIT
+          fi
           IFS=. read -r major minor patch <<<"${CLIENT_VERSION}"
           if (( major > 0 || minor > 26 || (minor == 26 && patch >= 1) )); then
             include_casework=0
