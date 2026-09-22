@@ -713,13 +713,16 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: registry-stack-release-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
+            target/release-client-python
+            target/release-client-node
+          key: registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ hashFiles('.github/workflows/release-candidate.yml', 'rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
           restore-keys: |
-            registry-stack-release-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-
+            registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-
 
       - name: Build Python client wheels
         shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/release-client-python
         run: |
           set -euo pipefail
           rustup toolchain install 1.95.0 --profile minimal
@@ -873,6 +876,8 @@ jobs:
 
       - name: Build Node client packages
         shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/release-client-node
         run: |
           set -euo pipefail
           IFS=. read -r client_major client_minor client_patch <<<"${CLIENT_VERSION}"
