@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha1/DoctorReport.schema.json",
+  "title": "DoctorReport",
+  "description": "Versioned JSON report emitted by caseworkctl for doctor.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "ok",
+        "command",
+        "runtimeConfig",
+        "packageRoot",
+        "checks",
+        "secretFileChecks",
+        "sourceChecks",
+        "eventWiringGuidance"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+        },
+        "kind": {
+          "const": "DoctorReport"
+        },
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "doctor"
+        },
+        "runtimeConfig": {
+          "type": "string"
+        },
+        "packageRoot": {
+          "type": "string"
+        },
+        "checks": {
+          "$ref": "#/$defs/doctorChecks"
+        },
+        "secretFileChecks": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "sourceChecks": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "eventWiringGuidance": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "ok",
+        "diagnostics"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+        },
+        "kind": {
+          "const": "DoctorReport"
+        },
+        "ok": {
+          "const": false
+        },
+        "command": {
+          "const": "doctor"
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/diagnostics"
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "diagnostics": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "severity",
+        "code",
+        "artifact",
+        "path",
+        "message",
+        "suggestedAction"
+      ],
+      "properties": {
+        "severity": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "artifact": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "suggestedAction": {
+          "type": "string"
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    },
+    "doctorChecks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configuration",
+        "secretFiles",
+        "sourceDescriptions",
+        "sourceConnections",
+        "database",
+        "oidcIssuer",
+        "directory"
+      ],
+      "properties": {
+        "configuration": {
+          "const": "ready"
+        },
+        "secretFiles": {
+          "const": "ready"
+        },
+        "sourceDescriptions": {
+          "const": "ready"
+        },
+        "sourceConnections": {
+          "const": "ready"
+        },
+        "database": {
+          "const": "ready"
+        },
+        "oidcIssuer": {
+          "const": "ready"
+        },
+        "directory": {
+          "const": "ready"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha1/LifecycleReport.schema.json",
+  "title": "LifecycleReport",
+  "description": "Versioned JSON report emitted by caseworkctl for lifecycle.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "ok",
+        "command",
+        "lifecycles"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+        },
+        "kind": {
+          "const": "LifecycleReport"
+        },
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "lifecycle"
+        },
+        "lifecycles": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/lifecycle"
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "ok",
+        "diagnostics"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+        },
+        "kind": {
+          "const": "LifecycleReport"
+        },
+        "ok": {
+          "const": false
+        },
+        "command": {
+          "const": "lifecycle"
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/diagnostics"
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "diagnostics": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "severity",
+        "code",
+        "artifact",
+        "path",
+        "message",
+        "suggestedAction"
+      ],
+      "properties": {
+        "severity": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "artifact": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "suggestedAction": {
+          "type": "string"
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "states",
+        "transitions",
+        "enforcement"
+      ],
+      "properties": {
+        "id": {
+          "enum": [
+            "occurrence",
+            "review_request"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "states": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/lifecycleState"
+          }
+        },
+        "transitions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/lifecycleTransition"
+          }
+        },
+        "enforcement": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/enforcementLayer"
+          }
+        }
+      }
+    },
+    "lifecycleState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "initial",
+        "terminal",
+        "unreachable",
+        "incomingTransitions",
+        "outgoingTransitions"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "initial": {
+          "type": "boolean"
+        },
+        "terminal": {
+          "type": "boolean"
+        },
+        "unreachable": {
+          "type": "boolean"
+        },
+        "incomingTransitions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outgoingTransitions": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "lifecycleTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "event",
+        "to",
+        "guard"
+      ],
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "guard": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "enforcementLayer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "description",
+        "events"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
