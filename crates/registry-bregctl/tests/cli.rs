@@ -316,8 +316,7 @@ fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
         .find(|finding| finding["code"] == "field.pattern.unverified_offline")
         .expect("offline success must identify native syntax as unverified");
     assert_eq!(finding["path"], "entities[record].fields[code].pattern");
-    assert_eq!(finding["severity"], "finding");
-    assert_tool_diagnostic(finding, "registry_project", "run_schema_test");
+    assert_tool_finding(finding, "registry_project", "run_schema_test");
     assert!(finding["message"]
         .as_str()
         .unwrap()
@@ -332,11 +331,15 @@ fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
         "--deny-findings",
     ]);
     assert_eq!(denied.status.code(), Some(1));
-    assert!(json_stdout(&denied)["diagnostics"]
+    let denied_report = json_stdout(&denied);
+    let denied_finding = denied_report["diagnostics"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|diagnostic| diagnostic["code"] == "field.pattern.unverified_offline"));
+        .find(|diagnostic| diagnostic["code"] == "field.pattern.unverified_offline")
+        .expect("denied finding remains in the refusal diagnostics");
+    assert_eq!(denied_finding["severity"], "finding");
+    assert_tool_diagnostic(denied_finding, "registry_project", "run_schema_test");
 }
 
 #[test]
@@ -1101,8 +1104,29 @@ fn assert_tool_diagnostic(diagnostic: &Value, artifact: &str, suggested_action: 
     assert_eq!(diagnostic["suggestedAction"], suggested_action);
 }
 
+fn assert_tool_finding(finding: &Value, artifact: &str, suggested_action: &str) {
+    let keys = finding
+        .as_object()
+        .expect("finding is an object")
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        keys,
+        std::collections::BTreeSet::from([
+            "artifact",
+            "code",
+            "message",
+            "path",
+            "suggestedAction",
+        ])
+    );
+    assert_eq!(finding["artifact"], artifact);
+    assert_eq!(finding["suggestedAction"], suggested_action);
+}
+
 #[test]
-fn authored_project_findings_use_the_tool_diagnostic_schema() {
+fn authored_project_findings_use_the_tool_finding_schema() {
     let project = TestProject::from_registry_source(authoring_fixture());
     let output = bregctl(&[
         "--format",
@@ -1123,7 +1147,7 @@ fn authored_project_findings_use_the_tool_diagnostic_schema() {
         .iter()
         .any(|finding| finding["code"] == "package.identity.missing"));
     for finding in report["findings"].as_array().expect("findings is an array") {
-        assert_tool_diagnostic(finding, "registry_project", "review_authoring_finding");
+        assert_tool_finding(finding, "registry_project", "review_authoring_finding");
     }
 }
 
@@ -1239,6 +1263,8 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
     assert!(journeys.contains("status: active"));
     assert!(registry.contains("type: reference"));
     assert!(registry.contains("type: vocabulary-code"));
+    assert!(registry.contains("id: record-group-code-unique"));
+    assert!(registry.contains("id: record-code-unique"));
     assert!(!journeys.contains("token"));
     let initialized_project = parse_project_yaml(
         &fs::read(destination.join("registry.yaml")).expect("initialized project bytes read"),

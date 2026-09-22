@@ -173,6 +173,7 @@ entities:
         classification: internal
     constraints:
       - kind: unique
+        id: asset-code-unique
         fields: [asset-code]
 vocabularies:
   - id: asset-classification
@@ -203,11 +204,18 @@ Constraints are evaluated on every write:
 
 | `kind` | Members | Checks |
 |---|---|---|
-| `unique` | `fields`, optional `when` | No two live records share the values. `when` narrows the rule to rows where a field equals a value, is null, is not null, or the record is in an active lifecycle. |
-| `compare` | `left`, `operator`, `right` | Two fields of one record compare as `less_than`, `less_than_or_equal`, `greater_than`, or `greater_than_or_equal`. |
-| `int_range` | `field`, `minimum`, `maximum` | An `int64` field stays within bounds. |
-| `vocabulary` | `field`, `values` | A field takes one of the listed values. |
-| `temporal-non-overlap` | `startField`, `endField`, `scopeFields` | No two records with equal scope fields have overlapping validity. |
+| `unique` | Optional `id`, `fields`, optional `when` | No two live records share the values. `when` narrows the rule to rows where a field equals a value, is null, is not null, or the record is in an active lifecycle. |
+| `compare` | Optional `id`, `left`, `operator`, `right` | Two fields of one record compare as `less_than`, `less_than_or_equal`, `greater_than`, or `greater_than_or_equal`. |
+| `int_range` | Optional `id`, `field`, `minimum`, `maximum` | An `int64` field stays within bounds. |
+| `vocabulary` | Optional `id`, `field`, `values` | A field takes one of the listed values. |
+| `temporal-non-overlap` | Optional `id`, `startField`, `endField`, `scopeFields` | No two records with equal scope fields have overlapping validity. |
+
+Give each constraint an `id` that is unique within its entity. The ID stays stable in
+`explain model`, migration statements, and operator diagnostics when the constraint's fields or
+bounds change. If you omit `id`, the compiler derives a content-based fallback that can repeat on
+another entity and changes when the constraint changes.
+
+{/* Evidence: crates/registry-breg/src/compiler.rs, derived_constraint_id(); crates/registry-breg/src/generated_ddl.rs; products/breg/generated/authoring/registry-module.schema.json. */}
 
 The compiler refuses field names that collide with Registry Record envelope members, so no field can be called `recordIdentifier`, `revisionIdentifier`, `snapshot`, `request`, or `requestPresence`.
 [Base Registry Engine API reference](../../reference/breg-api/) lists the wire encoding of every type.
@@ -354,6 +362,7 @@ A temporal entity declares which fields bound a record's validity:
       endField: valid-to
     constraints:
       - kind: temporal-non-overlap
+        id: subject-validity-non-overlap
         scopeFields: [subject]
         startField: valid-from
         endField: valid-to

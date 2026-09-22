@@ -1029,6 +1029,7 @@ struct SuccessReport {
     /// revision here.
     #[serde(skip_serializing_if = "Option::is_none")]
     revision: Option<String>,
+    #[serde(serialize_with = "serialize_findings")]
     findings: Vec<ToolDiagnostic>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     artifacts: Vec<ArtifactReport>,
@@ -1119,6 +1120,36 @@ struct ToolDiagnostic {
     path: String,
     message: String,
     suggested_action: SuggestedAction,
+}
+
+/// A successful report already identifies these entries as `findings`, so its
+/// elements do not repeat the constant `finding` severity. Refusal reports keep
+/// the complete diagnostic envelope because they can contain findings or errors.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolFinding<'a> {
+    code: &'a str,
+    artifact: DiagnosticArtifact,
+    path: &'a str,
+    message: &'a str,
+    suggested_action: SuggestedAction,
+}
+
+fn serialize_findings<S>(findings: &[ToolDiagnostic], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    findings
+        .iter()
+        .map(|finding| ToolFinding {
+            code: &finding.code,
+            artifact: finding.artifact,
+            path: &finding.path,
+            message: &finding.message,
+            suggested_action: finding.suggested_action,
+        })
+        .collect::<Vec<_>>()
+        .serialize(serializer)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -1516,6 +1547,7 @@ struct DiffSuccessReport {
     command: &'static str,
     profile: ProfileArg,
     baseline_assurance: BaselineAssurance,
+    #[serde(serialize_with = "serialize_findings")]
     findings: Vec<ToolDiagnostic>,
     #[serde(flatten)]
     diff: CompiledRegistryDiff,
@@ -6647,7 +6679,7 @@ entities:
       - {id: code, type: string, required: true, minLength: 1, maxLength: 64, classification: public}
       - {id: label, type: string, required: true, maxLength: 200, classification: public}
     constraints:
-      - {kind: unique, fields: [code]}
+      - {id: record-group-code-unique, kind: unique, fields: [code]}
 
   # The registry's records. `group` is a reference: the server stores the target
   # record's identifier and refuses a value that names no `record-group`.
@@ -6670,7 +6702,7 @@ entities:
       - {id: group, type: reference, target: record-group, classification: internal}
       - {id: status, type: vocabulary-code, vocabulary: record-status, classification: internal}
     constraints:
-      - {kind: unique, fields: [code]}
+      - {id: record-code-unique, kind: unique, fields: [code]}
     # A selector profile names an exact-match question a caller may ask by
     # value, rather than a filter over a listing. Every field it names must
     # refuse the empty value, which is why `code` declares `minLength: 1` above.
