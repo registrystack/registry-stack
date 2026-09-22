@@ -129,6 +129,16 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
             events: EVERY_EVENT,
         },
         EnforcementLayer {
+            id: "review_evidence_load",
+            description: "An apply on an entity whose plan requires review is routed through a path of its own before the coordinator runs, and this is where that path can refuse. The receipt and applied short-circuits named by the preflight below are consulted first, so a replay and an already-applied request never load review evidence at all. Otherwise the accepted review submission recorded for exactly this request, this proposal version, and this effect digest is loaded, and the evidence itself is fetched from the configured review authority: no accepted submission matching all three is a precondition failure, and so is an authority whose name does not match, a result that is pending, concealed, unknown, or expired, and one whose availability lapses between the fetch and the check. A review-result source that is not configured, a token that cannot be obtained, and an authority that does not answer are each refused as unavailable instead. What this layer obtains is only matched against the frozen review requirement much later, by the workflow transition below.",
+            events: &["apply"],
+        },
+        EnforcementLayer {
+            id: "apply_evidence_acquisition",
+            description: "An apply on an entity declaring Evidence application preconditions is routed the same way, after any review evidence above. In a transaction of its own, separate from the action's, it re-verifies everything it needs to derive the Evidence requests: the workflow must still be submitted, a recomputed action ETag must equal the caller's If-Match, the current proposal's version, effect digest, and contract fingerprint must match, the frozen application contract must still be the compiled one, and the frozen request values, the target rows, and the per-target predicates must all still hold, with the targets authorized by the same check the apply layer below runs. Those are the preconditions below re-run early, so a request that fails one is refused here rather than there. That transaction is then dropped before any remote call: the Evidence requests are resolved outside it, and a provider that cannot be reached, a resolution cancelled or timed out waiting for a concurrency permit, and a response that would exceed the retained-evidence budget are each refused with no row held. A receipt or an already-applied request short-circuits before any of this.",
+            events: &["apply"],
+        },
+        EnforcementLayer {
             id: "apply_preflight",
             description: "Before the transaction opens, an apply short-circuits on either of two conditions: a retained receipt for this same key, or a request already in the applied state, whatever key the call carries. Neither grant is consulted on either of those, and the second is not a replay, since the key may never have been seen. Otherwise the caller's task grant and the task grant frozen on the proposal are each confirmed current and live by the task-status check. Runs again on each retry of the transaction.",
             events: &["apply"],
@@ -140,7 +150,7 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "submit_preparation",
-            description: "Inside the transaction but before the idempotency row is locked, submit plans the submission once. It is skipped outright when an unlocked probe finds a receipt for this key, so a replay never re-plans. The request row is read under the same row policy the locked read below uses, a preview action ETag recomputed from that read must equal the caller's If-Match, the acting principal must be the recorded owner, and planning then requires the request to still be in draft at both the record revision and the workflow revision it read, admits the profile's submitter targets a first time, and refuses a plan whose intake, re-derived from the row, differs by a byte from the intake the planner ran on. Every one of those conditions is checked again after the lock, so a request that moved in between is refused rather than submitted on a stale plan.",
+            description: "Submit plans the submission once, and the planner itself runs inside no transaction at all. An unlocked probe for a receipt under this key comes first, and where it finds one the planning and every check named here is skipped, so a replay never re-plans. Where it finds none, a first transaction reads the request row under the same row policy the locked read below uses, and one combined precondition requires a preview action ETag recomputed from that read to equal the caller's If-Match, the acting principal to be the recorded owner, and the request to still be in draft; it then captures the intake and commits. The planner runs against that captured intake with no transaction open and no row locked, by design, so a plan it refuses holds nothing. Only afterwards does the transaction this stack describes open, and before it locks the idempotency row it probes unlocked for a receipt again, re-reads the row, re-checks that same ETag and owner, and then requires the request to still be in draft at both the record revision and the workflow revision the planner read, admits the profile's submitter targets a first time, and refuses a plan whose intake, re-derived from the row, differs by a byte from the intake the planner ran on. Those two revisions are checked once more after the lock, at the commit-preconditions layer below.",
             events: &["submit"],
         },
         EnforcementLayer {
@@ -348,6 +358,8 @@ mod tests {
             vec![
                 "caller_authentication",
                 "route_admission",
+                "review_evidence_load",
+                "apply_evidence_acquisition",
                 "apply_preflight",
                 "request_header_lookup",
                 "submit_preparation",
@@ -596,6 +608,53 @@ mod tests {
     /// rows, so a cancel the workflow accepted from `superseded` writes no
     /// row and is refused. The table declares no such edge, and this pins the
     /// policy the omission rests on.
+    #[test]
+    fn the_planner_runs_inside_no_transaction() {
+        let lifecycle = request_lifecycle();
+        let preparation = layer(&lifecycle, "submit_preparation").description;
+        assert!(
+            preparation.contains("inside no transaction at all"),
+            "the planner's concurrency boundary stopped being reported: {preparation}"
+        );
+        assert!(
+            preparation.contains("no transaction open and no row locked"),
+            "a planner refusal holds nothing, and that must be said: {preparation}"
+        );
+        assert!(
+            !preparation.contains("Every one of those conditions is checked again after the lock"),
+            "only the two revisions are re-checked after the lock: {preparation}"
+        );
+    }
+
+    #[test]
+    fn the_review_and_evidence_paths_refuse_before_the_apply_preflight() {
+        let lifecycle = request_lifecycle();
+        let index = |id: &str| {
+            lifecycle
+                .enforcement
+                .iter()
+                .position(|layer| layer.id == id)
+                .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
+        };
+        assert!(index("route_admission") < index("review_evidence_load"));
+        assert!(index("review_evidence_load") < index("apply_evidence_acquisition"));
+        assert!(index("apply_evidence_acquisition") < index("apply_preflight"));
+        for id in ["review_evidence_load", "apply_evidence_acquisition"] {
+            let reported = layer(&lifecycle, id);
+            assert_eq!(reported.events, &["apply"], "{id} gates applies alone");
+            assert!(
+                reported.description.contains("short-circuit"),
+                "{id} must say a receipt or an applied request skips it: {}",
+                reported.description
+            );
+        }
+        let acquisition = layer(&lifecycle, "apply_evidence_acquisition").description;
+        assert!(
+            acquisition.contains("dropped before any remote call"),
+            "the remote call holds no row, and that is the point: {acquisition}"
+        );
+    }
+
     #[test]
     fn the_cancel_update_policy_admits_no_superseded_row() {
         use crate::contract::Operation;

@@ -229,7 +229,7 @@ fn occurrence_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "source_authorization",
-            description: "The caller can see the item's queue, and the source, re-read as this caller, still discloses the subject under the binding the item holds and still offers the operation being attempted. A binding the source has moved refuses the action; a subject the source no longer discloses is reported as absent. The operator settlement of an uncertain attempt raises two of these events with no caller and reads no source, so that path passes this layer without being checked here.",
+            description: "The caller can see the item's queue, and the source, re-read as this caller, still discloses the subject under the binding the item holds. A binding the source has moved refuses the action; a subject the source no longer discloses is reported as absent. Those hold on every caller event named here, the recovery settlements included, because one shared caller read enforces them for every entry point. The further check that the source still offers the operation being attempted is narrower, and holds only on the reservation, the one path that chooses an operation. A recovery re-executes the operation its attempt already prepared and never re-tests it against the set the source offers now; standing in its place is the saved preparation itself, matched on the recorded binding and idempotency key and executed under a single-flight lease. The operator settlement of an uncertain attempt raises two of these events with no caller and reads no source, so that path passes this layer without being checked here.",
             events: CALLER_EVENTS,
         },
         EnforcementLayer {
@@ -257,7 +257,7 @@ fn occurrence_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "reservation_key_admission",
-            description: "A retried reservation is admitted by its own key check rather than by the idempotency record above: the attempt row recorded for this item and key is locked and compared field by field against the actor, both profiles, the displayed binding, the recovery evidence, and the operation. Any difference is refused as a conflict, and an exact match is refused as a still-pending attempt, so a reservation is answered from a stored response on no path. The request hash the row carries is written here and compared nowhere.",
+            description: "A retried reservation is admitted by its own key lookup rather than by the idempotency record above, and that lookup straddles the layers between. It reads the attempt row recorded for this item and key before the source is re-read, comparing the actor, the caller's casework profile, and the request hash the row carries, but its outcome is taken only after the source layer above has run: a difference in any of those is refused as a conflict, an item erased since is refused as expired, and an exact match returns the stored attempt with whatever receipt it holds. A retried reservation is therefore answered from its record, and returns before the holder, operation-offered, and fence checks below are reached. Only where that lookup found no row does the reservation itself lock the row and compare the actor, both profiles, the displayed binding, the recovery evidence, and the operation field by field, refusing a difference as a conflict and an exact match as a still-pending attempt. That locked compare reads no request hash, and is reachable only by a concurrent caller who inserted under the same key in between, so it decides a race and never an ordinary retry.",
             events: &["attempt_reserved"],
         },
         EnforcementLayer {
@@ -392,7 +392,7 @@ fn review_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "task_revision_and_holder",
-            description: decision_path_only!("The caller's If-Match, which is mandatory, equals the revision of the locked task row, so a decision on a task another operation has advanced is refused as a revision conflict, and the task is held by this reviewer: an unheld task, a task held by someone else, and a task already decided are each refused."),
+            description: decision_path_only!("Three checks at three positions, not one. The If-Match header is mandatory, and its syntax is settled by the HTTP layer before the decision call is entered at all: a missing or empty value is refused as precondition-required, and an unquoted, non-numeric, or non-positive one as an invalid request, each ahead of the source preflight, the request lock, the reviewer authority, and the idempotency admission above. A caller malformed here and unauthorized below is therefore told only that the header was malformed. The value that parse produced is compared against the locked task row's revision much later, immediately after that admission, and a decision on a task another operation has advanced is refused there as a revision conflict. The holder check runs later still, after the queue re-check above has confirmed the queue the locked task actually carries: an unheld task, a task held by someone else, and a task already decided are each refused."),
             events: EVERY_REVIEW_EVENT,
         },
         EnforcementLayer {
@@ -877,7 +877,7 @@ mod tests {
     /// performs, so the two are separate layers and the idempotency layer must
     /// not list the event it no longer gates.
     #[test]
-    fn the_reservation_is_admitted_by_its_own_key_check_not_by_replay() {
+    fn the_reservation_key_lookup_answers_a_retry_from_its_record() {
         let description = occurrence_lifecycle();
         let idempotency = layer(&description, "idempotency_admission");
         assert!(
@@ -885,10 +885,53 @@ mod tests {
             "{idempotency:?}"
         );
         let reservation = layer(&description, "reservation_key_admission").description;
-        assert!(reservation.contains("refused"), "{reservation}");
         assert!(
-            !reservation.contains("replay"),
-            "an exact match is refused, never replayed: {reservation}"
+            reservation.contains("answered from its record"),
+            "a retried reservation is answered, not refused: {reservation}"
+        );
+        assert!(
+            reservation.contains("request hash"),
+            "the hash the early lookup compares stopped being reported: {reservation}"
+        );
+        assert!(
+            reservation.contains("never an ordinary retry"),
+            "the locked compare decides a race alone: {reservation}"
+        );
+    }
+
+    #[test]
+    fn the_operation_offered_check_is_scoped_to_the_reservation() {
+        let description = occurrence_lifecycle();
+        let source = layer(&description, "source_authorization").description;
+        assert!(
+            source.contains("holds only on the reservation"),
+            "the operation check is not run on recovery and must say so: {source}"
+        );
+        assert!(
+            source.contains("never re-tests it"),
+            "recovery re-executes a prepared operation without re-testing it: {source}"
+        );
+        assert!(
+            source.contains("recovery settlements included"),
+            "disclosure and binding currency do hold on recovery: {source}"
+        );
+    }
+
+    #[test]
+    fn the_decision_layer_puts_the_header_syntax_before_the_call() {
+        let description = review_lifecycle();
+        let revision = layer(&description, "task_revision_and_holder").description;
+        assert!(
+            revision.contains("before the decision call is entered at all"),
+            "the header syntax is settled outside the service call: {revision}"
+        );
+        assert!(
+            revision.contains("told only that the header was malformed"),
+            "the header refusal wins over every check below it: {revision}"
+        );
+        assert!(
+            revision.contains("later still"),
+            "the holder check is not adjacent to the revision compare: {revision}"
         );
     }
 
