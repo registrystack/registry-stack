@@ -34,6 +34,7 @@ use registry_breg::{
     GeneratedArtifacts, RegistryModule, RegistryProject,
 };
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
+use registry_platform_hooks::HookHandlerSource;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -5996,11 +5997,21 @@ fn load_project_planner_asset_files(
     let mut wasm_module_paths = BTreeMap::new();
     for action in &project.actions {
         partition_handler_source(
-            action.handler.as_ref(),
+            action.handler.as_ref().map(|handler| &handler.handler),
             &format!("actions[{}]", action.id),
             &mut paths,
             &mut wasm_module_paths,
         );
+    }
+    for entity in &project.entities {
+        for hook in &entity.hooks {
+            partition_handler_source(
+                hook.handler.as_ref(),
+                &format!("entities[{}].hooks[{}]", entity.id, hook.id),
+                &mut paths,
+                &mut wasm_module_paths,
+            );
+        }
     }
     let mut assets = load_planner_asset_files(project_directory, paths)?;
     assets.extend(load_wasm_module_asset_files(
@@ -6158,11 +6169,37 @@ fn load_module_asset_files(
     let mut wasm_module_paths = BTreeMap::new();
     for action in &module.actions {
         partition_handler_source(
-            action.handler.as_ref(),
+            action.handler.as_ref().map(|handler| &handler.handler),
             &format!("modules[{module_id}].actions[{}]", action.id),
             &mut planner_paths,
             &mut wasm_module_paths,
         );
+    }
+    for entity in &module.entities {
+        for hook in &entity.hooks {
+            partition_handler_source(
+                hook.handler.as_ref(),
+                &format!(
+                    "modules[{module_id}].entities[{}].hooks[{}]",
+                    entity.id, hook.id
+                ),
+                &mut planner_paths,
+                &mut wasm_module_paths,
+            );
+        }
+    }
+    for extension in &module.extend_entities {
+        for hook in &extension.hooks {
+            partition_handler_source(
+                hook.handler.as_ref(),
+                &format!(
+                    "modules[{module_id}].extendEntities[{}].hooks[{}]",
+                    extension.entity, hook.id
+                ),
+                &mut planner_paths,
+                &mut wasm_module_paths,
+            );
+        }
     }
     assets.extend(load_planner_asset_files(module_directory, planner_paths)?);
     assets.extend(load_wasm_module_asset_files(
@@ -6173,28 +6210,31 @@ fn load_module_asset_files(
     Ok(assets)
 }
 
-/// Split one action handler's declared source reference into its asset family:
+/// Split one handler's declared source reference into its asset family:
 /// a Rhai script for rhai handlers, a WASM module for wasm handlers. An absent
 /// reference contributes nothing here; the compiler refuses the incomplete
 /// shape with its own diagnostic.
 fn partition_handler_source(
-    handler: Option<&registry_breg::contract::ActionHandlerSource>,
+    handler: Option<&HookHandlerSource>,
     declaring_path: &str,
     planner_paths: &mut BTreeMap<String, String>,
     wasm_module_paths: &mut BTreeMap<String, String>,
 ) {
     let Some(handler) = handler else { return };
-    if let Some(script) = handler.script() {
-        planner_paths.insert(
-            script.to_owned(),
-            format!("{declaring_path}.handler.script"),
-        );
-    }
-    if let Some(module) = handler.module() {
-        wasm_module_paths.insert(
-            module.to_owned(),
-            format!("{declaring_path}.handler.module"),
-        );
+    match handler {
+        HookHandlerSource::Rhai { script, .. } => {
+            planner_paths.insert(
+                script.to_owned(),
+                format!("{declaring_path}.handler.script"),
+            );
+        }
+        HookHandlerSource::Wasm { module, .. } => {
+            wasm_module_paths.insert(
+                module.to_owned(),
+                format!("{declaring_path}.handler.module"),
+            );
+        }
+        HookHandlerSource::Url { .. } => {}
     }
 }
 
