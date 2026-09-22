@@ -7,6 +7,14 @@
 //! command can report it without reimplementing the workflow. `terminal`, `unreachable`,
 //! and the transition counts on each state are computed from the declared transition list,
 //! never hand-written, so the report cannot drift from the table it is built from.
+//!
+//! Each edge's `guard` states only what the workflow method itself checks. Everything
+//! the runtime checks around that call, from route admission to the row policy at
+//! persist, is reported once per layer in `enforcement`, in execution order, with the
+//! events each layer covers. A layer is a named place the runtime can refuse, not an
+//! enumeration of every check made there: a reader learns that a request-ownership
+//! layer runs before the transition for four of the five events, not the exact
+//! predicate, which lives in `mutation/request.rs` and changes without notice.
 
 use serde::Serialize;
 
@@ -18,6 +26,7 @@ pub struct LifecycleDescription {
     pub label: &'static str,
     pub states: Vec<LifecycleState>,
     pub transitions: Vec<LifecycleTransition>,
+    pub enforcement: Vec<EnforcementLayer>,
 }
 
 /// One state in a `LifecycleDescription`. Every field but `id` is derived from
@@ -40,7 +49,20 @@ pub struct LifecycleTransition {
     pub from: &'static str,
     pub event: &'static str,
     pub to: &'static str,
+    /// What the workflow method itself checks before it moves the state. Nothing the
+    /// runtime checks around the call appears here; that is `enforcement`.
     pub guard: &'static str,
+}
+
+/// One place the runtime can refuse an event, in execution order within
+/// `LifecycleDescription::enforcement`. `events` names every event the layer runs for;
+/// an event absent from the list passes the layer without being checked there.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnforcementLayer {
+    pub id: &'static str,
+    pub description: &'static str,
+    pub events: &'static [&'static str],
 }
 
 /// Builds a `LifecycleDescription`, deriving each state's `initial`, `terminal`,
@@ -52,6 +74,7 @@ fn build_lifecycle(
     initial_state_id: &'static str,
     state_ids: &[&'static str],
     transitions: Vec<LifecycleTransition>,
+    enforcement: Vec<EnforcementLayer>,
 ) -> LifecycleDescription {
     let states = state_ids
         .iter()
@@ -74,32 +97,79 @@ fn build_lifecycle(
         label,
         states,
         transitions,
+        enforcement,
     }
 }
 
-/// The concurrency precondition every edge carries. `execute_request_action`
-/// recomputes the action ETag from the record and workflow as locked and
-/// compares it with the caller's `If-Match` before it looks at ownership, at
-/// apply authority, or at the transition itself; the header is mandatory, so
-/// a caller who omits it is refused at the HTTP layer and never reaches here.
-/// Written once and concatenated onto each of the seven rather than drifting
-/// seven ways.
-macro_rules! action_precondition {
-    () => {
-        "the caller's If-Match, which is mandatory, matches the action ETag recomputed from the record and workflow as locked, checked before ownership, authority, or the transition"
-    };
+const EVERY_EVENT: &[&str] = &["submit", "revise", "rebase", "cancel", "apply"];
+
+/// The layers `execute_request_action` and `execute_request_action_transaction` run
+/// around a workflow transition, in the order they run. The event lists are the
+/// runtime's own gating: `admit_submitter_targets` is called for Submit and Revise
+/// (rebase is Revise with a flag), `action_requires_request_owner` is false only for
+/// Apply, and the receipt and task-status preflight runs only for Apply.
+fn request_enforcement() -> Vec<EnforcementLayer> {
+    vec![
+        EnforcementLayer {
+            id: "route_admission",
+            description: "The action arrives on a POST route the caller's access profile lists, for an entity that declares change requests, with the route's operation matching the action and the requested response fields inside the profile's readable fields. Refused as an invalid request before any row is read.",
+            events: EVERY_EVENT,
+        },
+        EnforcementLayer {
+            id: "apply_preflight",
+            description: "Before the transaction opens, a retained receipt for the same idempotent apply short-circuits to replay; otherwise the caller's task grant and the task grant frozen on the proposal are each confirmed current and live by the task-status check. Runs again on each retry of the transaction.",
+            events: &["apply"],
+        },
+        EnforcementLayer {
+            id: "row_visibility",
+            description: "The request row is read under the row-level SELECT policy generated for this profile and operation, which admits only an active row whose request state the operation may see (draft, submitted, cancelled, and superseded; applied as well for apply) and only within the profile's request visibility. A row the policy hides is treated as absent.",
+            events: EVERY_EVENT,
+        },
+        EnforcementLayer {
+            id: "submitter_targets",
+            description: "Where the profile declares submitter targets, the caller must still hold read authority over every existing record the request's effects name. Checked against the caller's current authorization, not the authorization held when the request was created.",
+            events: &["submit", "revise", "rebase"],
+        },
+        EnforcementLayer {
+            id: "action_etag",
+            description: "The caller's If-Match, which is mandatory, must equal the action ETag recomputed from the record and workflow as locked, so an action prepared against a request that has since moved is refused as a failed precondition. Submit additionally compares a preview ETag before it plans the submission.",
+            events: EVERY_EVENT,
+        },
+        EnforcementLayer {
+            id: "request_ownership",
+            description: "The acting principal must be the owner recorded on the request. Apply is exempt: its authority is a task grant, and a different actor applies.",
+            events: &["submit", "revise", "rebase", "cancel"],
+        },
+        EnforcementLayer {
+            id: "task_grant",
+            description: "Inside the transaction, apply re-verifies that the caller's grant is the one the preflight checked and that both it and the proposal's grant are still current. For every other action, a caller acting under a task grant has that grant's status checked here.",
+            events: EVERY_EVENT,
+        },
+        EnforcementLayer {
+            id: "workflow_transition",
+            description: "The edge's own guard, run by RequestWorkflow. A refused transition is reported by its workflow error.",
+            events: EVERY_EVENT,
+        },
+        EnforcementLayer {
+            id: "persist_policy",
+            description: "The first write is an UPDATE of the request row under the row-level UPDATE policy generated for this profile and operation, which admits only the source states the operation may leave (draft for submit; submitted for revise, rebase, and apply; draft or submitted for cancel, and for cancel only when the acting principal is the recorded owner). A transition the workflow accepted from any other state writes no row and is refused as a failed precondition.",
+            events: EVERY_EVENT,
+        },
+    ]
 }
 
 /// Describes the request lifecycle enforced by `RequestWorkflow`: the states in
 /// `RequestState` and the transitions its `submit`, `revise`, `rebase`, `cancel`, and
 /// `apply` methods run.
 ///
-/// `cancel` refuses only `Applied` and `Cancelled` source states (it checks
-/// `matches!(self.state, RequestState::Applied | RequestState::Cancelled)`), so its guard
-/// also accepts a request in `Superseded`. That gives this table a seventh edge,
-/// `superseded` --cancel--> `cancelled`, declared here even though no transition targets
-/// `Superseded` and nothing can ever reach it. The computed `unreachable` flag on the
-/// `superseded` state reports that honestly instead of hiding it.
+/// `superseded` is in the table as a state and in no edge. Nothing writes it: no
+/// transition targets it, `initialize_draft` stores `draft`, and `save` stores the state
+/// a transition reached. `cancel`'s own check would accept it as a source, since it
+/// refuses only `Applied` and `Cancelled`, but the UPDATE policy generated for cancel
+/// admits only `draft` and `submitted` rows, so such a cancel would write nothing and be
+/// refused at persist. An edge that cannot fire from a state that cannot exist is not a
+/// transition the engine runs, so the state reports as unreachable and terminal rather
+/// than carrying a dead edge.
 pub fn request_lifecycle() -> LifecycleDescription {
     build_lifecycle(
         "request",
@@ -111,45 +181,40 @@ pub fn request_lifecycle() -> LifecycleDescription {
                 from: "draft",
                 event: "submit",
                 to: "submitted",
-                guard: concat!(action_precondition!(), "; ", "the caller is the request owner and the request is in draft and its current version has not already been frozen into a proposal"),
+                guard: "the request is in draft and its current version has not already been frozen into a proposal",
             },
             LifecycleTransition {
                 from: "submitted",
                 event: "revise",
                 to: "draft",
-                guard: concat!(action_precondition!(), "; ", "the caller is the request owner and the request is submitted; opens the next draft version tagged as a content revision, not a rebase"),
+                guard: "the request is submitted; opens the next draft version tagged as a content revision, not a rebase",
             },
             LifecycleTransition {
                 from: "submitted",
                 event: "rebase",
                 to: "draft",
-                guard: concat!(action_precondition!(), "; ", "the caller is the request owner and the request is submitted; opens the next draft version tagged as a rebase onto updated context, not a revision"),
+                guard: "the request is submitted; opens the next draft version tagged as a rebase onto updated context, not a revision",
             },
             LifecycleTransition {
                 from: "draft",
                 event: "cancel",
                 to: "cancelled",
-                guard: concat!(action_precondition!(), "; ", "the caller is the request owner and the request is not already applied or cancelled"),
+                guard: "the caller is the request owner and the request is not already applied or cancelled",
             },
             LifecycleTransition {
                 from: "submitted",
                 event: "cancel",
                 to: "cancelled",
-                guard: concat!(action_precondition!(), "; ", "the caller is the request owner and the request is not already applied or cancelled"),
+                guard: "the caller is the request owner and the request is not already applied or cancelled",
             },
             LifecycleTransition {
                 from: "submitted",
                 event: "apply",
                 to: "applied",
-                guard: concat!(action_precondition!(), "; ", "the caller's task grant and the proposal's task grant are each confirmed current and still live by the task-status check before the transaction opens, and both are re-verified as unchanged and current inside it; the request is submitted and unapplied at the current version; digest, fingerprint, review evidence, targets and links verify"),
-            },
-            LifecycleTransition {
-                from: "superseded",
-                event: "cancel",
-                to: "cancelled",
-                guard: concat!(action_precondition!(), "; ", "the caller is the request owner and the request is not already applied or cancelled"),
+                guard: "the request is submitted and unapplied, the named proposal version is its current version, the frozen proposal's digest verifies and matches the displayed digest, the contract fingerprint matches, review evidence matches the frozen review requirement, the observed targets match the frozen targets, the application links match the frozen effects, and any application reason is well-formed",
             },
         ],
+        request_enforcement(),
     )
 }
 
@@ -158,57 +223,149 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// `action_requires_request_owner` gates submit, revise, and cancel, and
-    /// only `apply` is open to another actor. Naming the owner on the cancel
-    /// edges alone read as if submission and revision had no owner
-    /// requirement at all.
-    #[test]
-    fn every_owner_gated_edge_names_the_owner_check() {
-        for edge in &request_lifecycle().transitions {
-            let owner_gated = matches!(edge.event, "submit" | "revise" | "rebase" | "cancel");
-            assert_eq!(
-                edge.guard.contains("the caller is the request owner"),
-                owner_gated,
-                "{edge:?}"
-            );
-        }
-    }
+    use std::collections::BTreeSet;
 
-    /// The ETag precondition refuses a stale action before any edge's own
-    /// checks run, so a guard that omitted it would report an owner in the
-    /// named state as able to act on a record that has since moved. It is on
-    /// `apply` too, which the reporting review did not claim: the check does
-    /// not branch on the action.
-    #[test]
-    fn every_edge_names_the_action_etag_precondition() {
-        for edge in &request_lifecycle().transitions {
-            assert!(edge.guard.contains("If-Match"), "{edge:?}");
-            assert!(
-                edge.guard
-                    .contains("recomputed from the record and workflow as locked"),
-                "{edge:?}"
-            );
-        }
-    }
-
-    /// `apply` is the one edge whose authority is a task grant rather than
-    /// request ownership, and it is checked twice: once before the
-    /// transaction opens and again inside it. A guard that listed only the
-    /// proposal and review integrity checks would report a revoked grant as
-    /// no obstacle.
-    #[test]
-    fn the_apply_edge_names_both_task_grant_checks() {
-        let apply = request_lifecycle()
+    fn declared_events(lifecycle: &LifecycleDescription) -> BTreeSet<&'static str> {
+        lifecycle
             .transitions
-            .into_iter()
-            .find(|edge| edge.event == "apply")
-            .expect("apply edge");
-        assert!(apply.guard.contains("task grant"), "{apply:?}");
-        assert!(
-            apply.guard.contains("before the transaction opens"),
-            "{apply:?}"
+            .iter()
+            .map(|edge| edge.event)
+            .collect()
+    }
+
+    fn layer<'a>(lifecycle: &'a LifecycleDescription, id: &str) -> &'a EnforcementLayer {
+        lifecycle
+            .enforcement
+            .iter()
+            .find(|layer| layer.id == id)
+            .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
+    }
+
+    /// A guard states what `RequestWorkflow` itself checks and nothing that
+    /// runs around it. The runtime layers are reported once each in
+    /// `enforcement`, in order, rather than transcribed onto every edge: the
+    /// earlier report did transcribe them and six review rounds each found a
+    /// layer it had left out, because a per-edge sentence can only ever be an
+    /// incomplete copy of the stack. A guard that names a layer's check is
+    /// that copy starting again.
+    #[test]
+    fn guards_state_the_workflow_condition_and_restate_no_layer() {
+        for edge in &request_lifecycle().transitions {
+            for phrase in [
+                "If-Match",
+                "ETag",
+                "task grant",
+                "policy",
+                "submitterTargets",
+                "before the transaction",
+            ] {
+                assert!(
+                    !edge.guard.contains(phrase),
+                    "{edge:?} restates an enforcement layer: {phrase:?}"
+                );
+            }
+            assert!(!edge.guard.is_empty(), "{edge:?}");
+        }
+    }
+
+    /// `RequestWorkflow::cancel` is the one transition that checks the actor
+    /// itself (`context.actor != self.owner` is `NotOwner`), so only the
+    /// cancel guards may name the owner; the owner check on submit, revise,
+    /// and rebase belongs to the mutation layer and is a reported layer.
+    #[test]
+    fn only_cancel_guards_name_the_owner_the_workflow_checks() {
+        for edge in &request_lifecycle().transitions {
+            assert_eq!(
+                edge.guard.contains("owner"),
+                edge.event == "cancel",
+                "{edge:?}"
+            );
+        }
+    }
+
+    /// The layers are reported in the order the runtime runs them, with the
+    /// workflow transition placed where it sits among them, and each names
+    /// at least one event the table raises and no event it does not.
+    #[test]
+    fn enforcement_layers_are_ordered_and_name_declared_events() {
+        let lifecycle = request_lifecycle();
+        let ids: Vec<&str> = lifecycle.enforcement.iter().map(|layer| layer.id).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "route_admission",
+                "apply_preflight",
+                "row_visibility",
+                "submitter_targets",
+                "action_etag",
+                "request_ownership",
+                "task_grant",
+                "workflow_transition",
+                "persist_policy",
+            ]
         );
-        assert!(apply.guard.contains("re-verified"), "{apply:?}");
+        let events = declared_events(&lifecycle);
+        for layer in &lifecycle.enforcement {
+            assert!(!layer.events.is_empty(), "{layer:?}");
+            assert!(!layer.description.is_empty(), "{layer:?}");
+            for event in layer.events {
+                assert!(
+                    events.contains(event),
+                    "{layer:?} names an undeclared event"
+                );
+            }
+        }
+    }
+
+    /// Which events a selective layer covers is what the runtime does, not a
+    /// choice this module makes: `admit_submitter_targets` runs for Submit
+    /// and Revise, and rebase is Revise with a flag; `action_requires_request_owner`
+    /// is false only for Apply; the receipt and task-status preflight runs
+    /// only for Apply. Every other layer runs for every action.
+    #[test]
+    fn selective_layers_cover_exactly_the_events_the_runtime_gates() {
+        let lifecycle = request_lifecycle();
+        assert_eq!(layer(&lifecycle, "apply_preflight").events, ["apply"]);
+        assert_eq!(
+            layer(&lifecycle, "submitter_targets").events,
+            ["submit", "revise", "rebase"]
+        );
+        assert_eq!(
+            layer(&lifecycle, "request_ownership").events,
+            ["submit", "revise", "rebase", "cancel"]
+        );
+        for id in [
+            "route_admission",
+            "row_visibility",
+            "action_etag",
+            "task_grant",
+            "workflow_transition",
+            "persist_policy",
+        ] {
+            assert_eq!(
+                layer(&lifecycle, id).events,
+                ["submit", "revise", "rebase", "cancel", "apply"],
+                "{id}"
+            );
+        }
+    }
+
+    /// The persist layer is what makes `superseded` a dead source state: the
+    /// UPDATE policy generated for cancel admits only draft and submitted
+    /// rows, so a cancel the workflow accepted from `superseded` writes no
+    /// row and is refused. The table declares no such edge, and this pins the
+    /// policy the omission rests on.
+    #[test]
+    fn the_cancel_update_policy_admits_no_superseded_row() {
+        use crate::contract::Operation;
+        use crate::generated_ddl::{change_request_action_state_exists_expression, PolicyCommand};
+
+        let cancel = change_request_action_state_exists_expression(
+            Operation::CancelRequest,
+            PolicyCommand::Update,
+        );
+        assert!(cancel.contains("'draft', 'submitted'"), "{cancel}");
+        assert!(!cancel.contains("superseded"), "{cancel}");
     }
 
     use registry_platform_canonical_json::canonicalize_json;
@@ -415,13 +572,13 @@ mod tests {
         assert_eq!(applied_workflow().state(), RequestState::Applied);
     }
 
-    // Edge 7, `superseded` --cancel--> `cancelled`, cannot be exercised positively: no
-    // transition ever produces a `Superseded` workflow, so one cannot be constructed to
-    // call `cancel` on. Instead this proves `cancel`'s guard refuses exactly the two
-    // states the table does NOT declare a `cancel` edge from (`Applied` and `Cancelled`),
-    // which is the shape that makes `Superseded` the one remaining state `cancel` accepts.
+    // `cancel`'s own check refuses exactly `Applied` and `Cancelled`, the two states the
+    // table declares no `cancel` edge from. It would also accept `Superseded`, which the
+    // table does not declare either: no transition produces a `Superseded` workflow, so
+    // none can be constructed to call `cancel` on, and the persist layer refuses the write
+    // regardless (see `the_cancel_update_policy_admits_no_superseded_row`).
     #[test]
-    fn cancel_guard_refuses_only_applied_and_cancelled_sources() {
+    fn cancel_refuses_applied_and_cancelled_sources() {
         let applied = applied_workflow();
         assert_eq!(
             applied.cancel(context(OWNER, "2026-09-19T00:04:00Z")),
@@ -469,8 +626,12 @@ mod tests {
         assert_eq!(table, declared);
     }
 
+    /// `superseded` is stored and matched but never written by any transition
+    /// and never accepted as a source by the persist layer, so the table
+    /// declares no edge touching it and it reports as both unreachable and
+    /// terminal.
     #[test]
-    fn superseded_is_unreachable_and_non_terminal_while_applied_and_cancelled_are_terminal() {
+    fn superseded_is_unreachable_and_terminal_and_applied_and_cancelled_are_terminal() {
         let lifecycle = request_lifecycle();
         let state = |id: &str| {
             lifecycle
@@ -482,9 +643,10 @@ mod tests {
 
         let superseded = state("superseded");
         assert!(superseded.unreachable);
-        assert!(!superseded.terminal);
+        assert!(superseded.terminal);
         assert_eq!(superseded.incoming_transitions, 0);
-        assert_eq!(superseded.outgoing_transitions, 1);
+        assert_eq!(superseded.outgoing_transitions, 0);
+        assert_eq!(lifecycle.transitions.len(), 6);
 
         assert!(state("applied").terminal);
         assert!(state("cancelled").terminal);

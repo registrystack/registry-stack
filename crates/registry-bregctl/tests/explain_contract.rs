@@ -356,7 +356,103 @@ fn renaming_a_lifecycle_state_or_event_fails_the_contract() {
     };
     assert!(
         schema.validate(&extra_edge).is_err(),
-        "an eighth edge must fail the schema: {extra_edge:#?}"
+        "a seventh edge must fail the schema: {extra_edge:#?}"
+    );
+}
+
+/// The table is pinned by position, not only by vocabulary. A schema that
+/// constrained each entry to an enum of the known ids would still admit a
+/// table with the states reordered, `revise` and `rebase` swapped, or an
+/// edge replaced by a duplicate of another, and every one of those is a
+/// different machine reported under the same names. The enforcement layers
+/// are pinned the same way because their order is what the report says
+/// about the runtime: a layer moved is a different claim about when the
+/// engine refuses.
+#[test]
+fn reordering_or_thinning_the_lifecycle_fails_the_contract() {
+    let report = explain_lifecycle_report();
+    let schema = load_schema("LifecycleExplanation");
+    let lifecycle = |edit: &dyn Fn(&mut Value)| {
+        let mut explanation = report["explanation"].clone();
+        edit(&mut explanation["lifecycles"][0]);
+        explanation
+    };
+
+    let swapped_states = lifecycle(&|machine| {
+        machine["states"].as_array_mut().expect("states").swap(0, 1);
+    });
+    assert!(
+        schema.validate(&swapped_states).is_err(),
+        "reordering the states must fail the schema: {swapped_states:#?}"
+    );
+
+    let swapped_edges = lifecycle(&|machine| {
+        let edges = machine["transitions"].as_array_mut().expect("transitions");
+        assert_eq!(edges[1]["event"], Value::String("revise".to_owned()));
+        assert_eq!(edges[2]["event"], Value::String("rebase".to_owned()));
+        edges.swap(1, 2);
+    });
+    assert!(
+        schema.validate(&swapped_edges).is_err(),
+        "swapping the revise and rebase edges must fail the schema: {swapped_edges:#?}"
+    );
+
+    let duplicated_edge = lifecycle(&|machine| {
+        let edges = machine["transitions"].as_array_mut().expect("transitions");
+        edges[5] = edges[4].clone();
+    });
+    assert!(
+        schema.validate(&duplicated_edge).is_err(),
+        "replacing the apply edge with a second cancel edge must fail the schema: {duplicated_edge:#?}"
+    );
+
+    let no_enforcement = lifecycle(&|machine| {
+        machine
+            .as_object_mut()
+            .expect("machine object")
+            .remove("enforcement");
+    });
+    assert!(
+        schema.validate(&no_enforcement).is_err(),
+        "a machine without its enforcement layers must fail the schema: {no_enforcement:#?}"
+    );
+
+    let dropped_layer = lifecycle(&|machine| {
+        machine["enforcement"]
+            .as_array_mut()
+            .expect("enforcement")
+            .pop();
+    });
+    assert!(
+        schema.validate(&dropped_layer).is_err(),
+        "dropping the persist layer must fail the schema: {dropped_layer:#?}"
+    );
+
+    let swapped_layers = lifecycle(&|machine| {
+        machine["enforcement"]
+            .as_array_mut()
+            .expect("enforcement")
+            .swap(0, 1);
+    });
+    assert!(
+        schema.validate(&swapped_layers).is_err(),
+        "reordering the enforcement layers must fail the schema: {swapped_layers:#?}"
+    );
+
+    let layer_without_events = lifecycle(&|machine| {
+        machine["enforcement"][0]["events"] = Value::Array(Vec::new());
+    });
+    assert!(
+        schema.validate(&layer_without_events).is_err(),
+        "a layer that applies to no event must fail the schema: {layer_without_events:#?}"
+    );
+
+    let layer_with_unknown_event = lifecycle(&|machine| {
+        machine["enforcement"][0]["events"] = Value::Array(vec![Value::String("merge".to_owned())]);
+    });
+    assert!(
+        schema.validate(&layer_with_unknown_event).is_err(),
+        "a layer naming an event the machine does not raise must fail the schema: {layer_with_unknown_event:#?}"
     );
 }
 
