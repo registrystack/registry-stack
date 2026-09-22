@@ -360,6 +360,49 @@ fn renaming_a_lifecycle_state_or_event_fails_the_contract() {
     );
 }
 
+/// `initial`, `terminal`, `unreachable`, and the two transition counts are
+/// derived from the edge list rather than written down, so pinning the states
+/// by id alone would leave the derivation itself unpinned: a report calling
+/// `draft` terminal or `superseded` reachable would still validate, and the
+/// contract would say nothing about the one part of the state list a code
+/// change can silently get wrong. Each derived fact is pinned to the value the
+/// derivation must produce, and this test is what proves the pin bites.
+#[test]
+fn flipping_a_derived_lifecycle_fact_fails_the_contract() {
+    let report = explain_lifecycle_report();
+    let schema = load_schema("LifecycleExplanation");
+    let state = |id: &str, field: &str, value: Value| {
+        let mut explanation = report["explanation"].clone();
+        let states = explanation["lifecycles"][0]["states"]
+            .as_array_mut()
+            .expect("states array");
+        let entry = states
+            .iter_mut()
+            .find(|state| state["id"] == id)
+            .unwrap_or_else(|| panic!("{id} is reported"));
+        assert_ne!(entry[field], value, "{id}.{field} already reports the edit");
+        entry[field] = value;
+        explanation
+    };
+
+    for (id, field, value) in [
+        ("draft", "terminal", Value::Bool(true)),
+        ("draft", "initial", Value::Bool(false)),
+        ("applied", "terminal", Value::Bool(false)),
+        ("superseded", "unreachable", Value::Bool(false)),
+        ("cancelled", "unreachable", Value::Bool(true)),
+        ("submitted", "outgoingTransitions", Value::from(3)),
+        ("submitted", "incomingTransitions", Value::from(2)),
+        ("superseded", "incomingTransitions", Value::from(1)),
+    ] {
+        let edited = state(id, field, value.clone());
+        assert!(
+            schema.validate(&edited).is_err(),
+            "{id}.{field} reported as {value} must fail the schema: {edited:#?}"
+        );
+    }
+}
+
 /// The table is pinned by position, not only by vocabulary. A schema that
 /// constrained each entry to an enum of the known ids would still admit a
 /// table with the states reordered, `revise` and `rebase` swapped, or an

@@ -234,7 +234,7 @@ fn occurrence_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "queue_and_holder_authority",
-            description: "The actor is a staff member of a team serving the item's queue; a supervisor serving that queue may release another person's holding but may not claim or reserve. A claim refuses an item already held. A release refuses an item nobody holds, and refuses a staff member who is not the recorded holder, but the supervisor above may release whoever holds it. A reservation refuses anyone but the recorded holder.",
+            description: "The actor is a staff member of a team serving the item's queue; a supervisor serving that queue may release another person's holding but may not claim or reserve. A claim refuses an item already held. A release refuses an item nobody holds, and refuses a staff member who is not the recorded holder, but the supervisor above may release whoever holds it. A reservation refuses anyone but the recorded holder. On the claim and release paths this layer straddles the idempotency admission below: the queue membership check runs before that admission and the holder-state refusals after it, so an exact retry of a claim that already succeeded is answered from its record rather than refused for the item now being held. A reservation sits on neither side of that split, being admitted by no record at all, and meets the holder check before the queue check.",
             events: &["claim", "release", "attempt_reserved"],
         },
         EnforcementLayer {
@@ -377,17 +377,17 @@ fn review_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "request_lock_and_lifecycle",
-            description: "On the decision, stage, and cancellation routes the review request row is locked before anything is decided, and an event against a request not still in reviewing, or whose subject is not the one the caller named, is refused; a repeated cancellation returns the terminal result already recorded rather than settling twice. A supersession reaches this lock through the producer's submission above, which selects only that producer's own reviewing requests.",
-            events: EVERY_REVIEW_EVENT,
-        },
-        EnforcementLayer {
-            id: "request_idempotency_admission",
-            description: "With the request row locked, a retry on the decision, stage, or cancellation route is answered from its recorded idempotency record before any queue, revision, holder, or decision check runs: a recorded request hash differing from this one is refused as a conflict, and a record whose response has been retained away is refused as expired. A settlement raised by a producer's submission or by the recover route was admitted by the layer above instead, without this lock.",
+            description: "On the decision, stage, and cancellation routes the review request row is locked before anything is decided, and an event against a request not still in reviewing is refused; a repeated cancellation returns the terminal result already recorded rather than settling twice. Only the lock is taken at this position: it precedes both layers below, while the reviewing check itself runs after them, so a retry recorded while the request was still reviewing is replayed from its record rather than refused for having settled since. Cancellation also refuses a subject that is not the one the caller named, at that later position. A supersession reaches this lock through the producer's submission above, which selects only that producer's own reviewing requests.",
             events: EVERY_REVIEW_EVENT,
         },
         EnforcementLayer {
             id: "reviewer_queue_authority",
-            description: decision_path_only!("The reviewer's role is neither Administrator nor Requester, their profile appears in at least one stage's deciding profiles, and they are a staff or supervisor member of a team serving the task's queue; the membership rows are locked so a concurrent membership change cannot race the decision."),
+            description: decision_path_only!("The reviewer's role is neither Administrator nor Requester, their profile appears in at least one stage's deciding profiles, and they are a staff or supervisor member of a team serving a task this request holds at one of those stages; the task, queue-service, and membership rows are locked together so a concurrent membership change cannot race the decision. That half runs under the request lock and before the idempotency admission below, so a retry whose recorded response is still stored is refused for lost authority rather than replayed. The other half runs later, after the task revision below: the queue the locked task actually carries is re-checked against this reviewer's membership, so a task moved to a queue they do not serve is refused even though the first half passed."),
+            events: EVERY_REVIEW_EVENT,
+        },
+        EnforcementLayer {
+            id: "request_idempotency_admission",
+            description: "With the request row locked and the reviewer admitted above, a retry on the decision, stage, or cancellation route is answered from its recorded idempotency record before any revision, holder, or decision check runs: a recorded request hash differing from this one is refused as a conflict, and a record whose response has been retained away is refused as expired. A settlement raised by a producer's submission or by the recover route was admitted by the producer submission layer above instead, without this lock.",
             events: EVERY_REVIEW_EVENT,
         },
         EnforcementLayer {
@@ -921,7 +921,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
         };
         assert!(index("producer_submission_idempotency") < index("request_lock_and_lifecycle"));
-        assert!(index("request_lock_and_lifecycle") < index("request_idempotency_admission"));
+        assert!(index("request_lock_and_lifecycle") < index("reviewer_queue_authority"));
+        assert!(index("reviewer_queue_authority") < index("request_idempotency_admission"));
         assert_eq!(
             layer(&description, "producer_submission_idempotency").events,
             ["settle"]
@@ -1144,8 +1145,8 @@ mod tests {
                 "review_source_preflight",
                 "producer_submission_idempotency",
                 "request_lock_and_lifecycle",
-                "request_idempotency_admission",
                 "reviewer_queue_authority",
+                "request_idempotency_admission",
                 "task_revision_and_holder",
                 "decision_eligibility",
                 "stage_quorum_progression",
@@ -1163,6 +1164,57 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Queue membership is checked before the idempotency admission and the
+    /// holder-state refusals after it, so the layer that carries both sits at
+    /// one position while half its refusals happen at another. Left unsaid, the
+    /// report would promise that an exact retry of a successful claim is
+    /// refused for the item being held, when the record answers it first.
+    #[test]
+    fn the_queue_and_holder_layer_names_the_admission_it_straddles() {
+        let description = occurrence_lifecycle();
+        let authority = layer(&description, "queue_and_holder_authority").description;
+        assert!(
+            authority.contains("straddles the idempotency admission below"),
+            "the straddle stopped being reported: {authority}"
+        );
+        assert!(
+            authority.contains("holder check before the queue check"),
+            "the reservation meets the two halves in the other order and must say so: {authority}"
+        );
+    }
+
+    /// Reviewer authority is consulted under the request lock and before the
+    /// idempotency record, so a retry by a reviewer who has since lost their
+    /// membership is refused rather than replayed. A report that placed the
+    /// admission after the record would promise the opposite.
+    #[test]
+    fn the_reviewer_authority_is_consulted_before_the_recorded_response() {
+        let description = review_lifecycle();
+        let index = |id: &str| {
+            description
+                .enforcement
+                .iter()
+                .position(|layer| layer.id == id)
+                .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
+        };
+        assert!(index("reviewer_queue_authority") < index("request_idempotency_admission"));
+        let authority = layer(&description, "reviewer_queue_authority").description;
+        assert!(
+            authority.contains("before the idempotency admission below"),
+            "the authority layer stopped naming where it sits: {authority}"
+        );
+        assert!(
+            authority.contains("The other half runs later"),
+            "the authority layer straddles the record and must say so: {authority}"
+        );
+        assert!(
+            layer(&description, "request_lock_and_lifecycle")
+                .description
+                .contains("Only the lock is taken at this position"),
+            "the lock layer stopped naming that its reviewing check runs later"
+        );
     }
 
     /// `settle` is one event with six targets, two of which (cancelled and

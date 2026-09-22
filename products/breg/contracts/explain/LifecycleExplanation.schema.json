@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://registrystack.org/breg-explain/v1alpha1/LifecycleExplanation.schema.json",
   "title": "LifecycleExplanation",
-  "description": "Wire shape of `explanation` for `bregctl explain lifecycle`, which reports the request lifecycle the engine enforces. This kind is pinned in full, identifiers and positions included: the request machine does not vary by project, so its own id, its five states, its six edges, and its fifteen enforcement layers, each with the exact event list it runs for, are all constrained here by position and unconditionally, and a rename, a reordering, or a dropped entry fails the contract test rather than passing it. `LifecycleDescription` in `registry-breg` exists to be this payload rather than to model anything the engine computes, so a change to its fields is a deliberate change to this contract and not the incidental drift that makes a compiled-model passthrough opaque. `lifecycle` is the one subject that takes no PROJECT: the lifecycle is engine behaviour and does not vary by project, so the report carries no `revision`.",
+  "description": "Wire shape of `explanation` for `bregctl explain lifecycle`, which reports the request lifecycle the engine enforces. This kind is pinned in full, identifiers and positions included: the request machine does not vary by project, so its own id, its five states with every fact derived from the edge list pinned to the value that derivation must produce, its six edges, and its eighteen enforcement layers, each with the exact event list it runs for, are all constrained here by position and unconditionally, and a rename, a reordering, or a dropped entry fails the contract test rather than passing it. `LifecycleDescription` in `registry-breg` exists to be this payload rather than to model anything the engine computes, so a change to its fields is a deliberate change to this contract and not the incidental drift that makes a compiled-model passthrough opaque. `lifecycle` is the one subject that takes no PROJECT: the lifecycle is engine behaviour and does not vary by project, so the report carries no `revision`.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "kind", "lifecycles"],
@@ -45,35 +45,60 @@
               "properties": {
                 "id": {
                   "const": "draft"
-                }
+                },
+                "initial": { "const": true },
+                "terminal": { "const": false },
+                "unreachable": { "const": false },
+                "incomingTransitions": { "const": 2 },
+                "outgoingTransitions": { "const": 2 }
               }
             },
             {
               "properties": {
                 "id": {
                   "const": "submitted"
-                }
+                },
+                "initial": { "const": false },
+                "terminal": { "const": false },
+                "unreachable": { "const": false },
+                "incomingTransitions": { "const": 1 },
+                "outgoingTransitions": { "const": 4 }
               }
             },
             {
               "properties": {
                 "id": {
                   "const": "cancelled"
-                }
+                },
+                "initial": { "const": false },
+                "terminal": { "const": true },
+                "unreachable": { "const": false },
+                "incomingTransitions": { "const": 2 },
+                "outgoingTransitions": { "const": 0 }
               }
             },
             {
               "properties": {
                 "id": {
                   "const": "applied"
-                }
+                },
+                "initial": { "const": false },
+                "terminal": { "const": true },
+                "unreachable": { "const": false },
+                "incomingTransitions": { "const": 1 },
+                "outgoingTransitions": { "const": 0 }
               }
             },
             {
               "properties": {
                 "id": {
                   "const": "superseded"
-                }
+                },
+                "initial": { "const": false },
+                "terminal": { "const": true },
+                "unreachable": { "const": true },
+                "incomingTransitions": { "const": 0 },
+                "outgoingTransitions": { "const": 0 }
               }
             }
           ],
@@ -169,6 +194,24 @@
             {
               "properties": {
                 "id": {
+                  "const": "caller_authentication"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "submit" },
+                    { "const": "revise" },
+                    { "const": "rebase" },
+                    { "const": "cancel" },
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 5
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
                   "const": "route_admission"
                 },
                 "events": {
@@ -195,6 +238,24 @@
                   ],
                   "items": false,
                   "minItems": 1
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "request_header_lookup"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "submit" },
+                    { "const": "revise" },
+                    { "const": "rebase" },
+                    { "const": "cancel" },
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 5
                 }
               }
             },
@@ -261,6 +322,20 @@
                   ],
                   "items": false,
                   "minItems": 3
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "applied_recovery"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "apply" }
+                  ],
+                  "items": false,
+                  "minItems": 1
                 }
               }
             },
@@ -411,7 +486,7 @@
             }
           ],
           "items": false,
-          "minItems": 15
+          "minItems": 18
         }
       }
     },

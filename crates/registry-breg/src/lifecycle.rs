@@ -119,14 +119,24 @@ const EVERY_EVENT: &[&str] = &["submit", "revise", "rebase", "cancel", "apply"];
 fn request_enforcement() -> Vec<EnforcementLayer> {
     vec![
         EnforcementLayer {
+            id: "caller_authentication",
+            description: "Every route the engine serves runs behind one bearer admission. A credential that is presented and does not verify is refused here, before any route is matched, with a single 401 that names no cause: malformed header, malformed token, expired, not yet valid, unknown or disallowed key, disallowed algorithm, wrong issuer, and wrong audience are deliberately indistinguishable to the caller. Presenting no credential at all is not refused here. That request continues as anonymous, and where the profile it resolves to does not permit the operation anonymously the route admission below is what refuses it, so for a missing credential this layer is not the first refusal.",
+            events: EVERY_EVENT,
+        },
+        EnforcementLayer {
             id: "route_admission",
-            description: "The action arrives on a POST route the caller's access profile lists, for an entity that declares change requests, with the route's operation matching the action and the requested response fields inside the profile's readable fields. Refused as an invalid request before any row is read.",
+            description: "The action arrives on a POST route the caller's access profile lists, for an entity that declares change requests, with the route's operation matching the action and the requested response fields inside the profile's readable fields. The profile is resolved from the identity the layer above established, or from the anonymous fallback where no credential was presented. Refused as an invalid request before any row is read.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
             id: "apply_preflight",
-            description: "Before the transaction opens, a retained receipt for the same idempotent apply short-circuits to replay; otherwise the caller's task grant and the task grant frozen on the proposal are each confirmed current and live by the task-status check. Runs again on each retry of the transaction.",
+            description: "Before the transaction opens, an apply short-circuits on either of two conditions: a retained receipt for this same key, or a request already in the applied state, whatever key the call carries. Neither grant is consulted on either of those, and the second is not a replay, since the key may never have been seen. Otherwise the caller's task grant and the task grant frozen on the proposal are each confirmed current and live by the task-status check. Runs again on each retry of the transaction.",
             events: &["apply"],
+        },
+        EnforcementLayer {
+            id: "request_header_lookup",
+            description: "The first read the transaction makes, before any idempotency row is locked and for every action alike: the named request's stored proposal version is selected from the request-state table, a request that is not there is refused as a precondition failure, and the action context built from that version is refused the same way where it cannot be constructed for this route. Only that version crosses this point, by design, so no intake, decision, snapshot, or held response is read before target-row authorization below. Because it precedes the lock, an action naming a request that does not exist is refused here even when the key it presents is already bound to some other request, and the conflict that binding would raise is never reported.",
+            events: EVERY_EVENT,
         },
         EnforcementLayer {
             id: "submit_preparation",
@@ -135,7 +145,7 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "idempotency_replay",
-            description: "Inside the transaction, the idempotency row for this action's key is locked and read before the request row and workflow are read under that lock. The stored binding covers the caller's If-Match, the target authority, and the canonical body, so a key already bound to a different request is refused as a conflict here, before those reads, and so is a key whose stored result was erased, because erasure is permanent and keeps the key reserved. Submit is the exception to the reading order: an unlocked probe for this key runs first, and where it finds no receipt the preparation layer above reads the row and plans the submission before this lock is taken. A binding that matches replays the stored response once row visibility and, where they apply, submitter targets have been re-checked. That replay returns without re-running the action ETag, request ownership, the in-transaction task grant check, the workflow transition, or the persist policy.",
+            description: "After the header lookup above, the idempotency row for this action's key is locked and read before the request row and workflow are read under that lock. The stored binding covers the caller's If-Match, the target authority, and the canonical body, so a key already bound to a different request is refused as a conflict here, before those reads, and so is a key whose stored result was erased, because erasure is permanent and keeps the key reserved. Submit is the exception to the reading order: an unlocked probe for this key runs first, and where it finds no receipt the preparation layer above reads the row and plans the submission before this lock is taken. A binding that matches replays the stored response once row visibility and, where they apply, submitter targets have been re-checked, and, on an apply whose workflow still carries a current proposal, once that proposal's targets have been re-authorized against the authority this caller presents now: an apply replay by a caller who has since lost authority over a target is refused rather than answered from the record. The other four actions reach that re-authorization and pass through it deciding nothing, so for them a replay is authorized by the row policy above and nothing else. A stored application result presented on any action but apply is refused as a precondition failure here rather than replayed. The replay returns without re-running the action ETag, request ownership, the in-transaction task grant check, the workflow transition, or the persist policy.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
@@ -147,6 +157,11 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
             id: "submitter_targets",
             description: "Where the profile declares submitter targets, the caller must still hold read authority over every existing record the request's effects name. Checked against the caller's current authorization, not the authorization held when the request was created.",
             events: &["submit", "revise", "rebase"],
+        },
+        EnforcementLayer {
+            id: "applied_recovery",
+            description: "An apply naming a request that is already applied, under a key with no retained result, is answered by rebuilding the recorded application instead of applying again, and is admitted by its own checks in place of most of the layers below. The proposal version and effect digest it presents must be the ones the recorded application carries, its If-Match must equal the action ETag recomputed for the state as it stood before that application rather than as it stands now, and the proposal's targets and its frozen application guards are both re-authorized against the target authority this caller presents now. Neither task grant is checked here, because the preflight above did not load them; this path returns before the action ETag, request ownership, the in-transaction task grant check, the workflow transition, and the persist policy.",
+            events: &["apply"],
         },
         EnforcementLayer {
             id: "action_etag",
@@ -170,7 +185,7 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "apply_target_authorization",
-            description: "Apply authorizes the proposal's frozen targets before it writes any of them: each target the effects name is checked against the target authority the caller presented, under this caller's current authorization rather than the authorization held when the proposal was frozen.",
+            description: "Apply authorizes the proposal's frozen targets before it writes any of them: each target the effects name is checked against the target authority the caller presented, under this caller's current authorization rather than the authorization held when the proposal was frozen. The same authorization runs at the replay layer above before a retained apply response is handed back, so losing authority over a target closes the replay route as well as this one.",
             events: &["apply"],
         },
         EnforcementLayer {
@@ -331,12 +346,15 @@ mod tests {
         assert_eq!(
             ids,
             vec![
+                "caller_authentication",
                 "route_admission",
                 "apply_preflight",
+                "request_header_lookup",
                 "submit_preparation",
                 "idempotency_replay",
                 "row_visibility",
                 "submitter_targets",
+                "applied_recovery",
                 "action_etag",
                 "request_ownership",
                 "task_grant",
@@ -371,6 +389,7 @@ mod tests {
         let lifecycle = request_lifecycle();
         for id in [
             "apply_preflight",
+            "applied_recovery",
             "apply_target_authorization",
             "apply_preconditions",
             "apply_target_persistence",
@@ -438,6 +457,100 @@ mod tests {
                 .description
                 .contains("preview"),
             "submit_preparation stopped naming the preview comparison"
+        );
+    }
+
+    /// A retained replay is not a pure short-circuit: it re-authorizes the
+    /// proposal's targets before it answers, so a caller who has lost authority
+    /// over a target is refused rather than handed the stored response. A report
+    /// listing only what the replay skips would present it as cheaper, and more
+    /// permissive, than it is.
+    #[test]
+    fn the_replay_layer_names_the_authorization_it_still_runs() {
+        let lifecycle = request_lifecycle();
+        let replay = layer(&lifecycle, "idempotency_replay").description;
+        assert!(
+            replay.contains("on an apply whose workflow still carries a current proposal"),
+            "the replay-time target authorization stopped being reported: {replay}"
+        );
+        assert!(
+            layer(&lifecycle, "apply_target_authorization")
+                .description
+                .contains("before a retained apply response is handed back"),
+            "the apply layer no longer says the replay path runs the same check"
+        );
+    }
+
+    /// The transaction reads the request header before it locks the idempotency
+    /// row, so a request that does not exist is refused ahead of the conflict a
+    /// reused key would otherwise raise. Reporting the replay layer as the first
+    /// thing inside the transaction would promise that conflict on a path that
+    /// never reaches it.
+    #[test]
+    fn the_header_lookup_sits_between_the_preflight_and_the_lock() {
+        let lifecycle = request_lifecycle();
+        let index = |id: &str| {
+            lifecycle
+                .enforcement
+                .iter()
+                .position(|layer| layer.id == id)
+                .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
+        };
+        assert!(index("apply_preflight") < index("request_header_lookup"));
+        assert!(index("request_header_lookup") < index("submit_preparation"));
+        assert!(index("request_header_lookup") < index("idempotency_replay"));
+        let lookup = layer(&lifecycle, "request_header_lookup");
+        assert_eq!(lookup.events, EVERY_EVENT);
+        assert!(
+            lookup.description.contains("never reported"),
+            "the conflict this layer pre-empts stopped being reported: {}",
+            lookup.description
+        );
+    }
+
+    /// Bearer admission refuses a credential that does not verify, but it lets a
+    /// request carrying no credential through as anonymous. Reporting it as the
+    /// place a missing credential is refused would send a reader looking for a
+    /// 401 that the route admission below actually raises.
+    #[test]
+    fn the_authentication_layer_says_a_missing_credential_is_not_refused_there() {
+        let lifecycle = request_lifecycle();
+        assert_eq!(lifecycle.enforcement[0].id, "caller_authentication");
+        let description = layer(&lifecycle, "caller_authentication").description;
+        assert!(
+            description.contains("not refused here"),
+            "the anonymous passthrough stopped being reported: {description}"
+        );
+        assert!(
+            layer(&lifecycle, "route_admission")
+                .description
+                .contains("anonymous fallback"),
+            "route admission no longer names where an anonymous caller comes from"
+        );
+    }
+
+    /// An apply against a request already in the applied state short-circuits the
+    /// preflight whatever key it carries, so neither task grant is loaded and the
+    /// recovery path stands in for the layers below it. Reporting the preflight as
+    /// the grant check for every apply would claim an authorization this path never
+    /// performs.
+    #[test]
+    fn the_applied_recovery_layer_says_neither_task_grant_is_checked() {
+        let lifecycle = request_lifecycle();
+        let recovery = layer(&lifecycle, "applied_recovery");
+        assert_eq!(recovery.events, ["apply"]);
+        assert!(
+            recovery
+                .description
+                .contains("Neither task grant is checked"),
+            "the skipped grants stopped being reported: {}",
+            recovery.description
+        );
+        assert!(
+            layer(&lifecycle, "apply_preflight")
+                .description
+                .contains("already in the applied state"),
+            "the preflight no longer names its second short-circuit"
         );
     }
 
