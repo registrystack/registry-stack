@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha1/SimulationReport.schema.json",
+  "title": "SimulationReport",
+  "description": "Versioned JSON report emitted by caseworkctl for simulate.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "ok",
+        "command",
+        "fixture",
+        "projectId",
+        "policyVersion",
+        "source",
+        "subject",
+        "routing",
+        "clock",
+        "networkAccess",
+        "databaseAccess"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+        },
+        "kind": {
+          "const": "SimulationReport"
+        },
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "const": "simulate"
+        },
+        "fixture": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "policyVersion": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "entity",
+            "id",
+            "version"
+          ],
+          "properties": {
+            "entity": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          }
+        },
+        "routing": {
+          "type": "object"
+        },
+        "clock": {},
+        "networkAccess": {
+          "const": false
+        },
+        "databaseAccess": {
+          "const": false
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "ok",
+        "diagnostics"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+        },
+        "kind": {
+          "const": "SimulationReport"
+        },
+        "ok": {
+          "const": false
+        },
+        "command": {
+          "const": "simulate"
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/diagnostics"
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "diagnostics": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "severity",
+        "code",
+        "artifact",
+        "path",
+        "message",
+        "suggestedAction"
+      ],
+      "properties": {
+        "severity": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "artifact": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "suggestedAction": {
+          "type": "string"
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    }
+  }
+}

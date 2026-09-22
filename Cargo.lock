@@ -5149,6 +5149,7 @@ dependencies = [
  "chrono",
  "clap",
  "getrandom 0.4.3",
+ "jsonschema",
  "p256",
  "rcgen",
  "registry-casework",
