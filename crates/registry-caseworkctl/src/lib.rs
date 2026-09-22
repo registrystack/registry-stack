@@ -278,6 +278,7 @@ enum OutputFormat {
 
 const DOMAIN_REFUSAL_EXIT: u8 = 1;
 const OPERATIONAL_FAILURE_EXIT: u8 = 3;
+const CLI_API_VERSION: &str = "registry.registrystack.org/caseworkctl/v1alpha1";
 
 pub fn main_entry() -> ExitCode {
     main_entry_from(
@@ -315,9 +316,12 @@ where
         Err(error) => {
             if machine_mode {
                 write_failure(
-                    &json!({"ok":false,"command":"usage","diagnostics":[diagnostic(
-                        "usage.invalid", "arguments", error.to_string(), "Correct the command arguments and retry."
-                    )]}),
+                    &cli_report_envelope(
+                        "UsageReport",
+                        json!({"ok":false,"command":"usage","diagnostics":[diagnostic(
+                            "usage.invalid", "arguments", error.to_string(), "Correct the command arguments and retry."
+                        )]}),
+                    ),
                     OutputFormat::Json,
                     stdout,
                     stderr,
@@ -355,12 +359,22 @@ where
     };
     let format = cli.format;
     let command_kind = command_kind(&cli.command);
+    let report_kind = cli_report_kind(&cli.command);
     match run(cli) {
-        Ok(report) => write_success(&report, format, stdout, stderr),
+        Ok(report) => write_success(
+            &machine_report(format, report_kind, report),
+            format,
+            stdout,
+            stderr,
+        ),
         Err(error) => {
             if let Some(denied) = error.downcast_ref::<project::DeniedFindings>() {
                 write_failure(
-                    &json!({"ok":false,"command":"check","diagnostics":denied.0}),
+                    &machine_report(
+                        format,
+                        report_kind,
+                        json!({"ok":false,"command":"check","diagnostics":denied.0}),
+                    ),
                     format,
                     stdout,
                     stderr,
@@ -369,13 +383,58 @@ where
             }
             let (exit, diagnostic) = classify_failure(command_kind, &error);
             write_failure(
-                &json!({"ok":false,"diagnostics":[diagnostic]}),
+                &machine_report(
+                    format,
+                    report_kind,
+                    json!({"ok":false,"diagnostics":[diagnostic]}),
+                ),
                 format,
                 stdout,
                 stderr,
             );
             ExitCode::from(exit)
         }
+    }
+}
+
+/// Every public JSON report carries one top-level envelope. The version covers
+/// all report kinds as one contract: a breaking change to any pinned field
+/// requires a version bump for the complete `caseworkctl` surface.
+fn cli_report_envelope(kind: &'static str, mut report: Value) -> Value {
+    report
+        .as_object_mut()
+        .expect("every caseworkctl report serializes as an object")
+        .extend([
+            ("apiVersion".to_owned(), Value::from(CLI_API_VERSION)),
+            ("kind".to_owned(), Value::from(kind)),
+        ]);
+    report
+}
+
+fn machine_report(format: OutputFormat, kind: &'static str, report: Value) -> Value {
+    if format == OutputFormat::Json {
+        cli_report_envelope(kind, report)
+    } else {
+        report
+    }
+}
+
+fn cli_report_kind(command: &Command) -> &'static str {
+    match command {
+        Command::Attempt(_) => "AttemptSettlementReport",
+        Command::Check(_) => "CheckReport",
+        Command::Db(_) => "DatabaseMigrationReport",
+        Command::Doctor(_) => "DoctorReport",
+        Command::Explain(_) => "ExplainReport",
+        Command::Init(_) => "InitReport",
+        Command::Lifecycle => "LifecycleReport",
+        Command::Package(_) => "PackageReport",
+        Command::Retention(_) => "RetentionEraseReport",
+        Command::Simulate(_) => "SimulationReport",
+        Command::Source(_) => "SourceAddReport",
+        Command::Test(_) => "TestReport",
+        Command::Dev(args) => args.report_kind(),
+        Command::DevSupervisor(_) | Command::DevServiceGuard(_) => "DevReport",
     }
 }
 
@@ -447,6 +506,12 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
         project_diagnostic_location(project)
     } else if let Some(semantic) = semantic_error {
         semantic_diagnostic_location(semantic)
+    } else if matches!(kind, CommandKind::Authoring) {
+        (
+            "authoring_input",
+            "authoring".to_owned(),
+            "Correct the authored input named by the refusal, then retry.",
+        )
     } else {
         (
             "runtime_dependency",
@@ -482,8 +547,7 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
     } else if let Some(semantic) = semantic_error {
         semantic.to_string()
     } else if domain {
-        "The Casework command was refused because an authored input did not satisfy its contract."
-            .to_owned()
+        format!("{error:#}")
     } else {
         "A Casework runtime dependency check failed.".to_owned()
     };
@@ -978,6 +1042,8 @@ mod tests {
         assert_eq!(exit, ExitCode::from(2));
         assert!(stderr.is_empty());
         let report: Value = serde_json::from_slice(&stdout).unwrap();
+        assert_eq!(report["apiVersion"], CLI_API_VERSION);
+        assert_eq!(report["kind"], "UsageReport");
         let diagnostic = &report["diagnostics"][0];
         for field in [
             "severity",
@@ -996,6 +1062,123 @@ mod tests {
         assert_eq!(exit, ExitCode::from(2));
         assert!(stdout.is_empty());
         assert!(!stderr.is_empty());
+    }
+
+    #[test]
+    fn help_and_version_remain_clap_text_when_json_format_is_selected() {
+        for arguments in [
+            vec!["caseworkctl", "--format", "json", "--help"],
+            vec!["caseworkctl", "--format=json", "--version"],
+        ] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let exit = main_entry_from(arguments, &mut stdout, &mut stderr);
+
+            assert_eq!(exit, ExitCode::SUCCESS);
+            assert!(stderr.is_empty());
+            assert!(!stdout.is_empty());
+            assert!(serde_json::from_slice::<Value>(&stdout).is_err());
+        }
+    }
+
+    #[test]
+    fn authoring_refusal_preserves_its_message_and_names_authored_input() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("casework");
+        project::init(&project, "standalone-decision").unwrap();
+        for entry in std::fs::read_dir(project.join("fixtures")).unwrap() {
+            std::fs::remove_file(entry.unwrap().path()).unwrap();
+        }
+
+        let arguments = [
+            OsString::from("caseworkctl"),
+            OsString::from("--format=json"),
+            OsString::from("test"),
+            project.clone().into_os_string(),
+        ];
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = main_entry_from(arguments, &mut stdout, &mut stderr);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stderr.is_empty());
+        let report: Value = serde_json::from_slice(&stdout).unwrap();
+        assert_eq!(report["apiVersion"], CLI_API_VERSION);
+        assert_eq!(report["kind"], "TestReport");
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["artifact"], "authoring_input");
+        assert_eq!(diagnostic["path"], "authoring");
+        assert!(diagnostic["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("test requires at least one YAML fixture")));
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "Correct the authored input named by the refusal, then retry."
+        );
+
+        stdout.clear();
+        let mut stderr = Vec::new();
+        let exit = main_entry_from(
+            [
+                OsString::from("caseworkctl"),
+                OsString::from("test"),
+                project.into_os_string(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stdout.is_empty());
+        let rendered = String::from_utf8(stderr).unwrap();
+        assert!(rendered.contains("test requires at least one YAML fixture"));
+        assert!(!rendered.contains("runtime dependency"));
+    }
+
+    #[test]
+    fn check_reports_the_exact_broken_review_policy_binding() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("casework");
+        let example = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/casework/examples/multi-stage-routing-clocks");
+        std::fs::create_dir_all(project.join("sources")).unwrap();
+        std::fs::copy(example.join("casework.yaml"), project.join("casework.yaml")).unwrap();
+        for source in ["regional-register.json", "response-register.json"] {
+            std::fs::copy(
+                example.join("sources").join(source),
+                project.join("sources").join(source),
+            )
+            .unwrap();
+        }
+        let regional_path = project.join("sources/regional-register.json");
+        let mut regional: Value =
+            serde_json::from_slice(&std::fs::read(&regional_path).unwrap()).unwrap();
+        regional["request"]["review"]["policyId"] = json!("missing-review-kind");
+        std::fs::write(&regional_path, serde_json::to_vec(&regional).unwrap()).unwrap();
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = main_entry_from(
+            [
+                OsString::from("caseworkctl"),
+                OsString::from("--format=json"),
+                OsString::from("check"),
+                project.into_os_string(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stderr.is_empty());
+        let report: Value = serde_json::from_slice(&stdout).unwrap();
+        let diagnostic = &report["diagnostics"][0];
+        let message = diagnostic["message"].as_str().unwrap();
+        assert!(message.contains("regional-register"), "{message}");
+        assert!(message.contains("missing-review-kind"), "{message}");
+        assert!(
+            message.contains("sha256:regional-source-revision"),
+            "{message}"
+        );
+        assert_eq!(diagnostic["artifact"], "authoring_input");
+        assert_eq!(diagnostic["path"], "authoring");
     }
 
     #[test]
@@ -1257,9 +1440,15 @@ mod tests {
         let (exit, diagnostic) = classify_failure(CommandKind::Retention, &corrupt);
         assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
         assert_eq!(diagnostic["code"], "caseworkctl.operational-failure");
+        assert_eq!(diagnostic["artifact"], "runtime_dependency");
+        assert_eq!(diagnostic["path"], "runtime");
         assert_eq!(
             diagnostic["message"],
             "A Casework runtime dependency check failed."
+        );
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "Correct the unavailable runtime dependency, then retry."
         );
     }
 
@@ -1433,3 +1622,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod cli_contract_tests;
