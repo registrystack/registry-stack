@@ -24,15 +24,17 @@ LIVE_BASELINES = (
     ROOT / "release/security/casework-advisory-baseline.json",
     ROOT / "release/security/discovery-advisory-baseline.json",
     ROOT / "release/security/evidence-advisory-baseline.json",
+    ROOT / "release/security/scheduling-advisory-baseline.json",
 )
 LIVE_REFERENCE_IMAGE_DIGESTS = {
-    "relay": "sha256:c1fda956208cdba3c5418ca98b6362942abf5124aa7edf4438b47e696e26f034",
-    "breg": "sha256:9619bde5f36f1efc91b48253735659839366dc816ca4d46f3af286d7f3f44e6a",
-    "casework": "sha256:d12f62d91c4fb60532f441b4740790608b1fbc59a2f8eb31952f949c294f776b",
-    "discovery": "sha256:43140226dc11cde1dd1ca322462b891a00f29bf1e7181230a0bc6dd6eeb65b85",
-    "evidence": "sha256:af402e73cb104ee27039bf6c7b5cc5e7cbf37416449b91ff47086c6463b90483",
+    "relay": "sha256:94d9d8439361ffec9fdc2ddd44c54b698632295998d8616276c9abf002d4a52c",
+    "breg": "sha256:9299a1beece6ad8de828a7fbb72cbd109901e5f6f638f71e80fe31f1f78b7a90",
+    "casework": "sha256:ae50ec47af1b4916ff811bffdc7f928c4ef397e46f6208bb4f36c5ce655a1499",
+    "discovery": "sha256:26f3686b5b982d1883e83e64509ab30e35a56ece7bc9545d6350435cc72a0d7c",
+    "evidence": "sha256:ee06a933127294e9c2175de5c0115f651ee748eb1a546faeba0c737f594c5222",
+    "scheduling": "sha256:74f49c852500729542a73b6e057fe201f13b9f0aae5f51ba775e72a2f4903331",
 }
-LIVE_REFERENCE_SOURCE_REVISION = "5e6120ad1ec2d17bc4189dfbaf38894cb8f7dbe8"
+LIVE_REFERENCE_SOURCE_REVISION = "6a460c2cf66bc9d286cbe4a5454571c392488c05"
 # The date the live exceptions below were reviewed against, stated here rather
 # than derived from the baselines: deriving it from their own reviewed_at values
 # would make the checker's future-dated guard unreachable for the newest
@@ -44,6 +46,7 @@ LIVE_REFERENCE_PROVENANCE = {
     "casework": "local_reproduction",
     "discovery": "local_reproduction",
     "evidence": "local_reproduction",
+    "scheduling": "local_reproduction",
 }
 LIVE_EXECUTABLES = {
     "relay": "/usr/local/bin/relay",
@@ -51,6 +54,7 @@ LIVE_EXECUTABLES = {
     "casework": "/usr/local/bin/casework",
     "discovery": "/usr/local/bin/discovery",
     "evidence": "/usr/local/bin/evidence",
+    "scheduling": "/usr/local/bin/scheduling",
 }
 
 

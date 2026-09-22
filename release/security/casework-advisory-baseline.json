@@ -27,7 +27,7 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:8f6a6a1d3bf865bf67481ef6ada53cf7cecac382d061819ac2dfdd4497b3b168",
+      "sha256:c526331d7e280980992c2b0f14a3f71e2d89df27ebc1a5832d925fb1bdbf1ed8",
       "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
@@ -52,7 +52,7 @@
       ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:599af5527226d6c09239257d46348e706b176e8968f29d288d11a95612fe73b1"
+    "definition_digest": "sha256:48d29db65e8e562f379a19d4015b4cc0e6c7ded4c00a51b9df797b8680d5c9e3"
   },
   "policies": [
     {
@@ -75,7 +75,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.32.0 Linux AMD64 Casework local reproduction is from rehearsal run 34923868162. Its executable imports or dynamically resolves none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr, and fp_nquery. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Re-reviewed on 2026-09-22 with the evidence bindings unchanged: the release Dockerfiles still pin the reviewed runtime base, and Debian still records Trixie as vulnerable at this version under its no-DSA minor-issue tag, with a fixed glibc only in forky and sid.",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.33.0 Linux AMD64 Casework local reproduction is exact rehearsal run 35711552030 at source 6a460c2cf66bc9d286cbe4a5454571c392488c05. Its executable imports none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. The exposure report has no review-required dynamic lookup. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian still records this Trixie version as vulnerable and fixes only forky and sid.",
       "reviewed_at": "2026-09-22",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
@@ -93,14 +93,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:599af5527226d6c09239257d46348e706b176e8968f29d288d11a95612fe73b1",
-      "component_layer_id": "sha256:8f6a6a1d3bf865bf67481ef6ada53cf7cecac382d061819ac2dfdd4497b3b168",
+      "runtime_definition_digest": "sha256:48d29db65e8e562f379a19d4015b4cc0e6c7ded4c00a51b9df797b8680d5c9e3",
+      "component_layer_id": "sha256:c526331d7e280980992c2b0f14a3f71e2d89df27ebc1a5832d925fb1bdbf1ed8",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:d12f62d91c4fb60532f441b4740790608b1fbc59a2f8eb31952f949c294f776b",
-        "reference_source_revision": "5e6120ad1ec2d17bc4189dfbaf38894cb8f7dbe8",
+        "reference_image_digest": "sha256:ae50ec47af1b4916ff811bffdc7f928c4ef397e46f6208bb4f36c5ce655a1499",
+        "reference_source_revision": "6a460c2cf66bc9d286cbe4a5454571c392488c05",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:599af5527226d6c09239257d46348e706b176e8968f29d288d11a95612fe73b1",
+        "runtime_definition_digest": "sha256:48d29db65e8e562f379a19d4015b4cc0e6c7ded4c00a51b9df797b8680d5c9e3",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -120,10 +120,68 @@
           },
           {
             "path": "/usr/local/bin/casework",
-            "sha256": "sha256:a6301604b6a588785e76310a670213bf0a39bed446161edf26e99bcd32e29584"
+            "sha256": "sha256:3ee3144dd2551ccf0d0f159275b6d152097630a0251583fa829d4fc32c6d83da"
           }
         ],
-        "definition_digest": "sha256:55c3faef5177007a91334c933de0d2c43932cd26aa12dd91c103de59083dc129"
+        "definition_digest": "sha256:139af03b983e13e6ea5bd5fb77750457a15e9e28553bbb01e8974bd553bfa239"
+      }
+    },
+    {
+      "vulnerability_id": "CVE-2026-19499",
+      "package": "libc6",
+      "installed_version": "2.41-12+deb13u4",
+      "severity": "High",
+      "status": "accepted_risk",
+      "owner": "@jeremi",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix; Grype reports wont-fix. The reviewed v0.33.0 Linux AMD64 Casework local reproduction is exact rehearsal run 35711552030 at source 6a460c2cf66bc9d286cbe4a5454571c392488c05. Its executable neither imports nor contains strfmon or strfmon_l. The exposure report has no review-required dynamic lookup. No caller-controlled right-justified monetary-format width path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian fixes the issue only in forky and sid.",
+      "reviewed_at": "2026-09-22",
+      "expires_at": "2026-10-06",
+      "invalidation_triggers": [
+        "candidate_image_identity_mismatch",
+        "candidate_rootfs_changed",
+        "component_layer_changed",
+        "expired",
+        "exposure_assertion_changed",
+        "exposure_assertion_false",
+        "exposure_assertion_unevaluable",
+        "fix_available",
+        "material_finding_changed",
+        "package_version_changed",
+        "rootfs_evidence_mismatch",
+        "runtime_base_changed",
+        "runtime_config_changed"
+      ],
+      "runtime_definition_digest": "sha256:48d29db65e8e562f379a19d4015b4cc0e6c7ded4c00a51b9df797b8680d5c9e3",
+      "component_layer_id": "sha256:c526331d7e280980992c2b0f14a3f71e2d89df27ebc1a5832d925fb1bdbf1ed8",
+      "exposure_assertion": {
+        "kind": "whole_image_fingerprint_equals",
+        "reference_image_digest": "sha256:ae50ec47af1b4916ff811bffdc7f928c4ef397e46f6208bb4f36c5ce655a1499",
+        "reference_source_revision": "6a460c2cf66bc9d286cbe4a5454571c392488c05",
+        "reference_provenance": "local_reproduction",
+        "runtime_definition_digest": "sha256:48d29db65e8e562f379a19d4015b4cc0e6c7ded4c00a51b9df797b8680d5c9e3",
+        "files": [
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "sha256:c8438e4fde1934e61c88311633f00949ff645d5c04cdb8671fa3d78164d2f307"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "sha256:9792e3cbb541c8f44c7acf5f14f4022ea62998ecc787d326bed4d8b6547dfd92"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+            "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
+          },
+          {
+            "path": "/usr/local/bin/casework",
+            "sha256": "sha256:3ee3144dd2551ccf0d0f159275b6d152097630a0251583fa829d4fc32c6d83da"
+          }
+        ],
+        "definition_digest": "sha256:139af03b983e13e6ea5bd5fb77750457a15e9e28553bbb01e8974bd553bfa239"
       }
     },
     {
@@ -133,7 +191,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.32.0 Linux AMD64 Casework local reproduction is from rehearsal run 34923868162. Its executable does not link libz or contain libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf, or gzvprintf. Its sole dlsym call selects the fixed _dl_find_object name, so no vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Re-reviewed on 2026-09-22 with the evidence bindings unchanged: the release Dockerfiles still pin the reviewed runtime base, and Debian still lists no fixed zlib package for Trixie.",
+      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.33.0 Linux AMD64 Casework local reproduction is exact rehearsal run 35711552030 at source 6a460c2cf66bc9d286cbe4a5454571c392488c05. Its executable neither links libz nor contains libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. The exposure report has no review-required dynamic lookup. No vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian still lists no fixed zlib package for Trixie.",
       "reviewed_at": "2026-09-22",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
@@ -151,14 +209,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:599af5527226d6c09239257d46348e706b176e8968f29d288d11a95612fe73b1",
+      "runtime_definition_digest": "sha256:48d29db65e8e562f379a19d4015b4cc0e6c7ded4c00a51b9df797b8680d5c9e3",
       "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:d12f62d91c4fb60532f441b4740790608b1fbc59a2f8eb31952f949c294f776b",
-        "reference_source_revision": "5e6120ad1ec2d17bc4189dfbaf38894cb8f7dbe8",
+        "reference_image_digest": "sha256:ae50ec47af1b4916ff811bffdc7f928c4ef397e46f6208bb4f36c5ce655a1499",
+        "reference_source_revision": "6a460c2cf66bc9d286cbe4a5454571c392488c05",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:599af5527226d6c09239257d46348e706b176e8968f29d288d11a95612fe73b1",
+        "runtime_definition_digest": "sha256:48d29db65e8e562f379a19d4015b4cc0e6c7ded4c00a51b9df797b8680d5c9e3",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -178,10 +236,10 @@
           },
           {
             "path": "/usr/local/bin/casework",
-            "sha256": "sha256:a6301604b6a588785e76310a670213bf0a39bed446161edf26e99bcd32e29584"
+            "sha256": "sha256:3ee3144dd2551ccf0d0f159275b6d152097630a0251583fa829d4fc32c6d83da"
           }
         ],
-        "definition_digest": "sha256:55c3faef5177007a91334c933de0d2c43932cd26aa12dd91c103de59083dc129"
+        "definition_digest": "sha256:139af03b983e13e6ea5bd5fb77750457a15e9e28553bbb01e8974bd553bfa239"
       }
     }
   ]
