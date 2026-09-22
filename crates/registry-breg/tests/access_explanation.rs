@@ -24,6 +24,31 @@ fn compile(source: &Value) -> registry_breg::CompiledRegistry {
     .unwrap()
 }
 
+fn repeated_action_target_source() -> Value {
+    let mut candidate = source();
+    candidate["actions"] = json!([{
+        "id":"create-paired-entries",
+        "inputs":[
+            {"id":"first-district", "type":"string", "maxLength":32, "required":true, "classification":"internal"},
+            {"id":"second-district", "type":"string", "maxLength":32, "required":true, "classification":"internal"}
+        ],
+        "effects":[
+            {"id":"first", "target":{"entity":"entry"}, "operation":"create", "set":{"district":{"fromField":"first-district"}}},
+            {"id":"second", "target":{"entity":"entry"}, "operation":"create", "set":{"district":{"fromField":"second-district"}}}
+        ]
+    }]);
+    candidate["accessProfiles"] = json!([{
+        "id":"clerk", "default":true, "principalClaim":"registry_principal",
+        "requiredScopes":["entry:edit"],
+        "permissions":[{
+            "action":"create-paired-entries", "operations":["invoke"],
+            "targets":[{"entity":"entry", "rowBoundaries":[{"field":"district", "claim":"districts", "operator":"in"}]}],
+            "results":["first", "second"]
+        }]
+    }]);
+    candidate
+}
+
 fn membership_source() -> Value {
     let mut source = source();
     source["entities"][0]["fields"]
@@ -94,6 +119,45 @@ fn access_explanation_connects_row_reach_to_typed_claim_requirements() {
     assert_eq!(
         explanation["entities"][0]["profiles"][0]["operations"],
         json!(["get", "patch"])
+    );
+}
+
+#[test]
+fn discriminated_action_targets_keep_one_entity_authority_lock() {
+    let registry = compile(&repeated_action_target_source());
+    let grant = &registry.actions().actions[0].permissions[0];
+    assert_eq!(
+        grant.targets.len(),
+        2,
+        "both effect sources stay discriminated"
+    );
+
+    let explanation = registry_breg::access::explain_access(&registry);
+    let action_reach = explanation
+        .row_reach
+        .iter()
+        .filter(|reach| reach.surface == "action_target")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        action_reach.len(),
+        1,
+        "row reach describes the entity lock once"
+    );
+    assert_eq!(action_reach[0].entity, "entry");
+
+    let claim_uses = &explanation
+        .claim_contract
+        .expect("the authority inventory compiles")
+        .direct_claims["districts"]
+        .uses;
+    let action_uses = claim_uses
+        .iter()
+        .filter(|use_| use_.surface.starts_with("actions/"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        action_uses.len(),
+        1,
+        "authority inventory describes the entity lock once"
     );
 }
 

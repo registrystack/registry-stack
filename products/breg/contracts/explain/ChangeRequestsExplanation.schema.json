@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/breg-explain/v1alpha1/ChangeRequestsExplanation.schema.json",
+  "$id": "https://registrystack.org/breg-explain/v1alpha2/ChangeRequestsExplanation.schema.json",
   "title": "ChangeRequestsExplanation",
   "description": "Wire shape of `explanation` for `bregctl explain change-requests`. Every node is reconstructed field by field by bregctl and is pinned in full, except `application` and `onApproved`, which are raw passthroughs of compiled-model values, and `fields[].schema`, which is a JSON Schema fragment read from the generated entity schema artifact; all three are declared opaque.",
   "type": "object",
@@ -36,7 +36,7 @@
   },
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha1"
+      "const": "registry.registrystack.org/breg-explain/v1alpha2"
     },
     "kind": {
       "const": "ChangeRequestsExplanation"

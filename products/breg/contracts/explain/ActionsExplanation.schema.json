@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/breg-explain/v1alpha1/ActionsExplanation.schema.json",
+  "$id": "https://registrystack.org/breg-explain/v1alpha2/ActionsExplanation.schema.json",
   "title": "ActionsExplanation",
   "description": "Wire shape of `explanation` for `bregctl explain actions`. Every node is reconstructed field by field by bregctl and is pinned in full, except `fieldType` (a passthrough of the compiled field-type source) and `handler.possibleWrites`/`evidence.capabilities` (both raw passthroughs of compiled-model values), which are declared opaque. No tracked fixture exercises a WASM handler (`handler.kind == \"wasm\"`); that branch is pinned from source but unexercised by the test gate. No tracked fixture exercises a `clear` field mutation; that branch is likewise pinned but unexercised.",
   "type": "object",
@@ -49,6 +49,28 @@
         "operator": { "enum": ["equals", "in"] }
       }
     },
+    "actionTargetSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "effect"],
+          "properties": {
+            "kind": { "const": "effect" },
+            "effect": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "input"],
+          "properties": {
+            "kind": { "const": "input" },
+            "input": { "$ref": "#/$defs/inputRef" }
+          }
+        }
+      ]
+    },
     "route": {
       "type": "object",
       "additionalProperties": false,
@@ -70,7 +92,7 @@
   },
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha1"
+      "const": "registry.registrystack.org/breg-explain/v1alpha2"
     },
     "kind": {
       "const": "ActionsExplanation"
@@ -194,28 +216,7 @@
                 "entity": { "type": "string" },
                 "operation": { "$ref": "#/$defs/operation" },
                 "fields": { "type": "array", "items": { "$ref": "#/$defs/fieldRef" } },
-                "source": {
-                  "oneOf": [
-                    {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["kind", "effect"],
-                      "properties": {
-                        "kind": { "const": "effect" },
-                        "effect": { "type": "string" }
-                      }
-                    },
-                    {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["kind", "input"],
-                      "properties": {
-                        "kind": { "const": "input" },
-                        "input": { "$ref": "#/$defs/inputRef" }
-                      }
-                    }
-                  ]
-                },
+                "source": { "$ref": "#/$defs/actionTargetSource" },
                 "conditionRequired": { "type": "boolean" }
               }
             }
@@ -239,12 +240,15 @@
                 "operations": { "type": "array", "items": { "$ref": "#/$defs/operation" } },
                 "targets": {
                   "type": "array",
+                  "description": "The permission's discriminated target uses. Each entry carries the action operation and source governed by this profile together with its target lock's row boundaries.",
                   "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["entity", "rowBoundaries"],
+                    "required": ["entity", "operation", "source", "rowBoundaries"],
                     "properties": {
                       "entity": { "type": "string" },
+                      "operation": { "$ref": "#/$defs/operation" },
+                      "source": { "$ref": "#/$defs/actionTargetSource" },
                       "rowBoundaries": { "type": "array", "items": { "$ref": "#/$defs/rowBoundary" } }
                     }
                   }

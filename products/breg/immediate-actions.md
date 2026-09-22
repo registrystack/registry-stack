@@ -97,6 +97,16 @@ permissions:
     results: [person, membership, household]
 ```
 
+The authored permission declares one target lock and row-boundary set per
+entity. Every declared target must be an entity the action actually creates,
+patches, or references; the compiler refuses extra target locks because they
+cannot be assigned an operation and source. `bregctl explain actions` expands
+those locks into discriminated target uses: every permission target carries the
+action `operation` and `source`
+(`effect` or `input`) it governs beside the applicable `rowBoundaries`. If an
+action uses one entity through more than one operation or source, its explained
+permission contains one entry for each use.
+
 Do not add `readableFields`, `writableFields`, query fields, request-stage
 fields, SQL fragments, or Rust customization to an action permission. The action
 contract and typed entities define the writable ceiling, and `results` controls

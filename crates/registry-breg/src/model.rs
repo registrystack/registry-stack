@@ -712,7 +712,34 @@ pub struct CompiledActionPermission {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledActionTargetPermission {
     pub entity_id: String,
+    /// The action target operation this permission entry governs. Absent only
+    /// when reading a package compiled before discriminated targets existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<Operation>,
+    /// The effect or input that identifies this action target use. Absent only
+    /// when reading a package compiled before discriminated targets existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<CompiledActionTargetUseSource>,
     pub row_boundaries: Vec<RowBoundarySource>,
+}
+
+impl CompiledActionPermission {
+    /// Returns each entity-level authority lock once. Permission targets are
+    /// discriminated by action use for authoring and explanation, but runtime
+    /// row authority remains one lock per entity.
+    pub(crate) fn entity_target_locks(
+        &self,
+    ) -> impl Iterator<Item = &CompiledActionTargetPermission> {
+        self.targets
+            .iter()
+            .enumerate()
+            .filter(|(index, target)| {
+                !self.targets[..*index]
+                    .iter()
+                    .any(|prior| prior.entity_id == target.entity_id)
+            })
+            .map(|(_, target)| target)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

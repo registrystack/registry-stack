@@ -146,7 +146,7 @@ pub fn authority_inventory(
                     .iter()
                     .any(|target| !target.row_boundaries.is_empty()),
             )?;
-            for target in &grant.targets {
+            for target in grant.entity_target_locks() {
                 inventory.boundaries(
                     target_entity(registry, &target.entity_id)?,
                     &grant.profile_id,

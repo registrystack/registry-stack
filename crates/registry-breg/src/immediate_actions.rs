@@ -1656,8 +1656,9 @@ fn compile_permissions(
                     "action permissions cannot declare entity projection, query, request, or writable fields",
                 ));
             }
-            let targets = compile_permission_targets(entities, profile, grant, errors);
-            validate_permission_covers_uses(&targets, target_uses, errors);
+            let target_locks = compile_permission_targets(entities, profile, grant, errors);
+            validate_permission_covers_uses(&target_locks, target_uses, errors);
+            let targets = discriminate_permission_targets(&target_locks, target_uses, errors);
             for result in &grant.results {
                 if !result_effects.contains(result) {
                     errors.push(Diagnostic::error(
@@ -1756,10 +1757,43 @@ fn compile_permission_targets(
         );
         targets.push(CompiledActionTargetPermission {
             entity_id: target.entity.clone(),
+            operation: None,
+            source: None,
             row_boundaries: target.row_boundaries.clone(),
         });
     }
     targets.sort_by(|left, right| left.entity_id.cmp(&right.entity_id));
+    targets
+}
+
+fn discriminate_permission_targets(
+    target_locks: &[CompiledActionTargetPermission],
+    target_uses: &[CompiledActionTargetUse],
+    errors: &mut Vec<Diagnostic>,
+) -> Vec<CompiledActionTargetPermission> {
+    let mut targets = Vec::new();
+    for target_lock in target_locks {
+        let mut matched = false;
+        for target_use in target_uses
+            .iter()
+            .filter(|target_use| target_use.entity_id == target_lock.entity_id)
+        {
+            matched = true;
+            targets.push(CompiledActionTargetPermission {
+                entity_id: target_lock.entity_id.clone(),
+                operation: Some(target_use.operation),
+                source: Some(target_use.source.clone()),
+                row_boundaries: target_lock.row_boundaries.clone(),
+            });
+        }
+        if !matched {
+            errors.push(Diagnostic::error(
+                "action.permission.targets.unused",
+                "project.accessProfiles[].permissions[].targets",
+                "action permission targets must name an entity the action creates, patches, or references",
+            ));
+        }
+    }
     targets
 }
 

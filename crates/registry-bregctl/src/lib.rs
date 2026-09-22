@@ -5408,10 +5408,9 @@ fn planner_test_failure(code: &str, path: &str, message: &str) -> FailureReport 
     )
 }
 
-/// `apiVersion` for every `bregctl explain` payload, versioned as a whole: a removal,
-/// rename, or type change to a pinned key in any of the eight kinds bumps this, an
-/// additive optional key does not.
-const EXPLAIN_API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha1";
+/// `apiVersion` for every `bregctl explain` payload, versioned as a whole: any change
+/// to a pinned object's shape in one of the nine kinds bumps this version.
+const EXPLAIN_API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha2";
 
 /// Which `explanation` kind a subject (and, for `access`, whether a scenario ran)
 /// produces. Kept beside `explain_envelope` because the two always travel together.
@@ -6654,11 +6653,13 @@ entities:
   # `status` is a vocabulary code drawn from the `record-status` list above.
   # Neither is `required`, so a create may omit it.
   #
-  # An entity may also declare `events`, which project chosen fields of a
-  # committed change to a webhook destination the deployment binds by name.
-  # This project declares none: a package refuses to activate until the runtime
-  # configuration binds every destination its events name. `bregctl dev`
-  # supplies local receiver bindings; operated deployments bind their own.
+  # An entity may also declare `hooks`, which project chosen fields of a
+  # committed change to a URL destination the deployment binds by name. Each
+  # hook declares `phase: after` and a handler such as
+  # `{kind: url, destinationId: registry-events}`. This project declares none:
+  # a package refuses to activate until the runtime configuration binds every
+  # destination its URL handlers name. `bregctl dev` supplies local receiver
+  # bindings; operated deployments bind their own.
   - id: record
     primaryDataset: generic-registry
     route: records
@@ -8091,14 +8092,7 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                     "fields": target.fields.iter()
                         .map(|field| field_summary_optional(compiled.entities().get(&target.entity_id), field))
                         .collect::<Vec<_>>(),
-                    "source": match &target.source {
-                        registry_breg::model::CompiledActionTargetUseSource::Effect { effect } => {
-                            json!({"kind": "effect", "effect": effect})
-                        }
-                        registry_breg::model::CompiledActionTargetUseSource::Input { input } => {
-                            json!({"kind": "input", "input": action_input_identity(action, input)})
-                        }
-                    },
+                    "source": action_target_use_source(action, &target.source),
                     "conditionRequired": target.condition_required,
                 })).collect::<Vec<_>>(),
                 "requiredConditionKeys": action.target_uses.iter()
@@ -8120,6 +8114,8 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                     "operations": grant.operations.iter().map(|operation| operation_wire_name(*operation)).collect::<Vec<_>>(),
                     "targets": grant.targets.iter().map(|target| json!({
                         "entity": target.entity_id,
+                        "operation": target.operation.map(operation_wire_name),
+                        "source": target.source.as_ref().map(|source| action_target_use_source(action, source)),
                         "rowBoundaries": target.row_boundaries,
                     })).collect::<Vec<_>>(),
                     "results": grant.results,
@@ -8445,6 +8441,20 @@ fn action_input_identity(action: &registry_breg::model::CompiledAction, input_id
         .find(|input| input.id == input_id)
         .map(action_input_summary)
         .unwrap_or_else(|| json!({"input": input_id}))
+}
+
+fn action_target_use_source(
+    action: &registry_breg::model::CompiledAction,
+    source: &registry_breg::model::CompiledActionTargetUseSource,
+) -> Value {
+    match source {
+        registry_breg::model::CompiledActionTargetUseSource::Effect { effect } => {
+            json!({"kind": "effect", "effect": effect})
+        }
+        registry_breg::model::CompiledActionTargetUseSource::Input { input } => {
+            json!({"kind": "input", "input": action_input_identity(action, input)})
+        }
+    }
 }
 
 fn action_target_summary(effect: &registry_breg::model::CompiledActionEffect) -> Value {
