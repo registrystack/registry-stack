@@ -30,6 +30,7 @@ def main() -> int:
         )
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
+        return 2
     for library in libraries:
         print(library)
     return 0
