@@ -3201,7 +3201,7 @@ accessProfiles:
 }
 
 /// A WASM handler summary carries its server-compatibility contract: the
-/// minimum server that runs it, and the two refusal shapes older or
+/// minimum server that runs it, and the load-time refusals older or
 /// feature-off servers produce. Rhai handlers carry no such member; their
 /// server contract is the baseline.
 #[test]
@@ -3236,7 +3236,7 @@ fn explain_actions_reports_wasm_handler_server_compatibility() {
     );
     assert_eq!(
         compatibility["serversBuiltWithoutTheFeature"],
-        "load the package and fail each invocation with a typed handler failure"
+        "refuse the package during load because handler rederivation requires WASM support"
     );
     assert_eq!(
         compatibility["moduleSha256"], handler["moduleSha256"],

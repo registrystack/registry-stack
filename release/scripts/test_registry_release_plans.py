@@ -533,6 +533,7 @@ version = "1.1.0"
             '__version__ = "1.1.0"\n',
         )
         for relative in (
+            "products/breg/wasm-handler-sdk/Cargo.lock",
             "products/manifest/fuzz/Cargo.lock",
             "products/platform/fuzz/Cargo.lock",
         ):
@@ -735,6 +736,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
             "crates/registry-casework-client-node/package.json",
             "crates/registry-casework-client-node/index.js",
             "crates/registry-relay-client-py/pyproject.toml",
+            "products/breg/wasm-handler-sdk/Cargo.lock",
             "products/manifest/fuzz/Cargo.lock",
             "products/platform/fuzz/Cargo.lock",
             "docs/site/src/data/archive-lock.yaml",
@@ -806,6 +808,26 @@ version = "1.0.0"
         self.assertIn(
             "products/platform/fuzz/Cargo.lock path packages must use version 1.1.0",
             stale_lock.stderr,
+        )
+
+    def test_prepare_rejects_stale_wasm_handler_sdk_lock(self) -> None:
+        sdk_lock = self.repo.root / "products/breg/wasm-handler-sdk/Cargo.lock"
+        write(
+            sdk_lock,
+            '''version = 4
+
+[[package]]
+name = "registry-core"
+version = "1.0.0"
+''',
+        )
+
+        result = self.prepare()
+
+        self.assertEqual(1, result.returncode)
+        self.assertIn(
+            "products/breg/wasm-handler-sdk/Cargo.lock path packages must use version 1.1.0",
+            result.stderr,
         )
 
     def test_prepare_rejects_stale_loader_diagnostics_with_current_guards(self) -> None:
