@@ -87,7 +87,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.33.0 Linux AMD64 Relay local reproduction is exact rehearsal run 35711552030 at source 6a460c2cf66bc9d286cbe4a5454571c392488c05. Its executable imports none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. The one review-required nonconstant dlsym tail jump is SQLite's extension-symbol wrapper; governed SQL rejects load_extension and no first-party runtime caller enables or invokes SQLite C extension loading. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian still records this Trixie version as vulnerable and fixes only forky and sid.",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.33.0 Linux AMD64 Relay local reproduction is exact rehearsal run 35758336494 at source 82c1b813a28d61c322d435ce93c9b022455ddb2b. Its executable imports none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. The one review-required nonconstant dlsym tail jump is SQLite's extension-symbol wrapper; governed SQL rejects load_extension and no first-party runtime caller enables or invokes SQLite C extension loading. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian still records this Trixie version as vulnerable and fixes only forky and sid.",
       "reviewed_at": "2026-09-22",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
@@ -109,8 +109,8 @@
       "component_layer_id": "sha256:302066fd41cf1075eb0e8bf16aa8467461330d1e777219b472cd11665246800a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:94d9d8439361ffec9fdc2ddd44c54b698632295998d8616276c9abf002d4a52c",
-        "reference_source_revision": "6a460c2cf66bc9d286cbe4a5454571c392488c05",
+        "reference_image_digest": "sha256:312340bc15d1d6c2c13044c804ad3cfe56ea7d1418d4a7e3bd073bd470c033a3",
+        "reference_source_revision": "82c1b813a28d61c322d435ce93c9b022455ddb2b",
         "reference_provenance": "local_reproduction",
         "runtime_definition_digest": "sha256:3a722bfd7ce830c3f482a867b937980075230ec96ebaa2e5e9c32c16df16c4b1",
         "files": [
@@ -135,7 +135,7 @@
             "sha256": "sha256:e1ead11e4a0a3d748ca85b4fa922854d1fd4ee07a0e1b5fa36444e3ed324ef5c"
           }
         ],
-        "definition_digest": "sha256:5c81770a1cf1343d596783c549a949130db40a93fb0f3545eedd40dc78cb461b"
+        "definition_digest": "sha256:793d61572f544d7f97c9f0d5c1a3b1e587a7983bda7f10f2b2e5447e1a7c38e3"
       }
     },
     {
@@ -145,7 +145,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix; Grype reports wont-fix. The reviewed v0.33.0 Linux AMD64 Relay local reproduction is exact rehearsal run 35711552030 at source 6a460c2cf66bc9d286cbe4a5454571c392488c05. Its executable neither imports nor contains strfmon or strfmon_l. The one review-required nonconstant dlsym tail jump is SQLite's extension-symbol wrapper; governed SQL rejects load_extension and no first-party runtime caller enables or invokes SQLite C extension loading. No caller-controlled right-justified monetary-format width path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian fixes the issue only in forky and sid.",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix; Grype reports wont-fix. The reviewed v0.33.0 Linux AMD64 Relay local reproduction is exact rehearsal run 35758336494 at source 82c1b813a28d61c322d435ce93c9b022455ddb2b. Its executable neither imports nor contains strfmon or strfmon_l. The one review-required nonconstant dlsym tail jump is SQLite's extension-symbol wrapper; governed SQL rejects load_extension and no first-party runtime caller enables or invokes SQLite C extension loading. No caller-controlled right-justified monetary-format width path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian fixes the issue only in forky and sid.",
       "reviewed_at": "2026-09-22",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
@@ -167,8 +167,8 @@
       "component_layer_id": "sha256:302066fd41cf1075eb0e8bf16aa8467461330d1e777219b472cd11665246800a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:94d9d8439361ffec9fdc2ddd44c54b698632295998d8616276c9abf002d4a52c",
-        "reference_source_revision": "6a460c2cf66bc9d286cbe4a5454571c392488c05",
+        "reference_image_digest": "sha256:312340bc15d1d6c2c13044c804ad3cfe56ea7d1418d4a7e3bd073bd470c033a3",
+        "reference_source_revision": "82c1b813a28d61c322d435ce93c9b022455ddb2b",
         "reference_provenance": "local_reproduction",
         "runtime_definition_digest": "sha256:3a722bfd7ce830c3f482a867b937980075230ec96ebaa2e5e9c32c16df16c4b1",
         "files": [
@@ -193,7 +193,7 @@
             "sha256": "sha256:e1ead11e4a0a3d748ca85b4fa922854d1fd4ee07a0e1b5fa36444e3ed324ef5c"
           }
         ],
-        "definition_digest": "sha256:5c81770a1cf1343d596783c549a949130db40a93fb0f3545eedd40dc78cb461b"
+        "definition_digest": "sha256:793d61572f544d7f97c9f0d5c1a3b1e587a7983bda7f10f2b2e5447e1a7c38e3"
       }
     },
     {
@@ -203,7 +203,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.33.0 Linux AMD64 Relay local reproduction is exact rehearsal run 35711552030 at source 6a460c2cf66bc9d286cbe4a5454571c392488c05. Its executable neither links libz nor contains libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. The one review-required nonconstant dlsym tail jump is SQLite's extension-symbol wrapper; governed SQL rejects load_extension and no first-party runtime caller enables or invokes SQLite C extension loading. No vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian still lists no fixed zlib package for Trixie.",
+      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.33.0 Linux AMD64 Relay local reproduction is exact rehearsal run 35758336494 at source 82c1b813a28d61c322d435ce93c9b022455ddb2b. Its executable neither links libz nor contains libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. The one review-required nonconstant dlsym tail jump is SQLite's extension-symbol wrapper; governed SQL rejects load_extension and no first-party runtime caller enables or invokes SQLite C extension loading. No vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian still lists no fixed zlib package for Trixie.",
       "reviewed_at": "2026-09-22",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
@@ -225,8 +225,8 @@
       "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:94d9d8439361ffec9fdc2ddd44c54b698632295998d8616276c9abf002d4a52c",
-        "reference_source_revision": "6a460c2cf66bc9d286cbe4a5454571c392488c05",
+        "reference_image_digest": "sha256:312340bc15d1d6c2c13044c804ad3cfe56ea7d1418d4a7e3bd073bd470c033a3",
+        "reference_source_revision": "82c1b813a28d61c322d435ce93c9b022455ddb2b",
         "reference_provenance": "local_reproduction",
         "runtime_definition_digest": "sha256:3a722bfd7ce830c3f482a867b937980075230ec96ebaa2e5e9c32c16df16c4b1",
         "files": [
@@ -251,7 +251,7 @@
             "sha256": "sha256:e1ead11e4a0a3d748ca85b4fa922854d1fd4ee07a0e1b5fa36444e3ed324ef5c"
           }
         ],
-        "definition_digest": "sha256:5c81770a1cf1343d596783c549a949130db40a93fb0f3545eedd40dc78cb461b"
+        "definition_digest": "sha256:793d61572f544d7f97c9f0d5c1a3b1e587a7983bda7f10f2b2e5447e1a7c38e3"
       }
     }
   ]
