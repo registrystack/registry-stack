@@ -409,6 +409,15 @@ If your source revision or any tracked input changed during the build,
 intended committed source. A failed preparation does not apply its generated
 patch.
 
+A prepared documentation lock for the current workspace release may be
+regenerated after its source changes only while the release remains untagged.
+The archive-lock comparison derives that candidate from the workspace version,
+matching release manifest, and candidate docset, then verifies that the exact
+tag is absent from the authoritative Registry Stack repository. Tag lookup
+errors fail the check. The resulting patch must retain the current candidate
+entry and leave every historical archive-lock entry unchanged; once the tag
+exists, its lock is immutable.
+
 The independent rehearsal must still reproduce the lock from a clean checkout.
 The candidate later builds and verifies its own archive from the accepted
 protected-main source; publication promotes those candidate bytes without
