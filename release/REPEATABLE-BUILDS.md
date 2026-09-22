@@ -32,7 +32,11 @@ The workflow:
 
 The proof excludes native macOS and Linux arm64 Relayctl binaries,
 environment independence, generated SBOM or scan bytes, signatures,
-provenance envelopes, and documentation archives.
+provenance envelopes, and documentation archives. Starting with v0.33.0, that
+macOS exclusion covers each complete native archive: the executable, relocated
+AWS-LC-FIPS shared libraries, notices, ad hoc signatures, and archive bytes.
+The candidate build verifies that packaged closure, but the scheduled Linux
+AMD64 proof makes no macOS repeatability claim.
 
 ## Release build marker
 
@@ -54,6 +58,13 @@ backend the runtimes link, from a dated Debian snapshot inside the pinned
 builder container. The source commit therefore fixes both the builder image
 and the additional build packages instead of consulting Debian's mutable
 package indexes.
+
+The native macOS builder uses the hosted runner's CMake and explicitly installs
+Go 1.24.4 for `aws-lc-fips-sys`. From v0.33.0 it preserves the resulting shared module,
+relocates each executable's loader commands to the adjacent packaged dylibs,
+signs the changed Mach-O files, and creates one deterministic archive per
+executable. Those steps define the supported macOS release payload, but they
+remain outside the Linux-only repeatability proof above.
 
 ## The C compiler, the linker, and the GNU libc floor
 

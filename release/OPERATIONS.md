@@ -456,6 +456,20 @@ again with a new `rehearsal_request_id`. Do not rerun only the failed jobs: a
 fresh correlated dispatch keeps both shard artifacts and their consumer on one
 source and workflow attempt.
 
+Starting with v0.33.0, every macOS arm64 native executable is candidate input
+as an archive whose name is the previous executable asset stem plus `.tar.gz`.
+The flat archive contains the same-stem executable, its complete
+AWS-LC-FIPS shared-library closure, and `THIRD_PARTY_NOTICES`. The native shard
+builder must relocate each FIPS load to its adjacent packaged library, sign the
+changed Mach-O files, and verify the resulting loader closure before producing
+the deterministic archive. Keep each executable in its own archive because
+separately built commands can have different module bytes under the same dylib
+basename. The installers validate the archive roster and modes, extract each
+bundle they manage into a private directory, and expose the command without
+separating it from its libraries. Linux assets and releases through v0.32.0 retain their
+existing formats. Node.js and Python package names and install commands also
+remain unchanged; their macOS packages embed the required dylibs and notices.
+
 The optional `release-native-benchmark.yml` workflow measures cold macOS
 release builds after changing their build topology. It is review-only: it has
 no publication permission, does not exercise the future-tag or prepared-plan
@@ -472,12 +486,14 @@ gh workflow run release-native-benchmark.yml \
   -f version=<published-version>
 ```
 
-The three group artifacts and merged artifact are bound to the version, source,
-run, and attempt and expire after two days. Verify the merged seven-file roster
-and bytes against the retained signed release assets before using the
-measurement to change the release budget. The merge job verifies `0755` modes
-before upload. Artifact downloads do not preserve those modes, so reproduce a
-local mode check by downloading all three shards and running
+The native group artifacts and merged artifact are bound to the version,
+source, run, and attempt and expire after two days. Verify the merged
+version-appropriate roster and bytes against the retained signed release assets
+before using the measurement to change the release budget. The native builder
+verifies the archive member roster and modes before upload; the merge validates
+each shard checksum and emits v0.33.0-or-later archives with mode `0644`.
+Artifact downloads do not preserve outer file modes, so reproduce a local
+archive and mode check by downloading all native shards and running
 `merge-release-native-platform-shards.py` again with the same source, version,
 purpose, and group inputs.
 

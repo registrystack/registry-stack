@@ -65,6 +65,50 @@ sha256sum --check --strict SHA256SUMS
 `SHA256SUMS` intentionally excludes itself, its Sigstore bundle, and its
 provenance bundle.
 
+## Verify macOS native bundles
+
+Starting with v0.33.0, each macOS arm64 native executable asset is a
+checksum-covered `.tar.gz` archive. Its name is the executable asset stem plus
+`.tar.gz`. The archive is flat and contains exactly one same-stem executable,
+`THIRD_PARTY_NOTICES`, and one or more AWS-LC-FIPS shared libraries. Linux
+assets and releases through v0.32.0 retain their existing formats.
+
+After authenticating `SHA256SUMS` and checking every payload, verify the closed
+archive roster without extracting over an existing path:
+
+```sh
+version="${tag#v}"
+IFS=. read -r major minor patch <<<"${version}"
+if (( major > 0 || minor >= 33 )); then
+  bundles=( *-"${tag}"-macos-arm64.tar.gz )
+  test -e "${bundles[0]}"
+  for bundle in "${bundles[@]}"; do
+    stem="${bundle%.tar.gz}"
+    tar -tzf "${bundle}" | awk -v executable="${stem}" '
+      {
+        if (seen[$0]++) { bad = 1; exit }
+        if ($0 == executable) { binaries++; next }
+        if ($0 == "THIRD_PARTY_NOTICES") { notices++; next }
+        if ($0 ~ /^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$/) {
+          libraries++; next
+        }
+        bad = 1; exit
+      }
+      END { exit (bad || binaries != 1 || notices != 1 || libraries < 1) }
+    '
+  done
+fi
+```
+
+Keep every extracted bundle together. The executable loads the adjacent dylibs;
+copying only the executable breaks its authenticated runtime closure. On macOS
+arm64, `release/scripts/registry-release verify-public --tag "${tag}"` also
+extracts one maintained bundle through the closed-roster verifier and runs its
+version smoke with loader override variables removed. This proves the packaged
+layout starts on that host. Registry Stack uses the FIPS build of AWS-LC with
+no non-FIPS fallback, but this packaging and smoke test are not a certification
+claim about Registry Stack.
+
 ## Authenticate the checksum provenance
 
 Releases from `v0.27.1` publish `registry-stack-${tag}-SHA256SUMS.intoto.jsonl`,

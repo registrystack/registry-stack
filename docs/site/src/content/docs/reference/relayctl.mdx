@@ -248,19 +248,28 @@ installer checks both binaries against the release `SHA256SUMS` and stops on a m
 not authenticate the release itself; [OpenSSF and release trust](../../security/openssf-evidence/)
 records the signed checksum chain that does.
 
-For Linux arm64 or macOS arm64, take the plain `relayctl` binary asset from the release. You can
-also use a plain asset on Linux amd64 or build from source.
+For Linux arm64, take the plain `relayctl` binary asset from the release. You can also use a plain
+asset on Linux amd64 or build from source.
+
+Starting with v0.33.0, the macOS arm64 asset is a `.tar.gz` bundle. It keeps the executable beside
+the shared AWS-LC-FIPS libraries it loads and the applicable third-party notices. Extract the whole
+bundle into one private directory and keep those files together. Releases through v0.32.0 retain
+their plain macOS binary assets.
 
 The release publishes three relayctl assets:
 
 - `relayctl-<tag>-linux-amd64`
 - `relayctl-<tag>-linux-arm64`
-- `relayctl-<tag>-macos-arm64`
+- `relayctl-<tag>-macos-arm64.tar.gz` for v0.33.0 and later
 
 Each asset is checked at build time to report `relayctl <version>` for the release version. Verify a
 downloaded asset against the release checksums and signatures documented in
-[`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/v0.21.0/release/VERIFY.md)
+[`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/v0.33.0/release/VERIFY.md)
 before running it.
+
+{/* Evidence: release/scripts/release_candidate.py, _relay_v2_payload_inventory;
+    release/scripts/macos_fips_packaging.py, archive_macos_fips_binary;
+    release/scripts/build-release-native-platform.sh. */}
 
 To build from source at a pinned tag:
 
@@ -268,7 +277,9 @@ To build from source at a pinned tag:
 cargo build --release --locked -p registry-relayctl
 ```
 
-The binary lands at `target/release/relayctl`.
+The binary lands at `target/release/relayctl`. A macOS source build also requires CMake and Go for
+the always-on AWS-LC-FIPS backend and retains a build-tree shared-library closure. It is not the
+published bundle, so do not copy that executable away from its built libraries by itself.
 
 ## Next
 

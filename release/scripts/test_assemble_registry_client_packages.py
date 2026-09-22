@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 import unittest
@@ -85,6 +86,88 @@ class AssembleClientPackagesTest(unittest.TestCase):
                 f"{product} addon is not copied into the platform package",
             )
 
+    def test_macos_platform_package_bundles_fips_dylibs_before_packing(self) -> None:
+        bundle_index, bundle = next(
+            (index, step)
+            for index, step in enumerate(self.steps)
+            if step.argv[0:2]
+            == (
+                "python3",
+                str(ROOT / "release/scripts/bundle-client-macos-fips.py"),
+            )
+        )
+        platform_directory = Path("/work/node-root/npm/darwin-arm64")
+        self.assertIn(
+            ("--library-directory", str(platform_directory)),
+            tuple(zip(bundle.argv, bundle.argv[1:])),
+        )
+        self.assertIn(
+            ("--library-root", str(ROOT / "target")),
+            tuple(zip(bundle.argv, bundle.argv[1:])),
+        )
+        consumers = [
+            Path(bundle.argv[index + 1])
+            for index, argument in enumerate(bundle.argv)
+            if argument == "--consumer"
+        ]
+        self.assertEqual(
+            consumers,
+            [
+                platform_directory / f"{product}-client.darwin-arm64.node"
+                for product in self.module.PRODUCTS
+            ],
+        )
+        addon_copies = [
+            index
+            for index, step in enumerate(self.steps)
+            if step.description.startswith("add the built ")
+        ]
+        pack_indices = [
+            index
+            for index, step in enumerate(self.steps)
+            if step.argv[:2] == ("npm", "pack")
+        ]
+        self.assertLess(max(addon_copies), bundle_index)
+        self.assertLess(bundle_index, min(pack_indices))
+
+        manifest = json.loads(
+            (
+                ROOT
+                / "crates/registry-stack-client-node/npm/darwin-arm64/package.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertIn("*.dylib", manifest["files"])
+
+    def test_linux_packages_do_not_run_the_macos_bundler(self) -> None:
+        steps = self.module.plan(
+            ROOT,
+            "9.9.9",
+            "linux-x64-gnu",
+            "all",
+            "/maturin/maturin",
+            Path("/work"),
+            Path("/out"),
+            "/maturin/python",
+        )
+        self.assertFalse(
+            any(
+                any(
+                    argument.endswith("bundle-client-macos-fips.py")
+                    for argument in step.argv
+                )
+                for step in steps
+            )
+        )
+        assemble = next(
+            step
+            for step in steps
+            if any(
+                argument.endswith("assemble-registry-client-wheel.py")
+                for argument in step.argv
+            )
+        )
+        self.assertNotIn("--macos-library-root", assemble.argv)
+
     def test_the_product_wheels_are_rebuilt_from_an_empty_directory(self) -> None:
         removals = [
             index
@@ -136,6 +219,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             "registry_casework_client_native-9.9.9-cp310-abi3-macosx_11_0_arm64.whl",
             assemble,
         )
+        self.assertIn(f"--macos-library-root {ROOT / 'target'}", assemble)
 
     def test_ci_profile_only_changes_all_five_binding_build_profiles(self) -> None:
         for napi_platform in self.module.PLATFORMS:
@@ -306,6 +390,10 @@ class AssembleClientPackagesTest(unittest.TestCase):
             if "assemble-registry-client-wheel.py" in line
         )
         self.assertIn("--include-casework", wheel)
+        self.assertFalse(
+            any("bundle-client-macos-fips.py" in line for line in rendered)
+        )
+        self.assertNotIn("--macos-library-root", wheel)
 
     def test_0_30_includes_casework_without_the_candidate_override(self) -> None:
         steps = self.module.plan(

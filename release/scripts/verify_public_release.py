@@ -24,6 +24,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import release_candidate
 import client_registry
+import macos_fips_packaging
 
 
 TAG_PATTERN = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
@@ -372,7 +373,28 @@ def smoke_asset_name(tag: str) -> str:
         raise PublicReleaseError(
             f"no maintained public binary smoke for {os.sys.platform}/{machine}"
         )
-    return f"evidence-{tag}-{platform_name}"
+    name = f"evidence-{tag}-{platform_name}"
+    version = tuple(int(part) for part in tag.removeprefix("v").split("."))
+    if (
+        platform_name == "macos-arm64"
+        and version >= release_candidate.MACOS_FIPS_BUNDLE_MINIMUM_VERSION
+    ):
+        name += ".tar.gz"
+    return name
+
+
+def smoke_downloaded_binary(path: Path) -> str:
+    if not path.name.endswith("-macos-arm64.tar.gz"):
+        path.chmod(path.stat().st_mode | stat.S_IXUSR)
+        return run_binary_smoke(path)
+    with tempfile.TemporaryDirectory(prefix="registry-release-macos-smoke-") as temporary:
+        try:
+            executable = macos_fips_packaging.extract_macos_binary_archive(
+                path, Path(temporary) / "bundle", path.name.removesuffix(".tar.gz")
+            )
+        except macos_fips_packaging.PackagingError as exc:
+            raise PublicReleaseError(f"invalid macOS binary bundle {path.name}: {exc}") from exc
+        return run_binary_smoke(executable)
 
 
 def verify_client_registries(directory: Path, version: str) -> int:
@@ -530,8 +552,7 @@ def verify(
         smoke_path = directory / smoke_name
         if smoke_name not in checksums or not smoke_path.is_file():
             raise PublicReleaseError(f"GitHub Release is missing smoke asset {smoke_name}")
-        smoke_path.chmod(smoke_path.stat().st_mode | stat.S_IXUSR)
-        observed_version = run_binary_smoke(smoke_path)
+        observed_version = smoke_downloaded_binary(smoke_path)
         expected_version = f"evidence {tag.removeprefix('v')}"
         if observed_version != expected_version:
             raise PublicReleaseError(

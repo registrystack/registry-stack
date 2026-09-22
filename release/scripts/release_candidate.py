@@ -60,6 +60,7 @@ MINT_RETIREMENT_VERSION = (0, 31, 0)
 # Every v0.30.x release retains Mint. v0.31.0 and later omit it.
 CASEWORK_RUNTIME_IMAGE_NAMES = (BREG_RUNTIME_IMAGE_NAMES - {"mint"}) | {"casework"}
 THIRD_PARTY_NOTICES_MINIMUM_VERSION = (0, 33, 0)
+MACOS_FIPS_BUNDLE_MINIMUM_VERSION = (0, 33, 0)
 SCHEDULING_RUNTIME_IMAGE_NAMES = CASEWORK_RUNTIME_IMAGE_NAMES | {"scheduling"}
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
@@ -405,6 +406,13 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
         inventory["casework-install.sh"] = "installer"
     if version_tuple >= THIRD_PARTY_NOTICES_MINIMUM_VERSION:
         inventory["THIRD_PARTY_NOTICES"] = "notice"
+    if version_tuple >= MACOS_FIPS_BUNDLE_MINIMUM_VERSION:
+        # macOS requires the shared FIPS module, so each native binary asset
+        # includes its adjacent runtime libraries in one authenticated archive.
+        for name, kind in list(inventory.items()):
+            if kind == "binary" and name.endswith("-macos-arm64"):
+                del inventory[name]
+                inventory[f"{name}.tar.gz"] = kind
     return inventory
 
 

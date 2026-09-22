@@ -1144,6 +1144,12 @@ jobs:
       - name: Test native release platform build and merge
         run: python3 -m unittest release/scripts/test_release_native_platform.py
 
+      - name: Test macOS FIPS packaging
+        run: python3 -m unittest release/scripts/test_macos_fips_packaging.py
+
+      - name: Test macOS bundle installers
+        run: python3 -m unittest release/scripts/test_macos_installers.py
+
       - name: Test release workflow structure
         run: python3 -m unittest release/scripts/test_release_workflow_structure.py
 

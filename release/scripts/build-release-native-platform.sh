@@ -52,13 +52,19 @@ fi
 target=aarch64-apple-darwin
 asset=macos-arm64
 rust_toolchain=1.95.0
-# aws-lc-fips-sys defaults to a shared library on macOS. Release assets are
-# standalone executables, so bind the validated module into each executable
-# instead of depending on a build-directory dylib that is not distributed.
-export AWS_LC_FIPS_SYS_STATIC=1
 tag="v${version}"
 export REGISTRY_RELEASE_TAG="${tag}"
 IFS=. read -r version_major version_minor _version_patch <<<"${version}"
+bundle_fips=0
+if ((version_major > 0 || version_minor >= 33)); then
+  bundle_fips=1
+  # AWS-LC FIPS supports a shared module on macOS. It refuses static macOS
+  # builds, so package that module with every executable from v0.33 onward.
+  export AWS_LC_FIPS_SYS_STATIC=0
+else
+  # Historical shards retain their original standalone executable contract.
+  export AWS_LC_FIPS_SYS_STATIC=1
+fi
 include_breg=0
 if ((version_major > 0 || version_minor >= 26)); then
   include_breg=1
@@ -86,13 +92,33 @@ target_root="${CARGO_TARGET_DIR:-${repo_root}/target}"
 if [[ "${target_root}" != /* ]]; then
   target_root="${repo_root}/${target_root}"
 fi
+fips_library_root="${target_root}/${target}/release/build"
+packager="${repo_root}/release/scripts/macos_fips_packaging.py"
+staged_executable=""
 
 stage() {
   local binary="$1"
   local destination="$2"
   local dependencies
-  cp -- "${target_root}/${target}/release/${binary}" \
-    "${temporary}/platform/${destination}"
+  local source="${target_root}/${target}/release/${binary}"
+  if [[ "${bundle_fips}" -eq 1 ]]; then
+    local archive="${temporary}/platform/${destination}.tar.gz"
+    local extracted="${temporary}/smoke/${destination}"
+    python3 "${packager}" archive \
+      --binary "${source}" \
+      --asset-name "${destination}" \
+      --library-root "${fips_library_root}" \
+      --notice "${repo_root}/THIRD_PARTY_NOTICES" \
+      --output "${archive}"
+    python3 "${packager}" extract \
+      --archive "${archive}" \
+      --destination "${extracted}" \
+      --expected-executable "${destination}"
+    staged_executable="${extracted}/${destination}"
+    return
+  fi
+
+  cp -- "${source}" "${temporary}/platform/${destination}"
   chmod 0755 "${temporary}/platform/${destination}"
   if ! dependencies="$(otool -L "${temporary}/platform/${destination}")"; then
     printf 'cannot inspect macOS release binary dependencies: %s\n' \
@@ -105,6 +131,7 @@ stage() {
       "${destination}" >&2
     return 1
   fi
+  staged_executable="${temporary}/platform/${destination}"
 }
 
 build_core() {
@@ -114,7 +141,7 @@ build_core() {
     --target "${target}"
 
   stage relayctl "relayctl-${tag}-${asset}"
-  test "$("${temporary}/platform/relayctl-${tag}-${asset}" --version)" = \
+  test "$("${staged_executable}" --version)" = \
     "relayctl ${version}"
   local binary
   for binary in evidence evidencectl evidence-oid4vci; do
@@ -131,7 +158,7 @@ build_breg() {
     --target "${target}"
 
   stage breg "breg-${tag}-${asset}"
-  test "$("${temporary}/platform/breg-${tag}-${asset}" --version)" = \
+  test "$("${staged_executable}" --version)" = \
     "breg ${version}"
 }
 
@@ -144,7 +171,7 @@ build_bregctl() {
     --target "${target}"
 
   stage bregctl "bregctl-${tag}-${asset}"
-  test "$("${temporary}/platform/bregctl-${tag}-${asset}" --version)" = \
+  test "$("${staged_executable}" --version)" = \
     "bregctl ${version}"
 }
 
@@ -162,7 +189,7 @@ build_casework() {
   local binary
   for binary in casework caseworkctl; do
     stage "${binary}" "${binary}-${tag}-${asset}"
-    test "$("${temporary}/platform/${binary}-${tag}-${asset}" --version)" = \
+    test "$("${staged_executable}" --version)" = \
       "${binary} ${version}"
   done
 }
@@ -180,6 +207,7 @@ fi
 if [[ "${group}" == casework || "${group}" == all ]]; then
   build_casework
 fi
+rm -rf -- "${temporary}/smoke"
 
 assets=()
 if [[ "${group}" == core || "${group}" == all ]]; then
@@ -199,6 +227,11 @@ fi
 if [[ ("${group}" == casework || "${group}" == all) && "${include_casework}" -eq 1 ]]; then
   assets+=("casework-${tag}-${asset}" "caseworkctl-${tag}-${asset}")
 fi
+if [[ "${bundle_fips}" -eq 1 ]]; then
+  for index in "${!assets[@]}"; do
+    assets[${index}]="${assets[${index}]}.tar.gz"
+  done
+fi
 
 (
   cd -- "${temporary}/platform"
@@ -208,8 +241,12 @@ fi
     printf '%s  %s\n' "${digest}" "${item}" >>../SHA256SUMS
   done
 )
+shard_format=registry-stack.release-native-platform-shard.v1
+if [[ "${bundle_fips}" -eq 1 ]]; then
+  shard_format=registry-stack.release-native-platform-shard.v2
+fi
 printf '%s\npurpose=%s\nsource_sha=%s\nversion=%s\ntarget=%s\nasset=%s\ngroup=%s\nrust_toolchain=%s\n' \
-  registry-stack.release-native-platform-shard.v1 \
+  "${shard_format}" \
   "${purpose}" "${source_sha}" "${version}" "${target}" "${asset}" \
   "${group}" "${rust_toolchain}" \
   >"${temporary}/RELEASE_NATIVE_PLATFORM_SHARD"

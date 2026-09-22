@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import tempfile
+import tarfile
 from pathlib import Path
 from unittest import TestCase, main, mock
 
@@ -494,6 +496,34 @@ class PublicReleaseVerifierTest(TestCase):
                 else:
                     os.environ["AWS_SECRET_ACCESS_KEY"] = original_aws
             self.assertEqual("evidence 1.2.3", observed)
+
+    def test_macos_smoke_selects_version_appropriate_asset(self) -> None:
+        with mock.patch.object(self.module.platform, "machine", return_value="arm64"), mock.patch.object(self.module.os.sys, "platform", "darwin"):
+            self.assertEqual("evidence-v0.32.0-macos-arm64", self.module.smoke_asset_name("v0.32.0"))
+            self.assertEqual("evidence-v0.33.0-macos-arm64.tar.gz", self.module.smoke_asset_name("v0.33.0"))
+
+    def test_macos_public_smoke_extracts_complete_archive_outside_download_directory(self) -> None:
+        stem = "evidence-v0.33.0-macos-arm64"
+        library = "libaws_lc_fips_0_14_2_crypto.dylib"
+        with tempfile.TemporaryDirectory() as temporary:
+            archive_path = Path(temporary) / f"{stem}.tar.gz"
+            with tarfile.open(archive_path, "w:gz", format=tarfile.USTAR_FORMAT) as archive:
+                for name, body, mode in (
+                    (stem, b"binary", 0o755),
+                    (library, b"FIPS module", 0o755),
+                    ("THIRD_PARTY_NOTICES", b"notices", 0o644),
+                ):
+                    member = tarfile.TarInfo(name)
+                    member.size, member.mode = len(body), mode
+                    archive.addfile(member, io.BytesIO(body))
+            def smoke(path):
+                self.assertEqual(stem, path.name)
+                self.assertNotEqual(archive_path.parent, path.parent)
+                self.assertEqual(b"FIPS module", (path.parent / library).read_bytes())
+                self.assertEqual(0o755, path.stat().st_mode & 0o777)
+                return "evidence 0.33.0"
+            with mock.patch.object(self.module, "run_binary_smoke", side_effect=smoke):
+                self.assertEqual("evidence 0.33.0", self.module.smoke_downloaded_binary(archive_path))
 
     def test_client_registry_verifier_requires_all_exact_public_packages(self) -> None:
         with (

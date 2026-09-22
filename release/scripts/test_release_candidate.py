@@ -734,6 +734,21 @@ class ReleaseCandidateTest(TestCase):
         self.assertNotIn("discovery-v0.23.0-linux-amd64", historical)
         self.assertEqual("binary", current["discovery-v0.24.0-linux-amd64"])
 
+    def test_macos_fips_binary_bundles_begin_with_v0_33_0(self) -> None:
+        binaries = ("relayctl", "evidence", "evidencectl", "evidence-oid4vci",
+                    "breg", "bregctl", "casework", "caseworkctl")
+        for version in ("0.32.0", "0.33.0", "1.0.0"):
+            inventory = self.module._relay_v2_payload_inventory(version)
+            for binary in binaries:
+                stem = f"{binary}-v{version}-macos-arm64"
+                if version == "0.32.0":
+                    self.assertEqual("binary", inventory[stem])
+                    self.assertNotIn(f"{stem}.tar.gz", inventory)
+                else:
+                    self.assertNotIn(stem, inventory)
+                    self.assertEqual("binary", inventory[f"{stem}.tar.gz"])
+                self.assertEqual("binary", inventory[f"{binary}-v{version}-linux-amd64"])
+
     def test_breg_payloads_begin_with_v0_26_0(self) -> None:
         historical = self.module._relay_v2_payload_inventory("0.25.0")
         current = self.module._relay_v2_payload_inventory("0.26.0")

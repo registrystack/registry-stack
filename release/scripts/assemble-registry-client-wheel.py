@@ -10,6 +10,7 @@ import hashlib
 import io
 import re
 import sys
+import tempfile
 import tomllib
 import zipfile
 from pathlib import Path
@@ -20,12 +21,14 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import client_registry
+from macos_fips_packaging import bundle_macos_fips
 
 
 ROOT = Path(__file__).resolve().parents[2]
 FACADE = ROOT / "crates" / "registry-stack-client-py"
 PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework")
 WHEEL_PATTERN = re.compile(r"^[^-]+-(?P<version>[^-]+)-(?P<tag>.+)\.whl$")
+MACOS_SHARED_FIPS_MINIMUM_VERSION = (0, 33, 0)
 
 
 def digest(data: bytes) -> str:
@@ -66,10 +69,45 @@ def wheel_metadata(tag: str) -> bytes:
     ).encode()
 
 
+def bundle_macos_wheel_files(
+    files: dict[str, bytes], library_roots: list[Path]
+) -> dict[str, bytes]:
+    """Relink staged extensions and return all signed wheel-owned files."""
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        staging = Path(temporary_directory)
+        for name, data in files.items():
+            destination = staging / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(data)
+
+        consumers = sorted(
+            path for path in staging.rglob("*.so") if path.is_file()
+        )
+        if not consumers:
+            raise ValueError("the macOS wheel contains no native extensions")
+        bundle_macos_fips(
+            consumers=consumers,
+            library_roots=library_roots,
+            library_directory=staging / "registry_client" / ".dylibs",
+        )
+        return {
+            path.relative_to(staging).as_posix(): path.read_bytes()
+            for path in sorted(staging.rglob("*"))
+            if path.is_file()
+        }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--macos-library-root",
+        action="append",
+        type=Path,
+        default=[],
+        help="root searched for shared AWS-LC-FIPS dylibs in a macOS build",
+    )
     parser.add_argument(
         "--include-casework",
         action="store_true",
@@ -135,6 +173,18 @@ def main() -> int:
     if len(tags) != 1:
         parser.error(f"input wheels have different compatibility tags: {sorted(tags)}")
     tag = tags.pop()
+
+    if (
+        "macosx" in tag
+        and client_registry.release_version(args.version)
+        >= MACOS_SHARED_FIPS_MINIMUM_VERSION
+    ):
+        if not args.macos_library_root:
+            parser.error("macOS wheels require at least one --macos-library-root")
+        try:
+            files = bundle_macos_wheel_files(files, args.macos_library_root)
+        except (OSError, ValueError) as exc:
+            parser.error(f"cannot bundle macOS FIPS libraries: {exc}")
 
     facade_root = FACADE / "python" / "registry_client"
     for path in sorted(facade_root.iterdir()):
