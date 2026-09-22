@@ -3,8 +3,11 @@
 set -euo pipefail
 cp -R /input/. /workspace
 apt-get update -qq
+# The CLI reference collector links the workspace FIPS cryptography backend.
+# aws-lc-fips-sys requires CMake, Go, and Perl when it builds that backend.
 apt-get install -y -qq ca-certificates curl git python3 python3-yaml xz-utils \
-  build-essential pkg-config libssl-dev libclang-dev protobuf-compiler
+  build-essential cmake golang-go perl pkg-config libssl-dev libclang-dev \
+  protobuf-compiler
 curl -fsSL https://sh.rustup.rs -o /tmp/rustup-init.sh
 sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain none
 export PATH="/root/.cargo/bin:${PATH}"
