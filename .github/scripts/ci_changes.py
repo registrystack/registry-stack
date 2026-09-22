@@ -448,6 +448,8 @@ ROOT_RUST_INPUTS = {
     "rust-toolchain",
     "rust-toolchain.toml",
     "rustfmt.toml",
+    "scripts/cargo-runtime-library-path.sh",
+    "scripts/cargo_runtime_library_path.py",
 }
 
 # Every workflow whose security properties are inspected by the release gate

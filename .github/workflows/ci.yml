@@ -106,6 +106,12 @@ jobs:
       - name: Test CI event routing
         run: python3 .github/scripts/test_ci_event_routing.py
 
+      - name: Test Cargo runtime-library resolution
+        run: >-
+          python3 -m unittest
+          scripts/test_cargo_runtime_library_path.py
+          scripts/test_cargo_runtime_script_contracts.py
+
       - name: Test nightly coverage planning
         run: python3 .github/scripts/test_nightly_rust_coverage.py
 
