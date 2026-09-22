@@ -66,6 +66,43 @@ signs the changed Mach-O files, and creates one deterministic archive per
 executable. Those steps define the supported macOS release payload, but they
 remain outside the Linux-only repeatability proof above.
 
+## The source tree, not the checkout
+
+A release binary must be a function of the source tree. Four crates in the lock
+run `git rev-parse HEAD` in their build script and bake the answer into what
+they compile: `wasmtime-internal-cache` keys its module cache on the full
+commit, `cranelift-codegen` writes `0.135.2-<first nine>` into its `VERSION`
+constant, `typst-utils` records `TYPST_COMMIT_SHA`, and `wasm-bindgen-shared`
+records the first nine characters as `WBG_VERSION`. Each is meant to read that
+crate's own development checkout. The first two reach a released binary today,
+through the WebAssembly action executor the Base Registry Engine enables from
+v0.33.0; the other two are in the lock but not in any release asset.
+
+The canonical builder mounts the repository at `/workspace` and puts
+`CARGO_HOME` inside it, so those build scripts resolved this repository instead
+and recorded the commit being released. The scheduled proof above cannot see
+that: it rebuilds one published tag, where the commit is identical on both
+sides. What it breaks is the image advisory baseline, whose reviewed layer
+digests are recorded in one commit and compared against the candidate built
+from the next one. Those can never match, so the fingerprint assertion stops
+converging and no renewal of it can succeed.
+
+`release/scripts/build-release-binaries.sh` therefore runs the container with
+`GIT_CEILING_DIRECTORIES=/workspace`. Repository discovery stops at the mount
+point, which reaches every build script because Cargo runs them below the
+repository root and the ceiling does not apply only to Cargo's own working
+directory. Each of the four crates then takes the fallback it already has for a
+packaged build. The inner invocation refuses to build a payload without the
+ceiling, so it is part of the canonical container contract rather than a
+setting a caller may drop.
+
+Before the payload is checksummed, the same script reads every staged binary
+back and fails the build when one still contains the exact source commit. That
+is a regression check for a path the ceiling does not cover, such as a build
+script that names the repository directory itself. It matches the full commit
+only, so a build script that embeds an abbreviation alone passes it and is
+caught by the ceiling instead.
+
 ## The C compiler, the linker, and the GNU libc floor
 
 The same container carries the Zig cross-compiler, installed from the Python
