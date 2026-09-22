@@ -108,10 +108,14 @@ const EVERY_EVENT: &[&str] = &["submit", "revise", "rebase", "cancel", "apply"];
 /// runtime's own gating: `admit_submitter_targets` is called for Submit and Revise
 /// (rebase is Revise with a flag), `action_requires_request_owner` is false only for
 /// Apply, and the receipt and task-status preflight runs only for Apply. The three
-/// apply-only layers between the task grant and the transition are the steps
-/// `apply_approved_request` runs in that order before it calls `RequestWorkflow::apply`:
-/// `authorize_targets`, `lock_and_verify_application_preconditions`, and the
-/// `apply_request_target` loop. No other action reaches them.
+/// apply-only layers before the transition are the steps `apply_approved_request` runs
+/// in that order before it calls `RequestWorkflow::apply`: `authorize_targets`,
+/// `lock_and_verify_application_preconditions`, and the `apply_request_target` loop.
+/// No other action reaches them. The two submit-only layers are the halves of
+/// `plan_submission_candidate` and its re-verification: the first runs before the
+/// idempotency row is locked, the second immediately before the transition, and
+/// reporting them as one layer would place the planning on whichever side of the lock
+/// the single layer sat.
 fn request_enforcement() -> Vec<EnforcementLayer> {
     vec![
         EnforcementLayer {
@@ -125,8 +129,13 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
             events: &["apply"],
         },
         EnforcementLayer {
+            id: "submit_preparation",
+            description: "Inside the transaction but before the idempotency row is locked, submit plans the submission once. It is skipped outright when an unlocked probe finds a receipt for this key, so a replay never re-plans. The request row is read under the same row policy the locked read below uses, a preview action ETag recomputed from that read must equal the caller's If-Match, the acting principal must be the recorded owner, and planning then requires the request to still be in draft at both the record revision and the workflow revision it read, admits the profile's submitter targets a first time, and refuses a plan whose intake, re-derived from the row, differs by a byte from the intake the planner ran on. Every one of those conditions is checked again after the lock, so a request that moved in between is refused rather than submitted on a stale plan.",
+            events: &["submit"],
+        },
+        EnforcementLayer {
             id: "idempotency_replay",
-            description: "Inside the transaction, the idempotency row for this action's key is locked and read before the request row is. The stored binding covers the caller's If-Match, the target authority, and the canonical body, so a key already bound to a different request is refused as a conflict here, before any row is read, and so is a key whose stored result was erased, because erasure is permanent and keeps the key reserved. A binding that matches replays the stored response once row visibility and, where they apply, submitter targets have been re-checked. That replay returns without re-running the action ETag, request ownership, the in-transaction task grant check, the workflow transition, or the persist policy.",
+            description: "Inside the transaction, the idempotency row for this action's key is locked and read before the request row and workflow are read under that lock. The stored binding covers the caller's If-Match, the target authority, and the canonical body, so a key already bound to a different request is refused as a conflict here, before those reads, and so is a key whose stored result was erased, because erasure is permanent and keeps the key reserved. Submit is the exception to the reading order: an unlocked probe for this key runs first, and where it finds no receipt the preparation layer above reads the row and plans the submission before this lock is taken. A binding that matches replays the stored response once row visibility and, where they apply, submitter targets have been re-checked. That replay returns without re-running the action ETag, request ownership, the in-transaction task grant check, the workflow transition, or the persist policy.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
@@ -141,7 +150,7 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "action_etag",
-            description: "The caller's If-Match, which is mandatory, must equal the action ETag recomputed from the record and workflow as locked, so an action prepared against a request that has since moved is refused as a failed precondition. Submit additionally compares a preview ETag before it plans the submission.",
+            description: "The caller's If-Match, which is mandatory, must equal the action ETag recomputed from the record and workflow as locked, so an action prepared against a request that has since moved is refused as a failed precondition. For submit this is the second such comparison: the preparation layer above made the first, against an unlocked read, before it planned the submission.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
@@ -153,6 +162,11 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
             id: "task_grant",
             description: "Inside the transaction, apply re-verifies that the caller's grant is the one the preflight checked and that both it and the proposal's grant are still current. For every other action, a caller acting under a task grant has that grant's status checked here.",
             events: EVERY_EVENT,
+        },
+        EnforcementLayer {
+            id: "submit_commit_preconditions",
+            description: "Immediately before the transition, submit re-verifies the plan it made before the lock against the values read under it: the record revision and the workflow revision must still be the ones planning read, and the submission's attachments are validated. A plan made against a request that has moved since is refused here rather than submitted.",
+            events: &["submit"],
         },
         EnforcementLayer {
             id: "apply_target_authorization",
@@ -319,12 +333,14 @@ mod tests {
             vec![
                 "route_admission",
                 "apply_preflight",
+                "submit_preparation",
                 "idempotency_replay",
                 "row_visibility",
                 "submitter_targets",
                 "action_etag",
                 "request_ownership",
                 "task_grant",
+                "submit_commit_preconditions",
                 "apply_target_authorization",
                 "apply_preconditions",
                 "apply_target_persistence",
@@ -361,6 +377,9 @@ mod tests {
         ] {
             assert_eq!(layer(&lifecycle, id).events, ["apply"], "{id}");
         }
+        for id in ["submit_preparation", "submit_commit_preconditions"] {
+            assert_eq!(layer(&lifecycle, id).events, ["submit"], "{id}");
+        }
         assert_eq!(
             layer(&lifecycle, "submitter_targets").events,
             ["submit", "revise", "rebase"]
@@ -384,6 +403,42 @@ mod tests {
                 "{id}"
             );
         }
+    }
+
+    /// Submit is the one action that does work before the idempotency row is
+    /// locked: it reads the row, compares a preview ETag, and plans the
+    /// submission, all under no lock. That is two reported places, one on each
+    /// side of the lock, and the position of each is the fact worth pinning:
+    /// a preparation layer reported after the lock would claim the plan was
+    /// made against the locked read, and a re-verification layer reported
+    /// before the transition would hide that the plan is checked again.
+    /// The preview comparison belongs to the preparation layer alone; the
+    /// ETag layer describes the locked comparison and must not reabsorb it.
+    #[test]
+    fn the_two_submit_layers_sit_on_either_side_of_the_lock() {
+        let lifecycle = request_lifecycle();
+        let index = |id: &str| {
+            lifecycle
+                .enforcement
+                .iter()
+                .position(|layer| layer.id == id)
+                .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
+        };
+        assert!(index("submit_preparation") < index("idempotency_replay"));
+        assert!(index("submit_commit_preconditions") > index("task_grant"));
+        assert!(index("submit_commit_preconditions") < index("workflow_transition"));
+        assert!(
+            !layer(&lifecycle, "action_etag")
+                .description
+                .contains("preview"),
+            "the preview comparison belongs to submit_preparation"
+        );
+        assert!(
+            layer(&lifecycle, "submit_preparation")
+                .description
+                .contains("preview"),
+            "submit_preparation stopped naming the preview comparison"
+        );
     }
 
     /// The replay layer's value is the list of layers it skips, so the layers it

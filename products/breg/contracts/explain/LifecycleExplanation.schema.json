@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://registrystack.org/breg-explain/v1alpha1/LifecycleExplanation.schema.json",
   "title": "LifecycleExplanation",
-  "description": "Wire shape of `explanation` for `bregctl explain lifecycle`, which reports the request lifecycle the engine enforces. This kind is pinned in full, identifiers and positions included: the request machine does not vary by project, so its own id, its five states, its six edges, and its thirteen enforcement layers, each with the exact event list it runs for, are all constrained here by position and unconditionally, and a rename, a reordering, or a dropped entry fails the contract test rather than passing it. `LifecycleDescription` in `registry-breg` exists to be this payload rather than to model anything the engine computes, so a change to its fields is a deliberate change to this contract and not the incidental drift that makes a compiled-model passthrough opaque. `lifecycle` is the one subject that takes no PROJECT: the lifecycle is engine behaviour and does not vary by project, so the report carries no `revision`.",
+  "description": "Wire shape of `explanation` for `bregctl explain lifecycle`, which reports the request lifecycle the engine enforces. This kind is pinned in full, identifiers and positions included: the request machine does not vary by project, so its own id, its five states, its six edges, and its fifteen enforcement layers, each with the exact event list it runs for, are all constrained here by position and unconditionally, and a rename, a reordering, or a dropped entry fails the contract test rather than passing it. `LifecycleDescription` in `registry-breg` exists to be this payload rather than to model anything the engine computes, so a change to its fields is a deliberate change to this contract and not the incidental drift that makes a compiled-model passthrough opaque. `lifecycle` is the one subject that takes no PROJECT: the lifecycle is engine behaviour and does not vary by project, so the report carries no `revision`.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "kind", "lifecycles"],
@@ -201,6 +201,20 @@
             {
               "properties": {
                 "id": {
+                  "const": "submit_preparation"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "submit" }
+                  ],
+                  "items": false,
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
                   "const": "idempotency_replay"
                 },
                 "events": {
@@ -306,6 +320,20 @@
             {
               "properties": {
                 "id": {
+                  "const": "submit_commit_preconditions"
+                },
+                "events": {
+                  "prefixItems": [
+                    { "const": "submit" }
+                  ],
+                  "items": false,
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
                   "const": "apply_target_authorization"
                 },
                 "events": {
@@ -383,7 +411,7 @@
             }
           ],
           "items": false,
-          "minItems": 13
+          "minItems": 15
         }
       }
     },

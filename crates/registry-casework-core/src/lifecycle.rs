@@ -55,7 +55,9 @@ pub struct LifecycleTransition {
 /// `LifecycleDescription::enforcement`. `events` names every event the layer
 /// runs for; an event absent from the list passes the layer without being
 /// checked there. Where an event is raised on more than one path and the layer
-/// gates only some of them, the description says which.
+/// gates only some of them, the description says which. One list can report one
+/// order, so where a layer's position is not the one a particular event meets,
+/// that layer's description names the event and where it really runs.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnforcementLayer {
@@ -204,7 +206,10 @@ const EVERY_OCCURRENCE_EVENT: &[&str] = &[
 /// a choice this module makes: neither recover route carries an If-Match and
 /// neither attempt settlement compares the item revision, so the revision layer
 /// stops at reservation; the operator path that settles an uncertain attempt
-/// carries no caller at all.
+/// carries no caller at all. The order is the one every event meets except the
+/// reservation, which reaches the reducer before its key check and the attempt
+/// fence rather than after them; the reducer layer names that exception rather
+/// than the list being split into a per-event order.
 fn occurrence_enforcement() -> Vec<EnforcementLayer> {
     vec![
         EnforcementLayer {
@@ -219,7 +224,7 @@ fn occurrence_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "erased_item_idempotency_preflight",
-            description: "Before the source is re-read, a retry naming an item that has already been erased is answered from the retained idempotency record alone: a recorded request hash differing from this one is refused as a conflict, and a record whose response has been retained away is refused as expired. It runs only against an erased item and only for a caller who currently serves that item's queue in the role the operation needs, so a live item passes it and reaches the source and queue layers below.",
+            description: "Before the source is re-read, a retry naming an item that has already been erased is answered from the retained idempotency record alone: a recorded request hash differing from this one is refused as a conflict, and a record whose response has been retained away is refused as expired. A reservation is stricter: any recorded hash matching this one is refused as expired, because an erased item can no longer be reserved even where the stored response survives. It runs only against an erased item and only for a caller who currently serves that item's queue in the role the operation needs, so a live item passes it and reaches the source and queue layers below.",
             events: &["claim", "release", "attempt_reserved"],
         },
         EnforcementLayer {
@@ -234,8 +239,8 @@ fn occurrence_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "idempotency_admission",
-            description: "A retried mutation whose recorded request hash differs from this one is refused as a conflict, and a retry whose stored response retention has erased, including the item itself, is refused as expired. For claim, release, and reservation against an already erased item, the preflight layer above has answered this before the source was read.",
-            events: CALLER_EVENTS,
+            description: "With the item row locked, a retried claim or release is answered from its recorded idempotency record: a recorded request hash differing from this one is refused as a conflict, and a retry whose stored response retention has erased, including the item itself, is refused as expired. Against an already erased item the preflight layer above has answered this before the source was read. A reservation is admitted by its own key check below instead, and no attempt settlement reaches an idempotency record on any path.",
+            events: &["claim", "release"],
         },
         EnforcementLayer {
             id: "source_binding_currency",
@@ -251,18 +256,23 @@ fn occurrence_enforcement() -> Vec<EnforcementLayer> {
             ],
         },
         EnforcementLayer {
+            id: "reservation_key_admission",
+            description: "A retried reservation is admitted by its own key check rather than by the idempotency record above: the attempt row recorded for this item and key is locked and compared field by field against the actor, both profiles, the displayed binding, the recovery evidence, and the operation. Any difference is refused as a conflict, and an exact match is refused as a still-pending attempt, so a reservation is answered from a stored response on no path. The request hash the row carries is written here and compared nowhere.",
+            events: &["attempt_reserved"],
+        },
+        EnforcementLayer {
             id: "attempt_fence",
             description: "No occurrence changes while a pending or uncertain attempt is live on the item: a claim, release, or reservation is refused, a clock effect is deferred, and an observation is requeued. An attempt settlement is fenced by the execution token recorded on the attempt; a refusal by the executor also requires its lease to be live, recovery requires it to have expired, and the operator settlement of an uncertain attempt requires an expired lease and then issues a fresh token that fences the original executor out.",
             events: EVERY_OCCURRENCE_EVENT,
         },
         EnforcementLayer {
             id: "lifecycle_transition",
-            description: "The edge's own guard, run by the reducer: the (state, event) pair is in the fixed table. In practice this refuses every event against a completed, superseded, or cancelled occurrence and every caller event raised from the wrong active state.",
+            description: "The edge's own guard, run by the reducer: the (state, event) pair is in the fixed table. In practice this refuses every event against a completed, superseded, or cancelled occurrence and every caller event raised from the wrong active state. The position reported here is where every event but one reaches it. The reservation is the exception: its reducer runs before the key check and the attempt fence above, so a reservation against a state the table refuses is refused before either of them.",
             events: EVERY_OCCURRENCE_EVENT,
         },
         EnforcementLayer {
             id: "persist_serialization",
-            description: "Every write runs in a transaction that already holds a row lock on the item, and on the subject or clock occurrence where one is involved, so a concurrent writer is serialized behind this one rather than filtered at write time; the clock path claims its effect once only. There is no row-level security and no persist-time state filter on this machine.",
+            description: "Every write runs in a transaction that already holds a row lock on the item, and on the subject or clock occurrence where one is involved, so a concurrent writer is serialized behind this one rather than filtered at write time; the clock path claims its effect once only. The first authoritative observation of an unseen occurrence is the exception: it inserts the item, so there is no item row to lock and the subject lock is the whole of its serialization. There is no row-level security and no persist-time state filter on this machine.",
             events: EVERY_OCCURRENCE_EVENT,
         },
     ]
@@ -361,13 +371,18 @@ fn review_enforcement() -> Vec<EnforcementLayer> {
             events: EVERY_REVIEW_EVENT,
         },
         EnforcementLayer {
+            id: "producer_submission_idempotency",
+            description: "A producer submitting a new review is admitted here, before any request row is locked. An advisory lock over the producer, the subject, and the review kind serializes that producer's concurrent submissions, and the submission's own idempotency record answers a retry under it: a recorded request hash differing from this one is refused as a conflict, and a record whose response has been retained away is refused as expired. The producer's priors that this submission supersedes are selected and locked only after that, so the settlements a supersession raises reach the request lock below having already passed this admission, not the one under the lock. The recovery route is admitted from its idempotency record too, and takes no lock at all.",
+            events: &["settle"],
+        },
+        EnforcementLayer {
             id: "request_lock_and_lifecycle",
-            description: "The review request row is locked before anything is decided, and an event against a request not still in reviewing, or whose subject is not the one the caller named, is refused; a repeated cancellation returns the terminal result already recorded rather than settling twice. Supersession selects only the producer's own reviewing requests, under a lock that serializes that producer's submissions and settlements.",
+            description: "On the decision, stage, and cancellation routes the review request row is locked before anything is decided, and an event against a request not still in reviewing, or whose subject is not the one the caller named, is refused; a repeated cancellation returns the terminal result already recorded rather than settling twice. A supersession reaches this lock through the producer's submission above, which selects only that producer's own reviewing requests.",
             events: EVERY_REVIEW_EVENT,
         },
         EnforcementLayer {
             id: "request_idempotency_admission",
-            description: "With the request row locked, a retry is answered from its recorded idempotency record before any queue, revision, holder, or decision check runs: a recorded request hash differing from this one is refused as a conflict, and a record whose response has been retained away is refused as expired.",
+            description: "With the request row locked, a retry on the decision, stage, or cancellation route is answered from its recorded idempotency record before any queue, revision, holder, or decision check runs: a recorded request hash differing from this one is refused as a conflict, and a record whose response has been retained away is refused as expired. A settlement raised by a producer's submission or by the recover route was admitted by the layer above instead, without this lock.",
             events: EVERY_REVIEW_EVENT,
         },
         EnforcementLayer {
@@ -700,6 +715,7 @@ mod tests {
                 "queue_and_holder_authority",
                 "idempotency_admission",
                 "source_binding_currency",
+                "reservation_key_admission",
                 "attempt_fence",
                 "lifecycle_transition",
                 "persist_serialization",
@@ -765,7 +781,11 @@ mod tests {
         );
         assert_eq!(
             layer(&description, "idempotency_admission").events,
-            caller_events
+            ["claim", "release"]
+        );
+        assert_eq!(
+            layer(&description, "reservation_key_admission").events,
+            ["attempt_reserved"]
         );
         let mut currency = observation_events.to_vec();
         currency.push("release");
@@ -792,6 +812,7 @@ mod tests {
                 "source_authorization",
                 "queue_and_holder_authority",
                 "idempotency_admission",
+                "reservation_key_admission",
             ] {
                 assert!(
                     !layer(&description, id).events.contains(&event),
@@ -822,6 +843,91 @@ mod tests {
         // report a source check that path never runs.
         let source = layer(&description, "source_authorization").description;
         assert!(source.contains("operator"), "{source}");
+    }
+
+    /// One ordered list per machine can report one order, and the reservation
+    /// is the single occurrence event whose reducer does not run where this
+    /// list puts it: `reserve_attempt_for_execution` calls the reducer before
+    /// its key check and before the attempt fence, while claim, release, the
+    /// six observations, and the clock-driven release all reach the fence
+    /// first. The list keeps the majority order and the layer that moves has
+    /// to name the event it moves for, or the report states an order that is
+    /// wrong for one event and says nothing about it.
+    #[test]
+    fn the_reducer_layer_names_the_one_event_that_reaches_it_early() {
+        let description = occurrence_lifecycle();
+        let index = |id: &str| {
+            description
+                .enforcement
+                .iter()
+                .position(|layer| layer.id == id)
+                .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
+        };
+        assert!(index("attempt_fence") < index("lifecycle_transition"));
+        assert!(index("reservation_key_admission") < index("attempt_fence"));
+        let reducer = layer(&description, "lifecycle_transition").description;
+        assert!(reducer.contains("reservation"), "{reducer}");
+        assert!(reducer.contains("attempt fence"), "{reducer}");
+    }
+
+    /// The reservation is admitted by a field-by-field comparison of its own
+    /// attempt row, not by the idempotency record the other caller events use,
+    /// and an exact match there is refused rather than replayed. Reporting it
+    /// under the idempotency layer would promise a replay the runtime never
+    /// performs, so the two are separate layers and the idempotency layer must
+    /// not list the event it no longer gates.
+    #[test]
+    fn the_reservation_is_admitted_by_its_own_key_check_not_by_replay() {
+        let description = occurrence_lifecycle();
+        let idempotency = layer(&description, "idempotency_admission");
+        assert!(
+            !idempotency.events.contains(&"attempt_reserved"),
+            "{idempotency:?}"
+        );
+        let reservation = layer(&description, "reservation_key_admission").description;
+        assert!(reservation.contains("refused"), "{reservation}");
+        assert!(
+            !reservation.contains("replay"),
+            "an exact match is refused, never replayed: {reservation}"
+        );
+    }
+
+    /// The first authoritative observation of an unseen occurrence inserts the
+    /// item row, so there is no item row to lock and the subject lock is the
+    /// whole of the serialization. A layer claiming every write already holds
+    /// an item lock would report a guarantee that path does not have.
+    #[test]
+    fn the_persist_layer_names_the_write_that_holds_no_item_lock() {
+        let description = occurrence_lifecycle();
+        let persist = layer(&description, "persist_serialization").description;
+        assert!(persist.contains("no item row"), "{persist}");
+        assert!(persist.contains("subject"), "{persist}");
+    }
+
+    /// A producer's submission is admitted before any review request row is
+    /// locked: an advisory lock and the submission's own idempotency record
+    /// answer a retry, and the priors it supersedes are selected and locked
+    /// only afterwards. The lock-first layers below are correct for the
+    /// decision and cancellation routes and wrong for this one, so this
+    /// admission is reported as its own layer in front of them.
+    #[test]
+    fn the_producer_submission_is_admitted_before_the_request_lock() {
+        let description = review_lifecycle();
+        let index = |id: &str| {
+            description
+                .enforcement
+                .iter()
+                .position(|layer| layer.id == id)
+                .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
+        };
+        assert!(index("producer_submission_idempotency") < index("request_lock_and_lifecycle"));
+        assert!(index("request_lock_and_lifecycle") < index("request_idempotency_admission"));
+        assert_eq!(
+            layer(&description, "producer_submission_idempotency").events,
+            ["settle"]
+        );
+        let admission = layer(&description, "request_idempotency_admission").description;
+        assert!(admission.contains("recover"), "{admission}");
     }
 
     /// A supervisor serving the queue may release another person's holding, so
@@ -1036,6 +1142,7 @@ mod tests {
                 "caller_authentication",
                 "producer_or_reviewer_admission",
                 "review_source_preflight",
+                "producer_submission_idempotency",
                 "request_lock_and_lifecycle",
                 "request_idempotency_admission",
                 "reviewer_queue_authority",
