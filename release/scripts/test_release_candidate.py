@@ -942,7 +942,7 @@ class ReleaseCandidateTest(TestCase):
             self.module.check_image_onboarding(root, "0.31.0"),
         )
 
-    def test_v0_33_scheduling_onboarding_stays_closed_until_external_setup(self) -> None:
+    def test_v0_33_scheduling_onboarding_requires_baseline_and_cleanup_entry(self) -> None:
         root = self.onboarding_repository()
         shutil.copy2(
             ROOT / "release/docker/Dockerfile.scheduling",
@@ -953,6 +953,19 @@ class ReleaseCandidateTest(TestCase):
             "scheduling advisory baseline is missing",
         ):
             self.module.check_image_onboarding(root, "0.33.0")
+        self.assertEqual(
+            self.module._candidate_image_names("0.33.0"),
+            self.module.check_image_onboarding(
+                root, "0.33.0", allow_missing_baseline=True
+            ),
+        )
+        cleanup = root / "release/scripts/cleanup-release-candidates.py"
+        cleanup.write_text(
+            cleanup.read_text(encoding="utf-8").replace(
+                '    "scheduling-candidate",\n', ""
+            ),
+            encoding="utf-8",
+        )
         with self.assertRaisesRegex(
             self.module.CandidateError,
             "CANDIDATE_PACKAGES must contain scheduling-candidate",
