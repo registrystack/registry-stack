@@ -162,11 +162,11 @@ the cleanup allowlist only after its private package exists, and merge its
 reviewed advisory baseline before requesting that candidate.
 
 Selecting `v0.33.0` or later also includes Scheduling in both checks. The
-release source deliberately deny-lists the public `scheduling` package while
-leaving `scheduling-candidate` out of scheduled cleanup until its private
-package identity exists. Provision both identities, add `scheduling-candidate`
-to the cleanup allowlist with its matching test, and merge a reviewed
-Scheduling advisory baseline before requesting a `v0.33.0` or later candidate.
+release source deny-lists the public `scheduling` package and includes the
+bootstrapped private `scheduling-candidate` package in scheduled cleanup.
+Verify both identities have the visibility and Actions access documented above,
+and require a reviewed Scheduling advisory baseline before requesting a
+`v0.33.0` or later candidate.
 
 The daily cleanup tolerates one delete failure: GitHub's 400 stating that
 publicly visible package versions with more than 5000 downloads cannot be

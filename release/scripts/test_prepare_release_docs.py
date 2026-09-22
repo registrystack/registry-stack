@@ -4,6 +4,7 @@ import importlib.util
 import io
 from contextlib import redirect_stdout
 import json
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -16,6 +17,7 @@ SPEC = importlib.util.spec_from_file_location(
 prep = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(prep)
 REAL_RUN = subprocess.run
+CONTAINER_SCRIPT = Path(__file__).with_name("prepare-release-docs-container.sh")
 
 
 class PreparationTest(TestCase):
@@ -79,6 +81,17 @@ class PreparationTest(TestCase):
         self.assertEqual(prep.git(self.repo, "rev-parse", "HEAD"), head)
         self.assertEqual(prep.git(self.repo, "status", "--porcelain"), "")
         self.assertEqual(json.loads((output / "report.json").read_text())["source_sha"], head)
+
+    def test_container_installs_fips_native_build_tools(self):
+        script = CONTAINER_SCRIPT.read_text(encoding="utf-8").replace("\\\n", " ")
+        install = next(
+            line for line in script.splitlines() if line.startswith("apt-get install ")
+        )
+        packages = set(shlex.split(install))
+
+        for required in ("build-essential", "cmake", "golang-go", "perl"):
+            with self.subTest(package=required):
+                self.assertIn(required, packages)
 
     def test_apply_preserves_untracked_work_and_rerun_is_noop(self):
         user_file = self.repo / "user-notes.txt"

@@ -337,7 +337,7 @@
                     "const": "refuse the package at load with a typed handler error and no state change"
                   },
                   "serversBuiltWithoutTheFeature": {
-                    "const": "load the package and fail each invocation with a typed handler failure"
+                    "const": "refuse the package during load because handler rederivation requires WASM support"
                   },
                   "moduleSha256": { "type": "string" }
                 }

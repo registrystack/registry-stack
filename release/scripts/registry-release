@@ -136,6 +136,7 @@ PYTHON_CLIENT_RELEASE_SURFACES = (
     ),
 )
 FUZZ_LOCK_RELEASE_SURFACE_PATHS = (
+    "products/breg/wasm-handler-sdk/Cargo.lock",
     "products/manifest/fuzz/Cargo.lock",
     "products/platform/fuzz/Cargo.lock",
 )
