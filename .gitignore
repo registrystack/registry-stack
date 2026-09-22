@@ -24,3 +24,6 @@ __pycache__/
 
 # Working directory created by the Base Registry Engine tutorials
 /tutorial-work/
+
+# Local decision trails written by unattended agent runs.
+/.audit/
