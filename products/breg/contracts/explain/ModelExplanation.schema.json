@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/breg-explain/v1alpha1/ModelExplanation.schema.json",
+  "$id": "https://registrystack.org/breg-explain/v1alpha2/ModelExplanation.schema.json",
   "title": "ModelExplanation",
   "description": "Wire shape of `explanation` for `bregctl explain model`. Nested compiled-model trees (entities, package, manifestProjection, physicalNames) are declared opaque because bregctl serializes them by passing a compiled-model value straight to serde, so their shape can change without any corresponding line changing in bregctl.",
   "type": "object",
@@ -19,7 +19,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha1"
+      "const": "registry.registrystack.org/breg-explain/v1alpha2"
     },
     "kind": {
       "const": "ModelExplanation"

@@ -3,8 +3,8 @@
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_project_json, Operation};
 use registry_breg::model::{
-    ActionRouteKind, CompiledActionTargetBinding, CompiledActionTargetUseSource,
-    CompiledActionValue,
+    ActionRouteKind, CompiledActionTargetBinding, CompiledActionTargetPermission,
+    CompiledActionTargetUseSource, CompiledActionValue,
 };
 
 fn compile_json(
@@ -12,6 +12,19 @@ fn compile_json(
 ) -> Result<registry_breg::CompiledRegistry, registry_breg::CompileFailure> {
     let project = parse_project_json(source).expect("source shape parses");
     compile_project(&project, &[], CompileProfile::Authoring)
+}
+
+#[test]
+fn predecessor_permission_targets_without_discriminators_remain_readable() {
+    let target: CompiledActionTargetPermission = serde_json::from_value(serde_json::json!({
+        "entityId": "person",
+        "rowBoundaries": []
+    }))
+    .expect("a predecessor permission target remains readable");
+
+    assert_eq!(target.entity_id, "person");
+    assert_eq!(target.operation, None);
+    assert_eq!(target.source, None);
 }
 
 #[test]
@@ -398,6 +411,30 @@ fn household_contact_action_compiles_routes_effects_and_authority() {
     assert!(grant.default);
     assert_eq!(grant.principal_claim.as_deref(), Some("registry_principal"));
     assert_eq!(grant.operations, [Operation::Invoke].into_iter().collect());
+    assert!(grant.targets.iter().any(|target| {
+        target.entity_id == "group-membership"
+            && target.operation == Some(Operation::Create)
+            && matches!(
+                target.source.as_ref(),
+                Some(CompiledActionTargetUseSource::Effect { effect }) if effect == "membership"
+            )
+    }));
+    assert!(grant.targets.iter().any(|target| {
+        target.entity_id == "household"
+            && target.operation == Some(Operation::Patch)
+            && matches!(
+                target.source.as_ref(),
+                Some(CompiledActionTargetUseSource::Input { input }) if input == "household"
+            )
+    }));
+    assert!(grant.targets.iter().any(|target| {
+        target.entity_id == "person"
+            && target.operation == Some(Operation::Create)
+            && matches!(
+                target.source.as_ref(),
+                Some(CompiledActionTargetUseSource::Effect { effect }) if effect == "person"
+            )
+    }));
     assert_eq!(
         grant.results.iter().cloned().collect::<Vec<_>>(),
         vec![
@@ -457,6 +494,31 @@ fn action_grants_must_cover_every_derived_target_and_result() {
         .collect::<Vec<_>>();
     assert!(codes.contains(&"action.permission.targets.incomplete"));
     assert!(codes.contains(&"action.permission.result_unknown"));
+}
+
+#[test]
+fn action_grants_refuse_unused_target_locks() {
+    let mut source: serde_json::Value =
+        serde_json::from_str(&household_contact_project("")).unwrap();
+    source["entities"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id":"unused-record", "primaryDataset":"test-dataset",
+            "route":"unused-records", "mutationMode":"mutable",
+            "fields":[{"id":"label", "type":"string", "maxLength":32, "classification":"internal"}]
+        }));
+    source["accessProfiles"][0]["permissions"][0]["targets"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"entity":"unused-record", "rowBoundaries":[]}));
+
+    let failure = compile_json(&serde_json::to_vec(&source).unwrap())
+        .expect_err("a target lock without an action target use is refused");
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "action.permission.targets.unused"));
 }
 
 #[test]

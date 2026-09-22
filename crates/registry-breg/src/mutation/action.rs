@@ -590,7 +590,7 @@ impl MutationCoordinator {
         // A hook holds no claims, so a grant that row-boundaries its targets
         // can never be satisfied by this path and is refused outright.
         let mut target_authority = BTreeMap::<String, Vec<RowBoundaryContext>>::new();
-        for target in &grant.targets {
+        for target in grant.entity_target_locks() {
             if target.row_boundaries.is_empty() {
                 target_authority.insert(target.entity_id.clone(), Vec::new());
             } else {

@@ -431,7 +431,7 @@ fn row_reach(
     }
     for action in &actions.actions {
         for grant in &action.permissions {
-            for target in &grant.targets {
+            for target in grant.entity_target_locks() {
                 add(
                     &target.entity_id,
                     &grant.profile_id,

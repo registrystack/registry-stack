@@ -14,9 +14,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use jsonschema::{Draft, JSONSchema};
-use serde_json::Value;
+use serde_json::{json, Value};
 
-const API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha1";
+const API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha2";
 
 /// Fixture directories the gate replays, each an on-disk registry project
 /// under `products/breg/`. Chosen to cover every subject's optional
@@ -146,17 +146,20 @@ fn explain_with_scenario(project: &Path, scenario: &Path) -> Value {
 }
 
 fn load_schema(kind: &str) -> JSONSchema {
+    let schema = load_schema_document(kind);
+    JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .compile(&schema)
+        .unwrap_or_else(|error| panic!("schema {kind} compiles: {error}"))
+}
+
+fn load_schema_document(kind: &str) -> Value {
     let path = repo_root()
         .join("products/breg/contracts/explain")
         .join(format!("{kind}.schema.json"));
     let bytes =
         std::fs::read(&path).unwrap_or_else(|error| panic!("schema {path:?} reads: {error}"));
-    let schema: Value = serde_json::from_slice(&bytes)
-        .unwrap_or_else(|error| panic!("schema {path:?} parses: {error}"));
-    JSONSchema::options()
-        .with_draft(Draft::Draft202012)
-        .compile(&schema)
-        .unwrap_or_else(|error| panic!("schema {path:?} compiles: {error}"))
+    serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("schema {path:?} parses: {error}"))
 }
 
 /// Asserts `explanation` carries the envelope for `kind`, then validates it
@@ -242,6 +245,48 @@ fn explain_actions_matches_contract() {
         let explanation = explain("actions", &fixture_path(relative));
         assert_matches_contract(name, "ActionsExplanation", &explanation);
     }
+}
+
+#[test]
+fn facility_action_permission_targets_keep_each_operation_and_source() {
+    let explanation = explain(
+        "actions",
+        &fixture_path("products/breg/fixtures/facility-registry-actions"),
+    );
+    let action = explanation["actions"]
+        .as_array()
+        .expect("actions are listed")
+        .iter()
+        .find(|action| action["id"] == "register-facility")
+        .expect("register-facility is explained");
+    let permission = action["permissions"]
+        .as_array()
+        .expect("permissions are listed")
+        .iter()
+        .find(|permission| permission["profile"] == "facility-registrar")
+        .expect("facility registrar permission is explained");
+    let roles = permission["targets"]
+        .as_array()
+        .expect("permission targets are listed")
+        .iter()
+        .map(|target| {
+            let source = &target["source"];
+            json!({
+                "entity": target["entity"],
+                "operation": target["operation"],
+                "sourceKind": source["kind"],
+                "sourceId": source.get("effect").unwrap_or(&source["input"]["input"]),
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        roles,
+        vec![
+            json!({"entity": "facility", "operation": "create", "sourceKind": "effect", "sourceId": "facility"}),
+            json!({"entity": "initial-operator-assignment", "operation": "create", "sourceKind": "effect", "sourceId": "initial-assignment"}),
+            json!({"entity": "operator", "operation": "invoke", "sourceKind": "input", "sourceId": "operator"}),
+        ]
+    );
 }
 
 #[test]

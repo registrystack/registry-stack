@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/breg-explain/v1alpha1/RoutesExplanation.schema.json",
+  "$id": "https://registrystack.org/breg-explain/v1alpha2/RoutesExplanation.schema.json",
   "title": "RoutesExplanation",
   "description": "Wire shape of `explanation` for `bregctl explain routes`. `routes` mixes two record shapes with no shared field beyond the injected `kind` discriminator: an entity-route half, which is a passthrough of the compiled route table (CompiledRoute) with `kind` injected after serialization, and an action-route half, which bregctl reconstructs field by field. Only the injected `kind` and the action half are pinned in full; the entity half's other fields are outside this contract version.",
   "type": "object",
@@ -8,7 +8,7 @@
   "required": ["apiVersion", "kind", "routes"],
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha1"
+      "const": "registry.registrystack.org/breg-explain/v1alpha2"
     },
     "kind": {
       "const": "RoutesExplanation"

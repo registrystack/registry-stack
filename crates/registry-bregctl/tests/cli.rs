@@ -1229,6 +1229,10 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
     assert!(registry.contains("manifestProjection:"));
     assert!(registry.contains("modules:"));
     assert!(registry.contains("vocabularies:"));
+    assert!(registry.contains("declare `hooks`"));
+    assert!(registry.contains("hook declares `phase: after`"));
+    assert!(registry.contains("{kind: url, destinationId: registry-events}"));
+    assert!(!registry.contains("declare `events`"));
     let journeys = fs::read_to_string(destination.join("tests/journeys.yaml"))
         .expect("initialized fixture journeys read");
     assert!(journeys.contains("entity: record"));

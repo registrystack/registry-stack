@@ -11,7 +11,7 @@ whose `explanation` field carries an envelope plus a subject-specific payload:
   "revision": "...",
   "findings": [],
   "explanation": {
-    "apiVersion": "registry.registrystack.org/breg-explain/v1alpha1",
+    "apiVersion": "registry.registrystack.org/breg-explain/v1alpha2",
     "kind": "RoutesExplanation",
     "routes": [ "..." ]
   }
@@ -23,6 +23,11 @@ whose `explanation` field carries an envelope plus a subject-specific payload:
 fields on any `registry-breg` type. Nine `kind` values exist, one per
 subject (ten invocations, because `explain access` produces a different
 `kind` with `--scenario` than without):
+
+`v1alpha2` adds `operation` and `source` to every immediate-action permission
+target. A consumer no longer has to join `permissions[].targets[]` back to the
+action's own `targets[]` to distinguish creates and patches from referenced
+invocation targets.
 
 | Subject | `--scenario` | `kind` | Schema |
 |---|---|---|---|
