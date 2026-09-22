@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.33.0 - 2026-09-22
+
 - BREAKING: replace hosted decisions with unified reviews. Remove `hosted.rs`
   and its routes: `POST /v1/hosted-items` and the paired
   `GET /v1/hosted-items/terminal`, `GET /v1/hosted-items/{itemId}`,
