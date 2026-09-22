@@ -854,6 +854,18 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         cache_key = cargo_cache["with"]["key"]
         restore_key = cargo_cache["with"]["restore-keys"]
+        self.assertEqual(
+            cargo_cache["with"]["path"].splitlines(),
+            [
+                "~/.cargo/registry",
+                "~/.cargo/git",
+                "target/release-client-python",
+                "target/release-client-node",
+            ],
+        )
+        self.assertIn("release-isolated-clients", cache_key)
+        self.assertIn("release-isolated-clients", restore_key)
+        self.assertIn(".github/workflows/release-candidate.yml", cache_key)
         self.assertIn("go-1.24.4", cache_key)
         self.assertIn("go-1.24.4", restore_key)
         self.assertIn("zig-0.12.1-glibc-2.17", cache_key)
@@ -877,6 +889,28 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("expected_wheels=2", wheel)
         self.assertIn("--require-hashes --only-binary=:all:", wheel)
         self.assertIn("release/requirements/maturin-1.9.6.txt", wheel)
+        python_step = next(
+            step
+            for step in clients["steps"]
+            if step.get("name") == "Build Python client wheels"
+        )
+        node_step = next(
+            step
+            for step in clients["steps"]
+            if step.get("name") == "Build Node client packages"
+        )
+        self.assertEqual(
+            python_step["env"]["CARGO_TARGET_DIR"],
+            "${{ github.workspace }}/target/release-client-python",
+        )
+        self.assertEqual(
+            node_step["env"]["CARGO_TARGET_DIR"],
+            "${{ github.workspace }}/target/release-client-node",
+        )
+        self.assertNotEqual(
+            python_step["env"]["CARGO_TARGET_DIR"],
+            node_step["env"]["CARGO_TARGET_DIR"],
+        )
         node = step_run(document, "clients", "Build Node client packages")
         self.assertNotIn("--use-napi-cross", node)
         self.assertIn(
