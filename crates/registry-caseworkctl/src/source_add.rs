@@ -974,9 +974,10 @@ fn reviewer_authority(
     let mut allowed_purposes: Option<BTreeSet<String>> = None;
     let mut row_boundary_findings = Vec::new();
     for id in &profile_ids {
-        let profile = profiles
+        let (profile_index, profile) = profiles
             .iter()
-            .find(|candidate| candidate["id"] == *id)
+            .enumerate()
+            .find(|(_, candidate)| candidate["id"] == *id)
             .with_context(|| format!("BReg access profile {id} named by the selected request is absent from registry.yaml"))?;
         if profile["principalClaim"] != Value::String(READER_PRINCIPAL_CLAIM.to_owned()) {
             bail!("BReg access profile {id} does not authenticate its principal through {READER_PRINCIPAL_CLAIM}");
@@ -997,10 +998,10 @@ fn reviewer_authority(
         if &requesters != reviewer_clients {
             bail!("BReg access profile {id} requesterClients must exactly match the Casework staff and supervisor clients");
         }
-        if has_nonempty_row_boundaries(profile) {
-            let mut claims = BTreeSet::new();
-            row_boundary_claims(profile, &mut claims);
-            row_boundary_findings.push(row_boundary_finding(id, &claims));
+        let mut row_boundary_locations = Vec::new();
+        collect_row_boundary_locations(profile, &mut Vec::new(), &mut row_boundary_locations);
+        for (pointer, claims) in &row_boundary_locations {
+            row_boundary_findings.push(row_boundary_finding(id, profile_index, pointer, claims));
         }
         let required_scopes = match profile.get("requiredScopes") {
             None | Some(Value::Null) => &[][..],
@@ -1054,42 +1055,45 @@ fn reviewer_authority(
     })
 }
 
-fn has_nonempty_row_boundaries(value: &Value) -> bool {
-    match value {
-        Value::Array(values) => values.iter().any(has_nonempty_row_boundaries),
-        Value::Object(values) => values.iter().any(|(key, value)| {
-            if key == "rowBoundaries" {
-                value
-                    .as_array()
-                    .is_none_or(|boundaries| !boundaries.is_empty())
-            } else {
-                has_nonempty_row_boundaries(value)
-            }
-        }),
-        _ => false,
-    }
-}
-
-/// Collects the `rowBoundaries` claim names anywhere under `value`, mirroring
-/// `has_nonempty_row_boundaries`'s traversal.
-fn row_boundary_claims(value: &Value, claims: &mut BTreeSet<String>) {
+/// Locates every non-empty `rowBoundaries` claim list nested under a BReg
+/// access profile (directly under a `permissions[]` entry, or nested deeper
+/// under a permission's `targets[]`), paired with the JSON Pointer segments,
+/// relative to the profile itself, that reach it. `path` is the traversal's
+/// working stack of segments; it is empty again on return.
+fn collect_row_boundary_locations(
+    value: &Value,
+    path: &mut Vec<String>,
+    locations: &mut Vec<(String, BTreeSet<String>)>,
+) {
     match value {
         Value::Array(values) => {
-            for value in values {
-                row_boundary_claims(value, claims);
+            for (index, value) in values.iter().enumerate() {
+                path.push(index.to_string());
+                collect_row_boundary_locations(value, path, locations);
+                path.pop();
             }
         }
         Value::Object(values) => {
             for (key, value) in values {
+                path.push(key.clone());
                 if key == "rowBoundaries" {
-                    for boundary in value.as_array().into_iter().flatten() {
-                        if let Some(claim) = boundary["claim"].as_str() {
-                            claims.insert(claim.to_owned());
-                        }
+                    if value
+                        .as_array()
+                        .is_none_or(|boundaries| !boundaries.is_empty())
+                    {
+                        let claims = value
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|boundary| boundary["claim"].as_str())
+                            .map(str::to_owned)
+                            .collect();
+                        locations.push((path.join("/"), claims));
                     }
                 } else {
-                    row_boundary_claims(value, claims);
+                    collect_row_boundary_locations(value, path, locations);
                 }
+                path.pop();
             }
         }
         _ => {}
@@ -1102,13 +1106,18 @@ fn row_boundary_claims(value: &Value, claims: &mut BTreeSet<String>) {
 /// claim, so access is neither widened nor silently bypassed, but an
 /// operator who wants a local reviewer to exercise the profile must add the
 /// claim to that client by hand.
-fn row_boundary_finding(id: &str, claims: &BTreeSet<String>) -> Value {
+fn row_boundary_finding(
+    id: &str,
+    profile_index: usize,
+    pointer: &str,
+    claims: &BTreeSet<String>,
+) -> Value {
     let claim_list = claims.iter().cloned().collect::<Vec<_>>().join(", ");
     json!({
         "severity": "finding",
         "code": "casework.source-add.row-boundary-claim-unsupported",
         "artifact": "breg_access_profile",
-        "path": format!("registry.yaml:/accessProfiles/{id}/rowBoundaries"),
+        "path": format!("registry.yaml:/accessProfiles/{profile_index}/{pointer}"),
         "message": format!(
             "BReg access profile {id} uses rowBoundaries on claim(s) {claim_list}; the local dev-client export does not add these claims, so a local Casework reviewer client cannot exercise the profile until an operator adds them by hand"
         ),
@@ -2322,6 +2331,10 @@ mod tests {
             );
         };
         assert_eq!(finding["severity"], "finding");
+        assert_eq!(
+            finding["path"],
+            "registry.yaml:/accessProfiles/0/permissions/0/rowBoundaries"
+        );
         let message = finding["message"].as_str().unwrap();
         assert!(message.contains("reviewer"), "{message}");
         assert!(message.contains("allowed_regions"), "{message}");
@@ -2744,16 +2757,24 @@ mod tests {
     #[test]
     fn reviewer_authority_reports_a_finding_for_profiles_with_row_boundary_claims() {
         let authored = json!({
-            "accessProfiles": [{
-                "id":"reviewer",
-                "principalClaim":"registry_principal",
-                "actorKind":"human",
-                "requesterClients":["staff","supervisor"],
-                "permissions":[{
-                    "entity":"request",
-                    "rowBoundaries":[{"field":"region","claim":"allowed_regions","operator":"in"}]
-                }]
-            }]
+            "accessProfiles": [
+                {
+                    "id":"operator",
+                    "principalClaim":"registry_principal",
+                    "actorKind":"human",
+                    "requesterClients":["staff","supervisor"]
+                },
+                {
+                    "id":"reviewer",
+                    "principalClaim":"registry_principal",
+                    "actorKind":"human",
+                    "requesterClients":["staff","supervisor"],
+                    "permissions":[{
+                        "entity":"request",
+                        "rowBoundaries":[{"field":"region","claim":"allowed_regions","operator":"in"}]
+                    }]
+                }
+            ]
         });
         let request = json!({"reviewPermissions":[{"profile":"reviewer"}],"applyPermissions":[]});
 
@@ -2767,6 +2788,13 @@ mod tests {
             );
         };
         assert_eq!(finding["severity"], "finding");
+        // "reviewer" is at index 1 in accessProfiles: the location must name
+        // that real index, not the profile id, and the permissions[] entry
+        // rowBoundaries is nested under.
+        assert_eq!(
+            finding["path"],
+            "registry.yaml:/accessProfiles/1/permissions/0/rowBoundaries"
+        );
         let message = finding["message"].as_str().unwrap();
         assert!(message.contains("reviewer"), "{message}");
         assert!(message.contains("allowed_regions"), "{message}");
