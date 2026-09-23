@@ -1012,9 +1012,22 @@ impl RuntimeConfig {
     /// sees the refusal without the runtime ever starting.
     fn validate_source_bindings(&self) -> Result<(), RuntimeConfigError> {
         for (source_id, binding) in &self.sources {
+            let path = format!("sources.{source_id}");
+            // Named ahead of the adapter's own check so the common mistake of
+            // leaving connectTimeoutMilliseconds at its default while lowering
+            // requestTimeoutMilliseconds below it is refused with the rule
+            // that failed, not a bare "not a valid source binding".
+            if binding.connect_timeout_milliseconds > binding.request_timeout_milliseconds {
+                return Err(RuntimeConfigError::InvalidSourceBinding {
+                    path,
+                    reason:
+                        "requestTimeoutMilliseconds must be at least connectTimeoutMilliseconds",
+                });
+            }
             registry_casework_breg::validate_binding_input(binding).map_err(|_| {
                 RuntimeConfigError::InvalidSourceBinding {
-                    path: format!("sources.{source_id}"),
+                    path: path.clone(),
+                    reason: "the binding does not meet the source adapter's accepted range",
                 }
             })?;
         }
@@ -1961,10 +1974,34 @@ reviewProducers:
         let error = RuntimeConfig::load(&operator).unwrap_err();
         assert!(matches!(
             &error,
-            RuntimeConfigError::InvalidSourceBinding { path }
+            RuntimeConfigError::InvalidSourceBinding { path, .. }
                 if path == "sources.professional"
         ));
         assert_eq!(error.path(), "sources.professional");
+    }
+
+    #[test]
+    fn a_request_timeout_shorter_than_the_connect_timeout_names_that_rule() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let operator = root.path().join("runtime.yaml");
+        let mut document = operator_value(&package, "development-loopback");
+        document["sources"]["professional"]["requestTimeoutMilliseconds"] =
+            serde_json::json!(9_000);
+        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+        let error = RuntimeConfig::load(&operator).unwrap_err();
+        assert!(matches!(
+            &error,
+            RuntimeConfigError::InvalidSourceBinding { path, .. }
+                if path == "sources.professional"
+        ));
+        assert!(
+            error.to_string().contains("requestTimeoutMilliseconds")
+                && error.to_string().contains("connectTimeoutMilliseconds"),
+            "the refusal does not name the timeout ordering rule: {error}"
+        );
     }
 
     #[test]
@@ -2183,8 +2220,8 @@ pub enum RuntimeConfigError {
         "each source namespace admitted for source-context review work must have an activated source adapter"
     )]
     InactiveReviewSourceNamespace,
-    #[error("{path} is not a valid Casework source binding")]
-    InvalidSourceBinding { path: String },
+    #[error("{path} is not a valid Casework source binding: {reason}")]
+    InvalidSourceBinding { path: String, reason: &'static str },
     #[error(
         "{path} must name exactly one completion secret, in a header the runtime does not reserve"
     )]
@@ -2209,8 +2246,8 @@ impl RuntimeConfigError {
             Self::InvalidSecretProviders => "secretProviders",
             Self::InvalidSecretReference { path }
             | Self::SecretProviderRequired { path }
-            | Self::InvalidSourceBinding { path }
             | Self::InvalidReviewCompletionAuth { path } => path,
+            Self::InvalidSourceBinding { path, .. } => path,
             Self::RemovedPrincipalClaim => "authentication.oidc.principalClaim",
             Self::InvalidOidc | Self::Oidc => "authentication.oidc",
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
