@@ -7,18 +7,26 @@
   occurrence instead of refusing the source read. The professional-review
   journey follows the `rebase` value BReg's `revise_request` action carries
   after a send-back, and asserts that BReg records a revision.
-- `caseworkctl source add` now refuses the pairing when the BReg registry
-  declares another change-request entity, besides the one being paired, that
-  names this Casework project's review authority with a `policyId` no
-  `reviewKinds` entry matches. BReg's own compile check only validates that
-  `review.authority` and `review.policyId` are well-formed identifiers, so
-  such an entity previously passed unnoticed until something tried to submit
-  a change request against it. The error names the entity, the declared
-  `policyId`, and that no `reviewKinds[].id` matches it. A `policyId` edited
-  in the BReg project after pairing is not caught: nothing `source add`
-  writes records the BReg project's location or content, and the existing
-  pinned-description re-check is deliberately scoped to the casework.yaml
-  on disk now, not a re-derived BReg source.
+- `caseworkctl source add` no longer refuses the whole pairing when the BReg
+  registry declares another change-request entity, besides the one being
+  paired, that names this Casework project's review authority with a
+  `policyId` no `reviewKinds` entry matches. BReg's own compile check only
+  validates that `review.authority` and `review.policyId` are well-formed
+  identifiers, so such an entity previously passed unnoticed until something
+  tried to submit a change request against it. Refusing the pairing over it
+  blocked incremental authoring (pairing this entity before that other
+  entity's review kind exists) and was wrong whenever several Casework
+  projects share the same authority id, since the other entity's policy may
+  legitimately live in one of them. The command now reports a finding
+  instead, naming the entity, the declared `policyId`, and that no
+  `reviewKinds[].id` matches it; a sibling entity whose `policyId` is not a
+  string is also reported as a finding rather than silently skipped. Preview
+  and apply report the same findings. The entity actually being paired is
+  unaffected: an unresolved `policyId` on it is still refused. A `policyId`
+  edited in the BReg project after pairing is not caught: nothing
+  `source add` writes records the BReg project's location or content, and
+  the existing pinned-description re-check is deliberately scoped to the
+  casework.yaml on disk now, not a re-derived BReg source.
 - `caseworkctl source add` no longer refuses the whole pairing when a
   selected request's review or apply access profile declares `rowBoundaries`.
   It writes the source description and runtime binding as before, and the
