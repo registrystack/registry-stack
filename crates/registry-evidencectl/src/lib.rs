@@ -361,6 +361,10 @@ pub fn main_entry() -> ExitCode {
                 write_unknown_selection_failure(unknown, format);
                 return ExitCode::from(1);
             }
+            if let Some(mismatch) = error.downcast_ref::<source_add::BregctlVersionMismatch>() {
+                write_bregctl_version_mismatch(mismatch, format);
+                return ExitCode::from(1);
+            }
             let operational = error
                 .chain()
                 .any(|cause| cause.downcast_ref::<std::io::Error>().is_some());
@@ -755,6 +759,35 @@ fn write_unknown_selection_failure(
                     "message": format!("`--select {}` names nothing in this response schema.", unknown.pointer()),
                     "suggestedAction": "Rerun with one of the pointers in availablePointers, or pass --list-pointers to print them.",
                     "availablePointers": unknown.available_pointers(),
+                }]
+            })
+        ),
+    }
+}
+
+/// Render one refusal for a public `bregctl` that answered `--version` with
+/// a build other than this one. The human message already names both
+/// versions; the JSON diagnostic carries them as machine-readable siblings
+/// instead of leaving them inside a free-text cause.
+fn write_bregctl_version_mismatch(
+    mismatch: &source_add::BregctlVersionMismatch,
+    format: OutputFormat,
+) {
+    match format {
+        OutputFormat::Human => eprintln!("evidencectl: {mismatch}"),
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::json!({
+                "status": "domain-refusal",
+                "diagnostics": [{
+                    "severity": "error",
+                    "code": "evidencectl.bregctl.version-mismatch",
+                    "artifact": "source add",
+                    "path": "$",
+                    "message": mismatch.to_string(),
+                    "suggestedAction": "Set --bregctl-bin or BREGCTL_BIN to a matching bregctl binary.",
+                    "foundVersion": mismatch.found,
+                    "requiredVersion": mismatch.required,
                 }]
             })
         ),

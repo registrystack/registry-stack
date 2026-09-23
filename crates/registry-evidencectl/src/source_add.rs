@@ -196,11 +196,45 @@ fn check_public_bregctl(binary: &Path) -> Result<()> {
         "source add drives public Base Registry Engine tooling and requires {expected} on PATH; set --bregctl-bin or BREGCTL_BIN to that binary"
     );
     let version = public_output(binary, &["--version".into()]).context(requirement.clone())?;
-    if std::str::from_utf8(&version).ok().map(str::trim) != Some(expected.as_str()) {
-        bail!(requirement);
+    let reported = std::str::from_utf8(&version).ok().map(str::trim);
+    if reported != Some(expected.as_str()) {
+        return Err(BregctlVersionMismatch {
+            found: reported.map(str::to_owned),
+            required: expected,
+        }
+        .into());
     }
     Ok(())
 }
+
+/// The public `bregctl` this composition drives answered `--version` with a
+/// build other than this one, so the two tools cannot be safely composed.
+/// Named apart from a generic domain refusal so `--format json` carries the
+/// found and required versions as diagnostic fields, not only inside a free
+/// text cause a machine reader would have to parse.
+#[derive(Debug)]
+pub(crate) struct BregctlVersionMismatch {
+    pub(crate) found: Option<String>,
+    pub(crate) required: String,
+}
+
+impl std::fmt::Display for BregctlVersionMismatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let required = &self.required;
+        match &self.found {
+            Some(found) => write!(
+                formatter,
+                "source add drives public Base Registry Engine tooling and found {found} on PATH; it requires {required}, set --bregctl-bin or BREGCTL_BIN to that binary"
+            ),
+            None => write!(
+                formatter,
+                "source add drives public Base Registry Engine tooling and requires {required} on PATH; set --bregctl-bin or BREGCTL_BIN to that binary"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BregctlVersionMismatch {}
 
 fn configure(
     args: SourceAddArgs,
