@@ -100,6 +100,11 @@ pub(crate) fn capture(root: &Path) -> Result<CapturedReview, Diagnostic> {
     }
     let declared_schema_fingerprint = declared_schema_fingerprint.ok_or_else(||
         refusal("migration.review.receipt", "reviewedMigrations", "provide the referenced rehearsal.json; the CLI does not manufacture migration evidence"))?;
+    // Grouped by the bare directory, which can disagree with descriptor-path
+    // order when one directory name is a strict prefix of another (`m0002`
+    // and `m0002-funding-source`): `prepare_reviewed_migration_plan` requires
+    // strictly increasing descriptor paths, so sort by that same key here.
+    sources.sort_by(|left, right| left.descriptor.path.cmp(&right.descriptor.path));
     Ok(CapturedReview {
         sources,
         declared_schema_fingerprint,
@@ -227,5 +232,65 @@ mod tests {
         drop(guard);
 
         assert_eq!(refused.code, "migration.review.path");
+    }
+}
+
+/// `prepare_reviewed_migration_plan` requires the sources it validates to
+/// arrive in strictly increasing descriptor-path order. Capture must produce
+/// that same order, not the order of the bare directory names, since a
+/// directory name can be a strict prefix of another (`m0002` and
+/// `m0002-funding-source`), and appending `/descriptor.json` to each can
+/// reorder the pair relative to their bare names.
+#[cfg(test)]
+mod ordering_tests {
+    use super::*;
+
+    fn write_minimal_rehearsal_receipt(path: &Path) {
+        let receipt = serde_json::json!({
+            "priorRevision": "rev-1",
+            "priorSchemaFingerprint": "fingerprint-1",
+            "planSha256": "plan-digest",
+            "sqlSha256": [],
+            "assertionSha256": [],
+            "fixtureInventory": [],
+            "postgresMajor": 16,
+            "rowAssertions": [],
+            "finalSchemaFingerprint": "fingerprint-2",
+            "proofs": {
+                "lockTimeout": true,
+                "chunkResume": true,
+                "destructiveResume": true,
+            },
+        });
+        std::fs::write(path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn capture_orders_sources_by_descriptor_path_not_by_bare_directory_name() {
+        let directory = tempfile::tempdir().unwrap();
+        // The platform temporary directory can itself sit behind a symbolic
+        // link, which capture's path resolution refuses by design, so name
+        // the real directory the operator would name.
+        let root = directory.path().canonicalize().unwrap();
+        for id in ["m0002", "m0002-funding-source"] {
+            let dir = root.join("modules/core/migrations").join(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("descriptor.json"), b"{}").unwrap();
+        }
+        write_minimal_rehearsal_receipt(&root.join("modules/core/migrations/m0002/rehearsal.json"));
+
+        let captured = capture(&root).expect("both sibling directories are a valid capture");
+        let descriptor_paths: Vec<&str> = captured
+            .sources
+            .iter()
+            .map(|source| source.descriptor.path.as_str())
+            .collect();
+        let mut sorted_by_descriptor_path = descriptor_paths.clone();
+        sorted_by_descriptor_path.sort_unstable();
+        assert_eq!(
+            descriptor_paths, sorted_by_descriptor_path,
+            "capture must already order sources by descriptor path, \
+             the key prepare_reviewed_migration_plan checks"
+        );
     }
 }
