@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Fix the professional-review starter hiding every source-backed review task.
+  Its `scope-correction` `displaySchema` described `record` as an object, but
+  the professional-licences source discloses it as a UUID string, so every
+  preflight failed and the inbox dropped the task. The schema now restates each
+  projected field's schema as `bregctl explain change-requests` reports it. The
+  kind also gains a `changes-requested` outcome, so a reviewer can send a
+  request back for its submitter to revise and resubmit. The starter and the
+  example project change together.
 - Log a warning when a source-context review is refused for a configuration
   defect: the source's disclosure fails the kind's `displaySchema`
   (`display_schema_rejected`, with the validation reason and path) or the

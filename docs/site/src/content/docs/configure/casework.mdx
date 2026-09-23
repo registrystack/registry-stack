@@ -546,6 +546,12 @@ selects the BReg adapter, and `description` points at the imported source descri
 Each entry in `requests` binds one BReg entity to one fallback queue; `target` is the response time the team is measured against.
 Until the description exists, `caseworkctl check` reports `"sourceDescription": "pending_source_add"`.
 
+The template's `scope-correction` review kind uses `contextStrategy: source`, so its `displaySchema` must admit exactly what the source discloses to a reviewer.
+It restates each projected field's schema under its API name, as `bregctl explain change-requests` reports it: `record` is a UUID string, not an object.
+Casework checks each reviewer's source read against the schema before it shows or acts on a task, and a task whose disclosed fields the schema refuses stays out of that reviewer's inbox.
+When you change a projected field in the register, change its schema here to match.
+The kind also declares a `changes-requested` outcome, labelled "Request changes", which settles as `changes_requested` and requires a reason; the submitter then revises and resubmits the request in BReg, which opens a fresh review.
+
 Continue from the register you built in [Create and query your first registry](../../tutorials/first-breg/), which leaves its project at `tutorial-work/project`.
 Before Casework can present its work, the entity named in `casework.yaml` must declare a change
 request whose `review.authority` and `review.policyId` select a source-context approval kind in

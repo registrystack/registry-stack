@@ -226,6 +226,13 @@ context with the caller's delegated credential and the configured source profile
 its stage, queue, assignment, independence, and decision rules. Complete every stage required by
 the policy.
 
+The starter's review stage excludes the submitter, so the person who submitted the request cannot
+claim, be assigned, or decide its review. A reviewer either approves or chooses the
+`changes-requested` outcome ("Request changes") with a reason. A send-back reaches BReg as a
+`changesRequested` review result; the submitter follows the request's `revise_request` action,
+patches the draft, and submits it again, and Casework opens a fresh review for the new proposal
+version.
+
 The terminal result carries the exact review request id, subject binding, full policy binding, and
 submission digest. BReg accepts it only when every value matches the durable submission. An early
 or unmatched completion remains in the bounded inbox for reconciliation. Redelivery is idempotent.
