@@ -231,9 +231,9 @@ claim, be assigned, or decide its review. A reviewer either approves or chooses 
 `changes-requested` outcome ("Request changes") with a reason. A send-back reaches BReg as a
 `changesRequested` review result. The request stays `submitted`, and BReg now offers its owner only
 `revise_request`, carrying `rebase: false`, and `cancel_request`. The submitter follows the
-`revise_request` action with the `rebase` value it carries, so BReg records the new draft as a
-revision, patches the draft, and submits it again, and Casework opens a fresh review for the new
-proposal version.
+`revise_request` action with the `rebase` value it carries, and BReg records the new draft as a
+revision. The submitter then patches the draft and submits it again, and Casework opens a fresh
+review for the new proposal version.
 
 The terminal result carries the exact review request id, subject binding, full policy binding, and
 submission digest. BReg accepts it only when every value matches the durable submission. An early

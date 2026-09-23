@@ -539,7 +539,7 @@ fn task_profiles_allow_governed_draft_authoring_and_refuse_direct_target_mutatio
         "  - id: reviewer\n    default: true\n    principalClaim: registry_principal\n    actorKind: agent\n    requesterClients: [agent-client]\n    requiredPurposes: [record-review]\n    taskGrant: {sourceIssuer: https://casework.example}",
     );
 
-    // A task-grant profile can no longer hold apply_request, so applying the
+    // A task-grant profile cannot hold apply_request, so applying the
     // change request needs its own, non-delegated profile; otherwise the
     // fixture's applyTargets completeness check has nothing to satisfy it.
     let governed = task_grant_reviewer

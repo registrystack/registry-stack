@@ -5,7 +5,9 @@ own principal. It does not make the agent the human who approved the task.
 BREG verifies the exchanged access token and selected access profile, then
 checks current Casework status before each new governed mutation. Task agents
 use change-request drafts and lifecycle operations; a task grant does not
-authorize direct changes to the target records.
+authorize direct changes to the target records. A task-grant profile cannot
+hold `apply_request`: the compiler refuses it with
+`access_profile.task_grant.operation_forbidden`.
 
 The authored access profile selects `actorKind: agent`, exact
 `requesterClients`, `requiredPurposes`, and a `taskGrant` containing the exact
