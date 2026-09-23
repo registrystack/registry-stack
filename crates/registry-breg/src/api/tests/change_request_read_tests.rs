@@ -254,6 +254,64 @@ fn request_capability_names_only_fields_the_caller_may_read() {
 }
 
 #[test]
+fn request_capability_never_names_an_effect_the_caller_cannot_see() {
+    let registry = compiled_registry();
+    let mut request = registry.entities()["placement-correction-request"]
+        .change_request
+        .clone()
+        .expect("request capability");
+    request.effects[0].mutations = vec![crate::model::CompiledChangeRequestMutation::Set {
+        field: "site".to_owned(),
+        value: crate::model::CompiledChangeRequestValue::FromEffect {
+            effect: "create-hidden-site".to_owned(),
+            target_entity_id: "site".to_owned(),
+        },
+    }];
+    request
+        .effects
+        .push(crate::model::CompiledChangeRequestEffect {
+            id: "create-hidden-site".to_owned(),
+            target: crate::model::CompiledChangeRequestTarget {
+                entity_id: "site".to_owned(),
+                binding: crate::model::CompiledChangeRequestTargetBinding::ReservedCreate {
+                    effect: "create-hidden-site".to_owned(),
+                },
+            },
+            operation: Operation::Create,
+            mutations: Vec::new(),
+            depends_on: BTreeSet::new(),
+        });
+    let placement_only = BTreeMap::from([
+        (
+            "placement-correction-request".to_owned(),
+            BTreeSet::from(["placement".to_owned()]),
+        ),
+        ("placement".to_owned(), BTreeSet::from(["site".to_owned()])),
+    ]);
+
+    let hidden = crate::artifacts::request_capability_metadata(&request, &placement_only);
+    assert_eq!(
+        hidden["effects"][0]["set"],
+        serde_json::json!([{"field": "site"}]),
+        "a value from an effect the caller cannot see names no source"
+    );
+    assert_eq!(hidden["effects"].as_array().map(Vec::len), Some(1));
+    assert!(!hidden.to_string().contains("create-hidden-site"));
+
+    let mut with_site = placement_only;
+    with_site.insert("site".to_owned(), BTreeSet::new());
+    let visible = crate::artifacts::request_capability_metadata(&request, &with_site);
+    assert_eq!(
+        visible["effects"][0]["set"],
+        serde_json::json!([{"field": "site", "fromEffect": "create-hidden-site"}])
+    );
+    assert_eq!(
+        visible["effects"][1]["target"],
+        serde_json::json!({"entity": "site", "fromEffect": "create-hidden-site"})
+    );
+}
+
+#[test]
 fn served_schemas_do_not_disclose_hidden_request_types_or_full_authoring_grants() {
     let registry = compiled_registry();
     let service = service_for(registry.clone());

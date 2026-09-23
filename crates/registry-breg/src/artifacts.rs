@@ -863,6 +863,14 @@ pub(crate) fn request_capability_metadata(
             })
         }
     };
+    // An effect on an entity the caller cannot read is left out, and so is
+    // every reference to it from an effect the caller can see.
+    let visible_effects = request
+        .effects
+        .iter()
+        .filter(|effect| readable_target(&effect.target.entity_id).is_some())
+        .map(|effect| effect.id.as_str())
+        .collect::<BTreeSet<_>>();
     let effects = request
         .effects
         .iter()
@@ -873,7 +881,11 @@ pub(crate) fn request_capability_metadata(
                     visible_target(&effect.target.entity_id, Some(from_field))
                 }
                 CompiledChangeRequestTargetBinding::ReservedCreate { effect: reserved } => {
-                    json!({"entity": effect.target.entity_id, "fromEffect": reserved})
+                    let mut target = json!({"entity": effect.target.entity_id});
+                    if visible_effects.contains(reserved.as_str()) {
+                        target["fromEffect"] = json!(reserved);
+                    }
+                    target
                 }
             };
             let mut set = Vec::new();
@@ -890,10 +902,13 @@ pub(crate) fn request_capability_metadata(
                             {
                                 entry["fromField"] = json!(field);
                             }
-                            CompiledChangeRequestValue::FromEffect { effect, .. } => {
+                            CompiledChangeRequestValue::FromEffect { effect, .. }
+                                if visible_effects.contains(effect.as_str()) =>
+                            {
                                 entry["fromEffect"] = json!(effect);
                             }
-                            CompiledChangeRequestValue::FromField { .. } => {}
+                            CompiledChangeRequestValue::FromField { .. }
+                            | CompiledChangeRequestValue::FromEffect { .. } => {}
                         }
                         set.push(entry);
                     }

@@ -2953,6 +2953,23 @@ fn parse_change_request_capability(
         .map(parse_change_request_effect)
         .collect::<Result<Vec<_>, _>>()?;
     ensure_unique(effects.iter().map(BRegChangeRequestEffect::id))?;
+    let listed = effects
+        .iter()
+        .map(BRegChangeRequestEffect::id)
+        .collect::<BTreeSet<_>>();
+    let dangling = effects.iter().any(|effect| {
+        effect
+            .target
+            .binding
+            .iter()
+            .chain(effect.set.iter().filter_map(|set| set.value.as_ref()))
+            .any(|binding| {
+                matches!(binding, BRegChangeRequestBinding::FromEffect(id) if !listed.contains(id.as_str()))
+            })
+    });
+    if dangling {
+        return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
+    }
     let review = parse_change_request_review(required(&mut capability, "review")?)?;
     let on_approved = parse_change_request_on_approved(required(&mut capability, "onApproved")?)?;
     let application = parse_change_request_application(required(&mut capability, "application")?)?;

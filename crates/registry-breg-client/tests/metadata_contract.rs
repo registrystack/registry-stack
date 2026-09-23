@@ -442,6 +442,7 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
         BRegDirectWrite::Patch(_)
     ));
 
+    let capability_for_references = capability.clone();
     for malformed in [
         {
             let mut malformed = capability.clone();
@@ -534,6 +535,30 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
         let mut value = fixture();
         value["entities"][0]["changeRequest"] = malformed;
         assert!(BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+
+    // A source naming an effect the document does not list is a dangling
+    // reference, never an effect the caller may assume exists.
+    for dangling in [
+        {
+            let mut dangling = capability_for_references.clone();
+            dangling["effects"][2]["target"]["fromEffect"] = json!("hidden");
+            dangling
+        },
+        {
+            let mut dangling = capability_for_references;
+            dangling["effects"][2]["set"][0]["fromEffect"] = json!("hidden");
+            dangling
+        },
+    ] {
+        let mut value = fixture();
+        value["entities"][0]["changeRequest"] = dangling;
+        assert_eq!(
+            BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap())
+                .unwrap_err()
+                .kind(),
+            BRegMetadataErrorKind::DanglingReference
+        );
     }
 }
 #[test]
