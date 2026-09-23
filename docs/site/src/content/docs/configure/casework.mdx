@@ -200,6 +200,7 @@ The policy identity, stages, context strategy, schemas, outcomes, clocks, and re
 `displaySchema` is a closed JSON Schema 2020-12 object, and closed is checked rather than assumed.
 The root carries `type: object` and `additionalProperties: false`, every nested object schema is closed the same way, every `$ref` points inside the same document, nesting stays within 16 levels, and the canonical schema stays under 64 KiB.
 A submitted snapshot is validated against it and stays under 16 KiB, so the schema is the whole contract for what the producer may send and what a person sees.
+A source-context kind validates the source's disclosure against it on every read. When the disclosure does not match, or the source no longer returns the pinned binding, the reviewer is refused and the inbox leaves the task out, as it does for any task the caller may not see. The runtime logs a warning naming the review kind and a reason (`display_schema_rejected` with the validation reason and path, or `binding_mismatch`) and no subject data, so the operator can find the defect.
 
 `retention` sets two clocks over the same item.
 `terminalDays` is how long a terminal result remains available, and `accountabilityDays` is how long the protected record of who decided what survives after that; `accountabilityDays` is at least `terminalDays`, and neither exceeds 3650.

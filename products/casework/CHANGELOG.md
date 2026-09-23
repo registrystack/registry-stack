@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Log a warning when a source-context review is refused for a configuration
+  defect: the source's disclosure fails the kind's `displaySchema`
+  (`display_schema_rejected`, with the validation reason and path) or the
+  source no longer returns the pinned binding (`binding_mismatch`). The
+  entry names the review kind and carries no subject data. The reviewer's
+  response is unchanged, so the inbox still leaves the task out silently.
 - `caseworkctl doctor` now checks the secret each review completion
   destination names (`bearerTokenRef` or `auth.secretRef`) alongside the
   database, audit, and source secrets, so an unreadable destination secret is

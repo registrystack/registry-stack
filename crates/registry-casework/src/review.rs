@@ -1020,16 +1020,47 @@ impl CaseworkService {
                     .read_for_caller(&subject, source_profile_id, EphemeralCredential::new(token))
                     .await
                     .map_err(map_review_source_error)?;
+                // The caller still sees only a refusal, but a binding the
+                // source does not return or a disclosure the kind's display
+                // schema rejects hides the task from every reviewer, so the
+                // operator is told which kind and why, without subject data.
                 if view.subject != subject
                     || view.binding.version != record.subject.version
                     || view.binding.integrity.as_deref() != Some(record.subject.digest.as_str())
                 {
+                    tracing::warn!(
+                        review_kind = %record.policy.identity.id,
+                        reason = "binding_mismatch",
+                        "Casework refused a review source read that does not match its pinned binding"
+                    );
                     return Err(ReviewRuntimeError::Forbidden);
                 }
-                record
+                if let Err(error) = record
                     .policy
                     .validate_display(&serde_json::to_value(&view.disclosed)?)
-                    .map_err(|_| ReviewRuntimeError::Forbidden)?;
+                {
+                    match error {
+                        registry_casework_core::ReviewDecisionValidationError::Structured(
+                            error,
+                        ) => tracing::warn!(
+                            review_kind = %record.policy.identity.id,
+                            reason = "display_schema_rejected",
+                            validation_reason = %serde_json::to_value(error.reason)?
+                                .as_str()
+                                .unwrap_or_default(),
+                            path = %error.path,
+                            "Casework refused a review source disclosure its display schema rejects"
+                        ),
+                        registry_casework_core::ReviewDecisionValidationError::Policy(_) => {
+                            tracing::warn!(
+                                review_kind = %record.policy.identity.id,
+                                reason = "policy_unverifiable",
+                                "Casework refused a review whose policy snapshot does not verify"
+                            )
+                        }
+                    }
+                    return Err(ReviewRuntimeError::Forbidden);
+                }
                 // The pinned binding can outlive the source occurrence it
                 // named, so a still-readable view is not enough: the source
                 // must also report live work. Withdrawn, superseded, and

@@ -39,6 +39,8 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio::sync::Notify;
 use tokio_postgres::NoTls;
+use tracing::instrument::WithSubscriber;
+use tracing_subscriber::fmt::MakeWriter;
 use uuid::Uuid;
 
 struct Fixture {
@@ -190,6 +192,40 @@ impl SourceAdapter for ReviewSource {
         _request: ExecutePreparedRequest<'_>,
     ) -> Result<SourceReceipt, SourceAdapterError> {
         Err(SourceAdapterError::Invalid)
+    }
+}
+
+#[derive(Clone, Default)]
+struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
+
+struct CapturedLogWriter(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for CapturedLogWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("log capture").extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'writer> MakeWriter<'writer> for CapturedLogs {
+    type Writer = CapturedLogWriter;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        CapturedLogWriter(Arc::clone(&self.0))
+    }
+}
+
+impl CapturedLogs {
+    fn entries(&self) -> Vec<serde_json::Value> {
+        String::from_utf8(self.0.lock().expect("log capture").clone())
+            .expect("JSON logs are UTF-8")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("structured tracing entry"))
+            .collect()
     }
 }
 
@@ -5050,6 +5086,135 @@ async fn source_context_task_inbox_honors_the_configured_source_read_budget() {
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(observed, task_ids.into_iter().collect());
+}
+
+#[tokio::test]
+async fn a_display_schema_the_source_disclosure_fails_is_logged_for_the_operator_and_hidden_from_the_reviewer(
+) {
+    let fixture = fixture().await;
+    let mut mismatched_project = project("2");
+    mismatched_project.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    mismatched_project.review_kinds[0].display_schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title"],
+        "properties": {"title": {"type": "string", "maxLength": 160}}
+    });
+    mismatched_project
+        .check()
+        .expect("a display schema the source does not satisfy still compiles");
+    let mismatched_service = CaseworkService::new(
+        fixture.store.clone(),
+        mismatched_project,
+        [Arc::new(ReviewSource {
+            revoked: Arc::clone(&fixture.source_revoked),
+            state: Arc::clone(&fixture.source_state),
+            read_blocked: Arc::clone(&fixture.source_read_blocked),
+            read_started: Arc::clone(&fixture.source_read_started),
+            read_continue: Arc::clone(&fixture.source_read_continue),
+            advanced: Arc::clone(&fixture.source_advanced),
+        }) as Arc<dyn SourceAdapter>],
+    )
+    .expect("mismatched review service");
+    let subject = "record-display-mismatch";
+    let mut source_request = request(subject, "producer-ref-display-mismatch");
+    source_request.context = ReviewContext::Source {
+        binding: SourceContextBinding {
+            reference: format!("registry:record:{subject}"),
+        },
+    };
+    let created = mismatched_service
+        .create_review_request(&fixture.producer, source_request, "create-display-mismatch")
+        .await
+        .expect("admission does not read the source");
+
+    let logs = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_ansi(false)
+        .with_writer(logs.clone())
+        .finish();
+    let page = mismatched_service
+        .review_tasks(
+            &fixture.reviewer_a,
+            Some("staff"),
+            "human-bearer",
+            None,
+            None,
+            10,
+        )
+        .with_subscriber(subscriber)
+        .await
+        .expect("the inbox still answers");
+    assert!(page.items.is_empty());
+    assert_eq!(page.next_cursor, None);
+
+    let entries = logs.entries();
+    let diagnostics = entries
+        .iter()
+        .filter(|entry| entry.pointer("/fields/reason").is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(diagnostics.len(), 1, "one operator diagnostic: {entries:?}");
+    assert_eq!(diagnostics[0]["level"], "WARN");
+    let fields = diagnostics[0]["fields"].as_object().expect("log fields");
+    assert_eq!(fields["review_kind"], "registry-correction");
+    assert_eq!(fields["reason"], "display_schema_rejected");
+    assert_eq!(fields["validation_reason"], "schema_mismatch");
+    assert_eq!(fields["path"], "$.display");
+    assert_eq!(
+        fields
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from([
+            "message",
+            "review_kind",
+            "reason",
+            "validation_reason",
+            "path"
+        ])
+    );
+    let rendered = serde_json::to_string(&entries).expect("render captured logs");
+    assert!(!rendered.contains(subject), "no subject data: {rendered}");
+
+    // A pinned binding the source no longer returns hides the task the same
+    // way and is reported under its own reason.
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests SET subject_version='stale' WHERE request_id=$1",
+            &[&created.accepted.request_id],
+        )
+        .await
+        .expect("pin a binding the source does not return");
+    let logs = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_ansi(false)
+        .with_writer(logs.clone())
+        .finish();
+    let page = mismatched_service
+        .review_tasks(
+            &fixture.reviewer_a,
+            Some("staff"),
+            "human-bearer",
+            None,
+            None,
+            10,
+        )
+        .with_subscriber(subscriber)
+        .await
+        .expect("the inbox still answers");
+    assert!(page.items.is_empty());
+    assert_eq!(page.next_cursor, None);
+    let entries = logs.entries();
+    let reasons = entries
+        .iter()
+        .filter_map(|entry| entry.pointer("/fields/reason"))
+        .collect::<Vec<_>>();
+    assert_eq!(reasons, [&json!("binding_mismatch")], "{entries:?}");
 }
 
 #[tokio::test]
