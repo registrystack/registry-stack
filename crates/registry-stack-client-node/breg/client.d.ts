@@ -753,7 +753,8 @@ export interface BRegChangeRequestEffect {
 
 /** One declared planner write, filtered to fields the caller may read. */
 export interface BRegChangeRequestPlannerWrite {
-  readonly target: BRegChangeRequestTarget
+  /** A planner write targets a stored record, never another effect. */
+  readonly target: { readonly entity: string; readonly fromField?: string; readonly fromEffect?: never }
   readonly operation: 'create' | 'patch'
   readonly fields: ReadonlyArray<string>
 }

@@ -586,6 +586,27 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
             BRegMetadataErrorKind::DanglingReference
         );
     }
+
+    // A planner write targets a stored record, never an effect the same
+    // request creates, so a planner target bound by fromEffect is refused
+    // whether or not the effect is listed.
+    for effect in ["rename", "hidden"] {
+        let mut malformed = capability_for_references.clone();
+        let target = malformed
+            .pointer_mut("/planner/writes/0/target")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        target.remove("fromField");
+        target.insert("fromEffect".to_owned(), json!(effect));
+        let value = change_request_fixture(&malformed);
+        assert_eq!(
+            BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap())
+                .unwrap_err()
+                .kind(),
+            BRegMetadataErrorKind::Shape
+        );
+    }
 }
 #[test]
 fn duplicate_json_members_are_refused_at_every_depth() {

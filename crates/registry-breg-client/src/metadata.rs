@@ -3105,6 +3105,14 @@ fn parse_change_request_planner_write(
 ) -> Result<BRegChangeRequestPlannerWrite, BRegMetadataError> {
     let mut write = object(value)?;
     let target = parse_change_request_target(required(&mut write, "target")?)?;
+    // A planner write targets a stored record; only an effect's target or
+    // value may name another effect of the same request.
+    if matches!(
+        target.binding,
+        Some(BRegChangeRequestBinding::FromEffect(_))
+    ) {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    }
     let operation = parse_change_request_operation(required(&mut write, "operation")?)?;
     let fields = identifier_array(required(&mut write, "fields")?)?;
     ensure_unique(fields.iter().map(String::as_str))?;
