@@ -222,7 +222,7 @@ export type BRegRequestResultReferenceData = JsonObject & {
   /** Revision written by the application, not a current ETag or precondition. */
   readonly targetRevision: SafeInteger
 }
-export type BRegRequestState = 'draft' | 'submitted' | 'cancelled' | 'applied' | 'superseded'
+export type BRegRequestState = 'draft' | 'submitted' | 'cancelled' | 'applied'
 export type BRegRequestReviewRequirement =
   | Readonly<{ mode: 'none' }>
   | Readonly<{ authority: string; policyId: string }>

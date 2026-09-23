@@ -408,7 +408,7 @@ fn renaming_a_lifecycle_state_or_event_fails_the_contract() {
 /// `initial`, `terminal`, `unreachable`, and the two transition counts are
 /// derived from the edge list rather than written down, so pinning the states
 /// by id alone would leave the derivation itself unpinned: a report calling
-/// `draft` terminal or `superseded` reachable would still validate, and the
+/// `draft` terminal or `cancelled` unreachable would still validate, and the
 /// contract would say nothing about the one part of the state list a code
 /// change can silently get wrong. Each derived fact is pinned to the value the
 /// derivation must produce, and this test is what proves the pin bites.
@@ -416,6 +416,13 @@ fn renaming_a_lifecycle_state_or_event_fails_the_contract() {
 fn flipping_a_derived_lifecycle_fact_fails_the_contract() {
     let report = explain_lifecycle_report();
     let schema = load_schema("LifecycleExplanation");
+    let ids: Vec<&str> = report["explanation"]["lifecycles"][0]["states"]
+        .as_array()
+        .expect("states array")
+        .iter()
+        .map(|state| state["id"].as_str().expect("state id"))
+        .collect();
+    assert_eq!(ids, ["draft", "submitted", "cancelled", "applied"]);
     let state = |id: &str, field: &str, value: Value| {
         let mut explanation = report["explanation"].clone();
         let states = explanation["lifecycles"][0]["states"]
@@ -434,11 +441,11 @@ fn flipping_a_derived_lifecycle_fact_fails_the_contract() {
         ("draft", "terminal", Value::Bool(true)),
         ("draft", "initial", Value::Bool(false)),
         ("applied", "terminal", Value::Bool(false)),
-        ("superseded", "unreachable", Value::Bool(false)),
+        ("cancelled", "terminal", Value::Bool(false)),
         ("cancelled", "unreachable", Value::Bool(true)),
         ("submitted", "outgoingTransitions", Value::from(3)),
         ("submitted", "incomingTransitions", Value::from(2)),
-        ("superseded", "incomingTransitions", Value::from(1)),
+        ("applied", "incomingTransitions", Value::from(0)),
     ] {
         let edited = state(id, field, value.clone());
         assert!(

@@ -523,7 +523,7 @@ fn unknown_lifecycle_predicates_list_the_closed_sets_the_runtime_accepts() {
     );
     assert_eq!(
         REQUEST_LIFECYCLE_STATES,
-        ["draft", "submitted", "cancelled", "applied", "superseded"]
+        ["draft", "submitted", "cancelled", "applied"]
     );
 
     let mut lifecycle_condition = change_request_event_project();

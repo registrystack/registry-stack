@@ -456,7 +456,7 @@ snapshot at or after the earliest erased commit unavailable, including later one
 ## Change requests
 
 A change request is a record of an entity that declares `changeRequest`. Creating it stores a
-draft; a submitted proposal changes its targets only when it is applied. BReg owns five source
+draft; a submitted proposal changes its targets only when it is applied. BReg owns four source
 states:
 
 ```text
@@ -464,7 +464,6 @@ draft ──submit──▶ submitted ──apply with exact approved evidence�
   ▲                   │
   └────revise─────────┘
 draft or submitted ──cancel by owner──▶ cancelled
-an older proposal replaced by a newer one ──▶ superseded
 ```
 
 `submit`, `revise`, and `cancel` belong to the principal that owns the request. Another principal

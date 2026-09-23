@@ -4466,8 +4466,7 @@ pub const REQUEST_LIFECYCLE_TRANSITIONS: [&str; 5] =
 /// Every change request state a request lifecycle event may select, in
 /// workflow order. Authoring documentation reads this list rather than
 /// restating it.
-pub const REQUEST_LIFECYCLE_STATES: [&str; 5] =
-    ["draft", "submitted", "cancelled", "applied", "superseded"];
+pub const REQUEST_LIFECYCLE_STATES: [&str; 4] = ["draft", "submitted", "cancelled", "applied"];
 
 fn valid_request_lifecycle_transition(value: &str) -> bool {
     REQUEST_LIFECYCLE_TRANSITIONS.contains(&value)

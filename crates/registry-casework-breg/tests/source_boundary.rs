@@ -1013,11 +1013,6 @@ async fn source_lifecycle_is_projected_as_application_work_only() {
             OccurrenceKind::Application,
             OccurrenceState::Cancelled,
         ),
-        (
-            "superseded",
-            OccurrenceKind::Application,
-            OccurrenceState::Superseded,
-        ),
     ] {
         let server = MockServer::start().await;
         mount_metadata(&server, "reader-token", "reader").await;
@@ -1035,6 +1030,27 @@ async fn source_lifecycle_is_projected_as_application_work_only() {
         assert_eq!(observed.occurrence_kind, kind);
         assert_eq!(observed.state, state);
     }
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/records/correction/{ID}")))
+        .and(header("authorization", "Bearer reader-token"))
+        .respond_with(response(record("superseded", None)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let logs = captured_logs(async {
+        assert_eq!(
+            adapter(&server.uri())
+                .read_authoritative(&subject())
+                .await
+                .unwrap_err(),
+            SourceAdapterError::Unavailable,
+            "a source state BReg never writes is refused"
+        );
+    })
+    .await;
+    assert_reader_log(&logs, &[("WARN", Some("did not match the expected shape"))]);
 }
 #[tokio::test]
 async fn stale_source_generation_is_refused_before_any_read_or_write() {

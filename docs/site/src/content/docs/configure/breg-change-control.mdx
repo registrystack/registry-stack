@@ -170,8 +170,7 @@ An applier's `applyTargets` names the entities the profile may write when it app
 Give the profiles that read the target entity a `requestPresence` entry so they can see that a correction is pending.
 A permission's `requestVisibility: owner` restricts reads of the request entity to the requests the caller's own principal created, which suits a submitter.
 
-The source request record is stored as `draft`, `submitted`, `cancelled`, `applied`, or `superseded`.
-Only the first four are reachable: no transition the engine runs ever targets `superseded`, and `bregctl explain lifecycle` reports it as an unreachable state.
+The source request record is stored as `draft`, `submitted`, `cancelled`, or `applied`, and `bregctl explain lifecycle` reports every one of them as reachable.
 The external result status is projected separately and never substitutes for the source lifecycle state.
 Applying writes the target the way a direct mutation would, so the target gains a revision and the request moves to `applied`.
 [Base Registry Engine API reference](../../reference/breg-api/#change-requests) describes each action, its route, and the states it accepts.

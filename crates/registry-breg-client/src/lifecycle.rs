@@ -85,7 +85,6 @@ pub enum BRegRequestState {
     Submitted,
     Cancelled,
     Applied,
-    Superseded,
 }
 
 /// One caller-visible record affected by an exact applied request proposal.
@@ -354,7 +353,6 @@ impl BRegRequestState {
             "submitted" => Some(Self::Submitted),
             "cancelled" => Some(Self::Cancelled),
             "applied" => Some(Self::Applied),
-            "superseded" => Some(Self::Superseded),
             _ => None,
         }
     }
@@ -365,7 +363,6 @@ impl BRegRequestState {
             Self::Submitted => "submitted",
             Self::Cancelled => "cancelled",
             Self::Applied => "applied",
-            Self::Superseded => "superseded",
         }
     }
 }

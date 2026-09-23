@@ -23,6 +23,9 @@
   the boundary claim(s), so an operator knows a local Casework reviewer
   client needs that claim added by hand to exercise the profile. Preview and
   apply report the same finding.
+- The BReg source adapter refuses a source request reported as `superseded`,
+  a state BReg no longer defines. A BReg draft still projects as a superseded
+  application occurrence.
 - Fix the professional-review starter hiding every source-backed review task.
   Its `scope-correction` `displaySchema` described `record` as an object, but
   the professional-licences source discloses it as a UUID string, so every

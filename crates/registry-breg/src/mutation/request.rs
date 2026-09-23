@@ -3208,7 +3208,6 @@ fn request_state_name(state: RequestState) -> &'static str {
         RequestState::Submitted => "submitted",
         RequestState::Cancelled => "cancelled",
         RequestState::Applied => "applied",
-        RequestState::Superseded => "superseded",
     }
 }
 

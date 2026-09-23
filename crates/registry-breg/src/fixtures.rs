@@ -4840,8 +4840,7 @@ fn assert_response_timestamp(value: Option<&Value>, nullable: bool) -> Result<()
 }
 
 fn assert_request_state(request: &Map<String, Value>) -> Result<(), FixtureError> {
-    let allowed_states =
-        BTreeSet::from(["draft", "submitted", "cancelled", "applied", "superseded"]);
+    let allowed_states = BTreeSet::from(["draft", "submitted", "cancelled", "applied"]);
     if request
         .get("bregState")
         .and_then(Value::as_str)

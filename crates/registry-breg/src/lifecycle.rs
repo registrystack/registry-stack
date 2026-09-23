@@ -160,7 +160,7 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "row_visibility",
-            description: "The request row is read under the row-level SELECT policy generated for this profile and operation, which admits only an active row whose request state the operation may see (draft, submitted, cancelled, and superseded; applied as well for apply) and only within the profile's request visibility. A row the policy hides is treated as absent.",
+            description: "The request row is read under the row-level SELECT policy generated for this profile and operation, which admits only an active row whose request state the operation may see (draft, submitted, and cancelled; applied as well for apply) and only within the profile's request visibility. A row the policy hides is treated as absent.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
@@ -224,21 +224,12 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
 /// Describes the request lifecycle enforced by `RequestWorkflow`: the states in
 /// `RequestState` and the transitions its `submit`, `revise`, `rebase`, `cancel`, and
 /// `apply` methods run.
-///
-/// `superseded` is in the table as a state and in no edge. Nothing writes it: no
-/// transition targets it, `initialize_draft` stores `draft`, and `save` stores the state
-/// a transition reached. `cancel`'s own check would accept it as a source, since it
-/// refuses only `Applied` and `Cancelled`, but the UPDATE policy generated for cancel
-/// admits only `draft` and `submitted` rows, so such a cancel would write nothing and be
-/// refused at persist. An edge that cannot fire from a state that cannot exist is not a
-/// transition the engine runs, so the state reports as unreachable and terminal rather
-/// than carrying a dead edge.
 pub fn request_lifecycle() -> LifecycleDescription {
     build_lifecycle(
         "request",
         "BReg change request lifecycle",
         "draft",
-        &["draft", "submitted", "cancelled", "applied", "superseded"],
+        &["draft", "submitted", "cancelled", "applied"],
         vec![
             LifecycleTransition {
                 from: "draft",
@@ -603,11 +594,6 @@ mod tests {
         }
     }
 
-    /// The persist layer is what makes `superseded` a dead source state: the
-    /// UPDATE policy generated for cancel admits only draft and submitted
-    /// rows, so a cancel the workflow accepted from `superseded` writes no
-    /// row and is refused. The table declares no such edge, and this pins the
-    /// policy the omission rests on.
     #[test]
     fn the_planner_runs_inside_no_transaction() {
         let lifecycle = request_lifecycle();
@@ -742,7 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn the_cancel_update_policy_admits_no_superseded_row() {
+    fn the_cancel_update_policy_admits_only_draft_and_submitted_rows() {
         use crate::contract::Operation;
         use crate::generated_ddl::{change_request_action_state_exists_expression, PolicyCommand};
 
@@ -750,8 +736,7 @@ mod tests {
             Operation::CancelRequest,
             PolicyCommand::Update,
         );
-        assert!(cancel.contains("'draft', 'submitted'"), "{cancel}");
-        assert!(!cancel.contains("superseded"), "{cancel}");
+        assert!(cancel.contains("'draft', 'submitted')"), "{cancel}");
     }
 
     use registry_platform_canonical_json::canonicalize_json;
@@ -959,10 +944,7 @@ mod tests {
     }
 
     // `cancel`'s own check refuses exactly `Applied` and `Cancelled`, the two states the
-    // table declares no `cancel` edge from. It would also accept `Superseded`, which the
-    // table does not declare either: no transition produces a `Superseded` workflow, so
-    // none can be constructed to call `cancel` on, and the persist layer refuses the write
-    // regardless (see `the_cancel_update_policy_admits_no_superseded_row`).
+    // table declares no `cancel` edge from.
     #[test]
     fn cancel_refuses_applied_and_cancelled_sources() {
         let applied = applied_workflow();
@@ -991,7 +973,6 @@ mod tests {
                 RequestState::Submitted => "submitted",
                 RequestState::Cancelled => "cancelled",
                 RequestState::Applied => "applied",
-                RequestState::Superseded => "superseded",
             }
         }
         let declared: Vec<&str> = [
@@ -999,7 +980,6 @@ mod tests {
             RequestState::Submitted,
             RequestState::Cancelled,
             RequestState::Applied,
-            RequestState::Superseded,
         ]
         .into_iter()
         .map(storage_id)
@@ -1012,30 +992,20 @@ mod tests {
         assert_eq!(table, declared);
     }
 
-    /// `superseded` is stored and matched but never written by any transition
-    /// and never accepted as a source by the persist layer, so the table
-    /// declares no edge touching it and it reports as both unreachable and
-    /// terminal.
     #[test]
-    fn superseded_is_unreachable_and_terminal_and_applied_and_cancelled_are_terminal() {
+    fn every_state_is_reachable_and_only_applied_and_cancelled_are_terminal() {
         let lifecycle = request_lifecycle();
-        let state = |id: &str| {
-            lifecycle
-                .states
-                .iter()
-                .find(|state| state.id == id)
-                .unwrap_or_else(|| panic!("state {id} declared"))
-        };
-
-        let superseded = state("superseded");
-        assert!(superseded.unreachable);
-        assert!(superseded.terminal);
-        assert_eq!(superseded.incoming_transitions, 0);
-        assert_eq!(superseded.outgoing_transitions, 0);
+        let ids: Vec<&str> = lifecycle.states.iter().map(|state| state.id).collect();
+        assert_eq!(ids, ["draft", "submitted", "cancelled", "applied"]);
+        assert!(lifecycle.states.iter().all(|state| !state.unreachable));
+        let terminal: Vec<&str> = lifecycle
+            .states
+            .iter()
+            .filter(|state| state.terminal)
+            .map(|state| state.id)
+            .collect();
+        assert_eq!(terminal, ["cancelled", "applied"]);
         assert_eq!(lifecycle.transitions.len(), 6);
-
-        assert!(state("applied").terminal);
-        assert!(state("cancelled").terminal);
     }
 
     #[test]
