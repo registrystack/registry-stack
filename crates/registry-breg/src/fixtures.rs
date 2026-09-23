@@ -83,6 +83,7 @@ pub enum SchemaTestRuntimeSetupError {
     Cursor,
     EventDestinations(EventDestinationActivationError),
     Evidence,
+    ReviewAuthorities,
     WasmExecution,
 }
 
@@ -95,6 +96,9 @@ impl fmt::Display for SchemaTestRuntimeSetupError {
             Self::EventDestinations(error) => write!(formatter, "schema-test {error}"),
             Self::Evidence => {
                 formatter.write_str("schema-test Evidence provider activation failed")
+            }
+            Self::ReviewAuthorities => {
+                formatter.write_str("schema-test review authority activation failed")
             }
             Self::WasmExecution => formatter.write_str("schema-test WASM execution setup failed"),
         }
@@ -3103,6 +3107,13 @@ impl SchemaTestRuntime {
         let evidence = config
             .activate_evidence(&registry)
             .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Evidence))?;
+        // A reviewed submission records its pending authority delivery in the
+        // same transaction, so the rehearsal activates the operator's review
+        // authority bindings exactly as the server does. No review worker runs
+        // here: the rehearsal never contacts the authority.
+        let review_authorities = config.activate_review_authorities(&registry).map_err(|_| {
+            FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::ReviewAuthorities)
+        })?;
         #[cfg(feature = "wasm")]
         let wasm_runtime = crate::wasm_runtime::install_configured(*config.wasm_execution())
             .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::WasmExecution))?;
@@ -3115,6 +3126,10 @@ impl SchemaTestRuntime {
             audit_profile,
             Some(event_destinations),
         );
+        let mutations = match review_authorities {
+            Some(authorities) => mutations.with_review_result_source(authorities),
+            None => mutations,
+        };
         let mutations = Arc::new(match evidence {
             Some(evaluator) => mutations
                 .with_evidence_evaluator(evaluator)

@@ -82,6 +82,9 @@ const HOUSEHOLD_DEMOGRAPHICS_SQL: &[u8] = include_bytes!(
 );
 const HOUSEHOLD_RESULT_CAPTURE_JOURNEY_SOURCE: &[u8] =
     include_bytes!("fixtures/household-no-review-capture-journey.yaml");
+const HOUSEHOLD_REVIEW_JOURNEY_SOURCE: &[u8] = include_bytes!(
+    "../../../products/breg/acceptance/publicschema-household-change-requests/tests/journeys.yaml"
+);
 const COMPILER_SOURCE_REVISION: &str = "fixture-project-source";
 const DATABASE_ID: &str = "fixture-database";
 const INSTANCE_ID: &str = "fixture-instance";
@@ -528,7 +531,7 @@ async fn public_spatial_fixture_schema_test_runs_through_the_production_executor
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn entity_apply_result_captures_resolve_committed_records_through_the_production_executor() {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
-    let (compiled, project_source, modules) = compiled_household_fixture();
+    let (compiled, project_source, modules) = compiled_household_fixture(false);
     let suite = validate_fixture_journeys(HOUSEHOLD_RESULT_CAPTURE_JOURNEY_SOURCE, &compiled)
         .expect("household journey with entity apply result captures preflights");
     let schema_fingerprint = measure_compiled_schema_fingerprint(&compiled).await;
@@ -561,7 +564,7 @@ async fn entity_apply_result_captures_resolve_committed_records_through_the_prod
         &config,
         &package.prepared,
         &suite,
-        household_credential_bindings(&suite, &idp),
+        household_credential_bindings(HOUSEHOLD_RESULT_CAPTURE_JOURNEY_SOURCE, &suite, &idp),
     )
     .await
     .expect("submit, apply, and captured-result GETs succeed");
@@ -591,6 +594,148 @@ async fn entity_apply_result_captures_resolve_committed_records_through_the_prod
     assert_eq!(applications.len(), 1, "one reviewed proposal applied once");
     assert_eq!(applications[0].get::<_, i16>(0), 3);
     assert_eq!(applications[0].get::<_, i64>(1), 1);
+
+    database.cleanup().await;
+    idp.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reviewed_submission_rehearses_against_the_configured_authority_without_contacting_it() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
+    let (compiled, project_source, modules) = compiled_household_fixture(true);
+    let suite = validate_fixture_journeys(HOUSEHOLD_REVIEW_JOURNEY_SOURCE, &compiled)
+        .expect("household acceptance journeys preflight");
+    let schema_fingerprint = measure_compiled_schema_fingerprint(&compiled).await;
+    let package = package_fixture_with_modules(
+        &project_source,
+        &schema_fingerprint,
+        HOUSEHOLD_REVIEW_JOURNEY_SOURCE,
+        modules,
+    );
+    // The configured authority endpoint is a live listener, so any outbound
+    // review exchange during the rehearsal would be observable here.
+    let authority = std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("loopback review authority listener binds");
+    authority
+        .set_nonblocking(true)
+        .expect("review authority listener becomes nonblocking");
+    let authority_port = authority
+        .local_addr()
+        .expect("review authority listener has an address")
+        .port();
+    let idp = MockIdp::start().await;
+    let database = TestDatabase::create(8).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator provisions household temporal exclusion prerequisites");
+    let config_path = package.write_runtime_config(&database, &idp);
+    package.bind_review_authority(&config_path, "casework", authority_port);
+    let config =
+        load_runtime_config(&config_path).expect("reviewed household runtime config loads");
+    let schema_test_database = prepare_schema_test_database_with_connection_configs_for_test(
+        &config,
+        &package.prepared,
+        &database.migration_config,
+        &database.runtime_config,
+    )
+    .await
+    .expect("reviewed household schema-test database prepares");
+
+    let receipt = execute_schema_test(
+        schema_test_database,
+        &config,
+        &package.prepared,
+        &suite,
+        household_credential_bindings(HOUSEHOLD_REVIEW_JOURNEY_SOURCE, &suite, &idp),
+    )
+    .await
+    .expect("a reviewed submission rehearses against its configured authority binding");
+    assert_eq!(
+        receipt.successful_journey_ids(),
+        ["household-contact-registration-request-flow"]
+    );
+
+    let submissions = database
+        .admin
+        .query(
+            "SELECT authority, producer_id, policy_id, state, withdrawn, attempt_count,
+                    accepted_binding IS NULL
+               FROM registry_internal.registry_request_review_submissions",
+            &[],
+        )
+        .await
+        .expect("administrator inspects the recorded review submissions");
+    assert_eq!(submissions.len(), 1, "one submitted proposal is recorded");
+    let submission = &submissions[0];
+    assert_eq!(submission.get::<_, String>(0), "casework");
+    assert_eq!(submission.get::<_, String>(1), "fixture-review-producer");
+    assert_eq!(
+        submission.get::<_, String>(2),
+        "household-contact-registration"
+    );
+    assert_eq!(
+        submission.get::<_, String>(3),
+        "cancelled",
+        "the journey withdraws the submission before any delivery"
+    );
+    assert!(submission.get::<_, bool>(4));
+    assert_eq!(submission.get::<_, i32>(5), 0, "no delivery was attempted");
+    assert!(submission.get::<_, bool>(6), "no authority accepted it");
+    match authority.accept() {
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        other => panic!("the rehearsal contacted the review authority: {other:?}"),
+    }
+
+    database.cleanup().await;
+    idp.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reviewed_submission_rehearsal_refuses_an_unbound_review_authority() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
+    let (compiled, project_source, modules) = compiled_household_fixture(true);
+    let suite = validate_fixture_journeys(HOUSEHOLD_REVIEW_JOURNEY_SOURCE, &compiled)
+        .expect("household acceptance journeys preflight");
+    let schema_fingerprint = measure_compiled_schema_fingerprint(&compiled).await;
+    let package = package_fixture_with_modules(
+        &project_source,
+        &schema_fingerprint,
+        HOUSEHOLD_REVIEW_JOURNEY_SOURCE,
+        modules,
+    );
+    let idp = MockIdp::start().await;
+    let database = TestDatabase::create(8).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator provisions household temporal exclusion prerequisites");
+    let config_path = package.write_runtime_config(&database, &idp);
+    let config = load_runtime_config(&config_path).expect("unbound runtime config loads");
+    let schema_test_database = prepare_schema_test_database_with_connection_configs_for_test(
+        &config,
+        &package.prepared,
+        &database.migration_config,
+        &database.runtime_config,
+    )
+    .await
+    .expect("database prepares before runtime setup");
+
+    let error = execute_schema_test(
+        schema_test_database,
+        &config,
+        &package.prepared,
+        &suite,
+        household_credential_bindings(HOUSEHOLD_REVIEW_JOURNEY_SOURCE, &suite, &idp),
+    )
+    .await
+    .expect_err("a review requirement without an operator binding refuses the rehearsal");
+    assert_eq!(
+        error,
+        FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::ReviewAuthorities)
+    );
 
     database.cleanup().await;
     idp.stop().await;
@@ -1076,6 +1221,23 @@ operationalTimeouts:
         path
     }
 
+    /// Appends one opaque-token review authority binding, the smallest
+    /// operator binding the runtime accepts for a declared review authority.
+    fn bind_review_authority(&self, config_path: &Path, authority: &str, port: u16) {
+        write_private(
+            &self
+                .directory
+                .join("secrets")
+                .join("review-authority-token"),
+            b"review-authority-token-canary",
+        );
+        let mut source = fs::read_to_string(config_path).expect("runtime config reads");
+        source.push_str(&format!(
+            "reviewAuthorities:\n  {authority}:\n    endpoint: http://127.0.0.1:{port}/\n    profile: fixture-requester\n    producerId: fixture-review-producer\n    recoveryDays: 7\n    tokenRef: secret:file/review-authority-token\n"
+        ));
+        fs::write(config_path, source).expect("review authority binding writes");
+    }
+
     fn write_spatial_runtime_config(&self, database: &TestDatabase, idp: &MockIdp) -> PathBuf {
         let secrets = self.directory.join("secrets");
         fs::create_dir_all(&secrets).expect("fixture secret root creates");
@@ -1219,12 +1381,12 @@ fn successful_credential_bindings(
 }
 
 fn household_credential_bindings(
+    journey_source: &[u8],
     suite: &registry_breg::fixtures::ValidatedFixtureJourneys,
     idp: &MockIdp,
 ) -> SchemaTestCredentialBindings {
-    let document: serde_json::Value =
-        serde_norway::from_slice(HOUSEHOLD_RESULT_CAPTURE_JOURNEY_SOURCE)
-            .expect("validated household journeys decode for synthetic credential binding");
+    let document: serde_json::Value = serde_norway::from_slice(journey_source)
+        .expect("validated household journeys decode for synthetic credential binding");
     let mut bindings = Vec::new();
     for journey in document["journeys"]
         .as_array()
@@ -1605,7 +1767,13 @@ fn compiled_spatial_fixture() -> (registry_breg::CompiledRegistry, Vec<u8>) {
     (registry, project_source)
 }
 
-fn compiled_household_fixture() -> (
+/// Builds the household acceptance project. With `external_review` false the
+/// contact request declares `review: {mode: none}`, so a journey may apply it
+/// without an external decision; otherwise it keeps the authored Casework
+/// review requirement.
+fn compiled_household_fixture(
+    external_review: bool,
+) -> (
     registry_breg::CompiledRegistry,
     Vec<u8>,
     Vec<PackageModuleSource>,
@@ -1634,9 +1802,11 @@ fn compiled_household_fixture() -> (
         .find(|entity| entity.id == "register-household-contact-request")
         .and_then(|entity| entity.change_request.as_mut())
         .expect("household fixture declares the contact request");
-    request.review = ChangeRequestReviewSource::None(ChangeRequestNoReviewSource {
-        mode: ChangeRequestNoReviewModeSource::None,
-    });
+    if !external_review {
+        request.review = ChangeRequestReviewSource::None(ChangeRequestNoReviewSource {
+            mode: ChangeRequestNoReviewModeSource::None,
+        });
+    }
     let registry = compile_project_with_assets(
         &project,
         &[core, demographics],

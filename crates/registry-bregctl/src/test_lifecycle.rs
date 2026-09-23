@@ -784,6 +784,11 @@ mod tests {
                 "evidenceProviders",
             ),
             (
+                SchemaTestRuntimeSetupError::ReviewAuthorities,
+                "test.review_authorities.activation_failed",
+                "reviewAuthorities",
+            ),
+            (
                 SchemaTestRuntimeSetupError::WasmExecution,
                 "test.wasm_execution.setup_failed",
                 "wasmExecution",
