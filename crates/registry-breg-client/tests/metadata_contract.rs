@@ -853,7 +853,10 @@ fn list_query_and_presentation_descriptors_are_retained_without_authority() {
     value["operations"][2]["query"] = json!({
         "kind": "odata",
         "selectableFields": [{"id": "legal-name", "apiName": "legalName"}],
-        "filterableFields": [{"id": "__request_breg_state", "apiName": "bregState", "operators": ["equals", "in"]}],
+        "filterableFields": [
+            {"id": "__request_breg_state", "apiName": "bregState", "operators": ["equals", "in"]},
+            {"id": "__request_review_outcome", "apiName": "reviewOutcome", "operators": ["equals", "in"]}
+        ],
         "sortableFields": [{"id": "legal-name", "apiName": "legalName", "directions": ["asc", "desc"]}],
         "allowCount": true, "defaultPageSize": 25, "maxPageSize": 100,
         "maxFilterClauses": 5, "maxInValues": 10,
@@ -869,6 +872,7 @@ fn list_query_and_presentation_descriptors_are_retained_without_authority() {
     let query = operation.query().unwrap();
     assert_eq!(query.filterable_fields[0].api_name, "bregState");
     assert_eq!(query.filterable_fields[0].operators, ["equals", "in"]);
+    assert_eq!(query.filterable_fields[1].api_name, "reviewOutcome");
     assert_eq!(query.max_page_size, 100);
     assert!(metadata
         .select_direct_write("records.company.get", "company-writer")

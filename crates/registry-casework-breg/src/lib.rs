@@ -381,7 +381,8 @@ impl BregAdapter {
                 .map(|review| review.application().state())
             {
                 Some(BRegExternalReviewApplicationState::AwaitingReview)
-                | Some(BRegExternalReviewApplicationState::Blocked) => {
+                | Some(BRegExternalReviewApplicationState::Blocked)
+                | Some(BRegExternalReviewApplicationState::Expired) => {
                     Ok(OccurrenceState::WaitingApplication)
                 }
                 Some(BRegExternalReviewApplicationState::Ready) => Ok(OccurrenceState::Open),

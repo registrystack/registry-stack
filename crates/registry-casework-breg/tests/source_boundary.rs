@@ -588,6 +588,7 @@ async fn external_review_projection_controls_only_source_application_state() {
     for (application_state, expected) in [
         ("awaitingReview", OccurrenceState::WaitingApplication),
         ("blocked", OccurrenceState::WaitingApplication),
+        ("expired", OccurrenceState::WaitingApplication),
         ("ready", OccurrenceState::Open),
         ("queued", OccurrenceState::Synchronizing),
         ("applying", OccurrenceState::Synchronizing),

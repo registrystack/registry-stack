@@ -249,7 +249,7 @@ export type BRegExternalReviewStatus = Readonly<{
   }>
   application: Readonly<{
     mode: 'manual' | 'automatic'
-    state: 'awaitingReview' | 'ready' | 'queued' | 'applying' | 'applied' | 'blocked'
+    state: 'awaitingReview' | 'ready' | 'queued' | 'applying' | 'applied' | 'blocked' | 'expired'
     executor?: string
     applicationId?: string
     /** Durable automatic-application attempts, from 0 through 1000. */

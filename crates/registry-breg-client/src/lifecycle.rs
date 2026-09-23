@@ -815,6 +815,9 @@ pub enum BRegExternalReviewApplicationState {
     Applying,
     Applied,
     Blocked,
+    /// An approval past its availability that was never applied. It can no
+    /// longer be applied: the owner revises the request or cancels it.
+    Expired,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -2416,6 +2419,7 @@ fn decode_external_review_application(
         "applying" => BRegExternalReviewApplicationState::Applying,
         "applied" => BRegExternalReviewApplicationState::Applied,
         "blocked" => BRegExternalReviewApplicationState::Blocked,
+        "expired" => BRegExternalReviewApplicationState::Expired,
         _ => return Err(BRegLifecycleDecodeError::Profile),
     };
     let executor = take_optional_identifier(&mut object, "executor")?;
