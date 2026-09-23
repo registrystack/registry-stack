@@ -97,8 +97,10 @@ bregctl --format json test ./my-registry \
 Package and sign as [deploy a registry](../breg/) describes, with the same
 `--baseline-runtime-config` and `--reviewed-migrations` arguments. If any source, reviewed
 artifact, baseline, or signature-policy input changes afterwards, repeat the test and the signing.
-A refusal names its cause: for `migration.review.refused`, check the change coverage and the
-artifact hashes; for `migration.review.fingerprint_mismatch`, rehearse the exact candidate again.
+A refusal names its cause. A code ending in `_refused` names the part of the reviewed directory
+that failed (the troubleshooting table below lists each); `migration.review.refused` means a
+precondition such as the prior revision or the baseline binding failed first; for
+`migration.review.fingerprint_mismatch`, rehearse the exact candidate again.
 Reviewed artifacts cannot authorize a change the planner classifies as unsupported.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, PackageCandidateArgs;
@@ -167,7 +169,7 @@ outcome:
 | `in_progress` | Another session holds the migration lock. | Wait for that activation to finish, then assess again. |
 | `completable` | Every durable step of the pinned target succeeded and the catalog is exactly the target's. Only the activation transition is missing. | Rerun with `--execute` to finish the activation. |
 | `revertible` | The pinned target reached no durable step and the catalog is still exactly the active package's. | Rerun with `--execute` to abandon the target. |
-| `unresolvable` | The catalog matches neither package, or a reviewed migration committed steps only the same target can finish. | Restore the pre-activation backup. The report names the catalog invariant that differs. |
+| `unresolvable` | The catalog matches neither package, or a reviewed migration committed steps only the same target can finish. | Restore the pre-activation backup. The assessment exits as a refusal, `migration.reconcile.outcome.unresolvable`, whose message names the reason and the catalog finding for each package. |
 
 `--execute` performs only the transition the assessment named, refuses every other outcome, and
 records the transition in the audit chain inside that transition's own transaction. Completing an
@@ -200,7 +202,12 @@ server binary, and earlier packages keep verifying under their recorded rules.
 | --- | --- |
 | `diff` reports the baseline as `integrity_only` | You passed `--package`. That is the signer's view; pass `--runtime-config` for the comparison against the activated package and its trust. |
 | `test` or `package` reports `migration.review.required` | The planner classified a change as needing review. Rehearse it, write the reviewed migration directory, and pass `--reviewed-migrations` to both commands. |
-| `test` or `package` reports `migration.review.refused` | The directory does not cover every reviewed change, or an artifact hash does not match its descriptor. Check the change coverage and the hashes. |
+| `test` or `package` reports `migration.review.descriptor_refused` | A descriptor is malformed, for example an empty or duplicate `covers` entry, a missing or unknown field-encryption history choice, a chunk size beyond the commit budget, or a plaintext drop ordered before its sealing backfill. Fix the descriptor, then repeat test and package. |
+| `test` or `package` reports `migration.review.coverage_refused` | The directory does not cover exactly the reviewed changes: a change is uncovered, a cover names a change the candidate does not make or the wrong change class, a fixture is not bound to any step, or the change is one reviewed artifacts cannot authorize. |
+| `test` or `package` reports `migration.review.sql_refused` | A step or assertion uses SQL outside the reviewed subset, for example more than one statement, transaction or role control, an unqualified or undeclared object, or DML without affected-row bounds. |
+| `test` or `package` reports `migration.review.evidence_refused` | The rehearsal receipt, external backup binding, or fixture bytes do not match this candidate, baseline, and database. Rehearse again and copy the new receipt. |
+| `test` or `package` reports `migration.review.closure_refused` | The set of files does not close: a descriptor the directory names is missing, a path appears twice, or there are too many artifacts. |
+| `test` or `package` reports `migration.review.refused` | A precondition failed before the reviewed directory was read, such as the prior revision or the baseline binding. Check the baseline arguments and the fingerprints in the rehearsal receipt. |
 | `test` or `package` reports `migration.review.fingerprint_mismatch` | The rehearsal receipt was taken for a different candidate or baseline. Rehearse the exact candidate again. |
 | `apply` fails after maintenance begins | Read the report, fix the cause, and retry the same target. If that is not available, run `migration reconcile` to assess the pinned target, execute the transition it names, and restore the pre-activation backup only when it reports `unresolvable`. |
 | `migration reconcile` reports `in_progress` | Another session holds the migration lock. Wait for it to finish, then assess again. |
