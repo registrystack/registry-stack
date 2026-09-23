@@ -825,6 +825,8 @@ pub enum PackageError {
     MigrationPlan,
     #[error("the package permissions are unsafe")]
     Permissions,
+    #[error("the package trust anchor is not canonical JSON")]
+    TrustAnchorNotCanonical,
     // The wrapped reason is one of `ReviewedMigrationError`'s own fixed,
     // value-free messages, so it carries no source value either.
     #[cfg(feature = "tooling")]
@@ -4327,7 +4329,7 @@ fn verify_signatures(
     let anchor_path = context.trust_anchor.ok_or(PackageError::Signature)?;
     reject_symlink_components(anchor_path)?;
     let anchor_bytes = read_bounded_regular(anchor_path, MAX_MANIFEST_BYTES, true)?;
-    let anchor: PackageTrustAnchor = parse_canonical(&anchor_bytes)?;
+    let anchor: PackageTrustAnchor = parse_canonical_trust_anchor(&anchor_bytes)?;
     if anchor.api_version != TRUST_ANCHOR_API_VERSION
         || anchor.environment != context.database_initialization_environment
         || anchor.instance_id != context.instance_id
@@ -4933,6 +4935,19 @@ fn parse_canonical<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
     let canonical = canonicalize_json(&value).map_err(|_| PackageError::CanonicalJson)?;
     if canonical != bytes {
         return Err(PackageError::CanonicalJson);
+    }
+    serde_json::from_value(value).map_err(|_| PackageError::CanonicalJson)
+}
+
+// The trust anchor is an operator-maintained file, not a signed package
+// artifact, so a well-formed but non-canonically-formatted anchor is refused
+// with its own cause instead of the generic `CanonicalJson` a malformed or
+// mis-shaped anchor still gets.
+fn parse_canonical_trust_anchor(bytes: &[u8]) -> Result<PackageTrustAnchor> {
+    let value = parse_json_strict(bytes).map_err(|_| PackageError::CanonicalJson)?;
+    let canonical = canonicalize_json(&value).map_err(|_| PackageError::CanonicalJson)?;
+    if canonical != bytes {
+        return Err(PackageError::TrustAnchorNotCanonical);
     }
     serde_json::from_value(value).map_err(|_| PackageError::CanonicalJson)
 }

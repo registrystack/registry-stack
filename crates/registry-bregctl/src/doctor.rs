@@ -369,6 +369,7 @@ mod tests {
             PackageError::Derivation,
             PackageError::MigrationPlan,
             PackageError::Permissions,
+            PackageError::TrustAnchorNotCanonical,
         ];
         let mut messages = HashSet::new();
         for cause in causes {

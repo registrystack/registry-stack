@@ -4489,6 +4489,10 @@ fn inspection_failure(
                     ("signature_refused", SuggestedAction::VerifyPackageTrust)
                 }
                 PackageError::Binding => ("binding_refused", SuggestedAction::VerifyPackageBinding),
+                PackageError::TrustAnchorNotCanonical => (
+                    "anchor_not_canonical",
+                    SuggestedAction::VerifyPackageIntegrity,
+                ),
                 PackageError::Closure
                 | PackageError::Integrity
                 | PackageError::CanonicalJson
@@ -4575,6 +4579,10 @@ fn package_diff_failure(error: PackageError) -> FailureReport {
         PackageError::Binding => (
             "diff.baseline.binding_refused",
             SuggestedAction::VerifyPackageBinding,
+        ),
+        PackageError::TrustAnchorNotCanonical => (
+            "diff.baseline.anchor_not_canonical",
+            SuggestedAction::VerifyPackageIntegrity,
         ),
         PackageError::Closure
         | PackageError::Integrity
