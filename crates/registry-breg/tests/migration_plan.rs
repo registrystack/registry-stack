@@ -11,9 +11,9 @@ use registry_breg::migration_plan::{
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
     RehearsalFixture, RehearsalProofs, RehearsalRowAssertion, ReviewedChangeCover,
     ReviewedFieldEncryptionHistory, ReviewedMigrationAssertionDescriptor,
-    ReviewedMigrationDescriptor, ReviewedMigrationFile, ReviewedMigrationObject,
-    ReviewedMigrationObjectKind, ReviewedMigrationRecovery, ReviewedMigrationSource,
-    ReviewedMigrationStepDescriptor,
+    ReviewedMigrationDescriptor, ReviewedMigrationError, ReviewedMigrationFile,
+    ReviewedMigrationObject, ReviewedMigrationObjectKind, ReviewedMigrationRecovery,
+    ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
 };
 use registry_breg::package::{
     compiled_registry_change_set, inspect_package_integrity, prepare_package,
@@ -143,6 +143,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         Variant::RequiredField,
         previous.clone(),
         Vec::new(),
+        ReviewedMigrationError::Coverage,
         "uncovered non-additive change",
     );
 
@@ -153,6 +154,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         Variant::RequiredField,
         previous.clone(),
         vec![uncovered.source()],
+        ReviewedMigrationError::Descriptor,
         "missing covers set",
     );
 
@@ -163,6 +165,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         Variant::RequiredField,
         previous.clone(),
         vec![orphan.source()],
+        ReviewedMigrationError::Coverage,
         "orphan cover",
     );
 
@@ -171,6 +174,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         Variant::RequiredField,
         previous.clone(),
         vec![valid.source(), duplicate.source()],
+        ReviewedMigrationError::Descriptor,
         "duplicate cover",
     );
 
@@ -181,6 +185,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         Variant::RequiredField,
         previous.clone(),
         vec![mismatch.source()],
+        ReviewedMigrationError::Coverage,
         "class-mismatched cover",
     );
 
@@ -205,6 +210,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         Variant::DifferentRegistry,
         unsupported_previous,
         vec![unsupported.source()],
+        ReviewedMigrationError::Coverage,
         "unsupported compiler change",
     );
 
@@ -321,6 +327,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
             Variant::RequiredField,
             previous.clone(),
             vec![forbidden.source()],
+            ReviewedMigrationError::Sql,
             label,
         );
     }
@@ -341,6 +348,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         Variant::RequiredField,
         previous.clone(),
         vec![unbounded_dml.source()],
+        ReviewedMigrationError::Sql,
         "DML without affected-row bounds",
     );
 
@@ -351,6 +359,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         Variant::RequiredField,
         previous.clone(),
         vec![non_boolean_assertion.source()],
+        ReviewedMigrationError::Sql,
         "assertion is not one declared read-only boolean SELECT",
     );
 
@@ -361,6 +370,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         Variant::RequiredField,
         previous.clone(),
         vec![object_mismatch.source()],
+        ReviewedMigrationError::Sql,
         "descriptor cover and parsed object inventory mismatch",
     );
 
@@ -371,6 +381,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         Variant::RequiredField,
         previous.clone(),
         vec![unbound.source()],
+        ReviewedMigrationError::Evidence,
         "rehearsal evidence bound to wrong target",
     );
 
@@ -384,6 +395,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         Variant::FieldRemoved,
         previous.clone(),
         vec![no_backup.source()],
+        ReviewedMigrationError::Evidence,
         "destructive plan without external backup binding",
     );
 
@@ -398,6 +410,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         Variant::FieldRemoved,
         previous.clone(),
         vec![wrong_backup.source()],
+        ReviewedMigrationError::Evidence,
         "external backup bound to a different database",
     );
 
@@ -409,6 +422,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         Variant::RequiredField,
         previous.clone(),
         vec![missing_fixture],
+        ReviewedMigrationError::Evidence,
         "missing rehearsal fixture bytes",
     );
 
@@ -423,6 +437,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         Variant::RequiredField,
         previous.clone(),
         vec![substituted_fixture],
+        ReviewedMigrationError::Evidence,
         "substituted rehearsal fixture bytes",
     );
 
@@ -438,6 +453,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         Variant::RequiredField,
         previous.clone(),
         vec![extra_fixture],
+        ReviewedMigrationError::Coverage,
         "unbound extra rehearsal fixture",
     );
 
@@ -547,6 +563,7 @@ fn reviewed_encryption_flip_refuses_a_missing_history_choice() {
         Variant::EncryptedFlipOn,
         previous,
         vec![artifacts.source()],
+        ReviewedMigrationError::Descriptor,
         "an encryption flip without an explicit history choice",
     );
 }
@@ -567,6 +584,7 @@ fn reviewed_encryption_flip_refuses_an_unknown_history_choice() {
         Variant::EncryptedFlipOn,
         previous,
         vec![source],
+        ReviewedMigrationError::Descriptor,
         "an unknown history choice value",
     );
 }
@@ -584,6 +602,7 @@ fn reviewed_plan_refuses_a_history_choice_without_an_encryption_flip() {
         Variant::RequiredField,
         previous,
         vec![artifacts.source()],
+        ReviewedMigrationError::Descriptor,
         "a history choice on a plan without a field-encryption flip",
     );
 }
@@ -606,6 +625,7 @@ fn reviewed_encryption_flip_refuses_a_chunk_size_beyond_the_commit_budget() {
         Variant::EncryptedFlipOn,
         previous,
         vec![artifacts.source()],
+        ReviewedMigrationError::Descriptor,
         "a field-encryption chunk size beyond the commit-member budget",
     );
 }
@@ -634,6 +654,7 @@ fn reviewed_encryption_flip_refuses_multiple_backfill_steps_for_one_entity() {
         Variant::EncryptedFlipOn,
         previous,
         vec![artifacts.source()],
+        ReviewedMigrationError::Coverage,
         "multiple field-encryption steps for one entity",
     );
 }
@@ -672,6 +693,7 @@ fn reviewed_encryption_flip_refuses_plaintext_drop_before_backfill() {
         Variant::EncryptedFlipOn,
         previous,
         vec![artifacts.source()],
+        ReviewedMigrationError::Descriptor,
         "dropping the plaintext column before its sealing backfill",
     );
 }
@@ -1113,12 +1135,13 @@ fn assert_refused(
     candidate_variant: Variant,
     previous: CompiledRegistry,
     migrations: Vec<ReviewedMigrationSource>,
+    expected: ReviewedMigrationError,
     label: &str,
 ) {
     let result = prepare_reviewed_package(candidate_variant, previous, migrations);
     assert_eq!(
         result.err(),
-        Some(PackageError::MigrationPlan),
+        Some(PackageError::ReviewedMigration(expected)),
         "{label} must be refused with a value-free error"
     );
 }
