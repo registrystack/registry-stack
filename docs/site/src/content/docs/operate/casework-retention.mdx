@@ -258,14 +258,16 @@ its source outcome, so recovery or readback has already resolved it and no settl
 ## Keep the audit file
 
 Casework appends every audited event to a keyed hash-chained JSONL file through a single-writer
-sink that rotates at 10 MiB and retains 50 files. That file is yours to hold: its lifetime, its
-off-host copies, and its disposal are your retention policy alone, and no Casework command prunes,
-exports, or erases it, including the two here. Ship it off host when completeness matters outside
-one machine's disk.
+sink. Once the active file reaches 10 MiB, the sink seals it under an ascending numeric suffix
+(`casework.jsonl.00000001`, `casework.jsonl.00000002`, and so on) and opens a fresh active file at
+the configured path; no sealed segment is ever deleted. Every segment is yours to hold: its
+lifetime, its off-host copies, and its disposal are your retention policy alone, and no Casework
+command prunes, exports, or erases any of them, including the two here. Ship segments off host when
+completeness matters outside one machine's disk.
 
-{/* Evidence: crates/registry-casework/src/runtime.rs, serve_from_path();
-    crates/registry-platform-audit/src/lib.rs, JsonlFileSink, DEFAULT_MAX_SIZE_BYTES, and
-    DEFAULT_MAX_FILES. */}
+{/* Evidence: crates/registry-casework/src/runtime.rs, serve_from_path() and
+    MAXIMUM_AUDIT_SEGMENT_BYTES;
+    crates/registry-platform-audit/src/segmented_jsonl.rs, DurableSegmentedJsonlSink. */}
 
 The chain is keyed with the audit secret named by the runtime file's `audit.hashKeyRef`, which
 authenticates the retained file against a writer that cannot read the deployment secret. Provide at

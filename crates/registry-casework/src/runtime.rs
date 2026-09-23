@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use clap::{Arg, Command};
 use registry_casework_breg::BregBinding;
 use registry_casework_core::{CaseworkProject, SourceAdapter};
-use registry_platform_audit::{AuditEnvelope, AuditProfile, ChainState, JsonlFileSink};
+use registry_platform_audit::{AuditEnvelope, AuditProfile, ChainState, DurableSegmentedJsonlSink};
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::{read_bounded, BearerToken, OutboundClientBuilder};
 use serde_json::Value;
@@ -31,6 +31,10 @@ struct ReviewCompletionTarget {
 }
 
 const MAXIMUM_COMPLETION_SECRET_BYTES: usize = 8 * 1024;
+
+/// Audit segments seal at this size and are retained, never deleted; an
+/// operator ships or prunes closed segments out of band.
+const MAXIMUM_AUDIT_SEGMENT_BYTES: u64 = 10 * 1024 * 1024;
 
 /// The secret a completion destination presents on every wake-up.
 enum ReviewCompletionCredential {
@@ -458,7 +462,8 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     )?);
 
     let audit_sink = Arc::new(
-        JsonlFileSink::new_single_writer(&config.audit.path).map_err(|_| RuntimeError::Audit)?,
+        DurableSegmentedJsonlSink::open(&config.audit.path, MAXIMUM_AUDIT_SEGMENT_BYTES)
+            .map_err(|_| RuntimeError::Audit)?,
     );
     let audit_chain = Arc::new(
         audit_profile
@@ -469,11 +474,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     // The keyed bootstrap above authenticates the retained chain before its
     // tail identity is used to reconcile a possible append/mark crash gap.
     let mut audit_publication_state = AuditPublicationState::from_verified_tail(
-        audit_sink
-            .last_envelope()
-            .await
-            .map_err(|_| RuntimeError::Audit)?
-            .as_ref(),
+        newest_segmented_audit_envelope(&config.audit.path)?.as_ref(),
     );
 
     // A bad signing key or audit configuration must not retire the live
@@ -685,6 +686,35 @@ fn resolve_audit_secret(
     })
 }
 
+/// Read the most recently written audit envelope straight off disk.
+///
+/// [`DurableSegmentedJsonlSink`] exposes a keyed tail hash but not the tail
+/// record itself, so restart reconciliation (which needs the retained
+/// `eventId`) reads the segment files directly. The active segment is checked
+/// first; a fallback to the newest sealed segment covers a restart that lands
+/// immediately after a rotation with no subsequent write, so the check stays
+/// correct without a false positive on a legitimately just-rotated set. This
+/// does not verify the chain: the keyed bootstrap that runs alongside it is
+/// what authenticates the retained history.
+fn newest_segmented_audit_envelope(path: &Path) -> Result<Option<AuditEnvelope>, RuntimeError> {
+    let candidates =
+        registry_platform_audit::segmented_audit_paths(path).map_err(|_| RuntimeError::Audit)?;
+    for candidate in candidates.into_iter().rev() {
+        let contents = match std::fs::read_to_string(&candidate) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err(RuntimeError::Audit),
+        };
+        let Some(last_line) = contents.lines().next_back() else {
+            continue;
+        };
+        let envelope =
+            serde_json::from_str::<AuditEnvelope>(last_line).map_err(|_| RuntimeError::Audit)?;
+        return Ok(Some(envelope));
+    }
+    Ok(None)
+}
+
 pub fn secret_resolver(config: &RuntimeConfig) -> Result<SecretResolver, RuntimeError> {
     let mut providers = Vec::new();
     if config.secret_providers.file.is_some() {
@@ -707,7 +737,7 @@ pub fn secret_resolver(config: &RuntimeConfig) -> Result<SecretResolver, Runtime
 struct RuntimeAuditPublisher {
     store: PostgresStore,
     chain: Arc<ChainState>,
-    sink: Arc<JsonlFileSink>,
+    sink: Arc<DurableSegmentedJsonlSink>,
     identifiers: registry_platform_audit::AuditKeyHasher,
 }
 
@@ -1234,7 +1264,7 @@ mod tests {
     struct FileAuditPublisher {
         database: Arc<Mutex<FileAuditState>>,
         chain: Arc<ChainState>,
-        sink: Arc<JsonlFileSink>,
+        sink: Arc<DurableSegmentedJsonlSink>,
     }
 
     struct FileAuditState {
@@ -1384,7 +1414,11 @@ mod tests {
 
     #[tokio::test]
     async fn audit_publication_reconciles_a_real_file_tail_after_restart() {
+        use std::os::unix::fs::PermissionsExt as _;
+
         let directory = tempfile::tempdir().expect("audit directory");
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("restrict audit directory");
         let path = directory.path().join("casework.jsonl");
         let event_id =
             Uuid::parse_str("ffffffff-ffff-4fff-8fff-ffffffffffff").expect("high event id");
@@ -1399,7 +1433,10 @@ mod tests {
         ))
         .expect("audit profile");
 
-        let sink = Arc::new(JsonlFileSink::new_single_writer(&path).expect("first writer lock"));
+        let sink = Arc::new(
+            DurableSegmentedJsonlSink::open(&path, MAXIMUM_AUDIT_SEGMENT_BYTES)
+                .expect("first writer lock"),
+        );
         let chain = Arc::new(
             profile
                 .bootstrap_or_start_empty(sink.as_ref())
@@ -1419,7 +1456,7 @@ mod tests {
         );
         assert_eq!(publication_state.unconfirmed, Some(event_id));
         assert!(matches!(
-            JsonlFileSink::new_single_writer(&path),
+            DurableSegmentedJsonlSink::open(&path, MAXIMUM_AUDIT_SEGMENT_BYTES),
             Err(registry_platform_audit::AuditError::SinkLocked { .. })
         ));
         drop(publisher);
@@ -1436,14 +1473,17 @@ mod tests {
                 ),
             );
         }
-        let sink = Arc::new(JsonlFileSink::new_single_writer(&path).expect("restart writer lock"));
+        let sink = Arc::new(
+            DurableSegmentedJsonlSink::open(&path, MAXIMUM_AUDIT_SEGMENT_BYTES)
+                .expect("restart writer lock"),
+        );
         let chain = Arc::new(
             profile
                 .bootstrap_or_start_empty(sink.as_ref())
                 .await
                 .expect("restart keyed bootstrap"),
         );
-        let tail = sink.last_envelope().await.expect("verified file tail");
+        let tail = newest_segmented_audit_envelope(&path).expect("verified file tail");
         let mut publication_state = AuditPublicationState::from_verified_tail(tail.as_ref());
         let publisher = FileAuditPublisher {
             database: Arc::clone(&database),
@@ -1464,6 +1504,101 @@ mod tests {
         assert_eq!(envelopes.len(), 2);
         assert_eq!(envelopes[0].record["eventId"], event_id.to_string());
         assert_eq!(envelopes[1].record["eventId"], earlier_event_id.to_string());
+    }
+
+    #[tokio::test]
+    async fn audit_publication_never_loses_a_record_past_the_rotation_limit() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().expect("audit directory");
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("restrict audit directory");
+        let path = directory.path().join("casework.jsonl");
+        let pending: Vec<(Uuid, Value)> = (0..12)
+            .map(|index| {
+                (
+                    Uuid::new_v4(),
+                    serde_json::json!({
+                        "event": "casework.synthetic",
+                        "index": index,
+                        "padding": "x".repeat(160),
+                    }),
+                )
+            })
+            .collect();
+        let oldest_event_id = pending.first().expect("seeded records").0;
+        let database = Arc::new(Mutex::new(FileAuditState {
+            fail_marks: false,
+            pending,
+        }));
+        let profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+            b"casework-audit-rotation-secret-32-bytes".to_vec(),
+        ))
+        .expect("audit profile");
+
+        let sink = Arc::new(
+            DurableSegmentedJsonlSink::open(&path, 900).expect("small-segment sink opens"),
+        );
+        let chain = Arc::new(
+            profile
+                .bootstrap_or_start_empty(sink.as_ref())
+                .await
+                .expect("keyed bootstrap"),
+        );
+        let publisher = FileAuditPublisher {
+            database: Arc::clone(&database),
+            chain,
+            sink: Arc::clone(&sink),
+        };
+        let mut publication_state = AuditPublicationState::default();
+
+        publish_audit_pass(&publisher, &mut publication_state)
+            .await
+            .expect("every pending record publishes");
+        assert!(database.lock().await.pending.is_empty());
+
+        let mut audit_files: Vec<_> = std::fs::read_dir(directory.path())
+            .expect("audit directory")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|candidate| {
+                candidate
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("casework.jsonl") && !name.ends_with(".lock")
+                    })
+            })
+            .collect();
+        audit_files.sort();
+        assert!(
+            audit_files.len() > 1,
+            "the rotation limit was not exercised by this fixture"
+        );
+        let mut event_ids = Vec::new();
+        for file in &audit_files {
+            for line in std::fs::read_to_string(file)
+                .expect("segment contents")
+                .lines()
+            {
+                let envelope = serde_json::from_str::<AuditEnvelope>(line).expect("audit envelope");
+                event_ids.push(
+                    envelope.record["eventId"]
+                        .as_str()
+                        .expect("event id")
+                        .to_owned(),
+                );
+            }
+        }
+        assert_eq!(
+            event_ids.len(),
+            12,
+            "a record must remain readable after rotation, never deleted"
+        );
+        assert!(
+            event_ids.contains(&oldest_event_id.to_string()),
+            "the oldest record must not be deleted once its segment rotates out of the active file"
+        );
     }
 
     #[test]
