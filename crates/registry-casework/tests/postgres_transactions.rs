@@ -972,7 +972,7 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
     let (store, client, schema) = isolated_schema("migrate").await;
     store.migrate().await.expect("first migration");
     let applied = applied_versions(&client).await;
-    assert_eq!(applied, (1..=15).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=16).collect::<Vec<i64>>());
     let index = occurrence_index(&client, &schema).await;
     assert!(index.1, "the occurrence identity index is unique");
 
@@ -985,6 +985,145 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
         occurrence_index(&client, &schema).await,
         index,
         "the second migration leaves the occurrence identity index in place"
+    );
+}
+
+async fn items_by_state(client: &tokio_postgres::Client) -> Vec<(String, String, uuid::Uuid)> {
+    client
+        .query(
+            "SELECT occurrence_key,state,item_id FROM casework_items WHERE source_id='source-a' ORDER BY first_observed_at,item_id",
+            &[],
+        )
+        .await
+        .expect("read occurrence items")
+        .into_iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2)))
+        .collect()
+}
+
+/// Bind the subject to `generation` and observe it open there, the way a
+/// restart onto a package or source binding and the next reconciliation do.
+async fn observe_open_in_generation(store: &PostgresStore, generation: &str) -> uuid::Uuid {
+    store
+        .register_source_generation("source-a", generation)
+        .await
+        .expect("rebind the source generation");
+    store
+        .apply_observation(
+            &observation_generation(
+                1,
+                "proposal-1",
+                OccurrenceKind::Review,
+                OccurrenceState::Open,
+                generation,
+            ),
+            "default",
+            None,
+        )
+        .await
+        .expect("the observation in the returned-to generation applies")
+        .expect("the observation opens an item")
+        .item_id
+}
+
+#[tokio::test]
+async fn returning_to_an_earlier_binding_generation_opens_a_fresh_occurrence() {
+    let (store, client, _schema) = isolated_schema("generation_return").await;
+    store.migrate().await.expect("migrate");
+
+    let first_a = observe_open_in_generation(&store, "binding-a").await;
+    let b = observe_open_in_generation(&store, "binding-b").await;
+    let second_a = observe_open_in_generation(&store, "binding-a").await;
+
+    assert_ne!(
+        second_a, first_a,
+        "a superseded occurrence stays terminal; the returned-to binding opens a fresh item"
+    );
+    let key_a = "Review:proposal-1:binding-a".to_owned();
+    let key_b = "Review:proposal-1:binding-b".to_owned();
+    assert_eq!(
+        items_by_state(&client).await,
+        [
+            (key_a.clone(), "superseded".to_owned(), first_a),
+            (key_b, "superseded".to_owned(), b),
+            (key_a, "open".to_owned(), second_a),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_database_failure_names_the_violated_constraint_without_row_data() {
+    let (store, client, _schema) = isolated_schema("constraint_name").await;
+    store.migrate().await.expect("migrate");
+    let violation = client
+        .execute(
+            "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(1,now())",
+            &[],
+        )
+        .await
+        .expect_err("a repeated ledger version is refused");
+    assert!(violation
+        .as_db_error()
+        .and_then(|error| error.detail())
+        .is_some_and(|detail| detail.contains("(version)=(1)")));
+
+    assert_eq!(
+        StoreError::Postgres(violation).to_string(),
+        "the Casework database operation failed (constraint casework_schema_migrations_pkey)"
+    );
+}
+
+#[tokio::test]
+async fn migration_16_releases_superseded_identities_in_a_database_that_holds_them() {
+    let (store, client, _schema) = isolated_schema("occurrence_identity_upgrade").await;
+    store.migrate().await.expect("establish current schema");
+    client
+        .batch_execute(
+            "DROP INDEX casework_items_occurrence_idx; \
+             CREATE UNIQUE INDEX casework_items_occurrence_idx \
+                 ON casework_items(source_id, subject_kind, subject_id, occurrence_key); \
+             DELETE FROM casework_schema_migrations WHERE version=16;",
+        )
+        .await
+        .expect("simulate the schema before migration 16");
+    let first_a = observe_open_in_generation(&store, "binding-a").await;
+    let b = observe_open_in_generation(&store, "binding-b").await;
+
+    store
+        .migrate()
+        .await
+        .expect("migration 16 applies over superseded rows");
+
+    assert_eq!(
+        applied_versions(&client).await,
+        (1..=16).collect::<Vec<_>>()
+    );
+    let second_a = observe_open_in_generation(&store, "binding-a").await;
+    let states: Vec<(uuid::Uuid, String)> = items_by_state(&client)
+        .await
+        .into_iter()
+        .map(|(_, state, item_id)| (item_id, state))
+        .collect();
+    assert_eq!(
+        states,
+        [
+            (first_a, "superseded".to_owned()),
+            (b, "superseded".to_owned()),
+            (second_a, "open".to_owned()),
+        ]
+    );
+    let duplicate_active = client
+        .execute(
+            "INSERT INTO casework_items(item_id,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,stage,binding,state,queue_id,revision,first_observed_at,updated_at) SELECT $1,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,stage,binding,'open',queue_id,1,now(),now() FROM casework_items WHERE item_id=$2",
+            &[&uuid::Uuid::new_v4(), &second_a],
+        )
+        .await
+        .expect_err("a second live item for one occurrence identity is refused");
+    assert_eq!(
+        duplicate_active
+            .as_db_error()
+            .and_then(|error| error.constraint()),
+        Some("casework_items_occurrence_idx")
     );
 }
 
@@ -1005,7 +1144,7 @@ async fn migration_13_adds_sync_claim_indexes_to_an_existing_schema() {
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=15).collect::<Vec<_>>()
+        (1..=16).collect::<Vec<_>>()
     );
     let indexes: Vec<String> = client
         .query(

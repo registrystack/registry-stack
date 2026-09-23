@@ -44,6 +44,16 @@
 - The BReg source adapter refuses a source request reported as `superseded`,
   a state BReg no longer defines. A BReg draft still projects as a superseded
   application occurrence.
+- Fix reconciliation failing on every pass after a package or source binding
+  was rolled back to a value the deployment had already used (A, then B, then
+  A). The returned-to binding derives the occurrence key of the item it left
+  behind, and that superseded item still held the key's uniqueness, so every
+  pass stopped on a duplicate key. Migration
+  `0016_occurrence_identity_excludes_superseded.sql` limits the occurrence
+  identity index to items that are not superseded: the superseded item stays
+  terminal and readable, and the observation opens a fresh item beside it. Two
+  live items for one occurrence are still refused. A failed database operation
+  now names the constraint it violated, and nothing from the row.
 - Fix the professional-review starter hiding every source-backed review task.
   Its `scope-correction` `displaySchema` described `record` as an object, but
   the professional-licences source discloses it as a UUID string, so every

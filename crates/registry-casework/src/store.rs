@@ -41,9 +41,11 @@ const ABSENCE_CURSORS_MIGRATION: &str = include_str!("../migrations/0012_absence
 const SYNC_CLAIM_INDEXES_MIGRATION: &str =
     include_str!("../migrations/0013_sync_claim_indexes.sql");
 const UNIFIED_REVIEWS_MIGRATION: &str = include_str!("../migrations/0015_unified_reviews.sql");
+const OCCURRENCE_IDENTITY_MIGRATION: &str =
+    include_str!("../migrations/0016_occurrence_identity_excludes_superseded.sql");
 
 /// Every schema version in ledger order.
-const MIGRATIONS: [(i64, &str); 15] = [
+const MIGRATIONS: [(i64, &str); 16] = [
     (1, MIGRATION),
     (2, HOSTED_MIGRATION),
     (3, ASSIGNMENT_MIGRATION),
@@ -59,6 +61,7 @@ const MIGRATIONS: [(i64, &str); 15] = [
     (13, SYNC_CLAIM_INDEXES_MIGRATION),
     (14, include_str!("../migrations/0014_task_grants.sql")),
     (15, UNIFIED_REVIEWS_MIGRATION),
+    (16, OCCURRENCE_IDENTITY_MIGRATION),
 ];
 
 /// Serializes operator-run migrations on one session lock. A second migrator
@@ -3537,6 +3540,16 @@ fn validate_settlement_text(
     Ok(())
 }
 
+/// Name the constraint a database refusal violated, and nothing else: the
+/// server's message and detail can quote row values, the constraint name cannot.
+fn violated_constraint(error: &tokio_postgres::Error) -> String {
+    error
+        .as_db_error()
+        .and_then(|error| error.constraint())
+        .map(|constraint| format!(" (constraint {constraint})"))
+        .unwrap_or_default()
+}
+
 fn map_unique_conflict(error: tokio_postgres::Error) -> StoreError {
     if error
         .as_db_error()
@@ -3617,7 +3630,7 @@ pub enum StoreError {
     CursorExpired,
     #[error("stored Casework data is invalid")]
     Corrupt,
-    #[error("the Casework database operation failed")]
+    #[error("the Casework database operation failed{}", violated_constraint(.0))]
     Postgres(#[from] tokio_postgres::Error),
     #[error("Casework serialization failed")]
     Json(#[from] serde_json::Error),
