@@ -526,6 +526,7 @@ fn check_with_target(
     fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))
         .context("setting private target-check staging permissions")?;
     let compiled = build::compile_with_target(project, documents, staging.path(), &evidence_bin)?;
+    build::reject_review_markers(&compiled.bundle_path)?;
     let report =
         build::check_compiled_bundle(&evidence_bin, &compiled.bundle_path, display_project)?;
     Ok(CheckedBundle {
@@ -567,14 +568,20 @@ fn compiler_refusal(error: anyhow::Error, artifact: &str) -> anyhow::Error {
     let authored = error
         .chain()
         .find_map(|cause| cause.downcast_ref::<authoring::AuthoredDiagnostic>());
+    let target_document = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<build::TargetDocumentDiagnostic>());
     let path = authored
         .map(|diagnostic| diagnostic.path.clone())
+        .or_else(|| target_document.map(|diagnostic| diagnostic.path.clone()))
         .unwrap_or_else(|| ".".to_owned());
     let code = authored
         .map(|diagnostic| diagnostic.code.to_owned())
+        .or_else(|| target_document.map(|diagnostic| diagnostic.code.to_owned()))
         .unwrap_or_else(|| "evidence.offline-check.refused".to_owned());
     let message = authored
         .map(|diagnostic| diagnostic.message.clone())
+        .or_else(|| target_document.map(|diagnostic| diagnostic.message.clone()))
         .unwrap_or_else(|| "offline validation refused the authored configuration".to_owned());
     DeniedFindings(vec![diagnostic(
         "error",

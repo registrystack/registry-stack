@@ -198,9 +198,10 @@ fn render_prepare_script() -> String {
 }
 
 fn render_parameters_schema() -> String {
-    r#"# TODO(evidencectl): replace with the closed schema for this source's own
-# reviewed adapter parameters. A transport: http-json source must declare at
-# least one; the closed Version 1 schema subset has no empty-object schema.
+    r#"# TODO(evidencectl): replace with the closed schema for this transport:
+# http-json source's own reviewed adapter parameters, if it needs any. The
+# closed Version 1 schema subset allows an empty adapter-parameters object,
+# so leave this as is when the fixed request needs no per-call selectors.
 type: object
 additionalProperties: false
 required: []

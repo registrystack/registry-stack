@@ -463,7 +463,7 @@ fn prepare_candidate(
     let compiled = compile_with_target(project, target, staging_root, evidence_bin)?;
     interruption.check()?;
     reject_review_markers(&compiled.bundle_path)?;
-    reject_review_markers_in_bytes(&target.runtime, "deployment runtime")?;
+    reject_review_markers_in_bytes(&target.runtime, "runtime.yaml")?;
     let runtime_path = staging_root.join("runtime.yaml");
     write_new_file(&runtime_path, &target.runtime, 0o600)?;
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o400))
@@ -793,26 +793,39 @@ fn valid_secret_name(name: &str) -> bool {
         })
 }
 
-fn reject_review_markers(bundle: &Path) -> Result<()> {
+/// Refuse a compiled bundle that still carries an authoring review marker,
+/// naming the offending file and the marker rule it matched so the refusal
+/// is actionable from `check` and `package` alike, instead of the generic
+/// message each command's `safe_command` wrapper falls back to for an
+/// unnamed cause.
+pub(crate) fn reject_review_markers(bundle: &Path) -> Result<()> {
     for path in bundle_files(bundle)? {
         let bytes = fs::read(&path).context("reading one generated bundle artifact")?;
-        reject_review_markers_in_bytes(&bytes, "deployment bundle")?;
+        let relative = path.strip_prefix(bundle).unwrap_or(&path);
+        reject_review_markers_in_bytes(&bytes, &format!("bundle/{}", relative.display()))?;
     }
     Ok(())
 }
 
-fn reject_review_markers_in_bytes(bytes: &[u8], description: &str) -> Result<()> {
-    if [
-        b"TODO(evidencectl)".as_slice(),
-        b"review-required",
-        b"placeholder_fact",
-    ]
-    .iter()
-    .any(|marker| bytes.windows(marker.len()).any(|window| window == *marker))
-    {
-        bail!("the {description} contains an unresolved authoring review marker");
+fn reject_review_markers_in_bytes(bytes: &[u8], artifact_path: &str) -> Result<()> {
+    let marker = ["TODO(evidencectl)", "review-required", "placeholder_fact"]
+        .into_iter()
+        .find(|marker| {
+            bytes
+                .windows(marker.len())
+                .any(|window| window == marker.as_bytes())
+        });
+    let Some(marker) = marker else {
+        return Ok(());
+    };
+    Err(TargetDocumentDiagnostic {
+        code: "evidence.package.review-marker",
+        path: artifact_path.to_owned(),
+        message: format!(
+            "{artifact_path} still contains the unresolved authoring review marker {marker}"
+        ),
     }
-    Ok(())
+    .into())
 }
 
 fn bundle_files(root: &Path) -> Result<Vec<PathBuf>> {
@@ -1216,12 +1229,19 @@ authorityProfiles:
     }
 
     #[test]
-    fn review_markers_are_rejected_without_repeating_authored_values() {
+    fn review_markers_are_named_by_rule_and_path_without_repeating_surrounding_content() {
         for marker in ["TODO(evidencectl)", "review-required", "placeholder_fact"] {
-            let error = reject_review_markers_in_bytes(marker.as_bytes(), "production runtime")
-                .expect_err("review marker rejected")
-                .to_string();
-            assert!(!error.contains(marker));
+            let surrounded = format!("before {marker} after-authored-suffix");
+            let error = reject_review_markers_in_bytes(
+                surrounded.as_bytes(),
+                "schemas/example.schema.yaml",
+            )
+            .expect_err("review marker rejected")
+            .to_string();
+            assert!(error.contains(marker), "{error}");
+            assert!(error.contains("schemas/example.schema.yaml"), "{error}");
+            assert!(!error.contains("before"), "{error}");
+            assert!(!error.contains("after-authored-suffix"), "{error}");
         }
     }
 
