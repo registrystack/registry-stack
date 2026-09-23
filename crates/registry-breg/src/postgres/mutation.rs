@@ -1915,6 +1915,7 @@ impl PostgresRecordMutationService {
                     MutationError::IdempotencyConflict
                     | MutationError::Unavailable
                     | MutationError::RetryableConflict
+                    | MutationError::LegacyReviewDataPresent
                     | MutationError::FieldEncryptionUnavailable
                     | MutationError::PlannerFailure(_)
                     | MutationError::ActionHandlerFailure(_)
