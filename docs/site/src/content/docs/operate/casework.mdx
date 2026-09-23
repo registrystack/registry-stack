@@ -38,14 +38,16 @@ the package directory and ends at a serving deployment.
 - **Secrets the process can read.** Every credential in the runtime file is a reference:
   `secret:file/<name>` names an owner-only file under one file provider root, and
   `secret:env/<NAME>` names an environment variable.
-- **Durable storage for the audit file.** The runtime appends a keyed hash chain to one JSONL file
-  and holds a process-lifetime lock on a sentinel file beside it, so exactly one process writes
-  one chain.
+- **Durable storage for the audit file.** The runtime appends a keyed hash chain to one JSONL file,
+  seals it under an eight-digit numeric suffix once it reaches 10 MiB, and deletes no sealed file.
+  It holds a process-lifetime lock on a sentinel file beside it, so exactly one process writes one
+  chain. The directory must belong to the runtime user with mode `0700`.
 - **A host for one process, or a place to run the container image.**
 
 {/* Evidence: crates/registry-casework/src/{config,runtime,store,auth}.rs;
     crates/registry-casework/migrations;
-    crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES and JsonlFileSink;
+    crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES;
+    crates/registry-platform-audit/src/segmented_jsonl.rs, DurableSegmentedJsonlSink;
     .github/workflows/ci.yml; products/casework/README.md. */}
 
 ### What it does not need
@@ -360,6 +362,39 @@ and start it again. For an operated database, retain the old deployment long eno
 required work, take the normal backup, and provision a fresh Casework database for the unified
 review package.
 
+### Upgrade from a release that rotated the audit file
+
+Casework 0.33.0 and earlier rotated the audit file: a full file became `casework.ndjson.1`, older
+files moved up to `casework.ndjson.49`, and the oldest was deleted. This release seals a full file
+as `casework.ndjson.00000001` and keeps every sealed file, and it continues only a chain whose
+first retained record is the chain's first. Before the first `serve` of this release:
+
+1. Stop every earlier `casework` process. While one still holds the lock beside the audit file,
+   the new process refuses to start with `another process holds the single-writer lock`.
+2. List the audit directory. If no numbered file such as `casework.ndjson.1` sits beside the audit
+   file, the file never reached 10 MiB, and the new release continues its chain as it is. If one
+   does, move the audit file and every numbered file beside it into an archive directory outside
+   the audit directory:
+
+   ```sh
+   install -d -m 0700 /var/lib/registry-casework/audit-archive
+   cd /var/lib/registry-casework/audit
+   mv casework.ndjson casework.ndjson.[0-9]* /var/lib/registry-casework/audit-archive/
+   ```
+
+   The new process then starts a fresh chain at the configured path. The archive stays keyed with
+   the same audit key, so keep both for as long as your retention policy requires. An event the
+   earlier process appended but never marked published appears again at the start of the fresh
+   chain. Without the move, the new process refuses to start and names the numbered file it found.
+3. Make the audit directory mode `0700`, and the audit file and its `.lock` file mode `0600`, all
+   owned by the runtime user. The earlier release accepted a group-readable directory; this one
+   refuses it with `audit directory must be owner-only`.
+
+{/* Evidence: crates/registry-casework/src/runtime.rs, open_audit_journal(),
+    refuse_rotated_audit_layout(), and describe_audit_journal_failure();
+    crates/registry-platform-audit/src/lib.rs, JsonlFileSink::rotate();
+    crates/registry-platform-audit/src/segmented_jsonl.rs, DurableSegmentedJsonlSink. */}
+
 :::caution[Keep the migration credential off the serving host]
 The migration credential owns the schema, and the serving process never needs it. Supply it only
 for the duration of a migration, and keep the runtime credential as the one the service manager
@@ -511,7 +546,9 @@ either product's database directly.
 The runtime verifies and loads the package once, at startup. Install the reviewed successor into a
 new directory beside the current one, point `package.root` at the new directory, and
 restart or roll out the process. Keep the previous package directory until the new one serves, so a
-rollback is a configuration change rather than a rebuild.
+rollback is a configuration change rather than a rebuild. A rollback to an earlier package or source
+binding does not reopen the work items that binding left behind: they stay superseded, and the
+source's next observation opens fresh work items beside them.
 
 :::caution[Editing a package in place changes nothing the process is serving]
 A running process keeps the policy it verified at startup, so files replaced under it leave the
@@ -530,7 +567,10 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 
 {/* Evidence: products/casework/README.md;
     products/casework/generated/registry-casework.openapi.json;
-    crates/registry-casework/src/config.rs, verify_policy_package(). */}
+    crates/registry-casework/src/config.rs, verify_policy_package();
+    crates/registry-casework/migrations/0016_occurrence_identity_excludes_superseded.sql;
+    crates/registry-casework/tests/postgres_transactions.rs,
+    returning_to_an_earlier_binding_generation_opens_a_fresh_occurrence. */}
 
 ## Troubleshooting
 
@@ -542,6 +582,9 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | A secret reference is refused | The named file must be a regular file owned by the running user, mode `0400` or `0600`, one link, no symbolic link, non-empty, and free of NUL bytes. |
 | Startup refuses the database or `doctor` stops at it | Check the resolved URL's user and database name, TLS on the server, and the trusted root reference when the server uses a private authority. |
 | Startup refuses the OIDC issuer | Check discovery reachability from the Casework host, or the pinned JWKS document's keys and their distinct `kid` values. |
+| `the Casework database schema version N is newer than this binary supports (M)` | A newer release already migrated this database. Run that release or a later one; Casework does not migrate a schema down. |
+| `the Casework audit journal could not be initialized` naming a numbered file `rotated by an earlier Casework release`, or saying the file `does not begin at the first record of its chain` | The audit directory still holds the layout of Casework 0.33.0 or earlier. Archive it as [the upgrade steps](#upgrade-from-a-release-that-rotated-the-audit-file) describe. |
+| `the Casework audit journal could not be initialized: audit directory must be owner-only` | Set the audit directory to mode `0700`, owned by the runtime user. |
 | `GET /ready` returns `503` while `GET /health` returns `200` | Audit publication or PostgreSQL is failing. Read the runtime log for the failed audit stage, and check the audit file, its lock, and the database. |
 | `profile.not-human` on a token you believe is human | The issuer did not add the configured human-identity claim to that session. Check the claim name and value against the issuer's mapping for interactive sessions. |
 | Work items report a source outage | The bound source is unreachable or refusing the reader. Run `caseworkctl doctor`, which names the failing source, read the runtime log's `Casework source reader request to BReg failed` entry for the cause, then check that binding's base URL, token endpoint, and reader grants. |

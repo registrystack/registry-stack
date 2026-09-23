@@ -34,7 +34,7 @@ erases it for one exact source request.
 | The request's producer and initiator identities | Raw until `terminalDays`, then a request-bound sha256 tombstone (not keyed with a secret) until the accountability deadline, so the same producer or initiator still learns the result expired | The runtime retention pass |
 | Review-create and mutation replay responses | Until request payload expiry, then a payload-free tombstone until the accountability deadline | The runtime retention pass, after which the key is free again |
 | Source-backed subjects, work items, private drafts, attempts, receipts, history, and durable events | No expiry; they stay for the life of the database | `caseworkctl retention erase --apply` |
-| The keyed audit JSONL file and its rotated siblings | Your retention policy alone | No Casework command |
+| The keyed audit JSONL file and its sealed segments | Your retention policy alone | No Casework command |
 
 Each review kind declares `terminalDays` and `accountabilityDays` in the project, and the project
 is refused unless `terminalDays` is at least 1, `accountabilityDays` is at least `terminalDays`,
@@ -247,12 +247,16 @@ Four refusals cover the cases worth planning for. `the source attempt still hold
 lease; wait for it to expire` means a client acquired the attempt within the last 330 seconds and
 may still be completing it; wait, then preview again. `the source attempt is completed` (or
 `refused`, or `pending`) means only an uncertain attempt can be settled, and a terminal attempt
-already has its outcome. `no source attempt has this identifier` means the UUID names nothing in
+already has its outcome. Recover a pending attempt first: once its execution lease expires, the
+actor who started it calls `POST /v1/work-items/{itemId}/attempts/{attemptId}/recover` while the
+source is reachable. Recovery completes or refuses the attempt from the source's answer, and leaves
+it uncertain only when the source cannot give one; settle it only then. `no source attempt has this identifier` means the UUID names nothing in
 this database. `the work item is claimed` (or another state) means the item is no longer awaiting
 its source outcome, so recovery or readback has already resolved it and no settlement is needed.
 
 {/* Evidence: crates/registry-casework/src/store.rs, AttemptSettlementError and
-    settle_uncertain_attempt();
+    settle_uncertain_attempt() and acquire_recovery_execution();
+    crates/registry-casework/src/service.rs, recover();
     crates/registry-casework-core/src/model.rs, AttemptState and OccurrenceState. */}
 
 ## Keep the audit file
@@ -264,6 +268,12 @@ the configured path; no sealed segment is ever deleted. Every segment is yours t
 lifetime, its off-host copies, and its disposal are your retention policy alone, and no Casework
 command prunes, exports, or erases any of them, including the two here. Ship segments off host when
 completeness matters outside one machine's disk.
+
+Casework 0.33.0 and earlier rotated the file instead, to `.1` through `.49`, and deleted the
+oldest. This release neither reads nor continues that layout: before its first start, move the
+audit file and its numbered siblings into an archive directory, and keep that archive under the
+same policy and the same audit key. [Upgrade from a release that rotated the audit
+file](../casework/#upgrade-from-a-release-that-rotated-the-audit-file) gives the steps.
 
 {/* Evidence: crates/registry-casework/src/runtime.rs, serve_from_path() and
     MAXIMUM_AUDIT_SEGMENT_BYTES;
@@ -312,7 +322,7 @@ sentinel lock beside the file.
 | `retention erase` refuses with `the requested resource was not found` | No local subject matches all three selector values. Confirm the source identifier, request kind, and request identifier with the source owner. |
 | A command inspects an unexpected Casework package | Check `package.root` in the selected runtime configuration and pass the intended `--runtime-config` file. |
 | `attempt settle` refuses with `the source attempt still holds a live execution lease` | A client acquired the attempt within the last 330 seconds. Wait for the lease to expire, then preview again. |
-| `attempt settle` refuses with `only an uncertain attempt can be settled` | The attempt is pending, completed, or refused. A terminal attempt already carries its outcome; a pending one is still recoverable by its holder. |
+| `attempt settle` refuses with `only an uncertain attempt can be settled` | The attempt is pending, completed, or refused. A terminal attempt already carries its outcome. Recover a pending one first: once its 330-second execution lease expires, the actor who started it calls `POST /v1/work-items/{itemId}/attempts/{attemptId}/recover` while the source is reachable. Settle only if recovery leaves it uncertain. |
 | `attempt settle` refuses with `only a work item awaiting its source outcome can be settled` | Recovery or source readback already moved the item out of synchronizing. No settlement is needed. |
 | A review request disappeared from producer polling and the result feed | Its `terminalDays` period closed. The accountability record may still exist; an authorized Supervisor can resolve one event until `accountabilityDays` closes too. |
 | An exact retry returns `idempotency.expired` with HTTP 410 | The item payload expired and only a payload-free tombstone remains. Reconcile the original operation before choosing a new key. |
