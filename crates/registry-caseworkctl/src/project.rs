@@ -16,96 +16,7 @@ use std::fs;
 use std::os::unix::fs::DirBuilderExt as _;
 use std::path::{Path, PathBuf};
 
-const CASEWORK_YAML: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
-kind: CaseworkProject
-casework:
-  id: professional-review
-  version: "1"
-accessProfiles:
-  - id: staff
-    principalClaim: registry_principal
-    requiredScopes: [casework:staff]
-    role: staff
-  - id: supervisor
-    principalClaim: registry_principal
-    requiredScopes: [casework:supervisor]
-    role: supervisor
-  - id: administrator
-    principalClaim: registry_principal
-    requiredScopes: [casework:admin]
-    role: administrator
-  - id: integration-requester
-    principalClaim: registry_principal
-    requiredScopes: [casework:reviews:request]
-    role: requester
-sources:
-  - id: professional-licences
-    adapter: breg
-    description: sources/professional-licences.json
-    requests:
-      - entity: scope-correction
-        queue: corrections
-        contextProjection:
-          - record
-          - licensed-activities
-          - authorization-conditions
-          - supporting-reference
-        target:
-          id: first-review-response
-          after: {elapsed: PT48H}
-queues:
-  - id: corrections
-    label: Licence corrections
-reviewKinds:
-  - id: scope-correction
-    version: "1"
-    purpose: approval
-    contextStrategy: source
-    stages:
-      - id: review
-        queue: corrections
-        decidingProfiles: [staff]
-        # The person who submitted the change request in the registry cannot
-        # claim, be assigned, or decide its review.
-        excludeInitiator: true
-        requiredApprovals: 1
-    retention:
-      terminalDays: 30
-      accountabilityDays: 365
-    displaySchema:
-      # The projected source fields a caller-filtered read may disclose,
-      # under their API names. All are optional: the source omits any field
-      # the reading caller cannot see.
-      type: object
-      additionalProperties: false
-      properties:
-        record:
-          type: object
-          additionalProperties: false
-          required: [recordRef]
-          properties:
-            recordRef: {type: string, maxLength: 128}
-        licensedActivities:
-          type: array
-          items: {type: string}
-          minItems: 1
-          maxItems: 3
-          uniqueItems: true
-        authorizationConditions: {type: string, maxLength: 500}
-        supportingReference: {type: string, minLength: 1, maxLength: 500}
-reviewProducers:
-  - id: registry-breg
-    profile: integration-requester
-    issuer: http://127.0.0.1:8091
-    subject: professional-review-breg
-    # BReg names the submitting person with its own issuer and the value of
-    # its principal claim, the same `registry_principal` claim these
-    # profiles read.
-    trustedInitiatorIssuer: http://127.0.0.1:8091
-    sourceNamespaces: [professional-licences]
-    kinds: [scope-correction]
-    recoveryDays: 7
-"#;
+const CASEWORK_YAML: &str = include_str!("../templates/professional-review/casework.yaml");
 
 const RUNTIME_SCHEMA: &str =
     include_str!("../../../products/casework/generated/runtime/runtime.schema.json");
@@ -158,9 +69,9 @@ const BREG_SOURCE_DESCRIPTION: &str = r#"{
     "requestEntity": "scope-correction",
     "requestRoute": "scope-corrections",
     "fields": [
-      {"field":"record","apiName":"record","schema":{"type":"object","additionalProperties":false,"required":["recordRef"],"properties":{"recordRef":{"type":"string","maxLength":128}}}},
-      {"field":"licensed-activities","apiName":"licensedActivities","schema":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":3,"uniqueItems":true}},
-      {"field":"authorization-conditions","apiName":"authorizationConditions","schema":{"type":"string","maxLength":500}},
+      {"field":"record","apiName":"record","schema":{"type":"string","format":"uuid"}},
+      {"field":"licensed-activities","apiName":"licensedActivities","schema":{"type":"array","items":{"type":"string","enum":["example-assessment","example-advisory-services","example-practical-services"]},"minItems":1,"maxItems":3,"uniqueItems":true,"x-registry-maxBytes":512}},
+      {"field":"authorization-conditions","apiName":"authorizationConditions","schema":{"type":"string","minLength":0,"maxLength":500}},
       {"field":"reason","apiName":"reason","schema":{"type":"string","minLength":1,"maxLength":500}},
       {"field":"supporting-reference","apiName":"supportingReference","schema":{"type":"string","minLength":1,"maxLength":500}}
     ],
@@ -1354,9 +1265,17 @@ mod tests {
             {
                 continue;
             }
+            // The template restates each projected field's source schema,
+            // so a value the source accepts is a value the kind displays.
+            assert_eq!(
+                kind.display_schema["properties"][field["apiName"].as_str().unwrap()],
+                field["schema"],
+                "displaySchema restates the source schema of {}",
+                field["field"]
+            );
             let sample = match field["apiName"].as_str().unwrap() {
-                "record" => json!({"recordRef": "licences/1042"}),
-                "licensedActivities" => json!(["general-practice"]),
+                "record" => json!("0f8b6c1e-2d4a-4c3b-9a7e-5b1d2c3e4f60"),
+                "licensedActivities" => json!(["example-assessment"]),
                 "authorizationConditions" => json!("Scope changes need a supervisor decision."),
                 "supportingReference" => json!("correction-case-1189"),
                 other => panic!("the starter projects unknown field {other:?}"),
@@ -2145,14 +2064,12 @@ mod tests {
         // Swapping purpose alone would trip registry-casework-core's own
         // AnswerOutcomes rule (an Answer-purpose kind needs a non-empty,
         // all-Answered outcomes list) before this check ever ran, so the
-        // fixture also adds the minimal outcome that satisfies core's rule
-        // and keeps the fixture on the purpose branch this test targets.
+        // fixture also settles the template's one outcome as answered, the
+        // minimal list that satisfies core's rule, and keeps the fixture on
+        // the purpose branch this test targets.
         let wrong_purpose_yaml = CASEWORK_YAML
             .replace("purpose: approval", "purpose: answer")
-            .replace(
-                "reviewProducers:",
-                "    outcomes:\n      - id: answered\n        label: Answered\n        settlement: answered\n        reasonRequired: false\nreviewProducers:",
-            );
+            .replace("settlement: changes_requested", "settlement: answered");
         let (_root, project) = write_offline_project(&wrong_purpose_yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
@@ -2306,8 +2223,8 @@ mod tests {
     #[test]
     fn explain_preserves_authored_stage_and_outcome_order() {
         let two_stage_yaml = CASEWORK_YAML.replace(
-            "        requiredApprovals: 1\n    retention:\n",
-            "        requiredApprovals: 1\n      - id: endorsement\n        queue: corrections\n        decidingProfiles: [supervisor]\n        requiredApprovals: 2\n        excludePreviousStageReviewers: true\n    outcomes:\n      - id: refused\n        label: Refused\n        settlement: rejected\n        reasonRequired: true\n      - id: more-detail\n        label: More detail needed\n        settlement: changes_requested\n        reasonRequired: true\n    retention:\n",
+            "        requiredApprovals: 1\n    outcomes:\n",
+            "        requiredApprovals: 1\n      - id: endorsement\n        queue: corrections\n        decidingProfiles: [supervisor]\n        requiredApprovals: 2\n        excludePreviousStageReviewers: true\n    outcomes:\n      - id: refused\n        label: Refused\n        settlement: rejected\n        reasonRequired: true\n",
         );
         let (_root, project) = write_offline_project(&two_stage_yaml, BREG_SOURCE_DESCRIPTION);
 
@@ -2331,7 +2248,7 @@ mod tests {
                 .iter()
                 .map(|outcome| outcome["id"].as_str().unwrap())
                 .collect::<Vec<_>>(),
-            ["refused", "more-detail"]
+            ["refused", "changes-requested"]
         );
         assert_eq!(kind["outcomes"][1]["settlement"], "changes_requested");
     }

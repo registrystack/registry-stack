@@ -27,9 +27,6 @@ sources:
     requests:
       - entity: scope-correction
         queue: corrections
-        # Only these current caller-authorized values may be released through
-        # the unified review-task context endpoint. The applicant's reason is
-        # intentionally excluded.
         contextProjection:
           - record
           - licensed-activities
@@ -89,12 +86,12 @@ reviewKinds:
 reviewProducers:
   - id: registry-breg
     profile: integration-requester
-    issuer: https://identity.example.test/realms/registry
+    issuer: http://127.0.0.1:8091
     subject: professional-review-breg
     # BReg names the submitting person with its own issuer and the value of
     # its principal claim, the same `registry_principal` claim these
     # profiles read.
-    trustedInitiatorIssuer: https://identity.example.test/realms/registry
+    trustedInitiatorIssuer: http://127.0.0.1:8091
     sourceNamespaces: [professional-licences]
     kinds: [scope-correction]
     recoveryDays: 7
