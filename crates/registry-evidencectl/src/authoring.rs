@@ -522,7 +522,7 @@ pub(crate) fn compile_check_project(
     validate_private_empty_staging(staging_root)?;
     let inputs = read_inputs(&project_root, false)?;
     validate_production_inputs(&project_root, &inputs)?;
-    let mut plan = compile_plan_with_connections(
+    let plan = compile_plan_with_connections(
         inputs,
         CompileProfile::Local {
             ports: LocalServicePorts::default(),
@@ -533,7 +533,7 @@ pub(crate) fn compile_check_project(
         },
         json!({}),
     )?;
-    expand_check_signing_validity(&mut plan.bundle);
+    check_signing_validity(&plan)?;
     validate_compiled_bundle_shape(&plan.bundle)?;
     let bundle_path = write_bundle(&project_root, None, staging_root, &plan, evidence_bin)?;
     let fixture_paths = plan
@@ -552,16 +552,36 @@ pub(crate) fn compile_check_project(
     })
 }
 
-fn expand_check_signing_validity(bundle: &mut Value) {
-    let maximum = bundle["requirements"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|requirement| requirement["validitySeconds"].as_u64())
-        .max()
-        .unwrap_or(300)
-        .max(300);
-    bundle["signing"]["maximumAssertionValiditySeconds"] = json!(maximum);
+/// Refuse a requirement validity `test` would also refuse.
+///
+/// `check` renders the same fixed local signing maximum `render_local_bundle`
+/// gives a fixture run, and a real target's own governance carries the same
+/// bound at `package` time. Reporting it here, against the question that
+/// declares it, catches the mismatch at authoring time instead of leaving it
+/// for the generic refusal the runtime raises once a fixture actually runs.
+fn check_signing_validity(plan: &CompilePlan) -> Result<()> {
+    let maximum = plan.bundle["signing"]["maximumAssertionValiditySeconds"]
+        .as_u64()
+        .unwrap_or(300);
+    for question in &plan.questions {
+        let Some(validity) = question.requirement["validitySeconds"].as_u64() else {
+            continue;
+        };
+        if validity > maximum {
+            return Err(AuthoredDiagnostic {
+                code: "evidence.question.validity-exceeds-signing-maximum".to_owned(),
+                path: format!(
+                    "questions/{}.yaml:/governance/validitySeconds",
+                    question.question_id
+                ),
+                message: format!(
+                    "requirement validity of {validity} seconds exceeds the {maximum} second signing maximum this offline check assumes"
+                ),
+            }
+            .into());
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn compile_fixture_project_with_connections(
@@ -8758,20 +8778,59 @@ factSchema: schemas/family-facts.schema.yaml
         );
     }
 
-    #[test]
-    fn check_only_signing_ceiling_covers_authored_validity_without_lowering_baseline() {
-        let mut long = json!({
-            "requirements": [{"validitySeconds": 86_400}],
-            "signing": {"maximumAssertionValiditySeconds": 300},
-        });
-        expand_check_signing_validity(&mut long);
-        assert_eq!(long["signing"]["maximumAssertionValiditySeconds"], 86_400);
+    fn minimal_question_plan(question_id: &str, validity_seconds: u64) -> QuestionPlan {
+        QuestionPlan {
+            question_id: question_id.to_owned(),
+            source_artifact_id: String::new(),
+            authored_source_artifacts: None,
+            derivation_artifact: String::new(),
+            fixture_artifact: None,
+            purpose: String::new(),
+            requirement_uri: String::new(),
+            response_formats: Vec::new(),
+            concepts: Vec::new(),
+            subjects: Vec::new(),
+            source_id: String::new(),
+            source_value: json!({}),
+            grants: Vec::new(),
+            requirement: json!({"validitySeconds": validity_seconds}),
+            response_schema: json!({}),
+            fact_schema: json!({}),
+            adapter_parameters_schema: json!({}),
+            prepare_script: String::new(),
+            extract_script: String::new(),
+            derivation_script: String::new(),
+        }
+    }
 
-        let mut short = json!({
-            "requirements": [{"validitySeconds": 60}],
-            "signing": {"maximumAssertionValiditySeconds": 300},
-        });
-        expand_check_signing_validity(&mut short);
-        assert_eq!(short["signing"]["maximumAssertionValiditySeconds"], 300);
+    fn plan_with_validity(validity_seconds: u64) -> CompilePlan {
+        CompilePlan {
+            questions: vec![minimal_question_plan("record-status", validity_seconds)],
+            access_policies: Vec::new(),
+            bundle: json!({"signing": {"maximumAssertionValiditySeconds": 300}}),
+            local_public_jwk: None,
+        }
+    }
+
+    #[test]
+    fn check_signing_validity_passes_a_requirement_at_the_local_signing_maximum() {
+        check_signing_validity(&plan_with_validity(300)).expect("300 seconds is the local ceiling");
+    }
+
+    #[test]
+    fn check_signing_validity_refuses_a_requirement_past_the_local_signing_maximum() {
+        let error = check_signing_validity(&plan_with_validity(900))
+            .expect_err("900 seconds exceeds the 300 second local signing maximum");
+        let diagnostic = error
+            .downcast_ref::<AuthoredDiagnostic>()
+            .expect("a signing validity refusal is an authored diagnostic");
+        assert_eq!(
+            diagnostic.code,
+            "evidence.question.validity-exceeds-signing-maximum"
+        );
+        assert_eq!(
+            diagnostic.path,
+            "questions/record-status.yaml:/governance/validitySeconds"
+        );
     }
 }

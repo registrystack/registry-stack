@@ -214,6 +214,51 @@ fn a_project_from_the_sourceless_shipped_starter_fails_its_offline_test() {
     );
 }
 
+/// `check` renders the same fixed local signing maximum `test` runs a
+/// fixture against, so a requirement validity that `test` would refuse must
+/// already be refused here, named at the question that declares it.
+#[test]
+fn check_refuses_a_requirement_validity_the_local_signing_maximum_cannot_cover() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let project = workspace.path().join("project");
+    let output = evidencectl(&[
+        "new",
+        path(&project),
+        "--transport",
+        "sqlite-extract",
+        "--profile",
+        "local",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let question = project.join("questions/record-status.yaml");
+    let authored = fs::read_to_string(&question).expect("authored question");
+    assert!(authored.contains("validitySeconds: 300"), "{authored}");
+    fs::write(
+        &question,
+        authored.replace("validitySeconds: 300", "validitySeconds: 900"),
+    )
+    .expect("raise the authored requirement validity past the local signing maximum");
+
+    let stub = write_stub_evidence(workspace.path());
+    let checked = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["check", path(&project)])
+        .env("EVIDENCE_BIN", &stub)
+        .output()
+        .expect("check the project");
+
+    assert!(
+        !checked.status.success(),
+        "check must refuse a requirement validity the local signing maximum cannot cover:\n{}",
+        stdout(&checked)
+    );
+    let printed = format!("{}{}", stdout(&checked), stderr(&checked));
+    assert!(
+        printed.contains("questions/record-status.yaml:/governance/validitySeconds"),
+        "{printed}"
+    );
+}
+
 #[test]
 fn openapi_and_sqlite_extract_are_mutually_exclusive_before_writing() {
     let workspace = TempDir::new().expect("temporary directory");
