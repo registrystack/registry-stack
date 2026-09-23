@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The BReg source adapter projects a request whose approval expired before it
+  was applied (BReg application state `expired`) as a waiting application
+  occurrence instead of refusing the source read. The professional-review
+  journey follows the `rebase` value BReg's `revise_request` action carries
+  after a send-back, and asserts that BReg records a revision.
 - `caseworkctl source add` now refuses the pairing when the BReg registry
   declares another change-request entity, besides the one being paired, that
   names this Casework project's review authority with a `policyId` no

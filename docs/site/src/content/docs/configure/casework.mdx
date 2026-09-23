@@ -550,7 +550,7 @@ The template's `scope-correction` review kind uses `contextStrategy: source`, so
 It restates each projected field's schema under its API name, as `bregctl explain change-requests` reports it: `record` is a UUID string, not an object.
 Casework checks each reviewer's source read against the schema before it shows or acts on a task, and a task whose disclosed fields the schema refuses stays out of that reviewer's inbox, and the runtime logs a `display_schema_rejected` warning naming the review kind.
 When you change a projected field in the register, change its schema here to match.
-The kind also declares a `changes-requested` outcome, labelled "Request changes", which settles as `changes_requested` and requires a reason; the submitter then revises and resubmits the request in BReg, which opens a fresh review.
+The kind also declares a `changes-requested` outcome, labelled "Request changes", which settles as `changes_requested` and requires a reason; BReg then offers the submitter a revision (`revise_request` with `rebase: false`) or a cancellation, never an apply, and the revised, resubmitted request opens a fresh review.
 
 Continue from the register you built in [Create and query your first registry](../../tutorials/first-breg/), which leaves its project at `tutorial-work/project`.
 Before Casework can present its work, the entity named in `casework.yaml` must declare a change

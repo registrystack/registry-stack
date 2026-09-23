@@ -172,6 +172,10 @@ A permission's `requestVisibility: owner` restricts reads of the request entity 
 
 The source request record is stored as `draft`, `submitted`, `cancelled`, or `applied`, and `bregctl explain lifecycle` reports every one of them as reachable.
 The external result status is projected separately and never substitutes for the source lifecycle state.
+A settled result does not move the request, but it decides what its owner and applier are offered.
+After a rejection the owner can only cancel.
+After a send-back, or an approval whose `availableUntil` passed before anyone applied it, the owner can revise the request or cancel it, and `apply_request` is not offered; the `revise_request` action then carries `rebase: false`, so the new draft is recorded as a revision.
+BReg refuses what it does not offer, and `bregctl explain lifecycle` reports that check as its `review_outcome` layer.
 Applying writes the target the way a direct mutation would, so the target gains a revision and the request moves to `applied`.
 [Base Registry Engine API reference](../../reference/breg-api/#change-requests) describes each action, its route, and the states it accepts.
 
@@ -183,7 +187,7 @@ bregctl explain change-requests ./my-registry
 
 The JSON report carries a `controlledWrites` list, one entry per target entity with its `requiredFor` operations and `eligibleRequestTypes`, and a `requests` list with the actions and routes of each request entity.
 
-{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml; crates/registry-breg/src/contract.rs, ChangeControlSource and ChangeRequestSource and RequestVisibilitySource; crates/registry-breg/src/request_workflow.rs; crates/registry-breg/src/lifecycle.rs, request_lifecycle and superseded_is_unreachable_and_terminal_and_applied_and_cancelled_are_terminal; crates/registry-breg/src/access.rs. */}
+{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml; crates/registry-breg/src/contract.rs, ChangeControlSource and ChangeRequestSource and RequestVisibilitySource; crates/registry-breg/src/request_workflow.rs; crates/registry-breg/src/lifecycle.rs, request_lifecycle and every_state_is_reachable_and_only_applied_and_cancelled_are_terminal; crates/registry-breg/src/access.rs. */}
 
 ### Require submitter authority over targets
 
@@ -520,6 +524,7 @@ The report lists every compiled action with its inputs, effects, grants, contrac
 | `check` reports a `change_request.*` error. | `effects` and `planner` are exclusive; `review` must be either `{mode: none}` or an authority and policy id; manual application must omit an executor; automatic application must name one. `check` does not run the script; evaluate it with `project planner-test`. |
 | A direct patch of a controlled entity is refused although the profile holds `patch`. | The entity's `changeControl.requiredFor` includes `patch`, so the write must arrive as an applied request. Submit a request of one of the `eligibleRequestTypes` that `explain change-requests` lists. |
 | `project planner-test` fails, or a submit is refused with `request.invalid`. | The script failed, returned an effect outside `writes`, attempted to return an obsolete disposition, or broke a bound. Read the message, fix the script or the ceiling, and rerun `project planner-test` with the same request file. |
+| `revise_request` answers `409 mutation.conflict`. | The settled review result rules the shape out: a rejected request can only be cancelled, and a send-back or an expired approval is answered by a revision, not a rebase. Read the request again and follow the action it offers. |
 | An invoke fails with `precondition.failed`. | A target changed between the target-conditions request and the invoke. Ask for target conditions again and invoke with the new ETags. |
 
 ## Next

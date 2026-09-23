@@ -18,8 +18,8 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
-- BREAKING: BReg drops the `superseded` change-request state, which no
-  transition ever wrote. A request is `draft`, `submitted`, `cancelled`, or
+- BREAKING: Base Registry Engine (BReg) drops the `superseded` change-request
+  state, which no transition ever wrote. A request is `draft`, `submitted`, `cancelled`, or
   `applied`; the `bregState` enum in generated OpenAPI and the Rust, Node.js,
   and Python clients loses the value, and a hook `when` condition naming
   `superseded` no longer compiles. The review result status `superseded` is
@@ -28,6 +28,25 @@ relevant product pages on this site rather than duplicating release notes.
 {/* Evidence: crates/registry-breg/src/request_workflow.rs, RequestState;
     crates/registry-breg/src/request_store.rs, install();
     crates/registry-breg/src/compiler.rs, REQUEST_LIFECYCLE_STATES. */}
+
+- BReg decides the change-request actions it offers from the settled review
+  result. A rejected request offers only `cancel_request`. A send-back, or an
+  approval whose `availableUntil` passed before it was applied, offers
+  `revise_request` with `rebase: false` and `cancel_request`, and no longer
+  offers `apply_request`. BReg refuses the shapes it does not offer: a revise
+  after a rejection, or a rebase after a send-back or an expired approval,
+  answers `409 mutation.conflict`. The review projection reports an expired
+  approval as application state `expired`, which the Rust, Node.js, and
+  Python clients accept, and request lists whose profile discloses
+  `review_state` can filter on `reviewOutcome`. `bregctl explain lifecycle`
+  reports the check as its `review_outcome` layer. See
+  [change requests](../reference/breg-api/#change-requests).
+
+{/* Evidence: crates/registry-breg/src/postgres/request_read.rs, action_is_available and revise_rebase_available;
+    crates/registry-breg/src/mutation/request.rs, execute_request_action_transaction;
+    crates/registry-breg/src/postgres/read.rs, REQUEST_REVIEW_OUTCOME_SQL;
+    crates/registry-breg/src/lifecycle.rs, request_lifecycle;
+    crates/registry-breg-client/src/lifecycle.rs, BRegExternalReviewApplicationState. */}
 
 ## v0.33.0 beta-45
 
