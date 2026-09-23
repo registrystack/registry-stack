@@ -63,6 +63,8 @@ fn install_runtime_constraints(schema: &mut Value) {
         ("BregBinding", "clientAssertionKeyRef"),
         ("BregBinding", "webhookSecretRef"),
         ("BregBinding", "trustedRootCertificatesRef"),
+        ("ReviewCompletionRuntimeConfig", "bearerTokenRef"),
+        ("ReviewCompletionAuthConfig", "secretRef"),
     ] {
         set_definition_property(
             schema,
@@ -97,6 +99,30 @@ fn install_runtime_constraints(schema: &mut Value) {
         );
     }
     set_assertion_issuer_constraints(schema);
+    set_review_completion_auth_constraints(schema);
+}
+
+/// State the shape `RuntimeConfig::validate_secret_references` requires of a
+/// completion destination: exactly one of `bearerTokenRef` and `auth`, and a
+/// header name made of HTTP token characters. The reserved header set is
+/// enforced at load, where names compare case-insensitively.
+fn set_review_completion_auth_constraints(schema: &mut Value) {
+    if let Some(destination) = schema
+        .pointer_mut("/$defs/ReviewCompletionRuntimeConfig")
+        .and_then(Value::as_object_mut)
+    {
+        destination.insert(
+            "oneOf".to_owned(),
+            serde_json::json!([{"required": ["bearerTokenRef"]}, {"required": ["auth"]}]),
+        );
+    }
+    set_definition_property(
+        schema,
+        "ReviewCompletionAuthConfig",
+        "header",
+        "pattern",
+        Value::String("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$".to_owned()),
+    );
 }
 
 /// State the bounds `RuntimeConfig::validate_assertion_issuers` applies, so a
@@ -378,6 +404,47 @@ mod tests {
         assert!(schema.is_valid(&with(serde_json::json!({
             "task-agent": ["https://exchange-a.example.test", "https://exchange-b.example.test"]
         }))));
+    }
+
+    #[test]
+    fn completion_destination_schema_names_exactly_one_secret_and_a_token_header() {
+        let schema = runtime_schema();
+        let with = |destination: Value| {
+            let mut instance = runtime_instance("secret:file/jwks.json", "file");
+            instance["reviewCompletionDestinations"] =
+                serde_json::json!({ "review-requester": destination });
+            instance
+        };
+        let url = "https://requester.example.test/completions";
+        for accepted in [
+            serde_json::json!({"url": url, "bearerTokenRef": "secret:file/completion-token"}),
+            serde_json::json!({"url": url, "auth": {"secretRef": "secret:file/completion-key"}}),
+            serde_json::json!({
+                "url": url,
+                "auth": {"header": "x-api-key", "secretRef": "secret:file/completion-key"}
+            }),
+        ] {
+            assert!(schema.is_valid(&with(accepted.clone())), "{accepted}");
+        }
+        for refused in [
+            serde_json::json!({"url": url}),
+            serde_json::json!({
+                "url": url,
+                "bearerTokenRef": "secret:file/completion-token",
+                "auth": {"secretRef": "secret:file/completion-key"}
+            }),
+            serde_json::json!({
+                "url": url,
+                "auth": {"header": "x api key", "secretRef": "secret:file/completion-key"}
+            }),
+            serde_json::json!({
+                "url": url,
+                "auth": {"header": "x-api-key", "secretRef": "completion-key"}
+            }),
+            serde_json::json!({"url": url, "auth": {"header": "x-api-key"}}),
+        ] {
+            assert!(!schema.is_valid(&with(refused.clone())), "{refused}");
+        }
     }
 
     #[test]

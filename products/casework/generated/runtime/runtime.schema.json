@@ -308,11 +308,63 @@
         }
       ]
     },
+    "ReviewCompletionAuthConfig": {
+      "additionalProperties": false,
+      "description": "How a completion destination presents its secret. Without `header` the\nsecret is sent as `Authorization: Bearer`; with one, the raw secret is the\nvalue of that header and no `Authorization` header is sent.",
+      "properties": {
+        "header": {
+          "default": null,
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "secretRef": {
+          "pattern": "^secret:(?:env|file)/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "secretRef"
+      ],
+      "type": "object"
+    },
     "ReviewCompletionRuntimeConfig": {
       "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "bearerTokenRef"
+          ]
+        },
+        {
+          "required": [
+            "auth"
+          ]
+        }
+      ],
       "properties": {
+        "auth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewCompletionAuthConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "bearerTokenRef": {
-          "type": "string"
+          "default": null,
+          "description": "Shorthand for `auth` with no header: the secret is presented as\n`Authorization: Bearer`. Exactly one of this and `auth` is configured.",
+          "pattern": "^secret:(?:env|file)/",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "maximumAttempts": {
           "default": 12,
@@ -340,8 +392,7 @@
         }
       },
       "required": [
-        "url",
-        "bearerTokenRef"
+        "url"
       ],
       "type": "object"
     },

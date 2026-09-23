@@ -1791,6 +1791,36 @@ mod tests {
     }
 
     #[test]
+    fn doctor_refuses_a_completion_secret_in_a_reserved_header() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        init(&project, "standalone-decision").unwrap();
+        let runtime_config = project.join("runtime.example.yaml");
+        let mut document: Value =
+            serde_norway::from_str(&runtime_example(&project, false).unwrap()).unwrap();
+        document["reviewCompletionDestinations"] = json!({
+            "receiver": {
+                "url": "https://completion.example.test/v1/reviews",
+                "auth": {"header": "Host", "secretRef": "secret:file/completion-key"}
+            }
+        });
+        fs::write(&runtime_config, serde_norway::to_string(&document).unwrap()).unwrap();
+
+        let error = doctor(&runtime_config).unwrap_err();
+        let runtime_error = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<registry_casework::RuntimeConfigError>());
+        assert!(
+            matches!(
+                runtime_error,
+                Some(registry_casework::RuntimeConfigError::InvalidReviewCompletionAuth { path })
+                    if path == "reviewCompletionDestinations.receiver.auth.header"
+            ),
+            "{error:#}"
+        );
+    }
+
+    #[test]
     fn standalone_starter_checks_real_review_display_schema_without_a_source() {
         use std::os::unix::fs::PermissionsExt as _;
 

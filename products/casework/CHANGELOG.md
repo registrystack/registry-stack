@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Let a review completion destination present its secret in a named header.
+  `reviewCompletionDestinations.<id>.auth: {header, secretRef}` sends the raw
+  secret in that header with no `Authorization` header; without `header`, or
+  with the existing `bearerTokenRef`, the secret is sent as
+  `Authorization: Bearer` as before. Reserved header names are refused when the
+  runtime configuration loads.
 - Add `decidedByCaller` to `GET /v1/review-tasks/{taskId}` for a decided task.
   It is true only when the current caller recorded the decision, so a reviewer
   whose decide response was lost can confirm the outcome. It names no other
