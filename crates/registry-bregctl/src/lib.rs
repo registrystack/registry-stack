@@ -3796,6 +3796,11 @@ fn schema_test_runtime_setup_failure(
             "evidenceProviders",
             "check the Evidence provider bindings and referenced credentials against the candidate before retrying",
         ),
+        SchemaTestRuntimeSetupError::ReviewAuthorities => (
+            "test.review_authorities.activation_failed",
+            "reviewAuthorities",
+            "bind every review authority the candidate's change requests name, and check the referenced credentials, before retrying",
+        ),
         SchemaTestRuntimeSetupError::WasmExecution => (
             "test.wasm_execution.setup_failed",
             "wasmExecution",
