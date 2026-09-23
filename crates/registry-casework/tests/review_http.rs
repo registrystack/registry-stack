@@ -1937,6 +1937,13 @@ async fn an_initiator_reads_only_the_requester_visible_history_of_their_own_requ
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _) = send(read(Uuid::new_v4(), &own_token, "initiator")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(read(
+        request_id,
+        &alternate_producer_token(&idp),
+        "producer-alternate",
+    ))
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "another requester");
 
     // The initiator reads as the person themselves: an agent acting for them,
     // a grant-bearing token, or a non-human token naming the same subject is
