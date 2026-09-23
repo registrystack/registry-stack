@@ -155,7 +155,7 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "idempotency_replay",
-            description: "After the header lookup above, the idempotency row for this action's key is locked and read before the request row and workflow are read under that lock. The stored binding covers the caller's If-Match, the target authority, and the canonical body, so a key already bound to a different request is refused as a conflict here, before those reads, and so is a key whose stored result was erased, because erasure is permanent and keeps the key reserved. Submit is the exception to the reading order: an unlocked probe for this key runs first, and where it finds no receipt the preparation layer above reads the row and plans the submission before this lock is taken. A binding that matches replays the stored response once row visibility and, where they apply, submitter targets have been re-checked, and, on an apply whose workflow still carries a current proposal, once that proposal's targets have been re-authorized against the authority this caller presents now: an apply replay by a caller who has since lost authority over a target is refused rather than answered from the record. The other four actions reach that re-authorization and pass through it deciding nothing, so for them a replay is authorized by the row policy above and nothing else. A stored application result presented on any action but apply is refused as a precondition failure here rather than replayed. The replay returns without re-running the action ETag, request ownership, the in-transaction task grant check, the workflow transition, or the persist policy.",
+            description: "After the header lookup above, the idempotency row for this action's key is locked and read before the request row and workflow are read under that lock. The stored binding covers the caller's If-Match, the target authority, and the canonical body, so a key already bound to a different request is refused as a conflict here, before those reads, and so is a key whose stored result was erased, because erasure is permanent and keeps the key reserved. Submit is the exception to the reading order: an unlocked probe for this key runs first, and where it finds no receipt the preparation layer above reads the row and plans the submission before this lock is taken. A binding that matches replays the stored response once row visibility and, where they apply, submitter targets have been re-checked, and, on an apply whose workflow still carries a current proposal, once that proposal's targets have been re-authorized against the authority this caller presents now: an apply replay by a caller who has since lost authority over a target is refused rather than answered from the record. The other four actions reach that re-authorization and pass through it deciding nothing, so for them a replay is authorized by the row policy above and nothing else. A stored application result presented on any action but apply is refused as a precondition failure here rather than replayed. The replay returns without re-running the action ETag, request ownership, the in-transaction task grant check, the settled review outcome check, the workflow transition, or the persist policy.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
@@ -187,6 +187,11 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
             id: "task_grant",
             description: "Inside the transaction, apply re-verifies that the caller's grant is the one the preflight checked and that both it and the proposal's grant are still current. For every other action, a caller acting under a task grant has that grant's status checked here.",
             events: EVERY_EVENT,
+        },
+        EnforcementLayer {
+            id: "review_outcome",
+            description: "Where the reviewed submission of the request's current version has a settled result, revise and rebase are checked against it, as the read reports them. A rejected result is answered only by cancel, so both are refused as a conflict. A send-back, or an approval past its availability that was never applied, is answered by a revision, so a rebase is refused as a conflict and a revision is admitted. Any other result, or none, leaves both admitted.",
+            events: &["revise", "rebase"],
         },
         EnforcementLayer {
             id: "submit_commit_preconditions",
@@ -361,6 +366,7 @@ mod tests {
                 "action_etag",
                 "request_ownership",
                 "task_grant",
+                "review_outcome",
                 "submit_commit_preconditions",
                 "apply_target_authorization",
                 "apply_preconditions",
@@ -386,7 +392,8 @@ mod tests {
     /// choice this module makes: `admit_submitter_targets` runs for Submit
     /// and Revise, and rebase is Revise with a flag; `action_requires_request_owner`
     /// is false only for Apply; the receipt and task-status preflight runs
-    /// only for Apply. Every other layer runs for every action.
+    /// only for Apply; the settled review outcome is checked only for Revise.
+    /// Every other layer runs for every action.
     #[test]
     fn selective_layers_cover_exactly_the_events_the_runtime_gates() {
         let lifecycle = request_lifecycle();
@@ -409,6 +416,10 @@ mod tests {
         assert_eq!(
             layer(&lifecycle, "request_ownership").events,
             ["submit", "revise", "rebase", "cancel"]
+        );
+        assert_eq!(
+            layer(&lifecycle, "review_outcome").events,
+            ["revise", "rebase"]
         );
         for id in [
             "route_admission",
@@ -569,6 +580,7 @@ mod tests {
             ("action_etag", "the action ETag"),
             ("request_ownership", "request ownership"),
             ("task_grant", "the in-transaction task grant check"),
+            ("review_outcome", "the settled review outcome check"),
             ("workflow_transition", "the workflow transition"),
             ("persist_policy", "the persist policy"),
         ];
