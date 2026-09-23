@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use registry_breg::compiler::module_digest_with_assets;
 use registry_breg::contract::{FieldTypeSource, ModuleAssetSource, ModuleLockSource};
-use registry_breg::migration_plan::ReviewedMigrationRecovery;
+use registry_breg::migration_plan::{ReviewedMigrationError, ReviewedMigrationRecovery};
 use registry_breg::package::{
     inspect_package_integrity, CompiledRegistryChangeClass, MigrationInspectionPlanKind,
     MigrationInspectionSummary, PackageBuildRequest, PackageError, PackageMigrationPlanInput,
@@ -3614,10 +3614,31 @@ fn capture_candidate(
         prevalidation_schema_fingerprint,
     };
     if args.reviewed_migrations.is_some() {
-        candidate.prevalidate().map_err(|_| {
+        candidate.prevalidate().map_err(|error| {
+            // The generic code is the fallback for a structural precondition
+            // (sequence, prior revision, baseline binding) that never reaches
+            // `ReviewedMigrationError`; a reviewed plan refusal names its kind.
+            let code = match error {
+                PackageError::ReviewedMigration(ReviewedMigrationError::Descriptor) => {
+                    "migration.review.descriptor_refused"
+                }
+                PackageError::ReviewedMigration(ReviewedMigrationError::Coverage) => {
+                    "migration.review.coverage_refused"
+                }
+                PackageError::ReviewedMigration(ReviewedMigrationError::Sql) => {
+                    "migration.review.sql_refused"
+                }
+                PackageError::ReviewedMigration(ReviewedMigrationError::Evidence) => {
+                    "migration.review.evidence_refused"
+                }
+                PackageError::ReviewedMigration(ReviewedMigrationError::Closure) => {
+                    "migration.review.closure_refused"
+                }
+                _ => "migration.review.refused",
+            };
             candidate_failure(
                 command,
-                "migration.review.refused",
+                code,
                 "reviewedMigrations",
                 &format!(
                     "the reviewed plan was refused; it has to cover exactly these changes: {reviewed_changes}. Check change coverage, canonical JSON, artifact hashes, prior package and schema bindings, and target fingerprint. Use the same reviewed directory for test and package"
@@ -4472,7 +4493,8 @@ fn inspection_failure(
                 | PackageError::Integrity
                 | PackageError::CanonicalJson
                 | PackageError::Derivation
-                | PackageError::MigrationPlan => {
+                | PackageError::MigrationPlan
+                | PackageError::ReviewedMigration(_) => {
                     ("integrity_refused", SuggestedAction::VerifyPackageIntegrity)
                 }
                 PackageError::Bounds | PackageError::Read => {
@@ -4558,7 +4580,8 @@ fn package_diff_failure(error: PackageError) -> FailureReport {
         | PackageError::Integrity
         | PackageError::CanonicalJson
         | PackageError::Derivation
-        | PackageError::MigrationPlan => (
+        | PackageError::MigrationPlan
+        | PackageError::ReviewedMigration(_) => (
             "diff.baseline.integrity_refused",
             SuggestedAction::VerifyPackageIntegrity,
         ),

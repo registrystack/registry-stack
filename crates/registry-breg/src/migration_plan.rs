@@ -372,7 +372,7 @@ pub enum ReviewedArtifactKind {
 
 #[cfg(feature = "tooling")]
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
-pub(crate) enum ReviewedMigrationError {
+pub enum ReviewedMigrationError {
     #[error("the reviewed migration descriptor is invalid")]
     Descriptor,
     #[error("the reviewed migration coverage is invalid")]

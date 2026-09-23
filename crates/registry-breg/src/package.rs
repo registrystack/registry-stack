@@ -38,8 +38,8 @@ use crate::history_schema::{
 #[cfg(feature = "tooling")]
 use crate::migration_plan::{
     prepare_reviewed_migration_plan, validate_reviewed_migration_plan,
-    PreparedReviewedMigrationPlan, ReviewedMigrationRecovery, ReviewedMigrationSource,
-    ReviewedMigrationStepDescriptor, ReviewedPlanBindings,
+    PreparedReviewedMigrationPlan, ReviewedMigrationError, ReviewedMigrationRecovery,
+    ReviewedMigrationSource, ReviewedMigrationStepDescriptor, ReviewedPlanBindings,
 };
 use crate::migration_plan::{
     reviewed_artifact_kind, ReviewedArtifactKind, ValidatedReviewedMigrationPlan,
@@ -825,6 +825,11 @@ pub enum PackageError {
     MigrationPlan,
     #[error("the package permissions are unsafe")]
     Permissions,
+    // The wrapped reason is one of `ReviewedMigrationError`'s own fixed,
+    // value-free messages, so it carries no source value either.
+    #[cfg(feature = "tooling")]
+    #[error("the reviewed migration plan was refused: {0}")]
+    ReviewedMigration(ReviewedMigrationError),
 }
 
 pub type Result<T> = std::result::Result<T, PackageError>;
@@ -2763,7 +2768,7 @@ fn reviewed_successor_inputs(
             candidate_physical_names: compiled.physical_names(),
         },
     )
-    .map_err(|_| PackageError::MigrationPlan)?;
+    .map_err(PackageError::ReviewedMigration)?;
     let PreparedReviewedMigrationPlan {
         descriptor_paths,
         files,

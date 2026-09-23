@@ -464,11 +464,18 @@ fn reviewed_successor_refuses_mismatched_baseline_database_before_receipt_valida
 
 #[test]
 fn reviewed_successor_refuses_unbound_evidence_and_uncovered_changes_before_io() {
-    for field in [
-        "priorRevision",
-        "priorSchemaFingerprint",
-        "planSha256",
-        "finalSchemaFingerprint",
+    for (field, code) in [
+        ("priorRevision", "migration.review.evidence_refused"),
+        (
+            "priorSchemaFingerprint",
+            "migration.review.evidence_refused",
+        ),
+        ("planSha256", "migration.review.evidence_refused"),
+        // The receipt's final schema fingerprint is also the candidate's own
+        // declared fingerprint, so mutating it away from a valid digest trips
+        // the request's digest-format precondition before reviewed migration
+        // content is ever validated, and keeps the generic fallback code.
+        ("finalSchemaFingerprint", "migration.review.refused"),
     ] {
         let fixture = ReviewFixture::create();
         fixture.mutate_json("rehearsal.json", |value| {
@@ -479,7 +486,7 @@ fn reviewed_successor_refuses_unbound_evidence_and_uncovered_changes_before_io()
             assert!(!output.status.success());
             assert_eq!(
                 json_stdout(&output)["diagnostics"][0]["code"],
-                "migration.review.refused",
+                code,
                 "{field}: {output:?}"
             );
             assert!(
@@ -494,7 +501,7 @@ fn reviewed_successor_refuses_unbound_evidence_and_uncovered_changes_before_io()
     let output = fixture.run("test", true);
     assert_eq!(
         json_stdout(&output)["diagnostics"][0]["code"],
-        "migration.review.refused"
+        "migration.review.descriptor_refused"
     );
 }
 
@@ -509,7 +516,7 @@ fn reviewed_successor_refuses_duplicate_keys_noncanonical_bytes_and_extra_artifa
         let output = fixture.run("test", true);
         assert_eq!(
             json_stdout(&output)["diagnostics"][0]["code"],
-            "migration.review.refused"
+            "migration.review.descriptor_refused"
         );
         assert!(!String::from_utf8_lossy(&output.stdout).contains("private-review-value-canary"));
     }
@@ -523,7 +530,7 @@ fn reviewed_successor_refuses_duplicate_keys_noncanonical_bytes_and_extra_artifa
     let output = fixture.run("test", true);
     assert_eq!(
         json_stdout(&output)["diagnostics"][0]["code"],
-        "migration.review.refused"
+        "migration.review.coverage_refused"
     );
     assert!(!String::from_utf8_lossy(&output.stdout).contains("private-review-value-canary"));
 }
@@ -671,7 +678,7 @@ fn a_refused_review_names_the_changes_it_has_to_cover() {
     fixture.mutate_json("descriptor.json", |value| value["covers"] = json!([]));
     let output = fixture.run("package", true);
     let diagnostic = json_stdout(&output)["diagnostics"][0].clone();
-    assert_eq!(diagnostic["code"], "migration.review.refused");
+    assert_eq!(diagnostic["code"], "migration.review.descriptor_refused");
     let message = diagnostic["message"].as_str().unwrap().to_owned();
     assert!(message.contains("access_profile_changed"), "{message}");
     assert!(message.contains("at record.reader"), "{message}");
