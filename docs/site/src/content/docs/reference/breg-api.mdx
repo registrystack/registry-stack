@@ -525,6 +525,7 @@ decides which actions stay on offer.
 | `changesRequested` | `revise_request` with `rebase: false`, `cancel_request` | a rebase with `409 mutation.conflict`; `apply_request` with `412 precondition.failed` |
 | `approved`, `availableUntil` not yet reached | `apply_request` for the applier; `revise_request` with `rebase: true` and `cancel_request` for the owner | nothing beyond the ordinary guards |
 | `approved`, `availableUntil` passed before application | `revise_request` with `rebase: false`, `cancel_request` | a rebase with `409 mutation.conflict`; `apply_request` with `412 precondition.failed` |
+| `answered`, `cancelled`, or `superseded` | `revise_request` with `rebase: true`, `cancel_request` | `apply_request` with `412 precondition.failed` |
 | none yet | unchanged | nothing beyond the ordinary guards |
 
 Send the `rebase` value the `revise_request` action carries: `false` records the new draft as a
@@ -532,6 +533,17 @@ revision of the proposal, `true` as a rebase onto updated context. An approval t
 unapplied reports `review.application.state` `expired` beside the result's `availableUntil`; the
 other application states are `awaitingReview`, `ready`, `queued`, `applying`, `applied`, and
 `blocked`.
+
+The offered actions follow the result even when the selected profile does not disclose
+`review_state`, so the owner and the applier can tell a coarse outcome from which actions remain,
+for example that a request was rejected. This is deliberate: the same caller would learn as much
+from the refusal of an action BReg no longer offers.
+
+The read and apply decide expiry on different clocks. The read compares the cached result's
+`availableUntil` with the database clock, while apply fetches the result from the review authority
+and checks it with the BReg service clock. Close to `availableUntil` the two can briefly disagree:
+a read can still offer `apply_request` that then answers `412 precondition.failed`, or report
+`expired` while the authority's result is still available. Apply is authoritative.
 
 A request list whose selected profile discloses `review_state` may also filter on
 `reviewOutcome`, with `eq` or `in`. Its values are `pending`, `approved`, `approvedExpired`,
@@ -551,13 +563,16 @@ same answer as for any field its grant withholds.
 
 {/* Evidence: crates/registry-breg/src/postgres/request_read.rs, action_is_available and revise_rebase_available;
     crates/registry-breg/src/mutation/request.rs, the settled review outcome check;
-    crates/registry-breg/src/review_store.rs, settled_outcome and read_projection;
+    crates/registry-breg/src/review_store.rs, settled_outcome, read_projection, and approved_evidence;
+    crates/registry-breg/src/review_integration.rs, from_approved;
     crates/registry-breg/src/postgres/read.rs, REQUEST_REVIEW_OUTCOME_SQL;
     crates/registry-breg/src/compiler.rs, query_operation;
     crates/registry-breg/tests/postgres_change_requests.rs, rejected_review_offers_only_cancel_and_refuses_revise_and_apply,
     changes_requested_review_offers_revision_and_cancel_and_refuses_rebase_and_apply,
     revision_after_changes_requested_records_revision_not_rebase,
-    approved_review_offers_apply_until_the_result_expires, and
+    answered_review_hides_apply_and_keeps_revise_and_cancel,
+    unexpired_approval_offers_apply_and_the_apply_succeeds,
+    expired_approval_hides_apply_and_is_answered_by_a_revision, and
     request_list_filters_on_the_settled_review_outcome. */}
 
 <ApiReferenceTable id="request-actions" />

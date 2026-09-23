@@ -901,6 +901,8 @@ const HEX: [char; 16] = [
 /// proposal, and the mutation path enforces the same shape: a rejection leaves
 /// only cancellation, a send-back or an expired approval is answered by a
 /// revision, and only an unexpired approval or an unsettled review keeps apply.
+/// An answered, cancelled, or superseded result cannot be applied either, but
+/// leaves revise, rebase, and cancel as they are.
 fn action_is_available(
     action: &VerifiedRequestAction,
     workflow: &RequestWorkflow,
@@ -930,6 +932,7 @@ fn action_is_available(
                         SettledReviewOutcome::Rejected
                             | SettledReviewOutcome::ChangesRequested
                             | SettledReviewOutcome::Approved { expired: true }
+                            | SettledReviewOutcome::Other
                     )
                 )
         }
@@ -1702,7 +1705,7 @@ mod tests {
                 false,
             ),
             (Some(SettledReviewOutcome::Rejected), None, false),
-            (Some(SettledReviewOutcome::Other), Some(true), true),
+            (Some(SettledReviewOutcome::Other), Some(true), false),
         ] {
             assert_eq!(
                 revise_rebase_available(&revise, &submitted, outcome),

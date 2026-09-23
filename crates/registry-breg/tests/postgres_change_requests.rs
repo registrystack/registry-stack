@@ -184,7 +184,17 @@ async fn cached_review_result_cannot_authorize_fresh_apply_but_committed_receipt
     );
     let app = router(service);
     let (request, digest) = submit_two_stage_correction(&app).await;
-    let result = reconcile_cached_external_approval(&database, &request.id, false).await;
+    // The cached approval stays live, so the read keeps advertising apply,
+    // while the authority's copy has already expired.
+    let result = reconcile_cached_external_result(
+        &database,
+        &request.id,
+        "approved",
+        false,
+        LIVE_UNTIL,
+        EXPIRED_UNTIL,
+    )
+    .await;
     *authority_state.result.lock().unwrap() = result;
     let applier = claims("applier", APPLIER, Some("apply"));
     let before = get_record(
@@ -347,7 +357,17 @@ async fn expired_online_review_blocks_final_automatic_attempt_until_authorized_r
     );
     let app = router(service);
     let (request, digest) = submit_two_stage_correction(&app).await;
-    let result = reconcile_cached_external_approval(&database, &request.id, true).await;
+    // The cached approval stays live, so the read keeps advertising apply,
+    // while the authority's copy has already expired.
+    let result = reconcile_cached_external_result(
+        &database,
+        &request.id,
+        "approved",
+        true,
+        LIVE_UNTIL,
+        EXPIRED_UNTIL,
+    )
+    .await;
     *authority_state.result.lock().unwrap() = result;
     authority_state.mode.store(1, Ordering::SeqCst);
     let server = serve_change_request_client_http(app.clone()).await;
@@ -543,7 +563,16 @@ async fn withdrawn_approval_blocks_the_manual_application_projection() {
     );
     let app = router(service);
     let (request, _digest) = submit_two_stage_correction(&app).await;
-    reconcile_cached_external_approval(&database, &request.id, false).await;
+    // A live cached approval makes the manual application ready.
+    reconcile_cached_external_result(
+        &database,
+        &request.id,
+        "approved",
+        false,
+        LIVE_UNTIL,
+        EXPIRED_UNTIL,
+    )
+    .await;
     let applier = claims("applier", APPLIER, Some("apply"));
     let record_path = format!(
         "/v1/records/correction-requests/{}?accessProfile=applier",
@@ -633,10 +662,33 @@ impl ReviewOutcomeFixture {
     }
 
     async fn settle(&self, request_id: &str, status: &str) {
-        let result =
-            reconcile_cached_external_result(&self.database, request_id, status, false).await;
+        let result = reconcile_cached_external_result(
+            &self.database,
+            request_id,
+            status,
+            false,
+            LIVE_UNTIL,
+            LIVE_UNTIL,
+        )
+        .await;
         *self.authority_state.result.lock().unwrap() = result;
         self.authority_state.mode.store(2, Ordering::SeqCst);
+    }
+
+    /// Expires the settled result in both the local cache and the
+    /// authority's copy.
+    async fn expire(&self, request_id: &str) {
+        self.database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_request_review_results
+                    SET available_until=$2::text::timestamptz
+                  WHERE request_entity_id='correction-request' AND request_id=$1",
+                &[&Uuid::parse_str(request_id).unwrap(), &EXPIRED_UNTIL],
+            )
+            .await
+            .expect("the cached result expires");
+        self.authority_state.result.lock().unwrap()["availableUntil"] = json!(EXPIRED_UNTIL);
     }
 
     async fn owner_view(&self, request_id: &str) -> Value {
@@ -892,7 +944,47 @@ async fn revision_after_changes_requested_records_revision_not_rebase() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn approved_review_offers_apply_until_the_result_expires() {
+async fn answered_review_hides_apply_and_keeps_revise_and_cancel() {
+    let fixture = ReviewOutcomeFixture::start("answered-review-outcome").await;
+    let (request, digest) = submit_two_stage_correction(&fixture.app).await;
+    let apply = action(
+        &fixture.applier_view(&request.id).await,
+        "apply_request",
+        None,
+    );
+
+    fixture.settle(&request.id, "answered").await;
+    let owner = fixture.owner_view(&request.id).await;
+    assert_eq!(
+        offered_operations(&owner),
+        ["cancel_request", "revise_request"]
+    );
+    assert_eq!(offered_rebase(&owner), true);
+    let applier = fixture.applier_view(&request.id).await;
+    assert!(
+        offered_operations(&applier).is_empty(),
+        "a result that is not an approval must not advertise apply: {applier}"
+    );
+    let refused_apply = send_action(
+        &fixture.app,
+        &apply,
+        "answered-apply",
+        claims("applier", APPLIER, Some("apply")),
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(
+        refused_apply.status,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        refused_apply.body
+    );
+    assert_eq!(application_result_count(&fixture.database).await, 0);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unexpired_approval_offers_apply_and_the_apply_succeeds() {
     let fixture = ReviewOutcomeFixture::start("approved-review-outcome").await;
     let (request, digest) = submit_two_stage_correction(&fixture.app).await;
     fixture.settle(&request.id, "approved").await;
@@ -911,20 +1003,40 @@ async fn approved_review_offers_apply_until_the_result_expires() {
         "ready"
     );
     let apply = action(&applier, "apply_request", None);
-    let revise = action(&owner, "revise_request", None);
+    let applied = send_action(
+        &fixture.app,
+        &apply,
+        "unexpired-approval-apply",
+        claims("applier", APPLIER, Some("apply")),
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(applied.status, StatusCode::OK, "{}", applied.body);
+    assert_eq!(application_result_count(&fixture.database).await, 1);
+    assert_eq!(
+        fixture.owner_view(&request.id).await["request"]["bregState"],
+        "applied"
+    );
+    fixture.finish().await;
+}
 
-    fixture
-        .database
-        .admin
-        .execute(
-            "UPDATE registry_internal.registry_request_review_results
-                SET available_until='2026-09-02T00:00:00Z'
-              WHERE request_entity_id='correction-request' AND request_id=$1",
-            &[&Uuid::parse_str(&request.id).unwrap()],
-        )
-        .await
-        .expect("the cached approval expires");
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn expired_approval_hides_apply_and_is_answered_by_a_revision() {
+    let fixture = ReviewOutcomeFixture::start("expired-review-outcome").await;
+    let (request, digest) = submit_two_stage_correction(&fixture.app).await;
+    fixture.settle(&request.id, "approved").await;
+    let apply = action(
+        &fixture.applier_view(&request.id).await,
+        "apply_request",
+        None,
+    );
+    let revise = action(
+        &fixture.owner_view(&request.id).await,
+        "revise_request",
+        None,
+    );
 
+    fixture.expire(&request.id).await;
     let owner = fixture.owner_view(&request.id).await;
     assert_eq!(
         owner["request"]["review"]["result"]["availableUntil"],
@@ -6170,19 +6282,21 @@ async fn submit_keyed_two_stage_correction(
     (request, digest)
 }
 
-async fn reconcile_cached_external_approval(
-    database: &TestDatabase,
-    request_id: &str,
-    automatic: bool,
-) -> Value {
-    reconcile_cached_external_result(database, request_id, "approved", automatic).await
-}
+/// A review result expiry that is still in the future.
+const LIVE_UNTIL: &str = "2099-09-02T00:00:00Z";
+/// A review result expiry that has already passed.
+const EXPIRED_UNTIL: &str = "2026-09-02T00:00:00Z";
 
+/// Records a settled review result in the local cache, expiring at
+/// `cached_until`, and returns the authority's copy of it, expiring at
+/// `authority_until`, for the controlled authority to serve.
 async fn reconcile_cached_external_result(
     database: &TestDatabase,
     request_id: &str,
     status: &str,
     automatic: bool,
+    cached_until: &str,
+    authority_until: &str,
 ) -> Value {
     let request_id = Uuid::parse_str(request_id).expect("request id");
     let row = database
@@ -6200,9 +6314,6 @@ async fn reconcile_cached_external_result(
     let proposal_digest: String = row.get(2);
     let review_request_id = Uuid::new_v4();
     let result_id = Uuid::new_v4();
-    // The cached row stays available so the read keeps advertising the
-    // outcome's actions, while the authority's copy below has already
-    // expired: a fresh apply must not trust the cache.
     let accepted = json!({
         "requestId": review_request_id,
         "subject": create["subject"].clone(),
@@ -6221,7 +6332,7 @@ async fn reconcile_cached_external_result(
         "submissionDigest": accepted["submissionDigest"].clone(),
         "status": status,
         "completedAt": "2026-09-01T00:00:00Z",
-        "availableUntil": "2026-09-02T00:00:00Z"
+        "availableUntil": authority_until
     });
     if matches!(status, "rejected" | "changes_requested" | "answered") {
         // The review protocol requires a terminal outcome for these statuses.
@@ -6244,11 +6355,11 @@ async fn reconcile_cached_external_result(
              (request_entity_id,request_id,proposal_version,authority,result_id,result,status,
               completed_at,available_until)
              VALUES ('correction-request',$1,1,'casework-a',$2,$3,$4,
-                     '2026-09-01T00:00:00Z','2099-09-02T00:00:00Z')",
-            &[&request_id, &result_id, &result, &status],
+                     '2026-09-01T00:00:00Z',$5::text::timestamptz)",
+            &[&request_id, &result_id, &result, &status, &cached_until],
         )
         .await
-        .expect("stale reconciled review result");
+        .expect("reconciled review result");
     if automatic {
         database
             .admin

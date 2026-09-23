@@ -2717,7 +2717,8 @@ pub(crate) enum SettledReviewOutcome {
     },
     Rejected,
     ChangesRequested,
-    /// Answered, cancelled, or superseded: none of them narrows the actions.
+    /// Answered, cancelled, or superseded: none of them can be applied, and
+    /// none of them narrows the other actions.
     Other,
 }
 
