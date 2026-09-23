@@ -726,6 +726,38 @@ export declare function encodeIngestionChunk(
   prefixDigest: string,
 ): BRegIngestionChunk
 
+/**
+ * Where a change-request target or value comes from, present only when the
+ * caller may read it: a request-entity field, or the record another effect
+ * of the same request creates.
+ */
+export type BRegChangeRequestBinding =
+  | { readonly fromField: string; readonly fromEffect?: never }
+  | { readonly fromEffect: string; readonly fromField?: never }
+  | { readonly fromField?: never; readonly fromEffect?: never }
+
+export type BRegChangeRequestTarget = { readonly entity: string } & BRegChangeRequestBinding
+
+/**
+ * One declared change-request effect on an entity the caller may read. Only
+ * target fields the caller may read are named; the value is descriptive and
+ * cannot create target-write authority.
+ */
+export interface BRegChangeRequestEffect {
+  readonly id: string
+  readonly operation: 'create' | 'patch'
+  readonly target: BRegChangeRequestTarget
+  readonly set: ReadonlyArray<{ readonly field: string } & BRegChangeRequestBinding>
+  readonly clear: ReadonlyArray<string>
+}
+
+/** One declared planner write, filtered to fields the caller may read. */
+export interface BRegChangeRequestPlannerWrite {
+  readonly target: BRegChangeRequestTarget
+  readonly operation: 'create' | 'patch'
+  readonly fields: ReadonlyArray<string>
+}
+
 export interface BRegChangeRequestCapability {
   readonly planner: {
     readonly kind: 'declarative' | 'rhai'
@@ -745,7 +777,9 @@ export interface BRegChangeRequestCapability {
     } | null
     readonly possibleWriteCount: SafeInteger | null
     readonly possibleWriteOperations: ReadonlyArray<string>
+    readonly writes: ReadonlyArray<BRegChangeRequestPlannerWrite>
   }
+  readonly effects: ReadonlyArray<BRegChangeRequestEffect>
   readonly review: BRegRequestReviewRequirement
   readonly onApproved: {
     readonly mode: 'manual' | 'automatic'

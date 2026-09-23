@@ -215,9 +215,35 @@ def metadata() -> dict:
                             "maximumMapEntries": 256,
                             "maximumModules": 0,
                         },
-                        "possibleWriteCount": 1,
+                        "possibleWriteCount": 2,
                         "possibleWriteOperations": ["patch"],
+                        "writes": [
+                            {
+                                "target": {
+                                    "entity": "company",
+                                    "fromField": "company",
+                                },
+                                "operation": "patch",
+                                "fields": ["legal-name"],
+                            }
+                        ],
                     },
+                    "effects": [
+                        {
+                            "id": "branch",
+                            "operation": "create",
+                            "target": {"entity": "company"},
+                            "set": [{"field": "legal-name"}],
+                            "clear": [],
+                        },
+                        {
+                            "id": "rename",
+                            "operation": "patch",
+                            "target": {"entity": "company", "fromEffect": "branch"},
+                            "set": [{"field": "legal-name", "fromField": "proposed"}],
+                            "clear": ["note"],
+                        },
+                    ],
                     "review": {
                         "authority": "casework",
                         "policyId": "address-review",
@@ -419,6 +445,35 @@ class MutationParityTests(unittest.TestCase):
         capability = self.contract.change_request_capability("company")
         self.assertEqual(capability["planner"]["kind"], "rhai")
         self.assertEqual(capability["planner"]["limits"]["maximum_modules"], 0)
+        self.assertEqual(
+            capability["planner"]["writes"],
+            [
+                {
+                    "target": {"entity": "company", "from_field": "company"},
+                    "operation": "patch",
+                    "fields": ["legal-name"],
+                }
+            ],
+        )
+        self.assertEqual(
+            capability["effects"],
+            [
+                {
+                    "id": "branch",
+                    "operation": "create",
+                    "target": {"entity": "company"},
+                    "set": [{"field": "legal-name"}],
+                    "clear": [],
+                },
+                {
+                    "id": "rename",
+                    "operation": "patch",
+                    "target": {"entity": "company", "from_effect": "branch"},
+                    "set": [{"field": "legal-name", "from_field": "proposed"}],
+                    "clear": ["note"],
+                },
+            ],
+        )
         self.assertEqual(
             capability["review"],
             {"authority": "casework", "policy_id": "address-review"},

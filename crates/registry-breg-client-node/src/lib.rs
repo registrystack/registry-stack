@@ -2084,6 +2084,27 @@ fn attachment_error(error: registry_breg_client::BRegAttachmentError) -> NapiErr
     binding_error("invalid_request", error.reason())
 }
 
+fn change_request_binding_value(
+    target: &mut Value,
+    binding: Option<&registry_breg_client::BRegChangeRequestBinding>,
+) {
+    match binding {
+        Some(registry_breg_client::BRegChangeRequestBinding::FromField(field)) => {
+            target["fromField"] = json!(field);
+        }
+        Some(registry_breg_client::BRegChangeRequestBinding::FromEffect(effect)) => {
+            target["fromEffect"] = json!(effect);
+        }
+        None => {}
+    }
+}
+
+fn change_request_target_value(target: &registry_breg_client::BRegChangeRequestTarget) -> Value {
+    let mut value = json!({"entity": target.entity()});
+    change_request_binding_value(&mut value, target.binding());
+    value
+}
+
 fn change_request_capability_value(
     value: &registry_breg_client::BRegChangeRequestCapability,
 ) -> Value {
@@ -2112,7 +2133,23 @@ fn change_request_capability_value(
             "possibleWriteCount": planner.possible_write_count(),
             "possibleWriteOperations": planner.possible_write_operations().iter()
                 .map(registry_breg_client::BRegOperationKind::as_str).collect::<Vec<_>>(),
+            "writes": planner.writes().iter().map(|write| json!({
+                "target": change_request_target_value(write.target()),
+                "operation": write.operation().as_str(),
+                "fields": write.fields(),
+            })).collect::<Vec<_>>(),
         },
+        "effects": value.effects().iter().map(|effect| json!({
+            "id": effect.id(),
+            "operation": effect.operation().as_str(),
+            "target": change_request_target_value(effect.target()),
+            "set": effect.set().iter().map(|entry| {
+                let mut value = json!({"field": entry.field()});
+                change_request_binding_value(&mut value, entry.value());
+                value
+            }).collect::<Vec<_>>(),
+            "clear": effect.clear(),
+        })).collect::<Vec<_>>(),
         "review": match value.review() {
             registry_breg_client::BRegChangeRequestReviewRequirement::None => {
                 json!({"mode":"none"})

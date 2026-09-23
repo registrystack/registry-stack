@@ -24,7 +24,7 @@ pub use breg_attachment::*;
 mod breg_metadata;
 
 use breg_metadata::{
-    BRegChangeRequestOnApprovedMode, BRegChangeRequestPlannerKind,
+    BRegChangeRequestBinding, BRegChangeRequestOnApprovedMode, BRegChangeRequestPlannerKind,
     BRegChangeRequestReviewRequirement, BRegDirectWrite, BRegMetadata, BRegMetadataErrorKind,
     BRegMetadataSelectionErrorKind, BRegOperationKind,
 };
@@ -323,9 +323,35 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
                 "maximumMapEntries": 256,
                 "maximumModules": 0
             },
-            "possibleWriteCount": 1,
-            "possibleWriteOperations": ["patch"]
+            "possibleWriteCount": 2,
+            "possibleWriteOperations": ["patch"],
+            "writes": [
+                {"target": {"entity": "company", "fromField": "company"}, "operation": "patch", "fields": ["name"]}
+            ]
         },
+        "effects": [
+            {
+                "id": "rename",
+                "operation": "patch",
+                "target": {"entity": "company", "fromField": "company"},
+                "set": [{"field": "name", "fromField": "proposed-name"}, {"field": "status"}],
+                "clear": ["note"]
+            },
+            {
+                "id": "branch",
+                "operation": "create",
+                "target": {"entity": "company"},
+                "set": [],
+                "clear": []
+            },
+            {
+                "id": "link",
+                "operation": "patch",
+                "target": {"entity": "company", "fromEffect": "branch"},
+                "set": [{"field": "parent", "fromEffect": "branch"}],
+                "clear": []
+            }
+        ],
         "review": {"authority":"casework", "policyId":"address-review"},
         "onApproved": {"mode":"automatic", "executor":"breg-worker"},
         "application": {"preconditions":{"request":[]}}
@@ -345,11 +371,54 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
     let limits = change_request.planner().limits().unwrap();
     assert_eq!(limits.maximum_targets(), 16);
     assert_eq!(limits.maximum_field_mutations(), 128);
-    assert_eq!(change_request.planner().possible_write_count(), Some(1));
+    assert_eq!(change_request.planner().possible_write_count(), Some(2));
     assert!(matches!(
         change_request.planner().possible_write_operations(),
         [BRegOperationKind::Patch]
     ));
+    let [write] = change_request.planner().writes() else {
+        panic!("one readable planner write")
+    };
+    assert_eq!(write.target().entity(), "company");
+    assert_eq!(
+        write.target().binding(),
+        Some(&BRegChangeRequestBinding::FromField("company".to_owned()))
+    );
+    assert_eq!(write.operation(), &BRegOperationKind::Patch);
+    assert_eq!(write.fields(), ["name"]);
+    let [rename, branch, link] = change_request.effects() else {
+        panic!("three readable effects")
+    };
+    assert_eq!(rename.id(), "rename");
+    assert_eq!(rename.operation(), &BRegOperationKind::Patch);
+    assert_eq!(rename.target().entity(), "company");
+    assert_eq!(
+        rename.target().binding(),
+        Some(&BRegChangeRequestBinding::FromField("company".to_owned()))
+    );
+    let [name, status] = rename.set() else {
+        panic!("two readable set fields")
+    };
+    assert_eq!(name.field(), "name");
+    assert_eq!(
+        name.value(),
+        Some(&BRegChangeRequestBinding::FromField(
+            "proposed-name".to_owned()
+        ))
+    );
+    assert_eq!(status.field(), "status");
+    assert_eq!(status.value(), None);
+    assert_eq!(rename.clear(), ["note"]);
+    assert_eq!(branch.operation(), &BRegOperationKind::Create);
+    assert_eq!(branch.target().binding(), None);
+    assert_eq!(
+        link.target().binding(),
+        Some(&BRegChangeRequestBinding::FromEffect("branch".to_owned()))
+    );
+    assert_eq!(
+        link.set()[0].value(),
+        Some(&BRegChangeRequestBinding::FromEffect("branch".to_owned()))
+    );
     let BRegChangeRequestReviewRequirement::External(requirement) = change_request.review() else {
         panic!("external")
     };
@@ -382,6 +451,65 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
         {
             let mut malformed = capability.clone();
             malformed["review"]["mode"] = json!("external");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed.as_object_mut().unwrap().remove("effects");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["planner"]
+                .as_object_mut()
+                .unwrap()
+                .remove("writes");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["planner"]["possibleWriteCount"] = json!(0);
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            let write = malformed["planner"]["writes"][0].clone();
+            malformed["planner"]["writes"] = json!([write.clone(), write.clone(), write]);
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["effects"][0]["target"]["fromEffect"] = json!("branch");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["effects"][0]["set"][0]["fromEffect"] = json!("branch");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["effects"][1]["id"] = json!("rename");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["effects"][0]["set"][1]["field"] = json!("name");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["effects"][0]["permission"] = json!("company-writer");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["effects"][0]["operation"] = json!("delete");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["effects"][0]["target"]["entity"] = json!("Company");
             malformed
         },
         {

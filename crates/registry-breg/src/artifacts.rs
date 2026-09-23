@@ -807,14 +807,29 @@ fn render_change_request(
 }
 
 /// Source-free change-request capability projection for caller-filtered
-/// Registry metadata. It intentionally omits effects, permissions, targets and all
-/// planner provenance, so this descriptive surface cannot manufacture action
-/// authority or disclose hidden configuration.
+/// Registry metadata. It omits permissions and all planner provenance, so this
+/// descriptive surface cannot manufacture action authority. Effects and
+/// planner writes are described only through what the caller may read:
+/// `readable_by_entity` holds the caller's readable fields per entity, an
+/// effect on an entity the caller cannot read is left out, and a target or
+/// request field the caller cannot read is never named.
 #[allow(dead_code)] // Called by the production /v1/registry metadata route.
 pub(crate) fn request_capability_metadata(
     request: &crate::model::CompiledChangeRequest,
-    _visible_fields: &BTreeSet<String>,
+    readable_by_entity: &BTreeMap<String, BTreeSet<String>>,
 ) -> Value {
+    let empty = BTreeSet::new();
+    let request_fields = readable_by_entity
+        .get(&request.request_entity_id)
+        .unwrap_or(&empty);
+    let readable_target = |entity: &str| readable_by_entity.get(entity);
+    let visible_target = |entity: &str, from_field: Option<&String>| {
+        let mut target = json!({"entity": entity});
+        if let Some(field) = from_field.filter(|field| request_fields.contains(*field)) {
+            target["fromField"] = json!(field);
+        }
+        target
+    };
     let planner = match request.planner.as_ref() {
         None => json!({"kind": "declarative"}),
         Some(planner) => {
@@ -823,17 +838,84 @@ pub(crate) fn request_capability_metadata(
                 .iter()
                 .map(|write| operation_name(write.operation))
                 .collect::<BTreeSet<_>>();
+            let writes = planner
+                .writes
+                .iter()
+                .filter_map(|write| {
+                    let readable = readable_target(&write.target_entity_id)?;
+                    Some(json!({
+                        "target": visible_target(
+                            &write.target_entity_id,
+                            write.target_from_field.as_ref(),
+                        ),
+                        "operation": operation_name(write.operation),
+                        "fields": write.fields.intersection(readable).collect::<Vec<_>>(),
+                    }))
+                })
+                .collect::<Vec<_>>();
             json!({
                 "kind": "rhai",
                 "abi": planner.abi,
                 "limits": render_request_planner(Some(planner), request)["limits"],
                 "possibleWriteCount": planner.writes.len(),
                 "possibleWriteOperations": operations,
+                "writes": writes,
             })
         }
     };
+    let effects = request
+        .effects
+        .iter()
+        .filter_map(|effect| {
+            let readable = readable_target(&effect.target.entity_id)?;
+            let target = match &effect.target.binding {
+                CompiledChangeRequestTargetBinding::Existing { from_field } => {
+                    visible_target(&effect.target.entity_id, Some(from_field))
+                }
+                CompiledChangeRequestTargetBinding::ReservedCreate { effect: reserved } => {
+                    json!({"entity": effect.target.entity_id, "fromEffect": reserved})
+                }
+            };
+            let mut set = Vec::new();
+            let mut clear = Vec::new();
+            for mutation in &effect.mutations {
+                match mutation {
+                    CompiledChangeRequestMutation::Set { field, value }
+                        if readable.contains(field) =>
+                    {
+                        let mut entry = json!({"field": field});
+                        match value {
+                            CompiledChangeRequestValue::FromField { field }
+                                if request_fields.contains(field) =>
+                            {
+                                entry["fromField"] = json!(field);
+                            }
+                            CompiledChangeRequestValue::FromEffect { effect, .. } => {
+                                entry["fromEffect"] = json!(effect);
+                            }
+                            CompiledChangeRequestValue::FromField { .. } => {}
+                        }
+                        set.push(entry);
+                    }
+                    CompiledChangeRequestMutation::Clear { field } if readable.contains(field) => {
+                        clear.push(field);
+                    }
+                    CompiledChangeRequestMutation::Set { .. }
+                    | CompiledChangeRequestMutation::Clear { .. } => {}
+                }
+            }
+            Some(json!({
+                "id": effect.id,
+                "operation": operation_name(effect.operation),
+                "target": target,
+                "set": set,
+                "clear": clear,
+            }))
+        })
+        .collect::<Vec<_>>();
     json!({
         "planner": planner,
+        "effects": effects,
         "review": request.review,
         "onApproved": request.on_approved,
         "application": request.application,
