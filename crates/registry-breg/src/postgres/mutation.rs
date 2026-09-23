@@ -577,41 +577,43 @@ impl PostgresRecordMutationService {
                 }
             }
         };
-        if matches!(
-            receipt_preflight,
-            crate::mutation::RequestReceiptPreflight::Receipt
-        ) {
-            let client = self
-                .pool
-                .get()
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
-            let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
-            let result = tokio::time::timeout_at(
-                deadline,
-                self.coordinator.execute_request_action(
-                    guard.client(),
-                    &self.registry,
-                    input,
-                    claims,
-                    fault,
-                    None,
-                    None,
-                    false,
-                ),
-            )
-            .await;
-            return match result {
-                Ok(result) => {
-                    guard.disarm();
-                    result
-                }
-                Err(_) => {
-                    guard.cancel_and_discard().await;
-                    Err(MutationError::Unavailable)
-                }
-            };
-        }
+        let proposal_authority = match receipt_preflight {
+            crate::mutation::RequestReceiptPreflight::Continue { proposal_authority } => {
+                proposal_authority
+            }
+            crate::mutation::RequestReceiptPreflight::Receipt => {
+                let client = self
+                    .pool
+                    .get()
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?;
+                let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+                let result = tokio::time::timeout_at(
+                    deadline,
+                    self.coordinator.execute_request_action(
+                        guard.client(),
+                        &self.registry,
+                        input,
+                        claims,
+                        fault,
+                        None,
+                        None,
+                        false,
+                    ),
+                )
+                .await;
+                return match result {
+                    Ok(result) => {
+                        guard.disarm();
+                        result
+                    }
+                    Err(_) => {
+                        guard.cancel_and_discard().await;
+                        Err(MutationError::Unavailable)
+                    }
+                };
+            }
+        };
         let crate::api::RequestActionBody::Apply {
             proposal_version,
             ref effect_digest,
@@ -622,7 +624,7 @@ impl PostgresRecordMutationService {
         };
         let request_id =
             uuid::Uuid::parse_str(input.record_id).map_err(|_| MutationError::InvalidRequest)?;
-        let (authority, accepted, proposal_authority) = {
+        let (authority, accepted) = {
             let client = self
                 .pool
                 .get()
@@ -636,14 +638,7 @@ impl PostgresRecordMutationService {
                 effect_digest,
             )
             .await?;
-            let proposal_authority = crate::request_store::load_task_authority(
-                &**client,
-                input.entity_id,
-                request_id,
-                i64::from(proposal_version),
-            )
-            .await?;
-            (authority, accepted, proposal_authority)
+            (authority, accepted)
         };
         // A guard acquisition is a protected disclosure too. Check both the
         // current actor and the authority frozen at submission before the
@@ -651,8 +646,8 @@ impl PostgresRecordMutationService {
         if let Some(grant) = claims.task_grant() {
             self.coordinator.check_task_authority(grant).await?;
         }
-        if let Some(grant) = proposal_authority {
-            self.coordinator.check_task_authority(&grant).await?;
+        if let Some(grant) = proposal_authority.as_deref() {
+            self.coordinator.check_task_authority(grant).await?;
         }
         let source = self
             .review_result_source
