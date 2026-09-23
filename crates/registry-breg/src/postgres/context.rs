@@ -3163,6 +3163,7 @@ mod tests {
                 read_paths: Vec::new(),
                 change_control: None,
                 change_request: None,
+                consent_record: None,
                 fields: vec![
                     FieldSource {
                         pattern: None,
@@ -3213,6 +3214,7 @@ mod tests {
                     required_purposes: BTreeSet::from(["operations".to_owned()]),
                     permissions: vec![AccessPermissionSource {
                         membership_boundaries: Vec::new(),
+                        require_consent: Vec::new(),
                         entity: "entry".to_owned(),
                         action: None,
                         operations: operations.clone(),
@@ -3264,6 +3266,7 @@ mod tests {
                     required_purposes: BTreeSet::new(),
                     permissions: vec![AccessPermissionSource {
                         membership_boundaries: Vec::new(),
+                        require_consent: Vec::new(),
                         entity: "entry".to_owned(),
                         action: None,
                         operations,
@@ -3298,6 +3301,8 @@ mod tests {
                 },
             ],
             vocabularies: Vec::new(),
+            recipients: None,
+            retired_consent_scopes: Vec::new(),
         };
         compile_project(&project, &[], CompileProfile::Authoring).expect("test project compiles")
     }

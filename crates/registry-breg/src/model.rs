@@ -12,8 +12,9 @@ use crate::contract::{
     ManifestProjectionDataServiceSource, ManifestProjectionDatasetSource,
     ManifestProjectionDistributionSource, ManifestProjectionEntitySource,
     ManifestProjectionPublicServiceSource, ManifestProjectionVocabularySource, MutationMode,
-    NormalizationStep, Operation, PackageIdentitySource, ProvenanceFieldSource, RowBoundarySource,
-    TemporalSource, ValidTimeRole, WebhookAuthenticationProfile, WebhookDeadLetterMode,
+    NormalizationStep, Operation, PackageIdentitySource, ProvenanceFieldSource,
+    RecipientGroupSource, RecipientOrganizationSource, RowBoundarySource, TemporalSource,
+    ValidTimeRole, WebhookAuthenticationProfile, WebhookDeadLetterMode,
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
@@ -759,6 +760,109 @@ pub enum CompiledActionTargetUseSource {
     Input { input: String },
 }
 
+/// Resolved stored columns and decision sets of one consent-record entity.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledConsentRecord {
+    pub subject_column: String,
+    pub recipient_column: String,
+    pub purpose_column: String,
+    pub scope_column: String,
+    /// The logical decision field, bound by the recipient feed's decision set.
+    pub decision_field: String,
+    pub decision_column: String,
+    pub from_column: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until_column: Option<String>,
+    pub gives: BTreeSet<String>,
+    pub revokes: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub refusals: BTreeSet<String>,
+    pub max_duration: CompiledConsentDuration,
+}
+
+impl CompiledConsentRecord {
+    /// The decisions a recipient may see: every give and every revoke that is
+    /// not a refusal.
+    pub fn feed_decisions(&self) -> BTreeSet<String> {
+        self.gives
+            .iter()
+            .chain(self.revokes.difference(&self.refusals))
+            .cloned()
+            .collect()
+    }
+}
+
+/// A parsed ISO 8601 duration. Components are kept apart so PostgreSQL adds
+/// calendar months and years the way the adopter wrote them.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledConsentDuration {
+    pub iso: String,
+    pub years: u32,
+    pub months: u32,
+    pub weeks: u32,
+    pub days: u32,
+    pub hours: u32,
+    pub minutes: u32,
+    pub seconds: u32,
+}
+
+/// One consent check of one gated profile.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledConsentRequirement {
+    /// The consent-record entity.
+    pub record: String,
+    /// The protected entity's field the consent subject references; `id` is
+    /// the row's own identity.
+    pub on: String,
+}
+
+/// Declared consent recipients and the recipient set of each client.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledRecipients {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub organizations: Vec<RecipientOrganizationSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<RecipientGroupSource>,
+}
+
+impl CompiledRecipients {
+    pub fn is_empty(&self) -> bool {
+        self.organizations.is_empty() && self.groups.is_empty()
+    }
+
+    /// Every client an organization acts through.
+    pub fn clients(&self) -> impl Iterator<Item = &str> {
+        self.organizations
+            .iter()
+            .flat_map(|organization| organization.clients.iter().map(String::as_str))
+    }
+
+    /// The organization a client acts for plus every group containing it.
+    /// Empty for a client no organization lists, so every consent check of
+    /// that caller fails closed.
+    pub fn recipient_set(&self, client: &str) -> BTreeSet<String> {
+        let Some(organization) = self
+            .organizations
+            .iter()
+            .find(|organization| organization.clients.iter().any(|id| id == client))
+        else {
+            return BTreeSet::new();
+        };
+        std::iter::once(organization.id.clone())
+            .chain(
+                self.groups
+                    .iter()
+                    .filter(|group| group.members.contains(&organization.id))
+                    .map(|group| group.id.clone()),
+            )
+            .collect()
+    }
+}
+
 /// Resolved stored-column inputs for one current membership predicate.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -812,6 +916,11 @@ pub struct CompiledEntity {
     pub access_profiles: BTreeMap<String, AccessProfileSource>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub membership_boundaries: BTreeMap<String, Vec<CompiledMembershipBoundary>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent_record: Option<CompiledConsentRecord>,
+    /// The consent checks of each gated profile, ANDed.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub consent_requirements: BTreeMap<String, Vec<CompiledConsentRequirement>>,
     pub hooks: BTreeMap<String, HookSource>,
     /// Which module contributed each id in this entity's id-keyed
     /// collections. An id absent from a map was contributed by the project
@@ -1428,6 +1537,8 @@ pub struct CompiledRegistry {
     metadata_inventory: CompiledMetadataInventory,
     query_inventory: CompiledQueryInventory,
     event_delivery_inventory: CompiledEventDeliveryInventory,
+    #[serde(default, skip_serializing_if = "CompiledRecipients::is_empty")]
+    recipients: CompiledRecipients,
     ddl: DdlInventory,
     artifacts: GeneratedArtifacts,
     findings: Vec<Diagnostic>,
@@ -1452,6 +1563,7 @@ impl CompiledRegistry {
         metadata_inventory: CompiledMetadataInventory,
         query_inventory: CompiledQueryInventory,
         event_delivery_inventory: CompiledEventDeliveryInventory,
+        recipients: CompiledRecipients,
         ddl: DdlInventory,
         artifacts: GeneratedArtifacts,
         findings: Vec<Diagnostic>,
@@ -1473,6 +1585,7 @@ impl CompiledRegistry {
             metadata_inventory,
             query_inventory,
             event_delivery_inventory,
+            recipients,
             ddl,
             artifacts,
             findings,
@@ -1534,6 +1647,10 @@ impl CompiledRegistry {
 
     pub fn event_deliveries(&self) -> &CompiledEventDeliveryInventory {
         &self.event_delivery_inventory
+    }
+
+    pub fn recipients(&self) -> &CompiledRecipients {
+        &self.recipients
     }
 
     pub fn ddl(&self) -> &DdlInventory {

@@ -1257,6 +1257,7 @@ fn action_profile_from_grant(grant: &CompiledActionPermission) -> AccessProfileS
             .flat_map(|target| target.row_boundaries.iter().cloned())
             .collect(),
         membership_boundaries: Vec::new(),
+        require_consent: Vec::new(),
         request_visibility: None,
         lookups: Vec::new(),
         read_paths: Vec::new(),

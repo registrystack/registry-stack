@@ -41,6 +41,7 @@ pub mod change_request;
 #[cfg(feature = "runtime")]
 pub mod cli;
 pub mod compiler;
+pub mod consent;
 pub mod contract;
 #[cfg(feature = "runtime")]
 pub mod correlation;

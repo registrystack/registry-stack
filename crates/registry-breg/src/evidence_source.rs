@@ -194,6 +194,18 @@ pub fn export_evidence_source(
     if !access.operations.contains(&Operation::Lookup) {
         return Err(refusal("access-profile","the selected profile does not grant lookup; declare and review that authority in BReg first"));
     }
+    // An Evidence runtime is one client answering for many relying parties,
+    // so a subject's consent to one recipient cannot follow its assertions.
+    if entity
+        .consent_requirements
+        .contains_key(&options.access_profile)
+    {
+        return Err(Diagnostic::error(
+            "consent.require.evidence_source_unsupported",
+            "access-profile",
+            "a consent-checked profile cannot back an Evidence source; the Evidence runtime is not the recipient the subject consented to",
+        ));
+    }
     let route = registry
         .routes()
         .routes

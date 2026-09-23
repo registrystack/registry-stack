@@ -850,6 +850,8 @@ mod tests {
             indexes: BTreeMap::new(),
             access_profiles: BTreeMap::new(),
             membership_boundaries: BTreeMap::new(),
+            consent_record: None,
+            consent_requirements: BTreeMap::new(),
             hooks: BTreeMap::new(),
             module_origins: Default::default(),
         }

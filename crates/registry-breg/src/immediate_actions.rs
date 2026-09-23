@@ -108,6 +108,7 @@ fn compile_action(
 ) -> Option<CompiledAction> {
     let action = &collected.source;
     validate_id(&action.id, "actions[].id", errors);
+    crate::consent::validate_action(action, entities, profiles, errors);
     if action.inputs.is_empty() {
         errors.push(Diagnostic::error(
             "action.inputs.empty",
@@ -1635,6 +1636,7 @@ fn compile_permissions(
                     "anonymous access profiles cannot invoke immediate actions",
                 ));
             }
+            crate::consent::validate_action_permission(profile, grant, entities, errors);
             if !grant.entity.is_empty() {
                 errors.push(Diagnostic::error(
                     "action.permission.exclusive",
@@ -1888,6 +1890,7 @@ fn validate_permission_access_requirements(
             spatial_queries: None,
             row_boundaries: row_boundaries.to_vec(),
             membership_boundaries: Vec::new(),
+            require_consent: Vec::new(),
             request_visibility: None,
             lookups: Vec::new(),
             read_paths: Vec::new(),
@@ -1987,6 +1990,7 @@ fn entity_permission_fields_empty(grant: &crate::contract::AccessPermissionSourc
         && grant.sortable_fields.is_empty()
         && grant.row_boundaries.is_empty()
         && grant.membership_boundaries.is_empty()
+        && grant.require_consent.is_empty()
         && grant.lookups.is_empty()
         && grant.read_paths.is_empty()
         && grant.apply_targets.is_empty()

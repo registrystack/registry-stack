@@ -36,6 +36,47 @@ pub struct RegistryProject {
     pub access_profiles: Vec<ProjectAccessProfileSource>,
     #[serde(default)]
     pub vocabularies: Vec<VocabularySource>,
+    /// Named organizations and frozen groups that consent may be given to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipients: Option<RecipientsSource>,
+    /// Consent scope codes of removed gated profiles, kept so existing consent
+    /// rows still validate. A retired scope matches nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired_consent_scopes: Vec<String>,
+}
+
+/// Declared consent recipients. Organization and group ids share one
+/// namespace and form the append-only `registry-recipients` vocabulary.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RecipientsSource {
+    #[serde(default)]
+    pub organizations: Vec<RecipientOrganizationSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<RecipientGroupSource>,
+}
+
+/// One named organization. Its clients are the verified OAuth clients that act
+/// for it; an organization with no clients is retired and keeps its code.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RecipientOrganizationSource {
+    pub id: String,
+    pub name: String,
+    pub contact: String,
+    pub clients: Vec<String>,
+}
+
+/// A frozen, named list of declared organizations. Groups do not nest.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RecipientGroupSource {
+    pub id: String,
+    pub name: String,
+    pub members: Vec<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -387,6 +428,81 @@ pub struct EntitySource {
     pub change_control: Option<ChangeControlSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub change_request: Option<ChangeRequestSource>,
+    /// Declares this entity's rows as subject-issued consent decisions that
+    /// `requireConsent` permissions check before returning a subject's row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent_record: Option<ConsentRecordSource>,
+}
+
+/// The fields of a consent-record entity the engine reads. Other fields are
+/// ignored by consent enforcement.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ConsentRecordSource {
+    /// A reference field naming the protected subject row.
+    pub subject: String,
+    /// A vocabulary-code field bound to `registry-recipients`.
+    pub recipient: String,
+    /// A vocabulary-code field compared with the verified request purpose.
+    pub purpose: String,
+    /// A vocabulary-code field bound to `registry-consent-scopes`.
+    pub scope: String,
+    pub decision: ConsentDecisionSource,
+    pub validity: ConsentValiditySource,
+}
+
+/// Maps the adopter's decision codes onto the engine's decision sets.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ConsentDecisionSource {
+    pub field: String,
+    /// Codes that give consent.
+    pub gives: Vec<String>,
+    /// Codes that supersede every give on the same key ordered no later.
+    pub revokes: Vec<String>,
+    /// Revoke codes never shown to recipients.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refusals: Vec<String>,
+}
+
+/// Validity of a consent decision. Every give expires within `maxDuration`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ConsentValiditySource {
+    /// A required timestamp field; a give is active only from this time.
+    pub from: String,
+    /// An optional timestamp field ending the give earlier than `maxDuration`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+    /// An ISO 8601 duration such as `P365D`, at most ten years.
+    pub max_duration: String,
+}
+
+/// A consent check ANDed into one read permission.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ConsentRequirementSource {
+    /// The consent-record entity checked.
+    pub record: String,
+    /// The permission entity's field the consent subject references; `id` is
+    /// the row's own identity.
+    pub on: String,
+}
+
+/// Who an action creates consent rows for.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsentIssuerSource {
+    /// The subject, bound through a principal link entity.
+    #[serde(rename = "self")]
+    Subject,
+    /// A reviewed steward act on the subject's behalf.
+    Steward,
 }
 
 /// A request may declare at most eight independently governed binary slots.
@@ -739,6 +855,9 @@ pub struct ActionSource {
     /// Acceptance-time checks over exact existing reference inputs, combined with AND.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<ActionRequirementSource>,
+    /// Required when the action creates consent-record rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent_issuer: Option<ConsentIssuerSource>,
 }
 
 pub const ACTION_HANDLER_ABI_V2: &str = "registry.action-handler/v2";
@@ -2432,6 +2551,9 @@ pub struct AccessProfileSource {
     /// Current active membership required for each stored reference key.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub membership_boundaries: Vec<MembershipBoundarySource>,
+    /// Current subject-issued consent required for each row, ANDed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub require_consent: Vec<ConsentRequirementSource>,
     /// Restricts change-request reads to rows owned by the authenticated principal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_visibility: Option<RequestVisibilitySource>,
@@ -2739,6 +2861,9 @@ pub struct AccessPermissionSource {
     /// Current active membership required for each stored reference key.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub membership_boundaries: Vec<MembershipBoundarySource>,
+    /// Current subject-issued consent required for each row, ANDed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub require_consent: Vec<ConsentRequirementSource>,
     /// Restricts change-request reads to rows owned by the authenticated principal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_visibility: Option<RequestVisibilitySource>,
@@ -2795,6 +2920,8 @@ struct RawAccessPermissionSource {
     row_boundaries: Option<Vec<RowBoundarySource>>,
     #[serde(default)]
     membership_boundaries: Vec<MembershipBoundarySource>,
+    #[serde(default)]
+    require_consent: Vec<ConsentRequirementSource>,
     /// Restricts change-request reads to rows owned by the authenticated principal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     request_visibility: Option<RequestVisibilitySource>,
@@ -2847,6 +2974,7 @@ impl<'de> Deserialize<'de> for AccessPermissionSource {
             spatial_queries: raw.spatial_queries,
             row_boundaries: raw.row_boundaries.unwrap_or_default(),
             membership_boundaries: raw.membership_boundaries,
+            require_consent: raw.require_consent,
             request_visibility: raw.request_visibility,
             lookups: raw.lookups,
             read_paths: raw.read_paths,
@@ -2914,6 +3042,9 @@ struct EntityAccessPermissionSourceSchema {
     /// Current active membership required for each stored reference key.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     membership_boundaries: Vec<MembershipBoundarySource>,
+    /// Current subject-issued consent required for each row, ANDed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    require_consent: Vec<ConsentRequirementSource>,
     #[serde(default)]
     request_visibility: Option<RequestVisibilitySource>,
     #[serde(default)]

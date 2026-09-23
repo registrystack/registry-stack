@@ -22,8 +22,8 @@ use crate::model::{
     CompiledChangeRequestValue, CompiledEntity, CompiledEventDeliveryInventory,
     CompiledManifestProjection, CompiledMetadataInventory, CompiledModuleIdentity,
     CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
-    CompiledQueryTemporalValueKind, CompiledRevisionKind, CompiledRoute, CompiledRouteInventory,
-    HttpMethod,
+    CompiledQueryTemporalValueKind, CompiledRecipients, CompiledRevisionKind, CompiledRoute,
+    CompiledRouteInventory, HttpMethod,
 };
 use crate::physical_names::{hex_prefix, PhysicalNameInventory};
 use crate::record_profile::{link_header_value, CONTEXT_IDENTIFIER, PROFILE_IDENTIFIER};
@@ -86,6 +86,8 @@ pub(crate) struct EffectiveModel<'a> {
     pub metadata_inventory: &'a CompiledMetadataInventory,
     pub query_inventory: &'a CompiledQueryInventory,
     pub event_delivery_inventory: &'a CompiledEventDeliveryInventory,
+    #[serde(skip_serializing_if = "CompiledRecipients::is_empty")]
+    pub recipients: &'a CompiledRecipients,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -105,6 +107,7 @@ pub(crate) fn generate_artifacts(
     metadata: &CompiledMetadataInventory,
     query: &CompiledQueryInventory,
     event_deliveries: &CompiledEventDeliveryInventory,
+    recipients: &CompiledRecipients,
     ddl: &DdlInventory,
 ) -> Result<GeneratedArtifacts, Diagnostic> {
     let mut artifacts = BTreeMap::new();
@@ -122,6 +125,7 @@ pub(crate) fn generate_artifacts(
         metadata_inventory: metadata,
         query_inventory: query,
         event_delivery_inventory: event_deliveries,
+        recipients,
     };
     insert_json_value(
         &mut artifacts,

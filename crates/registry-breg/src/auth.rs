@@ -548,6 +548,16 @@ fn validate_claim_mapping(
             return Err(AuthenticationConfigError::InvalidClaimMapping);
         }
     }
+    // A recipient's client that the verifier would refuse can never read under
+    // consent, so a mismatch is a configuration error, not a silent denial.
+    if registry.recipients().clients().any(|client| {
+        !verifier
+            .allowed_clients
+            .iter()
+            .any(|allowed| allowed == client)
+    }) {
+        return Err(AuthenticationConfigError::InvalidClaimMapping);
+    }
     if inventory
         .principal_claims
         .iter()
