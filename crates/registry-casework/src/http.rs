@@ -1751,6 +1751,7 @@ impl From<StoreError> for HttpError {
             StoreError::Configuration
             | StoreError::SecretConfiguration(_)
             | StoreError::Corrupt
+            | StoreError::SchemaNewer { .. }
             | StoreError::Json(_) => Self::Internal,
         }
     }

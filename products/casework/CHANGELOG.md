@@ -54,6 +54,12 @@
   terminal and readable, and the observation opens a fresh item beside it. Two
   live items for one occurrence are still refused. A failed database operation
   now names the constraint it violated, and nothing from the row.
+- Fix an older `casework` binary against a database a newer release migrated.
+  `casework migrate` used to report success without changing anything, and
+  `casework serve` refused to start with a corruption error. Both now refuse
+  with `the Casework database schema version N is newer than this binary
+  supports (M); run a casework release that supports it`, and `migrate` writes
+  nothing.
 - Fix the professional-review starter hiding every source-backed review task.
   Its `scope-correction` `displaySchema` described `record` as an object, but
   the professional-licences source discloses it as a UUID string, so every

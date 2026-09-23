@@ -64,6 +64,22 @@ const MIGRATIONS: [(i64, &str); 16] = [
     (16, OCCURRENCE_IDENTITY_MIGRATION),
 ];
 
+/// The newest schema version this binary knows how to run against.
+const SUPPORTED_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
+
+/// Refuse a ledger written by a newer binary, so a rollback onto an older one
+/// names the version skew instead of passing as a migration or failing as
+/// invalid data.
+fn refuse_newer_schema(newest_applied: Option<i64>) -> Result<(), StoreError> {
+    match newest_applied {
+        Some(found) if found > SUPPORTED_SCHEMA_VERSION => Err(StoreError::SchemaNewer {
+            found,
+            supported: SUPPORTED_SCHEMA_VERSION,
+        }),
+        _ => Ok(()),
+    }
+}
+
 /// Serializes operator-run migrations on one session lock. A second migrator
 /// waits here instead of racing the ledger primary key. The key spells the
 /// ASCII bytes of "casework".
@@ -204,6 +220,11 @@ impl PostgresStore {
                  applied_at timestamptz NOT NULL);",
             )
             .await?;
+        let newest_applied: Option<i64> = transaction
+            .query_one("SELECT max(version) FROM casework_schema_migrations", &[])
+            .await?
+            .get(0);
+        refuse_newer_schema(newest_applied)?;
         transaction.commit().await?;
 
         for (version, migration) in MIGRATIONS {
@@ -237,6 +258,12 @@ impl PostgresStore {
                 &[],
             )
             .await?;
+        refuse_newer_schema(
+            applied
+                .last()
+                .map(|row| row.try_get::<_, i64>(0))
+                .transpose()?,
+        )?;
         let schema_is_current = applied.len() == MIGRATIONS.len()
             && applied
                 .iter()
@@ -3630,6 +3657,10 @@ pub enum StoreError {
     CursorExpired,
     #[error("stored Casework data is invalid")]
     Corrupt,
+    #[error(
+        "the Casework database schema version {found} is newer than this binary supports ({supported}); run a casework release that supports it"
+    )]
+    SchemaNewer { found: i64, supported: i64 },
     #[error("the Casework database operation failed{}", violated_constraint(.0))]
     Postgres(#[from] tokio_postgres::Error),
     #[error("Casework serialization failed")]

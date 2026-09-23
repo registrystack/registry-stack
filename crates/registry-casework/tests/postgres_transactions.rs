@@ -1226,10 +1226,57 @@ async fn readiness_rejects_an_unsupported_migration_version() {
         .await
         .expect("simulate a schema created by a newer runtime");
 
+    let refusal = store
+        .ready()
+        .await
+        .expect_err("a schema newer than this binary must fail readiness");
     assert!(
-        matches!(store.ready().await, Err(StoreError::Corrupt)),
-        "an unsupported migration version must fail readiness"
+        matches!(
+            refusal,
+            StoreError::SchemaNewer {
+                found: 17,
+                supported: 16
+            }
+        ),
+        "a newer schema is not reported as corrupt data: {refusal:?}"
     );
+    assert_eq!(
+        refusal.to_string(),
+        "the Casework database schema version 17 is newer than this binary supports (16); run a casework release that supports it"
+    );
+}
+
+#[tokio::test]
+async fn migration_refuses_a_schema_newer_than_this_binary_and_writes_nothing() {
+    let (store, client, _schema) = isolated_schema("migrate_newer").await;
+    store
+        .migrate()
+        .await
+        .expect("migrate to the current schema");
+    client
+        .execute(
+            "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(17,now())",
+            &[],
+        )
+        .await
+        .expect("simulate a schema created by a newer runtime");
+    let before = applied_versions(&client).await;
+
+    let refusal = store
+        .migrate()
+        .await
+        .expect_err("an older binary must not report a newer schema as migrated");
+    assert!(
+        matches!(
+            refusal,
+            StoreError::SchemaNewer {
+                found: 17,
+                supported: 16
+            }
+        ),
+        "{refusal:?}"
+    );
+    assert_eq!(applied_versions(&client).await, before);
 }
 
 #[tokio::test]
