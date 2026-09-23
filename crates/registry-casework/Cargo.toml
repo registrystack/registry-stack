@@ -64,6 +64,7 @@ registry-evidence.workspace = true
 registry-thunderid-tooling.workspace = true
 jsonschema.workspace = true
 registry-casework-client.workspace = true
+registry-bregctl.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
 tempfile.workspace = true
 tower.workspace = true
