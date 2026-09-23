@@ -4315,12 +4315,23 @@ fn migration_reconcile_report(
     // the outcome is unresolvable: only `--execute` routes that outcome
     // through `ReconcileError::NotExecutable`. Reporting it here too keeps an
     // unresolvable assessment a refusal instead of a scriptable `ok: true`.
+    // The assessed findings are fixed, value-free catalog and plan names, and
+    // they are what an operator weighs before restoring a backup, so the
+    // refusal carries them instead of dropping them with the success report.
     if outcome.outcome == ReconcileOutcome::Unresolvable.as_str() {
-        return Err(reconcile_lifecycle_failure(
-            ReconcileLifecycleError::Reconcile(ReconcileError::NotExecutable(
-                ReconcileOutcome::Unresolvable,
-            )),
+        let mut failure = reconcile_lifecycle_failure(ReconcileLifecycleError::Reconcile(
+            ReconcileError::NotExecutable(ReconcileOutcome::Unresolvable),
         ));
+        if let Some(diagnostic) = failure.diagnostics.first_mut() {
+            diagnostic.message = format!(
+                "{}; unresolvable reason: {}; target catalog finding: {}; active catalog finding: {}",
+                diagnostic.message,
+                optional(outcome.unresolvable_reason),
+                optional(outcome.target_catalog_finding),
+                optional(outcome.active_catalog_finding),
+            );
+        }
+        return Err(failure);
     }
     Ok(MigrationReconcileSuccessReport {
         ok: true,
@@ -11391,6 +11402,28 @@ mod tests {
                     "migration.reconcile.outcome.unresolvable"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn migration_reconcile_refusal_keeps_the_assessed_findings() {
+        let mut outcome = reconcile_lifecycle_outcome("unresolvable");
+        outcome.target_catalog_finding = Some("target_finding_canary");
+        outcome.active_catalog_finding = Some("active_finding_canary");
+        outcome.unresolvable_reason = Some("reason_canary");
+        let Err(report) = migration_reconcile_report(outcome) else {
+            panic!("an unresolvable outcome must be refused");
+        };
+        let message = &report.diagnostics[0].message;
+        for finding in [
+            "target_finding_canary",
+            "active_finding_canary",
+            "reason_canary",
+        ] {
+            assert!(
+                message.contains(finding),
+                "the refusal must keep {finding}: {message}"
+            );
         }
     }
 
