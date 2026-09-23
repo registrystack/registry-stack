@@ -336,11 +336,25 @@
       "additionalProperties": false,
       "oneOf": [
         {
+          "properties": {
+            "bearerTokenRef": {
+              "not": {
+                "type": "null"
+              }
+            }
+          },
           "required": [
             "bearerTokenRef"
           ]
         },
         {
+          "properties": {
+            "auth": {
+              "not": {
+                "type": "null"
+              }
+            }
+          },
           "required": [
             "auth"
           ]

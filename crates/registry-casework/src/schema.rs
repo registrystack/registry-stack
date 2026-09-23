@@ -104,8 +104,9 @@ fn install_runtime_constraints(schema: &mut Value) {
 
 /// State the shape `RuntimeConfig::validate_secret_references` requires of a
 /// completion destination: exactly one of `bearerTokenRef` and `auth`, and a
-/// header name made of HTTP token characters. The reserved header set is
-/// enforced at load, where names compare case-insensitively.
+/// header name made of HTTP token characters. An explicit null reads as
+/// absent, as serde reads it at load. The reserved header set is enforced at
+/// load, where names compare case-insensitively.
 fn set_review_completion_auth_constraints(schema: &mut Value) {
     if let Some(destination) = schema
         .pointer_mut("/$defs/ReviewCompletionRuntimeConfig")
@@ -113,7 +114,16 @@ fn set_review_completion_auth_constraints(schema: &mut Value) {
     {
         destination.insert(
             "oneOf".to_owned(),
-            serde_json::json!([{"required": ["bearerTokenRef"]}, {"required": ["auth"]}]),
+            serde_json::json!([
+                {
+                    "required": ["bearerTokenRef"],
+                    "properties": {"bearerTokenRef": {"not": {"type": "null"}}}
+                },
+                {
+                    "required": ["auth"],
+                    "properties": {"auth": {"not": {"type": "null"}}}
+                }
+            ]),
         );
     }
     set_definition_property(
@@ -423,11 +433,25 @@ mod tests {
                 "url": url,
                 "auth": {"header": "x-api-key", "secretRef": "secret:file/completion-key"}
             }),
+            // An explicit null reads as absent, as it does at load.
+            serde_json::json!({
+                "url": url,
+                "bearerTokenRef": null,
+                "auth": {"secretRef": "secret:file/completion-key"}
+            }),
+            serde_json::json!({
+                "url": url,
+                "bearerTokenRef": "secret:file/completion-token",
+                "auth": null
+            }),
         ] {
             assert!(schema.is_valid(&with(accepted.clone())), "{accepted}");
         }
         for refused in [
             serde_json::json!({"url": url}),
+            serde_json::json!({"url": url, "bearerTokenRef": null}),
+            serde_json::json!({"url": url, "auth": null}),
+            serde_json::json!({"url": url, "bearerTokenRef": null, "auth": null}),
             serde_json::json!({
                 "url": url,
                 "bearerTokenRef": "secret:file/completion-token",

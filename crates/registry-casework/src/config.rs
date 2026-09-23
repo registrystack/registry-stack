@@ -1820,6 +1820,18 @@ reviewProducers:
             shorthand.review_completion_destinations["receiver"].secret_ref(),
             Some("secret:file/completion-token")
         );
+        // An explicit null reads as absent, as the runtime schema states.
+        let null_shorthand = load(serde_json::json!({
+            "url": url,
+            "bearerTokenRef": null,
+            "auth": {"secretRef": "secret:file/completion-key"}
+        }))
+        .expect("a null bearerTokenRef is absent");
+        assert_eq!(
+            null_shorthand.review_completion_destinations["receiver"].secret_ref(),
+            Some("secret:file/completion-key")
+        );
+        assert!(load(serde_json::json!({"url": url, "bearerTokenRef": null})).is_err());
 
         for header in [
             "Authorization",
