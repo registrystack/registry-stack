@@ -70,6 +70,11 @@ entities:
   fields:
   - {id: person, type: reference, target: person, required: true, classification: restricted}
   - {id: programme, type: string, maxLength: 80, required: true, classification: internal}
+  selectorProfiles:
+  - id: programme
+    fields: [programme]
+  readPaths:
+  - {id: households, through: enrolment-household, to: household, route: households}
 - id: consent-decision
   primaryDataset: consent-dataset
   route: consent-decisions
@@ -97,6 +102,14 @@ entities:
       from: effective-at
       until: expires-at
       maxDuration: P365D
+- id: enrolment-household
+  primaryDataset: consent-dataset
+  route: enrolment-households
+  mutationMode: mutable
+  classification: internal
+  fields:
+  - {id: enrolment, type: reference, target: enrolment, required: true, classification: restricted}
+  - {id: household, type: reference, target: household, required: true, classification: internal}
 actions:
 - id: record-consent
   consentIssuer: steward
@@ -147,12 +160,24 @@ accessProfiles:
     - {record: consent-decision, on: id}
   - entity: enrolment
     rowBoundaries: []
-    operations: [get, list, snapshot, revisions]
+    operations: [get, list, lookup, snapshot, revisions]
     readableFields: [person, programme]
     allowCount: true
     revisionAccess: true
+    lookups:
+    - selector: programme
+      valueOrigin: request
+    readPaths:
+    - path: households
+      readableFields: [label]
     requireConsent:
     - {record: consent-decision, on: person}
+  # The read path's target needs its own permission in the profile; without
+  # one the runtime answers the path with 503.
+  - entity: household
+    rowBoundaries: []
+    operations: [get]
+    readableFields: [label]
 - id: recipient-feed
   principalClaim: principal
   actorKind: service
@@ -198,3 +223,8 @@ accessProfiles:
     - {entity: person, rowBoundaries: []}
     - {entity: consent-decision, rowBoundaries: []}
     results: [decision]
+  - entity: enrolment-household
+    rowBoundaries: []
+    operations: [create, get]
+    readableFields: [enrolment, household]
+    writableFields: [enrolment, household]

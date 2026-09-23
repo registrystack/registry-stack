@@ -68,6 +68,11 @@ path = "tests/postgres_registry_extensibility.rs"
 required-features = ["postgres-test", "tooling"]
 
 [[test]]
+name = "postgres_consent_access"
+path = "tests/postgres_consent_access.rs"
+required-features = ["postgres-test"]
+
+[[test]]
 name = "postgres_membership_access"
 path = "tests/postgres_membership_access.rs"
 required-features = ["postgres-test"]
