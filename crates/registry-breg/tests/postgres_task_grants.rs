@@ -414,11 +414,13 @@ fn agent(idp: &MockIdp, status: &Status) -> (String, String) {
 }
 
 fn external_review_authority() -> Arc<ReviewAuthorityRegistry> {
-    let client =
-        registry_review_client::ReviewClient::new(registry_review_client::ReviewClientConfig::new(
-            "http://127.0.0.1:9/".parse().expect("loopback URL"),
-        ))
-        .expect("review client");
+    external_review_authority_at("http://127.0.0.1:9/")
+}
+fn external_review_authority_at(base_url: &str) -> Arc<ReviewAuthorityRegistry> {
+    let client = registry_review_client::ReviewClient::new(
+        registry_review_client::ReviewClientConfig::new(base_url.parse().expect("loopback URL")),
+    )
+    .expect("review client");
     let authority = Arc::new(
         ReviewAuthorityClient::new(
             "casework-a".to_owned(),
@@ -439,6 +441,48 @@ fn external_review_authority() -> Arc<ReviewAuthorityRegistry> {
         ReviewAuthorityRegistry::new(BTreeMap::from([("casework-a".to_owned(), authority)]))
             .expect("review authority registry"),
     )
+}
+/// Stands in for a review authority's result endpoint, so a test can count
+/// how many times BReg actually reaches the network for a review result
+/// without depending on a real review service.
+struct ReviewResultProvider {
+    calls: Arc<AtomicUsize>,
+    server: tokio::task::JoinHandle<()>,
+    address: std::net::SocketAddr,
+}
+impl Drop for ReviewResultProvider {
+    fn drop(&mut self) {
+        self.server.abort();
+    }
+}
+impl ReviewResultProvider {
+    async fn start() -> Self {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let app = axum::Router::new().fallback(move || {
+            let counted = counted.clone();
+            async move {
+                counted.fetch_add(1, Ordering::SeqCst);
+                axum::http::StatusCode::SERVICE_UNAVAILABLE
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        Self {
+            calls,
+            server,
+            address,
+        }
+    }
+    fn base_url(&self) -> String {
+        format!("http://{}/", self.address)
+    }
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
 }
 struct Response {
     status: StatusCode,
@@ -1213,6 +1257,146 @@ async fn evidence_apply_checks_original_task_before_disclosure_and_before_commit
                 "only authority valid at preflight may request Evidence"
             );
         }
+    }
+    db.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn review_apply_checks_original_task_before_authority_and_before_commit() {
+    let mut project: Value = serde_json::from_str(PROJECT).unwrap();
+    project["entities"][2]["changeRequest"]["review"] =
+        json!({"authority":"casework-a","policyId":"correction-review"});
+    project["entities"][2]["changeRequest"]["onApproved"] = json!({"mode":"manual"});
+    project["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|profile| profile["id"] != "reviewer");
+    let registry = Arc::new(
+        compile_project(
+            &parse_project_json(&serde_json::to_vec(&project).unwrap()).unwrap(),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .unwrap(),
+    );
+    let db = TestDatabase::create(8).await;
+    let identity = install(&db, &registry).await;
+    let idp = MockIdp::start().await;
+    let status = Arc::new(Status::default());
+    let provider = ReviewResultProvider::start().await;
+    let app = app_with_services(
+        &db,
+        registry,
+        identity,
+        &idp,
+        Arc::clone(&status),
+        None,
+        Some(external_review_authority_at(&provider.base_url())),
+    );
+    let steward = human(&idp, "steward", "maintain");
+    let applier = human(&idp, "applier", "apply");
+    let site = create(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        &steward,
+        "review-order-site",
+        json!({"tenant":"tenant-a","name":"old"}),
+    )
+    .await;
+    let replacement = create(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        &steward,
+        "review-order-replacement",
+        json!({"tenant":"tenant-a","name":"replacement"}),
+    )
+    .await;
+    // A task grant frozen on the submitted proposal must be re-checked live
+    // before the external review authority is contacted, the same as the
+    // evidence-apply path checks it before disclosure. "revoked" and
+    // "unavailable" prove a stale grant never reaches the authority;
+    // "live" proves a valid one still does.
+    for phase in ["revoked", "unavailable", "live"] {
+        let target = create(
+            &app,
+            "/v1/records/placements?accessProfile=steward",
+            &steward,
+            &format!("{phase}-target"),
+            json!({"tenant":"tenant-a","site":id(&site)}),
+        )
+        .await;
+        let (grant, token) = agent(&idp, &status);
+        let draft = create(
+            &app,
+            "/v1/records/correction-requests?accessProfile=submitter",
+            &token,
+            &format!("{phase}-draft"),
+            json!({"tenant":"tenant-a","placement":id(&target),
+                "proposedSite":id(&replacement),"reason":"synthetic correction"}),
+        )
+        .await;
+        let record = id(&draft);
+        let submit = action(
+            &get(&app, &record, "submitter", &token).await,
+            "submit_request",
+        );
+        let submitted = perform(&app, &submit, &token, &format!("{phase}-submit")).await;
+        assert_eq!(submitted.status, StatusCode::OK, "{}", submitted.body);
+
+        // Force the submission straight to "accepted" so the test exercises
+        // the apply path without depending on a real review authority ever
+        // completing a review.
+        let request_id = Uuid::parse_str(&record).unwrap();
+        let digest = format!("sha256:{}", "b".repeat(64));
+        let accepted_binding = json!({
+            "requestId": Uuid::new_v4(),
+            "subject": {"source":PACKAGE,"type":"correction-request","id":record,"version":"1","digest":digest},
+            "policy": {"id":"correction-review","version":"1","digest":digest},
+            "submissionDigest": digest
+        });
+        let updated = db
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_request_review_submissions
+                    SET state='accepted', accepted_binding=$2 WHERE request_id=$1",
+                &[&request_id, &accepted_binding],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            updated, 1,
+            "the submission row must exist to force acceptance"
+        );
+
+        let apply = action(
+            &get(&app, &record, "applier", &applier).await,
+            "apply_request",
+        );
+        match phase {
+            "revoked" => status.revoke(&grant),
+            "unavailable" => {
+                status.unavailable.lock().unwrap().insert(grant.clone());
+            }
+            _ => {}
+        }
+        let before = counts(&db).await;
+        let calls_before = provider.calls();
+        let result = perform(&app, &apply, &applier, &format!("{phase}-apply")).await;
+        assert!(
+            !result.status.is_success(),
+            "phase {phase}: this review authority never accepts, {}",
+            result.body
+        );
+        assert_eq!(
+            counts(&db).await,
+            before,
+            "phase {phase}: refusal leaves no effects or receipt"
+        );
+        assert_eq!(
+            provider.calls(),
+            calls_before + usize::from(phase == "live"),
+            "phase {phase}: only a live originating task grant may reach the review authority"
+        );
     }
     db.cleanup().await;
 }

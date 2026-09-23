@@ -259,12 +259,12 @@ pub(crate) async fn save_task_authority(
 
 /// Call only after proving current visibility of the corresponding request.
 pub(crate) async fn load_task_authority(
-    transaction: &Transaction<'_>,
+    client: &impl GenericClient,
     entity_id: &str,
     record_id: Uuid,
     proposal_version: i64,
 ) -> Result<Option<crate::task_grant::TaskGrantBinding>, MutationError> {
-    let row = transaction
+    let row = client
         .query_opt(
             "SELECT binding FROM registry_internal.registry_request_task_authority
          WHERE request_entity_id = $1 AND request_id = $2 AND proposal_version = $3",

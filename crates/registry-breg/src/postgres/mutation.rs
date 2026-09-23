@@ -622,7 +622,7 @@ impl PostgresRecordMutationService {
         };
         let request_id =
             uuid::Uuid::parse_str(input.record_id).map_err(|_| MutationError::InvalidRequest)?;
-        let (authority, accepted) = {
+        let (authority, accepted, proposal_authority) = {
             let client = self
                 .pool
                 .get()
@@ -636,8 +636,24 @@ impl PostgresRecordMutationService {
                 effect_digest,
             )
             .await?;
-            (authority, accepted)
+            let proposal_authority = crate::request_store::load_task_authority(
+                &**client,
+                input.entity_id,
+                request_id,
+                i64::from(proposal_version),
+            )
+            .await?;
+            (authority, accepted, proposal_authority)
         };
+        // A guard acquisition is a protected disclosure too. Check both the
+        // current actor and the authority frozen at submission before the
+        // review authority is contacted.
+        if let Some(grant) = claims.task_grant() {
+            self.coordinator.check_task_authority(grant).await?;
+        }
+        if let Some(grant) = proposal_authority {
+            self.coordinator.check_task_authority(&grant).await?;
+        }
         let source = self
             .review_result_source
             .as_ref()
