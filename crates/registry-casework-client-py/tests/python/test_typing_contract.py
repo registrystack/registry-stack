@@ -81,6 +81,16 @@ class TypingContractTests(unittest.TestCase):
         self.assertEqual(reviewer_task_fields["state"], "ReviewerTaskState")
         self.assertEqual(reviewer_task_fields["stageIndex"], "SafeInteger")
         self.assertEqual(reviewer_task_fields["revision"], "SafeInteger")
+        self.assertEqual(
+            [ast.unparse(base) for base in classes["ReviewerTask"].bases],
+            ["_ReviewerTaskOptional"],
+        )
+        optional_task_fields = {
+            node.target.id: ast.unparse(node.annotation)
+            for node in classes["_ReviewerTaskOptional"].body
+            if isinstance(node, ast.AnnAssign)
+        }
+        self.assertEqual(optional_task_fields, {"decidedByCaller": "bool"})
         draft_fields = {
             node.target.id: ast.unparse(node.annotation)
             for node in classes["ReviewTaskDraft"].body

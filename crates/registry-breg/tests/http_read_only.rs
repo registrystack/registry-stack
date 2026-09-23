@@ -598,6 +598,7 @@ entities:
       requiredFor: [patch]
     fields:
       - {id: site, type: string, required: true, maxLength: 64, classification: public}
+      - {id: holder-note, type: string, maxLength: 64, classification: public}
   - id: placement-correction
     primaryDataset: test-dataset
     route: placement-corrections
@@ -612,6 +613,7 @@ entities:
           operation: patch
           set:
             site: {fromField: proposed-site}
+          clear: [holder-note]
       review:
         authority: casework-main
         policyId: placement-correction
@@ -3725,6 +3727,69 @@ async fn workspace_metadata_projects_request_field_disclosure_per_caller_profile
         json!([]),
         "anonymous profiles never receive request metadata"
     );
+    assert_eq!(harness.records.calls(), 0);
+}
+
+#[tokio::test]
+async fn workspace_metadata_names_only_the_readable_target_fields_a_change_request_changes() {
+    let harness = Harness::from_project(REQUEST_METADATA_GRANT_PROJECT, true);
+    let change_request = |document: &Value| {
+        document["entities"]
+            .as_array()
+            .expect("metadata entities")
+            .iter()
+            .find(|entity| entity["id"] == "placement-correction")
+            .expect("request entity")["changeRequest"]
+            .clone()
+    };
+
+    let officer = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=correction-officer",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+    )
+    .await;
+    let effects = change_request(&officer)["effects"].clone();
+    assert_eq!(effects.as_array().map(Vec::len), Some(1), "{effects}");
+    assert!(effects[0]["id"].is_string(), "{effects}");
+    assert_eq!(effects[0]["operation"], "patch");
+    assert_eq!(
+        effects[0]["target"],
+        json!({"entity": "placement", "fromField": "target"})
+    );
+    assert_eq!(
+        effects[0]["set"],
+        json!([{"field": "site", "fromField": "proposed-site"}])
+    );
+    assert_eq!(
+        effects[0]["clear"],
+        json!([]),
+        "a target field the profile cannot read is not named"
+    );
+    assert!(!officer.to_string().contains("holder-note"));
+
+    let narrow = body_json(
+        harness
+            .send(
+                Method::GET,
+                "/v1/registry?accessProfile=narrow-reader",
+                Some(caseworker_claims("case-management")),
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(
+        change_request(&narrow)["effects"],
+        json!([]),
+        "an effect on an entity the profile cannot read is not described"
+    );
+    let rendered = narrow.to_string();
+    assert!(!rendered.contains("holder-note"));
+    assert!(!rendered.contains("\"site\""));
     assert_eq!(harness.records.calls(), 0);
 }
 

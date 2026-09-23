@@ -72,6 +72,19 @@ actual deployment or `bregctl dev export-client` values, not a guessed resource
 based on the project directory name. Changing these fields changes the source
 binding generation and invalidates stale source-bound authority.
 
+`reviewCompletionDestinations` is keyed by the logical destination ids a
+producer's `completion` block names. Each destination has one `url` and exactly
+one secret. `bearerTokenRef` presents it as `Authorization: Bearer <secret>`.
+`auth: {secretRef}` does the same, and `auth: {header, secretRef}` presents the
+raw secret as the value of that header instead, with no `Authorization` header,
+for a receiver that authenticates with, for example, `x-api-key`. The header
+name is HTTP token characters, at most 64 bytes, and compared case-insensitively
+against a reserved set the runtime refuses at load: authentication, host,
+cookie, framing, hop-by-hop, forwarding, proxy, and tracing headers, plus the
+completion contract's own `idempotency-key` and every `registry-` header. The
+secret is visible ASCII, is never logged, and redirects are not followed.
+`caseworkctl doctor` reports the same refusal before the runtime starts.
+
 See the complete maintained
 [`runtime.example.yaml`](examples/professional-review/runtime.example.yaml) and
 the generated editor schema at

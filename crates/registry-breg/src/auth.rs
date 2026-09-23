@@ -247,14 +247,14 @@ impl RegistryAuthenticator {
             actor_kind(&verified.claims, &self.contextual_claims)
                 .map_err(|_| AuthenticationError::InvalidClaims)?,
         );
+        // The person is named by the configured principal claim, the same
+        // claim every access profile reads. A review authority compares this
+        // identity with its own caller principals, so it must not fall back
+        // to `sub` when the deployment's principal lives in another claim.
         let human_identity = if actor_kind == Some(registry_platform_oidc::ActorKind::Human) {
             Some(registry_review_client::HumanIdentity {
                 issuer: self.issuer.clone(),
-                subject: verified
-                    .claims
-                    .sub
-                    .clone()
-                    .ok_or(AuthenticationError::InvalidClaims)?,
+                subject: principal.clone(),
             })
         } else {
             None

@@ -225,6 +225,7 @@ class BRegRetainedRequestHistoryPage:
     ) -> BRegRetainedRequestProposal | None: ...
 class BRegChangeRequestCapability(TypedDict):
     planner: dict[str, JsonValue]
+    effects: list[dict[str, JsonValue]]
     review: dict[str, JsonValue]
     on_approved: dict[str, JsonValue]
     application: dict[str, JsonValue]

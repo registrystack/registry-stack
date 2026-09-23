@@ -142,10 +142,173 @@ fn request_description_declares_external_review_authority() {
         .change_request
         .as_ref()
         .expect("request capability");
-    let metadata = crate::artifacts::request_capability_metadata(request, &BTreeSet::new());
+    let metadata = crate::artifacts::request_capability_metadata(request, &BTreeMap::new());
     assert_eq!(metadata["review"]["authority"], "casework");
     assert_eq!(metadata["review"]["policyId"], "placement-correction");
     assert!(metadata.get("stages").is_none());
+}
+
+#[test]
+fn request_capability_names_only_fields_the_caller_may_read() {
+    let registry = compiled_registry();
+    let request = registry.entities()["placement-correction-request"]
+        .change_request
+        .as_ref()
+        .expect("request capability");
+    let readable = |request_fields: &[&str], placement_fields: &[&str]| {
+        BTreeMap::from([
+            (
+                "placement-correction-request".to_owned(),
+                request_fields
+                    .iter()
+                    .map(|field| (*field).to_owned())
+                    .collect(),
+            ),
+            (
+                "placement".to_owned(),
+                placement_fields
+                    .iter()
+                    .map(|field| (*field).to_owned())
+                    .collect(),
+            ),
+        ])
+    };
+
+    let full = crate::artifacts::request_capability_metadata(
+        request,
+        &readable(&["placement", "proposed-site"], &["site"]),
+    );
+    assert_eq!(
+        full["effects"][0]["target"],
+        serde_json::json!({"entity": "placement", "fromField": "placement"})
+    );
+    assert_eq!(
+        full["effects"][0]["set"],
+        serde_json::json!([{"field": "site", "fromField": "proposed-site"}])
+    );
+
+    let narrow = crate::artifacts::request_capability_metadata(
+        request,
+        &readable(&["placement"], &["site"]),
+    );
+    assert_eq!(
+        narrow["effects"][0]["set"],
+        serde_json::json!([{"field": "site"}]),
+        "a request field the caller cannot read is not named as the value source"
+    );
+    assert!(!narrow.to_string().contains("proposed-site"));
+
+    let mut planned = request.clone();
+    planned.planner = Some(crate::model::CompiledChangeRequestPlanner {
+        kind: crate::model::CompiledChangeRequestPlannerKind::Rhai,
+        source_module: None,
+        script_path: "planners/correction.rhai".to_owned(),
+        abi: crate::contract::CHANGE_REQUEST_PLAN_ABI_V1.to_owned(),
+        rhai_version: "1".to_owned(),
+        script_sha256: "sha256:test".to_owned(),
+        script_bytes: Vec::new(),
+        limits: crate::model::CompiledChangeRequestPlannerLimits {
+            maximum_source_bytes: 1,
+            maximum_operations: 1,
+            maximum_call_depth: 1,
+            maximum_expression_depth: 1,
+            maximum_string_bytes: 1,
+            maximum_array_items: 1,
+            maximum_map_entries: 1,
+            maximum_modules: 0,
+        },
+        request_fields: vec!["placement".to_owned(), "proposed-site".to_owned()],
+        writes: [
+            ("placement", &["site", "label"][..]),
+            ("site", &["label"][..]),
+        ]
+        .into_iter()
+        .map(
+            |(entity, fields)| crate::model::CompiledChangeRequestPlannerWrite {
+                target_entity_id: entity.to_owned(),
+                target_from_field: (entity == "placement").then(|| "placement".to_owned()),
+                operation: Operation::Patch,
+                fields: fields.iter().map(|field| (*field).to_owned()).collect(),
+                field_types: BTreeMap::new(),
+                required_fields: BTreeSet::new(),
+                reference_sources: BTreeMap::new(),
+            },
+        )
+        .collect(),
+    });
+    let planner = crate::artifacts::request_capability_metadata(
+        &planned,
+        &readable(&["placement"], &["site"]),
+    )["planner"]
+        .clone();
+    assert_eq!(planner["possibleWriteCount"], 2);
+    assert_eq!(
+        planner["writes"],
+        serde_json::json!([{
+            "target": {"entity": "placement", "fromField": "placement"},
+            "operation": "patch",
+            "fields": ["site"]
+        }]),
+        "a planner write names only readable target fields on readable entities"
+    );
+}
+
+#[test]
+fn request_capability_never_names_an_effect_the_caller_cannot_see() {
+    let registry = compiled_registry();
+    let mut request = registry.entities()["placement-correction-request"]
+        .change_request
+        .clone()
+        .expect("request capability");
+    request.effects[0].mutations = vec![crate::model::CompiledChangeRequestMutation::Set {
+        field: "site".to_owned(),
+        value: crate::model::CompiledChangeRequestValue::FromEffect {
+            effect: "create-hidden-site".to_owned(),
+            target_entity_id: "site".to_owned(),
+        },
+    }];
+    request
+        .effects
+        .push(crate::model::CompiledChangeRequestEffect {
+            id: "create-hidden-site".to_owned(),
+            target: crate::model::CompiledChangeRequestTarget {
+                entity_id: "site".to_owned(),
+                binding: crate::model::CompiledChangeRequestTargetBinding::ReservedCreate {
+                    effect: "create-hidden-site".to_owned(),
+                },
+            },
+            operation: Operation::Create,
+            mutations: Vec::new(),
+            depends_on: BTreeSet::new(),
+        });
+    let placement_only = BTreeMap::from([
+        (
+            "placement-correction-request".to_owned(),
+            BTreeSet::from(["placement".to_owned()]),
+        ),
+        ("placement".to_owned(), BTreeSet::from(["site".to_owned()])),
+    ]);
+
+    let hidden = crate::artifacts::request_capability_metadata(&request, &placement_only);
+    assert_eq!(
+        hidden["effects"][0]["set"],
+        serde_json::json!([{"field": "site"}]),
+        "a value from an effect the caller cannot see names no source"
+    );
+    assert_eq!(hidden["effects"].as_array().map(Vec::len), Some(1));
+    assert!(!hidden.to_string().contains("create-hidden-site"));
+
+    let mut with_site = placement_only;
+    with_site.insert("site".to_owned(), BTreeSet::new());
+    let visible = crate::artifacts::request_capability_metadata(&request, &with_site);
+    assert_eq!(
+        visible["effects"][0]["set"],
+        serde_json::json!([{"field": "site", "fromEffect": "create-hidden-site"}])
+    );
+    assert_eq!(
+        visible["effects"][1]["target"],
+        serde_json::json!({"entity": "site", "fromEffect": "create-hidden-site"})
+    );
 }
 
 #[test]

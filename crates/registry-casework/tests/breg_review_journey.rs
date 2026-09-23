@@ -369,6 +369,7 @@ fn casework_project(issuer: &str) -> CaseworkProject {
             issuer: issuer.to_owned(),
             subject: "registry-service".to_owned(),
             trusted_initiator_issuer: None,
+            initiator_profile: None,
             source_namespaces: vec![REGISTRY_ID.to_owned()],
             kinds: vec!["registry-correction".to_owned()],
             recovery_days: 7,
@@ -384,6 +385,7 @@ fn casework_project(issuer: &str) -> CaseworkProject {
 async fn casework_fixture(
     idp: &MockIdp,
     source: BregReviewSource,
+    project: CaseworkProject,
 ) -> (Router, CaseworkService, tokio_postgres::Client, String) {
     let base = env::var("BREG_TEST_DATABASE_URL").expect("BREG_TEST_DATABASE_URL");
     let schema = format!("casework_breg_journey_{}", Uuid::new_v4().simple());
@@ -429,7 +431,6 @@ async fn casework_fixture(
         ))
         .await
         .expect("Casework directory");
-    let project = casework_project(&idp.issuer());
     project.check().expect("Casework project");
     let service = CaseworkService::new(
         PostgresStore::connect_runtime(&database_config, &secrets).expect("Casework runtime store"),
@@ -586,6 +587,19 @@ fn token(idp: &MockIdp, audience: &str, principal: &str, scope: &str) -> String 
         "registry_principal": principal,
         "scope": scope,
         "registry_actor_kind": "service"
+    }))
+}
+
+/// A person's token as a stock identity provider issues it: `sub` is the
+/// provider's own user identifier, and the deployment's principal travels in
+/// `registry_principal`, the claim every profile in this journey reads.
+fn human_token(idp: &MockIdp, principal: &str, scope: &str) -> String {
+    idp.mint_token(json!({
+        "aud": BREG_AUDIENCE,
+        "sub": Uuid::new_v4().to_string(),
+        "registry_principal": principal,
+        "scope": scope,
+        "registry_actor_kind": "human"
     }))
 }
 
@@ -758,6 +772,7 @@ async fn breg_casework_two_stage_review_manual_apply_and_lost_receipt_recovery()
                 "breg:review-read",
             ),
         },
+        casework_project(&idp.issuer()),
     )
     .await;
     let (casework_url, casework_task) = serve(casework_app).await;
@@ -1359,6 +1374,304 @@ async fn breg_casework_two_stage_review_manual_apply_and_lost_receipt_recovery()
 
     normal_task.abort();
     fault_task.abort();
+    database.cleanup().await;
+    let (cleanup, cleanup_connection) =
+        tokio_postgres::connect(&env::var("BREG_TEST_DATABASE_URL").unwrap(), NoTls)
+            .await
+            .unwrap();
+    let cleanup_task = tokio::spawn(async move {
+        let _ = cleanup_connection.await;
+    });
+    cleanup
+        .batch_execute(&format!("DROP SCHEMA {casework_schema} CASCADE"))
+        .await
+        .unwrap();
+    cleanup_task.abort();
+}
+
+/// The professional-review shape: every profile reads `registry_principal`,
+/// the review stage excludes the initiator, and the producer trusts the shared
+/// issuer for initiators. The person who submitted the change request in BReg
+/// must then be refused when they try to claim or decide its review in
+/// Casework, even though their token's `sub` is an unrelated provider id.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn breg_submitter_cannot_claim_or_decide_their_own_excluded_review() {
+    let idp = MockIdp::start().await;
+    let breg_endpoint = Arc::new(Mutex::new(None));
+    let mut project = casework_project(&idp.issuer());
+    project.review_kinds[0].stages.truncate(1);
+    project.review_kinds[0].stages[0].exclude_initiator = true;
+    project.review_producers[0].trusted_initiator_issuer = Some(idp.issuer());
+    let (casework_app, _casework, casework_db, casework_schema) = casework_fixture(
+        &idp,
+        BregReviewSource {
+            endpoint: Arc::clone(&breg_endpoint),
+            reader_token: token(
+                &idp,
+                BREG_AUDIENCE,
+                "casework-source-reader",
+                "breg:review-read",
+            ),
+        },
+        project,
+    )
+    .await;
+    casework_db
+        .batch_execute(&format!(
+            "INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
+             VALUES('first-team','{issuer}','submitting-officer','staff'),
+                   ('first-team','{issuer}','queue-supervisor','supervisor');",
+            issuer = idp.issuer()
+        ))
+        .await
+        .expect("the submitter also serves the review queue");
+    let (casework_url, casework_task) = serve(casework_app).await;
+
+    let registry = Arc::new(breg_project());
+    let database = TestDatabase::create(4).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("BReg schema");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &registry,
+        RegistryStateTestIdentity {
+            package_id: REGISTRY_ID,
+            environment: "local",
+            instance_id: "composed-review",
+            database_id: "composed-review-database",
+            package_revision: PACKAGE_REVISION,
+            package_sequence: 1,
+        },
+    )
+    .await
+    .expect("BReg identity");
+    drop(migration);
+    migration_task.abort();
+
+    let scratch = tempfile::tempdir().expect("runtime binding directory");
+    std::fs::write(
+        scratch.path().join("review-token"),
+        token(
+            &idp,
+            CASEWORK_AUDIENCE,
+            "registry-service",
+            "casework:producer breg:review-read",
+        ),
+    )
+    .expect("review token");
+    for name in ["database", "migration", "audit", "cursor"] {
+        std::fs::write(scratch.path().join(name), "unused-test-secret").unwrap();
+    }
+    for name in ["review-token", "database", "migration", "audit", "cursor"] {
+        std::fs::set_permissions(
+            scratch.path().join(name),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+    }
+    let config = parse_runtime_config(&runtime_config(scratch.path(), &casework_url).to_string())
+        .expect("BReg runtime binding");
+    let authorities = config
+        .activate_review_authorities(&registry)
+        .expect("review authority activation")
+        .expect("review authority required");
+    let service = breg_service(
+        &database,
+        registry.clone(),
+        identity,
+        Arc::clone(&authorities),
+        None,
+    );
+    let (breg_url, breg_task) = serve(breg_router(service, &registry, &idp)).await;
+    *breg_endpoint.lock().expect("BReg endpoint lock") = Some(breg_url.clone());
+
+    let steward = token(&idp, BREG_AUDIENCE, "steward", "breg:steward");
+    // One person holds both roles: they may submit in BReg and they serve
+    // the Casework queue that reviews their submission.
+    let officer = human_token(
+        &idp,
+        "submitting-officer",
+        "breg:submit casework:first-reviewer breg:review-read",
+    );
+    let colleague = human_token(
+        &idp,
+        "reviewer-one",
+        "casework:first-reviewer breg:review-read",
+    );
+    let supervisor = human_token(
+        &idp,
+        "queue-supervisor",
+        "casework:supervisor breg:review-read",
+    );
+    let (status, asset) = request_json(
+        &breg_url,
+        Method::POST,
+        "/v1/records/assets?accessProfile=steward",
+        &steward,
+        Some(json!({"data":{"owner":"owner-a","label":"old"}})),
+        Some("create-asset"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{asset}");
+    let asset_id = asset["data"]["recordIdentifier"].as_str().unwrap();
+    let (status, request) = request_json(
+        &breg_url,
+        Method::POST,
+        "/v1/records/correction-requests?accessProfile=submitter",
+        &officer,
+        Some(json!({"data":{"owner":"owner-a","asset":asset_id,"label":"self-approved"}})),
+        Some("create-request"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{request}");
+    let request_id = request["data"]["recordIdentifier"].as_str().unwrap();
+    let (status, draft) = request_json(
+        &breg_url,
+        Method::GET,
+        &format!("/v1/records/correction-requests/{request_id}?accessProfile=submitter"),
+        &officer,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{draft}");
+    let (submit_href, submit_etag) = action(&draft, "submit_request");
+    let (status, submitted) = request_json(
+        &breg_url,
+        Method::POST,
+        &submit_href,
+        &officer,
+        Some(json!({})),
+        Some("submit-request"),
+        Some(&submit_etag),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{submitted}");
+
+    let worker_pool = database.runtime_config.build_pool().expect("worker pool");
+    assert!(
+        run_review_authority_once_for_test(&worker_pool, &authorities)
+            .await
+            .expect("one review submission exchange"),
+        "the pending review submission is claimed"
+    );
+    let accepted = wait_for(
+        &database.admin,
+        "SELECT state,accepted_binding::text FROM registry_internal.registry_request_review_submissions LIMIT 1",
+        "accepted",
+    )
+    .await;
+    let accepted_binding: Value =
+        serde_json::from_str(&accepted.get::<_, String>(1)).expect("accepted binding");
+    let review_request_id =
+        Uuid::parse_str(accepted_binding["requestId"].as_str().unwrap()).unwrap();
+    let initiator = casework_db
+        .query_one(
+            "SELECT initiator_issuer,initiator_subject FROM casework_review_requests
+             WHERE request_id=$1",
+            &[&review_request_id],
+        )
+        .await
+        .expect("recorded initiator");
+    assert_eq!(initiator.get::<_, String>(0), idp.issuer());
+    assert_eq!(initiator.get::<_, String>(1), "submitting-officer");
+    let task_id: Uuid = casework_db
+        .query_one(
+            "SELECT task_id FROM casework_review_tasks WHERE request_id=$1",
+            &[&review_request_id],
+        )
+        .await
+        .expect("review task")
+        .get(0);
+
+    let casework_call =
+        |bearer: &str, profile: &str, path: String, body: Option<Value>, key: &str| {
+            let client = reqwest::Client::new();
+            let mut call = client
+                .post(casework_url.join(&path).expect("Casework URL"))
+                .bearer_auth(bearer)
+                .header(registry_casework_core::CASEWORK_PROFILE_HEADER, profile)
+                .header(
+                    registry_casework_core::SOURCE_PROFILE_HEADER,
+                    "casework-reviewer",
+                )
+                .header("if-match", "\"1\"")
+                .header("idempotency-key", key.to_owned());
+            if let Some(body) = body {
+                call = call.json(&body);
+            }
+            async move { call.send().await.expect("Casework response").status() }
+        };
+    assert_eq!(
+        casework_call(
+            &officer,
+            "first-reviewer",
+            format!("/v1/review-tasks/{task_id}/claim"),
+            None,
+            "self-claim",
+        )
+        .await,
+        StatusCode::FORBIDDEN,
+        "the submitter cannot claim the review of their own request"
+    );
+    assert_eq!(
+        casework_call(
+            &supervisor,
+            "supervisor",
+            format!("/v1/review-tasks/{task_id}/assign"),
+            Some(json!({"assignee":{"issuer":idp.issuer(),"subject":"submitting-officer"}})),
+            "assign-to-submitter",
+        )
+        .await,
+        StatusCode::FORBIDDEN,
+        "a supervisor cannot hand the review to the person who submitted it"
+    );
+    // The submitter never holds the task, so a decision is refused as a
+    // conflict before any decision is recorded.
+    assert_eq!(
+        casework_call(
+            &officer,
+            "first-reviewer",
+            format!("/v1/review-tasks/{task_id}/decisions"),
+            Some(json!({"decision":{"type":"approve"}})),
+            "self-decide",
+        )
+        .await,
+        StatusCode::CONFLICT,
+        "the submitter cannot decide the review of their own request"
+    );
+    let untouched: (String, i64, i64) = casework_db
+        .query_one(
+            "SELECT t.state,t.revision,
+                    (SELECT count(*) FROM casework_review_decisions d WHERE d.request_id=t.request_id)
+               FROM casework_review_tasks t WHERE t.task_id=$1",
+            &[&task_id],
+        )
+        .await
+        .map(|row| (row.get(0), row.get(1), row.get(2)))
+        .expect("review task after refusal");
+    assert_eq!(untouched, ("open".to_owned(), 1, 0));
+    assert_eq!(
+        casework_call(
+            &colleague,
+            "first-reviewer",
+            format!("/v1/review-tasks/{task_id}/claim"),
+            None,
+            "colleague-claim",
+        )
+        .await,
+        StatusCode::OK,
+        "another member of the queue still claims the same task"
+    );
+
+    breg_task.abort();
+    casework_task.abort();
     database.cleanup().await;
     let (cleanup, cleanup_connection) =
         tokio_postgres::connect(&env::var("BREG_TEST_DATABASE_URL").unwrap(), NoTls)

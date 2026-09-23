@@ -14,6 +14,9 @@ use crate::HumanIdentityConfig;
 pub struct CaseworkAuthenticator {
     verifier: TokenVerifier,
     profiles: BTreeMap<String, AccessProfile>,
+    /// Requester profiles through which a person reads their own review
+    /// requests; they authenticate a person as strictly as reviewer profiles.
+    initiator_profiles: BTreeSet<String>,
     human_identity: HumanIdentityConfig,
 }
 
@@ -34,6 +37,11 @@ impl CaseworkAuthenticator {
                 .iter()
                 .cloned()
                 .map(|profile| (profile.id.clone(), profile))
+                .collect(),
+            initiator_profiles: project
+                .review_producers
+                .iter()
+                .filter_map(|producer| producer.initiator_profile.clone())
                 .collect(),
             human_identity,
         }
@@ -90,7 +98,9 @@ impl CaseworkAuthenticator {
             .profiles
             .get(selected_profile)
             .ok_or(AuthenticationError::Profile)?;
-        if profile.role != CaseworkRole::Requester
+        let requires_person = profile.role != CaseworkRole::Requester
+            || self.initiator_profiles.contains(&profile.id);
+        if requires_person
             && (verified.claims.extra.contains_key("act")
                 || verified
                     .claims
@@ -108,7 +118,7 @@ impl CaseworkAuthenticator {
         {
             return Err(AuthenticationError::Profile);
         }
-        if profile.role != CaseworkRole::Requester {
+        if requires_person {
             let human_identity = verified
                 .claims
                 .extra

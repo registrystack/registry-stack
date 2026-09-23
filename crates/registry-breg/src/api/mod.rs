@@ -469,6 +469,13 @@ async fn registry_metadata(
     let mut entities: BTreeMap<String, MetadataEntity> = BTreeMap::new();
     let permitted_requests =
         permitted_request_types(&visible_surfaces(&service, &claims, &options));
+    let mut readable_by_entity: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (_, entry) in &visible {
+        readable_by_entity
+            .entry(entry.response_entity_id.clone())
+            .or_default()
+            .extend(entry.readable_fields.iter().cloned());
+    }
     for (_, entry) in visible {
         let Some(response_entity) = service.registry.entities().get(&entry.response_entity_id)
         else {
@@ -498,7 +505,7 @@ async fn registry_metadata(
                     metadata_change_control(&service, response_entity, &permitted_requests)
                 }),
                 change_request: response_entity.change_request.as_ref().map(|request| {
-                    crate::artifacts::request_capability_metadata(request, &entry.readable_fields)
+                    crate::artifacts::request_capability_metadata(request, &readable_by_entity)
                 }),
             });
     }

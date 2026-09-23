@@ -24,10 +24,53 @@ use crate::{
 
 struct ReviewCompletionTarget {
     url: String,
-    bearer_token: BearerToken,
+    credential: ReviewCompletionCredential,
     timeout: Duration,
     maximum_attempts: u32,
     retry: Duration,
+}
+
+const MAXIMUM_COMPLETION_SECRET_BYTES: usize = 8 * 1024;
+
+/// The secret a completion destination presents on every wake-up.
+enum ReviewCompletionCredential {
+    Bearer(BearerToken),
+    Header {
+        name: reqwest::header::HeaderName,
+        value: reqwest::header::HeaderValue,
+    },
+}
+
+impl ReviewCompletionCredential {
+    fn from_config(header: Option<&str>, secret: &[u8]) -> Result<Self, RuntimeError> {
+        let Some(header) = header else {
+            return completion_bearer_token(secret).map(Self::Bearer);
+        };
+        let name = reqwest::header::HeaderName::from_bytes(header.as_bytes())
+            .map_err(|_| RuntimeError::CompletionConfiguration)?;
+        // The same header-safe subset a bearer credential is held to: visible
+        // ASCII only, so the secret cannot fold or inject a header.
+        if secret.is_empty()
+            || secret.len() > MAXIMUM_COMPLETION_SECRET_BYTES
+            || !secret.iter().all(u8::is_ascii_graphic)
+        {
+            return Err(RuntimeError::CompletionConfiguration);
+        }
+        let mut value = reqwest::header::HeaderValue::from_bytes(secret)
+            .map_err(|_| RuntimeError::CompletionConfiguration)?;
+        value.set_sensitive(true);
+        Ok(Self::Header { name, value })
+    }
+
+    fn header(&self) -> (reqwest::header::HeaderName, reqwest::header::HeaderValue) {
+        match self {
+            Self::Bearer(token) => (
+                reqwest::header::AUTHORIZATION,
+                token.authorization_header_value(),
+            ),
+            Self::Header { name, value } => (name.clone(), value.clone()),
+        }
+    }
 }
 
 struct ReviewCompletionDispatcher {
@@ -50,15 +93,21 @@ impl ReviewCompletionDispatcher {
     ) -> Result<Self, RuntimeError> {
         let mut targets = BTreeMap::new();
         for (id, target) in configured {
+            let reference = target
+                .secret_ref()
+                .ok_or(RuntimeError::CompletionConfiguration)?;
             let secret = secrets
-                .resolve(&target.bearer_token_ref)
+                .resolve(reference)
                 .map_err(|_| RuntimeError::CompletionConfiguration)?;
-            let token = completion_bearer_token(secret.expose_secret())?;
+            let credential = ReviewCompletionCredential::from_config(
+                target.secret_header(),
+                secret.expose_secret(),
+            )?;
             targets.insert(
                 id.clone(),
                 Arc::new(ReviewCompletionTarget {
                     url: target.url.clone(),
-                    bearer_token: token,
+                    credential,
                     timeout: Duration::from_millis(target.timeout_milliseconds),
                     maximum_attempts: target.maximum_attempts,
                     retry: Duration::from_secs(target.retry_seconds),
@@ -232,7 +281,8 @@ pub async fn validate_retained_completion_destinations_for_test(
                 (*id).to_owned(),
                 crate::ReviewCompletionRuntimeConfig {
                     url: "http://127.0.0.1/completion".to_owned(),
-                    bearer_token_ref: "secret:env/TEST".to_owned(),
+                    bearer_token_ref: Some("secret:env/TEST".to_owned()),
+                    auth: None,
                     timeout_milliseconds: 1_000,
                     maximum_attempts: 1,
                     retry_seconds: 1,
@@ -260,8 +310,10 @@ pub async fn dispatch_review_completions_once_for_test(
             destination_id.to_owned(),
             Arc::new(ReviewCompletionTarget {
                 url,
-                bearer_token: BearerToken::new(bearer_token.to_owned())
-                    .map_err(|_| crate::ReviewRuntimeError::Invalid)?,
+                credential: ReviewCompletionCredential::Bearer(
+                    BearerToken::new(bearer_token.to_owned())
+                        .map_err(|_| crate::ReviewRuntimeError::Invalid)?,
+                ),
                 timeout: Duration::from_secs(30),
                 maximum_attempts: 3,
                 retry: Duration::from_secs(1),
@@ -276,13 +328,11 @@ async fn deliver_review_completion(
     target: &ReviewCompletionTarget,
     delivery: &crate::LeasedReviewCompletion,
 ) -> bool {
+    let (credential_name, credential_value) = target.credential.header();
     let Ok(response) = client
         .post(&target.url)
         .timeout(target.timeout)
-        .header(
-            reqwest::header::AUTHORIZATION,
-            target.bearer_token.authorization_header_value(),
-        )
+        .header(credential_name, credential_value)
         .header("idempotency-key", delivery.event.event_id.to_string())
         .header("registry-recipient-binding", &delivery.recipient_binding)
         .json(&delivery.event)
@@ -902,7 +952,9 @@ mod tests {
             .expect("completion client");
         let target = ReviewCompletionTarget {
             url: format!("{}/completion", server.uri()),
-            bearer_token: BearerToken::new("dispatch-secret").expect("completion token"),
+            credential: ReviewCompletionCredential::Bearer(
+                BearerToken::new("dispatch-secret").expect("completion token"),
+            ),
             timeout: Duration::from_secs(1),
             maximum_attempts: 3,
             retry: Duration::from_secs(1),
@@ -924,7 +976,9 @@ mod tests {
             .await;
         let nonempty_success_target = ReviewCompletionTarget {
             url: format!("{}/nonempty-success", server.uri()),
-            bearer_token: BearerToken::new("dispatch-secret").expect("completion token"),
+            credential: ReviewCompletionCredential::Bearer(
+                BearerToken::new("dispatch-secret").expect("completion token"),
+            ),
             timeout: Duration::from_secs(1),
             maximum_attempts: 3,
             retry: Duration::from_secs(1),
@@ -956,12 +1010,92 @@ mod tests {
             .await;
         let redirect_target = ReviewCompletionTarget {
             url: format!("{}/redirect", server.uri()),
-            bearer_token: BearerToken::new("dispatch-secret").expect("completion token"),
+            credential: ReviewCompletionCredential::Bearer(
+                BearerToken::new("dispatch-secret").expect("completion token"),
+            ),
             timeout: Duration::from_secs(1),
             maximum_attempts: 3,
             retry: Duration::from_secs(1),
         };
         assert!(!deliver_review_completion(&client, &redirect_target, &delivery).await);
+    }
+
+    #[tokio::test]
+    async fn review_completion_presents_its_secret_in_a_configured_header_without_authorization() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/completion"))
+            .and(header("x-api-key", "dispatch-key"))
+            .and(header(
+                "idempotency-key",
+                "11111111-1111-4111-8111-111111111111",
+            ))
+            .and(header("registry-recipient-binding", "registry-service"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = OutboundClientBuilder::new()
+            .try_build()
+            .expect("completion client");
+        let target = ReviewCompletionTarget {
+            url: format!("{}/completion", server.uri()),
+            credential: ReviewCompletionCredential::from_config(Some("X-Api-Key"), b"dispatch-key")
+                .expect("header credential"),
+            timeout: Duration::from_secs(1),
+            maximum_attempts: 3,
+            retry: Duration::from_secs(1),
+        };
+        let delivery = crate::LeasedReviewCompletion {
+            event: registry_casework_core::ReviewCompletion {
+                event_type: registry_casework_core::ReviewCompletionType::ReviewCompleted,
+                event_id: Uuid::parse_str("11111111-1111-4111-8111-111111111111")
+                    .expect("event id"),
+                request_id: Uuid::parse_str("22222222-2222-4222-8222-222222222222")
+                    .expect("request id"),
+                result_id: Uuid::parse_str("33333333-3333-4333-8333-333333333333")
+                    .expect("result id"),
+                completed_at: Utc
+                    .with_ymd_and_hms(2026, 9, 19, 12, 34, 56)
+                    .single()
+                    .expect("completion timestamp"),
+            },
+            destination_id: "registry-completion".to_owned(),
+            recipient_binding: "registry-service".to_owned(),
+        };
+
+        assert!(deliver_review_completion(&client, &target, &delivery).await);
+        let received = server.received_requests().await.expect("recorded requests");
+        assert_eq!(received.len(), 1);
+        assert!(
+            !received[0].headers.contains_key("authorization"),
+            "a configured header replaces Authorization"
+        );
+
+        let (name, value) = ReviewCompletionCredential::from_config(None, b"dispatch-secret")
+            .expect("default credential")
+            .header();
+        assert_eq!(name, reqwest::header::AUTHORIZATION);
+        assert_eq!(value, "Bearer dispatch-secret");
+        assert!(value.is_sensitive());
+        let (_, value) =
+            ReviewCompletionCredential::from_config(Some("x-api-key"), b"dispatch-key")
+                .expect("header credential")
+                .header();
+        assert_eq!(value, "dispatch-key");
+        assert!(value.is_sensitive());
+        for invalid in [
+            b"".as_slice(),
+            b"dispatch key",
+            b"dispatch-key\r\nhost: other",
+            &[0xff],
+            &[b'k'; MAXIMUM_COMPLETION_SECRET_BYTES + 1],
+        ] {
+            assert!(matches!(
+                ReviewCompletionCredential::from_config(Some("x-api-key"), invalid),
+                Err(RuntimeError::CompletionConfiguration)
+            ));
+        }
     }
 
     #[test]

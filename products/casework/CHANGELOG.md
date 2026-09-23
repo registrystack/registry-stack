@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- Let a review completion destination present its secret in a named header.
+  `reviewCompletionDestinations.<id>.auth: {header, secretRef}` sends the raw
+  secret in that header with no `Authorization` header; without `header`, or
+  with the existing `bearerTokenRef`, the secret is sent as
+  `Authorization: Bearer` as before. Reserved header names are refused when the
+  runtime configuration loads.
+- Add `decidedByCaller` to `GET /v1/review-tasks/{taskId}` for a decided task.
+  It is true only when the current caller recorded the decision, so a reviewer
+  whose decide response was lost can confirm the outcome. It names no other
+  reviewer.
+- Fix initiator exclusion for BReg-sourced reviews. BReg now names a review's
+  initiator by the value of its configured principal claim rather than `sub`,
+  so a stage with `excludeInitiator` refuses the submitter when the Casework
+  profiles read that same claim. The professional-review starter and example
+  now exclude the submitter from the review stage and set
+  `trustedInitiatorIssuer` on the BReg producer. The paired
+  professional-licences BReg starter's `editor` client is now a human teaching
+  client, because BReg names an initiator only for a human caller and Casework
+  refuses a request for an `excludeInitiator` kind that names none.
+- Add an optional `initiatorProfile` on a review producer. The person a request
+  names as its initiator reads that request's requester-visible history through
+  `GET /v1/review-requests/{requestId}/history`, and nothing else. The initiator
+  profile authenticates a person as strictly as a reviewer profile: it refuses
+  delegated (`act`), grant-bearing, and non-human tokens. Retention now
+  keeps the initiator identity as a request-bound sha256 tombstone instead of clearing
+  it, so the initiator receives the same `410` as the producer after expiry.
+  A request erased by an earlier release kept no initiator identity, so its
+  initiator receives `404`.
+
 ## v0.33.0 - 2026-09-22
 
 - BREAKING: replace hosted decisions with unified reviews. Remove `hosted.rs`

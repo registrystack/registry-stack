@@ -132,6 +132,16 @@ struct ProducerAdmission {
     producer: registry_casework_core::ReviewProducerPolicy,
 }
 
+/// A requester-role caller entitled to a request's requester-visible history.
+enum RequesterReader {
+    /// The admitted producer, bound to its exact identity.
+    Producer(Box<registry_casework_core::ReviewProducerPolicy>),
+    /// A person reading as the recorded initiator of a request admitted by
+    /// one of these producers, each of which declares the caller's profile as
+    /// its initiator profile.
+    Initiator(std::collections::BTreeSet<String>),
+}
+
 #[derive(Clone)]
 struct ReviewRequestRecord {
     request_id: Uuid,
@@ -784,20 +794,20 @@ impl CaseworkService {
         cursor: Option<Uuid>,
         limit: usize,
     ) -> Result<ReviewHistoryPage, ReviewRuntimeError> {
-        let producer = if actor.role == CaseworkRole::Requester {
+        let requester = if actor.role == CaseworkRole::Requester {
             if source_profile_id.is_some() {
                 return Err(ReviewRuntimeError::SourceProfileNotApplicable);
             }
-            Some(self.producer_for_actor(actor)?.producer)
+            Some(self.requester_reader(actor)?)
         } else {
             require_human_reviewer(actor)?;
             None
         };
         let history = self
             .store
-            .review_history(actor, request_id, producer.as_ref(), cursor, limit)
+            .review_history(actor, request_id, requester.as_ref(), cursor, limit)
             .await?;
-        if producer.is_none() {
+        if requester.is_none() {
             self.preflight_review_request_source(request_id, source_profile_id, token)
                 .await?;
             self.store.recheck_review_access(actor, request_id).await?;
@@ -1093,6 +1103,31 @@ impl CaseworkService {
             .cloned()
             .map(|producer| ProducerAdmission { producer })
             .ok_or(ReviewRuntimeError::Forbidden)
+    }
+
+    /// The producer itself, or else a person whose profile some producer
+    /// declares as its initiator profile. Which request that person may read
+    /// is decided against the stored initiator, not here.
+    fn requester_reader(
+        &self,
+        actor: &ActorContext,
+    ) -> Result<RequesterReader, ReviewRuntimeError> {
+        match self.producer_for_actor(actor) {
+            Ok(admission) => return Ok(RequesterReader::Producer(Box::new(admission.producer))),
+            Err(ReviewRuntimeError::Forbidden) => {}
+            Err(error) => return Err(error),
+        }
+        let producers = self
+            .project
+            .review_producers
+            .iter()
+            .filter(|producer| producer.initiator_profile.as_ref() == Some(&actor.profile_id))
+            .map(|producer| producer.id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        if producers.is_empty() {
+            return Err(ReviewRuntimeError::Forbidden);
+        }
+        Ok(RequesterReader::Initiator(producers))
     }
 }
 
@@ -1556,7 +1591,10 @@ impl PostgresStore {
             .query_opt(
                 "SELECT t.task_id,t.request_id,t.stage_index,t.stage_id,t.queue_id,t.state,
                         t.holder_issuer,t.holder_subject,t.revision,r.policy_snapshot,
-                        r.lifecycle,r.result_available_until,r.result_erased_at
+                        r.lifecycle,r.result_available_until,r.result_erased_at,
+                        EXISTS(SELECT 1 FROM casework_review_decisions d
+                               WHERE d.task_id=t.task_id
+                                 AND d.actor_issuer=$2 AND d.actor_subject=$3)
                  FROM casework_review_tasks t
                  JOIN casework_review_requests r ON r.request_id=t.request_id
                  JOIN casework_queue_service q ON q.queue_id=t.queue_id
@@ -1593,7 +1631,13 @@ impl PostgresStore {
         {
             return Err(ReviewRuntimeError::NotFound);
         }
-        reviewer_task_from_row(&row, &policy)
+        let mut task = reviewer_task_from_row(&row, &policy)?;
+        // Only the caller's own decision is compared, so the read confirms a
+        // lost decide response without naming any other reviewer.
+        if task.state == ReviewerTaskState::Decided {
+            task.decided_by_caller = Some(row.get(13));
+        }
+        Ok(task)
     }
 
     async fn review_absence_candidates(
@@ -1871,7 +1915,8 @@ impl PostgresStore {
         let transaction = client.transaction().await?;
         let selected_rows = transaction
             .query(
-                "SELECT request_id,producer_id,producer_issuer,producer_subject,result_erased_at
+                "SELECT request_id,producer_id,producer_issuer,producer_subject,result_erased_at,
+                        initiator_issuer,initiator_subject
                    FROM casework_review_requests r
                  WHERE (result_available_until<=$1 AND (
                            result_erased_at IS NULL OR EXISTS(
@@ -1904,12 +1949,24 @@ impl PostgresStore {
                     &row.get::<_, String>(2),
                     &row.get::<_, String>(3),
                 );
+                // The initiator keeps only a tombstone of their identity, so
+                // they alone can still learn that the result expired.
+                let initiator_tombstone = match (
+                    row.get::<_, Option<String>>(5),
+                    row.get::<_, Option<String>>(6),
+                ) {
+                    (Some(issuer), Some(subject)) => {
+                        Some(review_initiator_tombstone(request_id, &issuer, &subject))
+                    }
+                    _ => None,
+                };
                 transaction
                     .execute(
                         "UPDATE casework_review_requests
-                            SET producer_issuer=$2,producer_subject=$2
+                            SET producer_issuer=$2,producer_subject=$2,
+                                initiator_issuer=$3,initiator_subject=$3
                           WHERE request_id=$1 AND result_erased_at IS NULL",
-                        &[&request_id, &producer_tombstone],
+                        &[&request_id, &producer_tombstone, &initiator_tombstone],
                     )
                     .await?;
             }
@@ -1958,8 +2015,8 @@ impl PostgresStore {
                  SET source_namespace=submission_digest,subject_source=submission_digest,
                      subject_type=submission_digest,subject_id=submission_digest,
                      subject_version=submission_digest,subject_digest=submission_digest,
-                     requester_reference=submission_digest,initiator_issuer=NULL,
-                     initiator_subject=NULL,context='{}'::jsonb,result_constraints=NULL,
+                     requester_reference=submission_digest,context='{}'::jsonb,
+                     result_constraints=NULL,
                      completion_destination=NULL,completion_recipient_binding=NULL
                  WHERE request_id=ANY($2) AND result_available_until<=$1
                    AND result_erased_at IS NULL",
@@ -2842,6 +2899,7 @@ impl PostgresStore {
             state: ReviewerTaskState::Held {
                 holder: actor.principal.clone(),
             },
+            decided_by_caller: None,
         };
         let claim_event_id = Uuid::new_v4();
         {
@@ -3166,6 +3224,7 @@ impl PostgresStore {
             } else {
                 ReviewerTaskState::Open
             },
+            decided_by_caller: None,
         };
         insert_review_idempotency(
             &transaction,
@@ -3432,7 +3491,7 @@ impl PostgresStore {
         &self,
         actor: &ActorContext,
         request_id: Uuid,
-        producer: Option<&registry_casework_core::ReviewProducerPolicy>,
+        requester: Option<&RequesterReader>,
         cursor: Option<Uuid>,
         limit: usize,
     ) -> Result<ReviewHistoryPage, ReviewRuntimeError> {
@@ -3441,10 +3500,14 @@ impl PostgresStore {
         // Access is decided before the retention boundary: whether a settled
         // review's result window has closed is only for callers entitled to
         // the review to learn.
-        if let Some(producer) = producer {
-            ensure_review_producer_access(&record, producer)?;
-        } else {
-            ensure_review_reviewer_access(&client, &record, actor, None, false).await?;
+        match requester {
+            Some(RequesterReader::Producer(producer)) => {
+                ensure_review_producer_access(&record, producer)?;
+            }
+            Some(RequesterReader::Initiator(producers)) => {
+                ensure_review_initiator_access(&record, producers, actor)?;
+            }
+            None => ensure_review_reviewer_access(&client, &record, actor, None, false).await?,
         }
         ensure_review_result_retained(&record)?;
         if limit == 0 || limit > 100 {
@@ -3459,7 +3522,7 @@ impl PostgresStore {
                             NOT $3 OR kind IN ('request_created','stage_advanced','review_settled','review_cancelled')
                             OR (kind='note' AND detail->>'audience'='requester')
                          )",
-                        &[&request_id, &cursor, &producer.is_some()],
+                        &[&request_id, &cursor, &requester.is_some()],
                     )
                     .await?
                     .map(|row| (row.get::<_, DateTime<Utc>>(0), row.get::<_, Uuid>(1)))
@@ -3483,7 +3546,7 @@ impl PostgresStore {
                  ORDER BY occurred_at,event_id LIMIT $5",
                 &[
                     &request_id,
-                    &producer.is_some(),
+                    &requester.is_some(),
                     &cursor_occurred_at,
                     &cursor_event_id,
                     &query_limit,
@@ -3766,6 +3829,7 @@ impl PostgresStore {
             revision: expected_revision + 1,
             eligible_profiles: stage.deciding_profiles.clone(),
             state: ReviewerTaskState::Open,
+            decided_by_caller: None,
         };
         let actor_ref = actor_reference(&actor.principal);
         let release_event_id = Uuid::new_v4();
@@ -3906,6 +3970,7 @@ impl PostgresStore {
                 "decided" | "closed" => ReviewerTaskState::Decided,
                 _ => return Err(ReviewRuntimeError::Corrupt),
             },
+            decided_by_caller: None,
         };
         check_task_holder(&task.state, &actor.principal).map_err(map_review_decision_error)?;
         let mut progress = ReviewProgress::new(
@@ -4791,6 +4856,35 @@ fn request_from_row(row: &Row) -> Result<ReviewRequestRecord, ReviewRuntimeError
     })
 }
 
+/// A person reads a request only as its exact recorded initiator, and only
+/// when the producer that admitted it declares the caller's profile. After
+/// erasure the stored initiator is a tombstone of that same identity, so the
+/// person still learns that the result expired and nobody else does.
+fn ensure_review_initiator_access(
+    record: &ReviewRequestRecord,
+    producers: &std::collections::BTreeSet<String>,
+    actor: &ActorContext,
+) -> Result<(), ReviewRuntimeError> {
+    let expected = if record.result_erased_at.is_some() {
+        let tombstone = review_initiator_tombstone(
+            record.request_id,
+            &actor.principal.issuer,
+            &actor.principal.subject,
+        );
+        IssuerPrincipal {
+            issuer: tombstone.clone(),
+            subject: tombstone,
+        }
+    } else {
+        actor.principal.clone()
+    };
+    if producers.contains(&record.producer_id) && record.initiator.as_ref() == Some(&expected) {
+        Ok(())
+    } else {
+        Err(ReviewRuntimeError::NotFound)
+    }
+}
+
 fn ensure_review_producer_access(
     record: &ReviewRequestRecord,
     producer: &registry_casework_core::ReviewProducerPolicy,
@@ -4847,6 +4941,7 @@ fn reviewer_task_from_row(
         revision: row.get(8),
         eligible_profiles: stage.deciding_profiles.clone(),
         state,
+        decided_by_caller: None,
     })
 }
 
@@ -5149,10 +5244,26 @@ fn review_producer_tombstone(
     issuer: &str,
     subject: &str,
 ) -> String {
+    review_identity_tombstone(
+        b"registry-casework-review-producer-tombstone/v1\0",
+        request_id,
+        &[producer_id, issuer, subject],
+    )
+}
+
+fn review_initiator_tombstone(request_id: Uuid, issuer: &str, subject: &str) -> String {
+    review_identity_tombstone(
+        b"registry-casework-review-initiator-tombstone/v1\0",
+        request_id,
+        &[issuer, subject],
+    )
+}
+
+fn review_identity_tombstone(domain: &[u8], request_id: Uuid, values: &[&str]) -> String {
     let mut hash = Sha256::new();
-    hash.update(b"registry-casework-review-producer-tombstone/v1\0");
+    hash.update(domain);
     hash.update(request_id.as_bytes());
-    for value in [producer_id, issuer, subject] {
+    for value in values {
         hash.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
         hash.update(value.as_bytes());
     }

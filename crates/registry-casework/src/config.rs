@@ -332,7 +332,12 @@ pub struct RuntimeConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewCompletionRuntimeConfig {
     pub url: String,
-    pub bearer_token_ref: String,
+    /// Shorthand for `auth` with no header: the secret is presented as
+    /// `Authorization: Bearer`. Exactly one of this and `auth` is configured.
+    #[serde(default)]
+    pub bearer_token_ref: Option<String>,
+    #[serde(default)]
+    pub auth: Option<ReviewCompletionAuthConfig>,
     #[serde(default = "default_review_completion_timeout_ms")]
     #[cfg_attr(
         feature = "schema",
@@ -360,6 +365,134 @@ pub struct ReviewCompletionRuntimeConfig {
         ))
     )]
     pub retry_seconds: u64,
+}
+
+/// How a completion destination presents its secret. Without `header` the
+/// secret is sent as `Authorization: Bearer`; with one, the raw secret is the
+/// value of that header and no `Authorization` header is sent.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewCompletionAuthConfig {
+    #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(min = 1, max = MAXIMUM_REVIEW_COMPLETION_HEADER_NAME_BYTES))
+    )]
+    pub header: Option<String>,
+    pub secret_ref: String,
+}
+
+impl ReviewCompletionRuntimeConfig {
+    /// The secret reference this destination presents, when exactly one of
+    /// `bearerTokenRef` and `auth` names it.
+    #[must_use]
+    pub fn secret_ref(&self) -> Option<&str> {
+        match (&self.bearer_token_ref, &self.auth) {
+            (Some(reference), None) => Some(reference),
+            (None, Some(auth)) => Some(&auth.secret_ref),
+            _ => None,
+        }
+    }
+
+    /// The header that carries the secret instead of `Authorization: Bearer`.
+    #[must_use]
+    pub fn secret_header(&self) -> Option<&str> {
+        self.auth.as_ref().and_then(|auth| auth.header.as_deref())
+    }
+}
+
+const MAXIMUM_REVIEW_COMPLETION_HEADER_NAME_BYTES: usize = 64;
+
+/// Header names a completion destination may not carry its secret in.
+///
+/// Authentication, host and routing, cookie, framing, hop-by-hop, forwarding,
+/// proxy, and tracing headers belong to the runtime or the operator's network
+/// path, the same closed set Evidence refuses for its source headers. The
+/// `idempotency-key` and `registry-` headers are the completion contract's own.
+const RESERVED_REVIEW_COMPLETION_HEADER_NAMES: [&str; 39] = [
+    "authorization",
+    "proxy-authorization",
+    "www-authenticate",
+    "proxy-authenticate",
+    "host",
+    "cookie",
+    "set-cookie",
+    "content-length",
+    "content-type",
+    "transfer-encoding",
+    "expect",
+    "connection",
+    "keep-alive",
+    "te",
+    "trailer",
+    "upgrade",
+    "proxy-connection",
+    "forwarded",
+    "via",
+    "x-real-ip",
+    "x-client-ip",
+    "x-cluster-client-ip",
+    "true-client-ip",
+    "cf-connecting-ip",
+    "fastly-client-ip",
+    "x-appengine-user-ip",
+    "x-azure-clientip",
+    "traceparent",
+    "tracestate",
+    "baggage",
+    "b3",
+    "x-cloud-trace-context",
+    "x-request-id",
+    "x-correlation-id",
+    "x-amzn-trace-id",
+    "x-original-url",
+    "x-rewrite-url",
+    "x-original-method",
+    "idempotency-key",
+];
+
+const RESERVED_REVIEW_COMPLETION_HEADER_PREFIXES: [&str; 8] = [
+    "x-forwarded-",
+    "proxy-",
+    "sec-",
+    "x-b3-",
+    "x-envoy-",
+    "x-datadog-",
+    "x-http-method",
+    "registry-",
+];
+
+fn valid_review_completion_header_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    !name.is_empty()
+        && name.len() <= MAXIMUM_REVIEW_COMPLETION_HEADER_NAME_BYTES
+        && name.bytes().all(is_http_token_byte)
+        && !RESERVED_REVIEW_COMPLETION_HEADER_PREFIXES
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
+        && !RESERVED_REVIEW_COMPLETION_HEADER_NAMES.contains(&lower.as_str())
+}
+
+fn is_http_token_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
 }
 
 fn default_review_completion_timeout_ms() -> u64 {
@@ -805,10 +938,29 @@ impl RuntimeConfig {
             }
         }
         for (destination_id, destination) in &self.review_completion_destinations {
-            references.push((
-                format!("reviewCompletionDestinations.{destination_id}.bearerTokenRef"),
-                &destination.bearer_token_ref,
-            ));
+            let path = format!("reviewCompletionDestinations.{destination_id}");
+            match (&destination.bearer_token_ref, &destination.auth) {
+                (Some(reference), None) => {
+                    references.push((format!("{path}.bearerTokenRef"), reference));
+                }
+                (None, Some(auth)) => {
+                    if auth
+                        .header
+                        .as_deref()
+                        .is_some_and(|header| !valid_review_completion_header_name(header))
+                    {
+                        return Err(RuntimeConfigError::InvalidReviewCompletionAuth {
+                            path: format!("{path}.auth.header"),
+                        });
+                    }
+                    references.push((format!("{path}.auth.secretRef"), &auth.secret_ref));
+                }
+                _ => {
+                    return Err(RuntimeConfigError::InvalidReviewCompletionAuth {
+                        path: format!("{path}.auth"),
+                    });
+                }
+            }
         }
         for (path, raw) in references {
             let reference = SecretReference::parse(raw.clone())
@@ -1617,6 +1769,124 @@ reviewProducers:
     }
 
     #[test]
+    fn a_completion_destination_names_a_safe_header_for_its_secret() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("source-context");
+        std::fs::create_dir(&package).unwrap();
+        write_package_with_project(&package, SOURCE_CONTEXT_REVIEW_PROJECT);
+        let runtime = root.path().join("completion-auth.yaml");
+        let load = |destination: serde_json::Value| {
+            let mut document = operator_value(&package, "operator-controlled-upstream");
+            document["reviewCompletionDestinations"] =
+                serde_json::json!({ "receiver": destination });
+            std::fs::write(&runtime, serde_norway::to_string(&document).unwrap()).unwrap();
+            RuntimeConfig::load(&runtime)
+        };
+        let url = "https://completion.example.test/v1/reviews";
+
+        let custom = load(serde_json::json!({
+            "url": url,
+            "auth": {"header": "X-Api-Key", "secretRef": "secret:file/completion-key"}
+        }))
+        .expect("a custom header is accepted");
+        let auth = custom.review_completion_destinations["receiver"]
+            .auth
+            .as_ref()
+            .expect("configured auth");
+        assert_eq!(auth.header.as_deref(), Some("X-Api-Key"));
+        assert_eq!(
+            custom.review_completion_destinations["receiver"].secret_header(),
+            Some("X-Api-Key")
+        );
+        assert_eq!(
+            custom.review_completion_destinations["receiver"].secret_ref(),
+            Some("secret:file/completion-key")
+        );
+        let defaulted = load(serde_json::json!({
+            "url": url,
+            "auth": {"secretRef": "secret:file/completion-key"}
+        }))
+        .expect("auth without a header keeps the bearer default");
+        assert_eq!(
+            defaulted.review_completion_destinations["receiver"].secret_ref(),
+            Some("secret:file/completion-key")
+        );
+        let shorthand = load(serde_json::json!({
+            "url": url,
+            "bearerTokenRef": "secret:file/completion-token"
+        }))
+        .expect("bearerTokenRef stays the shorthand for the default");
+        assert_eq!(
+            shorthand.review_completion_destinations["receiver"].secret_ref(),
+            Some("secret:file/completion-token")
+        );
+        // An explicit null reads as absent, as the runtime schema states.
+        let null_shorthand = load(serde_json::json!({
+            "url": url,
+            "bearerTokenRef": null,
+            "auth": {"secretRef": "secret:file/completion-key"}
+        }))
+        .expect("a null bearerTokenRef is absent");
+        assert_eq!(
+            null_shorthand.review_completion_destinations["receiver"].secret_ref(),
+            Some("secret:file/completion-key")
+        );
+        assert!(load(serde_json::json!({"url": url, "bearerTokenRef": null})).is_err());
+
+        for header in [
+            "Authorization",
+            "proxy-authorization",
+            "Host",
+            "Content-Length",
+            "Content-Type",
+            "Transfer-Encoding",
+            "Connection",
+            "Keep-Alive",
+            "TE",
+            "Trailer",
+            "Upgrade",
+            "Cookie",
+            "Idempotency-Key",
+            "Registry-Recipient-Binding",
+            "registry-anything",
+            "X-Forwarded-For",
+            "Traceparent",
+            "",
+            "x api key",
+            "x-api-key\r\nhost",
+            &"x".repeat(65),
+        ] {
+            let refused = load(serde_json::json!({
+                "url": url,
+                "auth": {"header": header, "secretRef": "secret:file/completion-key"}
+            }))
+            .expect_err(header);
+            assert_eq!(
+                refused.path(),
+                "reviewCompletionDestinations.receiver.auth.header",
+                "{header}"
+            );
+        }
+        for destination in [
+            serde_json::json!({"url": url}),
+            serde_json::json!({
+                "url": url,
+                "bearerTokenRef": "secret:file/completion-token",
+                "auth": {"header": "x-api-key", "secretRef": "secret:file/completion-key"}
+            }),
+        ] {
+            let refused = load(destination).expect_err("exactly one credential");
+            assert_eq!(refused.path(), "reviewCompletionDestinations.receiver.auth");
+        }
+        let unknown = load(serde_json::json!({
+            "url": url,
+            "auth": {"header": "x-api-key", "secretRef": "secret:file/completion-key", "scheme": "Basic"}
+        }))
+        .expect_err("closed auth object");
+        assert!(matches!(unknown, RuntimeConfigError::Parse { .. }));
+    }
+
+    #[test]
     fn runtime_envelope_listener_and_operated_paths_are_strict() {
         let root = tempfile::tempdir().unwrap();
         let package = root.path().join("package");
@@ -1915,6 +2185,10 @@ pub enum RuntimeConfigError {
     InactiveReviewSourceNamespace,
     #[error("{path} is not a valid Casework source binding")]
     InvalidSourceBinding { path: String },
+    #[error(
+        "{path} must name exactly one completion secret, in a header the runtime does not reserve"
+    )]
+    InvalidReviewCompletionAuth { path: String },
     #[error("plaintext PostgreSQL is test-only")]
     PlaintextDatabase,
     #[error("the OIDC issuer could not be initialized")]
@@ -1935,7 +2209,8 @@ impl RuntimeConfigError {
             Self::InvalidSecretProviders => "secretProviders",
             Self::InvalidSecretReference { path }
             | Self::SecretProviderRequired { path }
-            | Self::InvalidSourceBinding { path } => path,
+            | Self::InvalidSourceBinding { path }
+            | Self::InvalidReviewCompletionAuth { path } => path,
             Self::RemovedPrincipalClaim => "authentication.oidc.principalClaim",
             Self::InvalidOidc | Self::Oidc => "authentication.oidc",
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",

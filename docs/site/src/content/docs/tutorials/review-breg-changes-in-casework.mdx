@@ -194,7 +194,10 @@ setup. It does not report the progress of a submitted review. Use the resources 
 ## Submit and observe the exact binding
 
 Create the request as its owner, read its advertised `submit_request` action, and send the returned
-`ifMatch` with a fresh `Idempotency-Key`. Submission freezes:
+`ifMatch` with a fresh `Idempotency-Key`. Submit as a person: the starter's `editor` client carries
+the human actor marker, because the review stage excludes the request's initiator and BReg names an
+initiator only for a human caller. A service or agent submission is refused when Casework admits it.
+Submission freezes:
 
 - the request and target facts used by the proposal;
 - the proposal version and effect digest;

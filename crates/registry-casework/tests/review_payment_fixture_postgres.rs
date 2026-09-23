@@ -376,6 +376,7 @@ fn project(issuer: &str) -> CaseworkProject {
             issuer: issuer.to_owned(),
             subject: "payment-service".to_owned(),
             trusted_initiator_issuer: None,
+            initiator_profile: None,
             source_namespaces: vec!["payments".to_owned()],
             kinds: vec!["payment-batch".to_owned()],
             recovery_days: 7,

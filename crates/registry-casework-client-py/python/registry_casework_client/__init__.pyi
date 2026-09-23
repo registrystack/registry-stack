@@ -794,7 +794,9 @@ class ReviewHeldTaskStateValue(TypedDict):
 class ReviewHeldTaskState(TypedDict):
     held: ReviewHeldTaskStateValue
 ReviewerTaskState: TypeAlias = Literal["open", "decided"] | ReviewHeldTaskState
-class ReviewerTask(TypedDict):
+class _ReviewerTaskOptional(TypedDict, total=False):
+    decidedByCaller: bool
+class ReviewerTask(_ReviewerTaskOptional):
     taskId: Uuid
     requestId: Uuid
     stageIndex: SafeInteger

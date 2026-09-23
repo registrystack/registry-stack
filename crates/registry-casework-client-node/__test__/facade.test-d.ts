@@ -137,6 +137,11 @@ function taskHolder(task: ReviewerTask): string | undefined {
 }
 void taskHolder
 
+function decidedByMe(task: ReviewerTask): boolean {
+  return task.state === 'decided' && task.decidedByCaller === true
+}
+void decidedByMe
+
 function resultTrace(outcome: ReviewResultOutcome): string {
   switch (outcome.kind) {
     case 'available':

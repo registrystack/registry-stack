@@ -31,6 +31,7 @@ erases it for one exact source request.
 | Review request context, result and constraints, notes, drafts, tasks, and minimized history | `terminalDays` from terminal settlement | The runtime retention pass |
 | Producer result-feed events | The same `terminalDays` from terminal settlement | The runtime retention pass |
 | Protected accountability record: the raw issuer-qualified deciding identity, the staff reason, and only a sha256 digest of a recorded result | `accountabilityDays` from the same terminal time, never shorter than `terminalDays` | The runtime retention pass |
+| The request's producer and initiator identities | Raw until `terminalDays`, then a request-bound sha256 tombstone (not keyed with a secret) until the accountability deadline, so the same producer or initiator still learns the result expired | The runtime retention pass |
 | Review-create and mutation replay responses | Until request payload expiry, then a payload-free tombstone until the accountability deadline | The runtime retention pass, after which the key is free again |
 | Source-backed subjects, work items, private drafts, attempts, receipts, history, and durable events | No expiry; they stay for the life of the database | `caseworkctl retention erase --apply` |
 | The keyed audit JSONL file and its rotated siblings | Your retention policy alone | No Casework command |

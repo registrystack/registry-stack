@@ -103,7 +103,9 @@ function otherCreateOperation() {
 const metadata = {id:'test-registry',version:'1',revision:`sha256:${'a'.repeat(64)}`,metadataVersion:'1',
   entities:[{id:'item',datasetIdentifier:'items',route:'items',schema:'/v1/schemas/item',
     operations:['create','patch','list','lookup','apply_request','tombstone','batch'].map(operation=>({operation,accessProfile:profile})),readableFields:fields.map(f=>f.id),
-    changeRequest:{planner:{kind:'declarative'},review:{authority:'casework',policyId:'address-review'},
+    changeRequest:{planner:{kind:'declarative'},
+      effects:[{id:'move',operation:'patch',target:{entity:'item',fromField:'reference'},set:[{field:'wide',fromField:'date'},{field:'decimal'}],clear:['nullable']}],
+      review:{authority:'casework',policyId:'address-review'},
       onApproved:{mode:'automatic',executor:'breg-worker'},application:{preconditions:{request:[]}}}},
     {id:'other',datasetIdentifier:'other-items',route:'others',schema:'/v1/schemas/other',
       operations:[{operation:'create',accessProfile:profile}],readableFields:fields.map(f=>f.id)}],
@@ -193,6 +195,9 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     assert.equal(contract.changeRequestCapability('item').review.policyId,'address-review');
     assert.equal(contract.changeRequestCapability('item').onApproved.executor,'breg-worker');
     assert.deepEqual(contract.changeRequestCapability('item').application.preconditions,{request:[]});
+    assert.deepEqual(contract.changeRequestCapability('item').effects,[{id:'move',operation:'patch',
+      target:{entity:'item',fromField:'reference'},set:[{field:'wide',fromField:'date'},{field:'decimal'}],clear:['nullable']}]);
+    assert.deepEqual(contract.changeRequestCapability('item').planner.writes,[]);
     list.id = 'forged';
     assert.equal(contract.operations.find(op=>op.kind === 'list').id,'records.item.list');
     const binding = contract.selectCreate('records.item.create',profile);

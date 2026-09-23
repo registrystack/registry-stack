@@ -177,6 +177,7 @@ fn project(issuer: &str) -> CaseworkProject {
             profile("administrator", CaseworkRole::Administrator),
             profile("producer", CaseworkRole::Requester),
             profile("producer-alternate", CaseworkRole::Requester),
+            profile("initiator", CaseworkRole::Requester),
         ],
         queues: vec![QueuePolicy {
             id: "review".to_owned(),
@@ -256,6 +257,7 @@ fn project(issuer: &str) -> CaseworkProject {
                 issuer: issuer.to_owned(),
                 subject: "registry-service".to_owned(),
                 trusted_initiator_issuer: Some(issuer.to_owned()),
+                initiator_profile: Some("initiator".to_owned()),
                 source_namespaces: vec!["registry".to_owned()],
                 kinds: vec![
                     "registry-correction".to_owned(),
@@ -270,6 +272,7 @@ fn project(issuer: &str) -> CaseworkProject {
                 issuer: issuer.to_owned(),
                 subject: "registry-service".to_owned(),
                 trusted_initiator_issuer: Some(issuer.to_owned()),
+                initiator_profile: None,
                 source_namespaces: vec!["registry".to_owned()],
                 kinds: vec![
                     "registry-correction".to_owned(),
@@ -368,13 +371,15 @@ async fn app(
              INSERT INTO casework_queue_service(queue_id,team_id,revision)
              VALUES('review','review-team',1);
              INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
-             VALUES('review-team','https://placeholder.invalid','reviewer','staff');",
+             VALUES('review-team','https://placeholder.invalid','reviewer','staff'),
+                   ('review-team','https://placeholder.invalid','colleague','staff');",
         )
         .await
         .expect("seed review HTTP directory");
     database
         .execute(
-            "UPDATE casework_memberships SET issuer=$1 WHERE subject='reviewer'",
+            "UPDATE casework_memberships SET issuer=$1
+             WHERE issuer='https://placeholder.invalid'",
             &[&idp.issuer()],
         )
         .await
@@ -444,6 +449,24 @@ fn reviewer_token(idp: &MockIdp) -> String {
         "aud": AUDIENCE,
         "registry_principal": "reviewer",
         "scope": "casework:staff",
+        "registry_actor_kind": "human"
+    }))
+}
+
+fn colleague_token(idp: &MockIdp) -> String {
+    idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "registry_principal": "colleague",
+        "scope": "casework:staff",
+        "registry_actor_kind": "human"
+    }))
+}
+
+fn initiator_token(idp: &MockIdp, principal: &str) -> String {
+    idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "registry_principal": principal,
+        "scope": "casework:initiator",
         "registry_actor_kind": "human"
     }))
 }
@@ -1789,6 +1812,336 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
         .await
         .expect("bounded unknown result body")
         .is_empty());
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn an_initiator_reads_only_the_requester_visible_history_of_their_own_request_over_http() {
+    let idp = MockIdp::start().await;
+    let (app, _, _, _, _, _) = app(&idp).await;
+    let producer_token = token(&idp);
+    let reviewer_token = reviewer_token(&idp);
+    let own_token = initiator_token(&idp, "initiator");
+    let send = |request: Request<Body>| {
+        let app = app.clone();
+        async move {
+            let response = app.oneshot(request).await.expect("initiator test response");
+            let status = response.status();
+            let body = to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .expect("bounded initiator test body");
+            (
+                status,
+                String::from_utf8(body.to_vec()).expect("UTF-8 body"),
+            )
+        }
+    };
+    let read = |request_id: Uuid, token: &str, profile: &str| {
+        Request::builder()
+            .uri(format!("/v1/review-requests/{request_id}/history"))
+            .header("authorization", format!("Bearer {token}"))
+            .header(CASEWORK_PROFILE_HEADER, profile)
+            .body(Body::empty())
+            .expect("history request")
+    };
+    let note = |request_id: Uuid, token: &str, profile: &str, audience: &str, text: &str| {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri(format!("/v1/review-requests/{request_id}/notes"))
+            .header("authorization", format!("Bearer {token}"))
+            .header(CASEWORK_PROFILE_HEADER, profile)
+            .header(CONTENT_TYPE, "application/json")
+            .header("idempotency-key", format!("note-{profile}-{audience}"));
+        if profile == "staff" {
+            request = request.header(SOURCE_PROFILE_HEADER, "reviewer-source");
+        }
+        request
+            .body(Body::from(
+                serde_json::to_vec(&json!({"audience": audience, "note": text}))
+                    .expect("serialize note"),
+            ))
+            .expect("note request")
+    };
+
+    let (status, body) = send(create_http_request(
+        &review_request("initiator-history", &idp.issuer()),
+        Some(&producer_token),
+    ))
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let created: ReviewRequestAccepted = serde_json::from_str(&body).expect("create JSON");
+    let request_id = created.request_id;
+    let (status, _) = send(note(
+        request_id,
+        &reviewer_token,
+        "staff",
+        "requester",
+        "REQUESTER_REASON_CANARY",
+    ))
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(note(
+        request_id,
+        &reviewer_token,
+        "staff",
+        "reviewers",
+        "REVIEWER_ONLY_CANARY",
+    ))
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The same request, admitted by a producer that declares no initiator
+    // profile, names the same person and stays closed to them.
+    let (status, body) = send(
+        Request::builder()
+            .method("POST")
+            .uri("/v1/review-requests")
+            .header(CONTENT_TYPE, "application/json")
+            .header(CASEWORK_PROFILE_HEADER, "producer-alternate")
+            .header("idempotency-key", "create-alternate-initiator")
+            .header(
+                "authorization",
+                format!("Bearer {}", alternate_producer_token(&idp)),
+            )
+            .body(Body::from(
+                serde_json::to_vec(&review_request_for_subject(
+                    "record-2",
+                    "alternate-initiator-history",
+                    &idp.issuer(),
+                ))
+                .expect("serialize alternate request"),
+            ))
+            .expect("alternate create request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let alternate: ReviewRequestAccepted = serde_json::from_str(&body).expect("alternate JSON");
+
+    let (status, history) = send(read(request_id, &own_token, "initiator")).await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    assert!(history.contains("REQUESTER_REASON_CANARY"));
+    assert!(history.contains("request_created"));
+    assert!(!history.contains("REVIEWER_ONLY_CANARY"));
+    let (_, producer_history) = send(read(request_id, &producer_token, "producer")).await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&history).expect("initiator history JSON"),
+        serde_json::from_str::<Value>(&producer_history).expect("producer history JSON"),
+        "the initiator sees exactly the producer's view"
+    );
+
+    let other_person = initiator_token(&idp, "another-initiator");
+    let (status, _) = send(read(request_id, &other_person, "initiator")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(read(alternate.request_id, &own_token, "initiator")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(read(Uuid::new_v4(), &own_token, "initiator")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(read(
+        request_id,
+        &alternate_producer_token(&idp),
+        "producer-alternate",
+    ))
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "another requester");
+
+    // The initiator reads as the person themselves: an agent acting for them,
+    // a grant-bearing token, or a non-human token naming the same subject is
+    // refused before any request is looked up.
+    for (extra, expected) in [
+        (
+            json!({"act": {"sub": "assistant-agent"}}),
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            json!({"registry_grant_request": "grant"}),
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            json!({"registry_actor_kind": "service"}),
+            StatusCode::FORBIDDEN,
+        ),
+    ] {
+        let mut claims = json!({
+            "aud": AUDIENCE,
+            "registry_principal": "initiator",
+            "scope": "casework:initiator",
+            "registry_actor_kind": "human"
+        });
+        for (key, value) in extra.as_object().expect("extra claims") {
+            claims[key] = value.clone();
+        }
+        let (status, body) = send(read(request_id, &idp.mint_token(claims), "initiator")).await;
+        assert_eq!(status, expected, "{extra}");
+        assert!(!body.contains("REQUESTER_REASON_CANARY"), "{extra}");
+    }
+
+    // Read only: the initiator profile carries no producer authority.
+    let (status, _) = send(note(
+        request_id,
+        &own_token,
+        "initiator",
+        "requester",
+        "INITIATOR_NOTE_CANARY",
+    ))
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    for path in ["result", "clocks"] {
+        let (status, _) = send(
+            Request::builder()
+                .uri(format!("/v1/review-requests/{request_id}/{path}"))
+                .header("authorization", format!("Bearer {own_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "initiator")
+                .body(Body::empty())
+                .expect("initiator read request"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
+    }
+    let (_, history) = send(read(request_id, &producer_token, "producer")).await;
+    assert!(!history.contains("INITIATOR_NOTE_CANARY"));
+
+    idp.stop().await;
+}
+
+async fn read_task_json(app: &axum::Router, task_id: Uuid, token: &str) -> Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-tasks/{task_id}"))
+                .header("authorization", format!("Bearer {token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .body(Body::empty())
+                .expect("review task read request"),
+        )
+        .await
+        .expect("review task read response");
+    assert_eq!(response.status(), StatusCode::OK);
+    serde_json::from_slice(
+        &to_bytes(response.into_body(), 32 * 1024)
+            .await
+            .expect("bounded review task read"),
+    )
+    .expect("review task read JSON")
+}
+
+#[tokio::test]
+async fn a_reviewer_confirms_from_the_task_read_whether_they_decided_it_over_http() {
+    let idp = MockIdp::start().await;
+    let (app, _, _, _, _, _) = app(&idp).await;
+    let mut request = review_request("decided-by-caller-ref", &idp.issuer());
+    request.kind = "registry-answer".to_owned();
+    request.subject.id = "decided-by-caller-record".to_owned();
+    request.subject.digest = ContentDigest::for_bytes(b"decided-by-caller-record");
+    request.context = ReviewContext::Submitted {
+        snapshot: json!({}),
+    };
+    let created = app
+        .clone()
+        .oneshot(create_http_request(&request, Some(&token(&idp))))
+        .await
+        .expect("create review response");
+    assert_eq!(created.status(), StatusCode::CREATED);
+
+    let reviewer_token = reviewer_token(&idp);
+    let colleague_token = colleague_token(&idp);
+    let tasks = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/review-tasks")
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .body(Body::empty())
+                .expect("task list request"),
+        )
+        .await
+        .expect("task list response");
+    let tasks: ReviewTaskPage = serde_json::from_slice(
+        &to_bytes(tasks.into_body(), 32 * 1024)
+            .await
+            .expect("bounded task list"),
+    )
+    .expect("task list JSON");
+    assert_eq!(tasks.items.len(), 1);
+    let task_id = tasks.items[0].task_id;
+
+    // Undecided work says nothing about who decided it.
+    let open = read_task_json(&app, task_id, &reviewer_token).await;
+    assert_eq!(open["state"], "open");
+    assert!(open.get("decidedByCaller").is_none(), "{open}");
+
+    let claimed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/review-tasks/{task_id}/claim"))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header("if-match", "\"1\"")
+                .header("idempotency-key", "claim-decided-by-caller")
+                .body(Body::empty())
+                .expect("claim request"),
+        )
+        .await
+        .expect("claim response");
+    assert_eq!(claimed.status(), StatusCode::OK);
+    let decided = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/review-tasks/{task_id}/decisions"))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(CONTENT_TYPE, "application/json")
+                .header("if-match", "\"2\"")
+                .header("idempotency-key", "decide-decided-by-caller")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "decision": {
+                            "type": "answer",
+                            "outcome": "found",
+                            "result": {"answer": "Recorded"}
+                        }
+                    }))
+                    .expect("serialize decision"),
+                ))
+                .expect("decide request"),
+        )
+        .await
+        .expect("decide response");
+    assert_eq!(decided.status(), StatusCode::NO_CONTENT);
+
+    // The reviewer whose decide response was lost learns the decision is
+    // theirs, while a colleague on the same queue learns only that it is
+    // not theirs, and neither read names the decider.
+    let own = read_task_json(&app, task_id, &reviewer_token).await;
+    assert_eq!(own["state"], "decided");
+    assert_eq!(own["decidedByCaller"], true);
+    let other = read_task_json(&app, task_id, &colleague_token).await;
+    assert_eq!(other["state"], "decided");
+    assert_eq!(other["decidedByCaller"], false);
+    assert_eq!(
+        {
+            let mut own = own.clone();
+            own.as_object_mut()
+                .expect("task object")
+                .remove("decidedByCaller");
+            own
+        },
+        {
+            let mut other = other.clone();
+            other
+                .as_object_mut()
+                .expect("task object")
+                .remove("decidedByCaller");
+            other
+        },
+        "the two reads differ only by the caller-relative flag"
+    );
 
     idp.stop().await;
 }

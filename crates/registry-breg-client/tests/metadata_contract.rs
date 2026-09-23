@@ -24,7 +24,7 @@ pub use breg_attachment::*;
 mod breg_metadata;
 
 use breg_metadata::{
-    BRegChangeRequestOnApprovedMode, BRegChangeRequestPlannerKind,
+    BRegChangeRequestBinding, BRegChangeRequestOnApprovedMode, BRegChangeRequestPlannerKind,
     BRegChangeRequestReviewRequirement, BRegDirectWrite, BRegMetadata, BRegMetadataErrorKind,
     BRegMetadataSelectionErrorKind, BRegOperationKind,
 };
@@ -304,6 +304,29 @@ fn runtime_v1_promotes_only_exact_direct_create_and_patch_contracts() {
     );
 }
 
+/// A company carrying `capability`, with every field the capability names
+/// readable on the entity and on each of its operations, as a conforming
+/// runtime publishes it.
+fn change_request_fixture(capability: &Value) -> Value {
+    let mut value = fixture();
+    let readable = [
+        ("legal-name", "legalName"),
+        ("company", "company"),
+        ("proposed-name", "proposedName"),
+        ("name", "name"),
+        ("status", "status"),
+        ("note", "note"),
+        ("parent", "parent"),
+    ];
+    value["entities"][0]["readableFields"] = json!(readable.map(|(id, _)| id));
+    for operation in value["operations"].as_array_mut().unwrap() {
+        operation["fields"] = json!(readable.map(|(id, api_name)| field(id, api_name)));
+        operation["readableFields"] = json!(readable.map(|(id, _)| id));
+    }
+    value["entities"][0]["changeRequest"] = capability.clone();
+    value
+}
+
 #[test]
 fn change_request_capability_is_strict_typed_and_never_creates_authority() {
     let capability = json!({
@@ -323,15 +346,40 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
                 "maximumMapEntries": 256,
                 "maximumModules": 0
             },
-            "possibleWriteCount": 1,
-            "possibleWriteOperations": ["patch"]
+            "possibleWriteCount": 2,
+            "possibleWriteOperations": ["patch"],
+            "writes": [
+                {"target": {"entity": "company", "fromField": "company"}, "operation": "patch", "fields": ["name"]}
+            ]
         },
+        "effects": [
+            {
+                "id": "rename",
+                "operation": "patch",
+                "target": {"entity": "company", "fromField": "company"},
+                "set": [{"field": "name", "fromField": "proposed-name"}, {"field": "status"}],
+                "clear": ["note"]
+            },
+            {
+                "id": "branch",
+                "operation": "create",
+                "target": {"entity": "company"},
+                "set": [],
+                "clear": []
+            },
+            {
+                "id": "link",
+                "operation": "patch",
+                "target": {"entity": "company", "fromEffect": "branch"},
+                "set": [{"field": "parent", "fromEffect": "branch"}],
+                "clear": []
+            }
+        ],
         "review": {"authority":"casework", "policyId":"address-review"},
         "onApproved": {"mode":"automatic", "executor":"breg-worker"},
         "application": {"preconditions":{"request":[]}}
     });
-    let mut value = fixture();
-    value["entities"][0]["changeRequest"] = capability.clone();
+    let value = change_request_fixture(&capability);
     let metadata = parse(&value);
     let change_request = metadata.change_request_capability("company").unwrap();
     assert_eq!(
@@ -345,11 +393,54 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
     let limits = change_request.planner().limits().unwrap();
     assert_eq!(limits.maximum_targets(), 16);
     assert_eq!(limits.maximum_field_mutations(), 128);
-    assert_eq!(change_request.planner().possible_write_count(), Some(1));
+    assert_eq!(change_request.planner().possible_write_count(), Some(2));
     assert!(matches!(
         change_request.planner().possible_write_operations(),
         [BRegOperationKind::Patch]
     ));
+    let [write] = change_request.planner().writes() else {
+        panic!("one readable planner write")
+    };
+    assert_eq!(write.target().entity(), "company");
+    assert_eq!(
+        write.target().binding(),
+        Some(&BRegChangeRequestBinding::FromField("company".to_owned()))
+    );
+    assert_eq!(write.operation(), &BRegOperationKind::Patch);
+    assert_eq!(write.fields(), ["name"]);
+    let [rename, branch, link] = change_request.effects() else {
+        panic!("three readable effects")
+    };
+    assert_eq!(rename.id(), "rename");
+    assert_eq!(rename.operation(), &BRegOperationKind::Patch);
+    assert_eq!(rename.target().entity(), "company");
+    assert_eq!(
+        rename.target().binding(),
+        Some(&BRegChangeRequestBinding::FromField("company".to_owned()))
+    );
+    let [name, status] = rename.set() else {
+        panic!("two readable set fields")
+    };
+    assert_eq!(name.field(), "name");
+    assert_eq!(
+        name.value(),
+        Some(&BRegChangeRequestBinding::FromField(
+            "proposed-name".to_owned()
+        ))
+    );
+    assert_eq!(status.field(), "status");
+    assert_eq!(status.value(), None);
+    assert_eq!(rename.clear(), ["note"]);
+    assert_eq!(branch.operation(), &BRegOperationKind::Create);
+    assert_eq!(branch.target().binding(), None);
+    assert_eq!(
+        link.target().binding(),
+        Some(&BRegChangeRequestBinding::FromEffect("branch".to_owned()))
+    );
+    assert_eq!(
+        link.set()[0].value(),
+        Some(&BRegChangeRequestBinding::FromEffect("branch".to_owned()))
+    );
     let BRegChangeRequestReviewRequirement::External(requirement) = change_request.review() else {
         panic!("external")
     };
@@ -373,6 +464,7 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
         BRegDirectWrite::Patch(_)
     ));
 
+    let capability_for_references = capability.clone();
     for malformed in [
         {
             let mut malformed = capability.clone();
@@ -382,6 +474,65 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
         {
             let mut malformed = capability.clone();
             malformed["review"]["mode"] = json!("external");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed.as_object_mut().unwrap().remove("effects");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["planner"]
+                .as_object_mut()
+                .unwrap()
+                .remove("writes");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["planner"]["possibleWriteCount"] = json!(0);
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            let write = malformed["planner"]["writes"][0].clone();
+            malformed["planner"]["writes"] = json!([write.clone(), write.clone(), write]);
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["effects"][0]["target"]["fromEffect"] = json!("branch");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["effects"][0]["set"][0]["fromEffect"] = json!("branch");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["effects"][1]["id"] = json!("rename");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["effects"][0]["set"][1]["field"] = json!("name");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["effects"][0]["permission"] = json!("company-writer");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["effects"][0]["operation"] = json!("delete");
+            malformed
+        },
+        {
+            let mut malformed = capability.clone();
+            malformed["effects"][0]["target"]["entity"] = json!("Company");
             malformed
         },
         {
@@ -403,9 +554,58 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
             malformed
         },
     ] {
-        let mut value = fixture();
-        value["entities"][0]["changeRequest"] = malformed;
+        let value = change_request_fixture(&malformed);
         assert!(BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+
+    // A source naming an effect the document does not list, an entity it
+    // does not list, or a field the caller cannot read is a dangling
+    // reference, never a name the caller may assume exists or may read.
+    let dangling_at = |pointer: &str, replacement: Value| {
+        let mut dangling = capability_for_references.clone();
+        *dangling.pointer_mut(pointer).unwrap() = replacement;
+        dangling
+    };
+    for dangling in [
+        dangling_at("/effects/2/target/fromEffect", json!("hidden")),
+        dangling_at("/effects/2/set/0/fromEffect", json!("hidden")),
+        dangling_at("/effects/0/target/entity", json!("hidden-company")),
+        dangling_at("/effects/0/target/fromField", json!("secret")),
+        dangling_at("/effects/0/set/0/field", json!("secret")),
+        dangling_at("/effects/0/set/0/fromField", json!("secret")),
+        dangling_at("/effects/0/clear/0", json!("secret")),
+        dangling_at("/planner/writes/0/target/entity", json!("hidden-company")),
+        dangling_at("/planner/writes/0/target/fromField", json!("secret")),
+        dangling_at("/planner/writes/0/fields/0", json!("secret")),
+    ] {
+        let value = change_request_fixture(&dangling);
+        assert_eq!(
+            BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap())
+                .unwrap_err()
+                .kind(),
+            BRegMetadataErrorKind::DanglingReference
+        );
+    }
+
+    // A planner write targets a stored record, never an effect the same
+    // request creates, so a planner target bound by fromEffect is refused
+    // whether or not the effect is listed.
+    for effect in ["rename", "hidden"] {
+        let mut malformed = capability_for_references.clone();
+        let target = malformed
+            .pointer_mut("/planner/writes/0/target")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        target.remove("fromField");
+        target.insert("fromEffect".to_owned(), json!(effect));
+        let value = change_request_fixture(&malformed);
+        assert_eq!(
+            BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap())
+                .unwrap_err()
+                .kind(),
+            BRegMetadataErrorKind::Shape
+        );
     }
 }
 #[test]

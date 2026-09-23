@@ -483,6 +483,56 @@ fn action_authority_has_no_crud_requirement_or_profile_fallback() {
 }
 
 #[tokio::test]
+async fn human_identity_is_the_principal_claim_and_a_human_token_without_it_is_refused() {
+    let registry = compiled();
+    let idp = MockIdp::start().await;
+    let audience = "urn:example:breg";
+    let auth = RegistryAuthenticator::new(
+        &registry,
+        oidc_verifier_config(idp.issuer(), vec![audience.to_owned()]),
+        Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            idp.jwks_uri(),
+            JwksFetcherConfig::defaults(),
+            FetchUrlPolicy::dev(),
+        )),
+        AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".to_owned())),
+    )
+    .expect("human verifier config is valid");
+    let claims = json!({
+        "aud": audience,
+        "registry_principal": "reviewer-principal",
+        "registry_actor_kind": "human",
+        "registry_purpose": "case-management",
+        "regions": ["north"],
+        "scope": "case.rename"
+    });
+
+    // The person is named by the principal claim, with no `sub` needed.
+    let named = auth
+        .authenticate(&idp.mint_token(claims.clone()))
+        .await
+        .expect("a human token with its principal claim authenticates");
+    let identity = named
+        .human_identity()
+        .expect("a human token names a person");
+    assert_eq!(identity.issuer, idp.issuer());
+    assert_eq!(identity.subject, "reviewer-principal");
+
+    // A human token without the principal claim is refused before it can
+    // name anyone, even when it carries `sub`.
+    let mut unnamed = claims;
+    unnamed
+        .as_object_mut()
+        .unwrap()
+        .remove("registry_principal");
+    unnamed["sub"] = json!("reviewer-principal");
+    assert!(matches!(
+        auth.authenticate(&idp.mint_token(unnamed)).await,
+        Err(crate::auth::AuthenticationError::InvalidClaims)
+    ));
+}
+
+#[tokio::test]
 async fn standing_agent_action_requires_a_trusted_actor_subject() {
     let registry = compiled();
     let idp = MockIdp::start().await;

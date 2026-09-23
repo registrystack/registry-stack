@@ -317,6 +317,7 @@ fn project(version: &str) -> CaseworkProject {
             issuer: "https://issuer.test".to_owned(),
             subject: "registry-service".to_owned(),
             trusted_initiator_issuer: Some("https://issuer.test".to_owned()),
+            initiator_profile: None,
             source_namespaces: vec!["registry".to_owned()],
             kinds: vec!["registry-correction".to_owned()],
             recovery_days: 30,
@@ -1390,7 +1391,14 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
     for column in 3..=9 {
         assert_eq!(scrubbed.get::<_, String>(column), tombstone);
     }
-    for column in 10..=13 {
+    // The initiator survives only as a tombstone of their identity, distinct
+    // from the producer's, so they alone can still learn the result expired.
+    let initiator_tombstone = scrubbed.get::<_, String>(10);
+    assert!(initiator_tombstone.starts_with("sha256:"));
+    assert_eq!(scrubbed.get::<_, String>(11), initiator_tombstone);
+    assert_ne!(initiator_tombstone, producer_tombstone);
+    assert_ne!(initiator_tombstone, "initiator");
+    for column in 12..=13 {
         assert!(scrubbed.get::<_, Option<String>>(column).is_none());
     }
     let reservation = fixture
@@ -3044,6 +3052,157 @@ async fn review_reads_check_access_before_disclosing_retention_expiry() {
             .await,
         Err(ReviewRuntimeError::ResultExpired)
     ));
+}
+
+#[tokio::test]
+async fn an_initiator_learns_their_own_result_expired_before_and_after_erasure() {
+    let fixture = fixture().await;
+    let mut project = answer_project(false);
+    project
+        .access_profiles
+        .push(profile("initiator", CaseworkRole::Requester));
+    project.review_producers[0].initiator_profile = Some("initiator".to_owned());
+    project.check().expect("initiator retention test project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("initiator retention test service");
+    let initiator = actor("initiator", CaseworkRole::Requester, "initiator");
+    let another_person = actor("another-person", CaseworkRole::Requester, "initiator");
+    let mut same_subject_elsewhere = actor("initiator", CaseworkRole::Requester, "initiator");
+    same_subject_elsewhere.principal.issuer = "https://other-issuer.test".to_owned();
+    let mut answer_request = request("initiator-retention", "initiator-retention-ref");
+    answer_request.kind = "registry-answer".to_owned();
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            answer_request,
+            "create-initiator-retention",
+        )
+        .await
+        .expect("create initiator retention review");
+    let request_id = created.accepted.request_id;
+    assert!(!service
+        .review_history(&initiator, request_id, None, "", None, 10)
+        .await
+        .expect("initiator reads an active request")
+        .items
+        .is_empty());
+    assert!(matches!(
+        service
+            .review_history(&same_subject_elsewhere, request_id, None, "", None, 10)
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    let task = task_id(&fixture, request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-initiator-retention",
+        )
+        .await
+        .expect("claim initiator retention review");
+    service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            task,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Answer {
+                    outcome: "found".to_owned(),
+                    reason: None,
+                    result: Some(json!({"correction": "settled answer"})),
+                },
+            },
+            None,
+            "",
+            2,
+            "decide-initiator-retention",
+        )
+        .await
+        .expect("settle initiator retention review");
+    let now = Utc::now();
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests
+             SET terminal_at=$2,result_available_until=$3,
+                 accountability_retained_until=$4
+             WHERE request_id=$1",
+            &[
+                &request_id,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+                &(now + TimeDelta::days(30)),
+            ],
+        )
+        .await
+        .expect("cross the result retention boundary");
+
+    for phase in ["expired", "erased"] {
+        assert!(
+            matches!(
+                service
+                    .review_history(&initiator, request_id, None, "", None, 10)
+                    .await,
+                Err(ReviewRuntimeError::ResultExpired)
+            ),
+            "{phase}"
+        );
+        assert!(
+            matches!(
+                service
+                    .review_history(&fixture.producer, request_id, None, "", None, 10)
+                    .await,
+                Err(ReviewRuntimeError::ResultExpired)
+            ),
+            "{phase}"
+        );
+        assert!(
+            matches!(
+                service
+                    .review_history(&another_person, request_id, None, "", None, 10)
+                    .await,
+                Err(ReviewRuntimeError::NotFound)
+            ),
+            "{phase}"
+        );
+        assert!(
+            matches!(
+                service
+                    .review_history(&same_subject_elsewhere, request_id, None, "", None, 10)
+                    .await,
+                Err(ReviewRuntimeError::NotFound)
+            ),
+            "{phase}"
+        );
+        if phase == "expired" {
+            service
+                .erase_expired_reviews()
+                .await
+                .expect("erase the expired result");
+        }
+    }
+    let stored = fixture
+        .database
+        .query_one(
+            "SELECT initiator_issuer,initiator_subject,result_erased_at IS NOT NULL
+             FROM casework_review_requests WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("inspect erased initiator");
+    let tombstone = stored.get::<_, String>(0);
+    assert!(stored.get::<_, bool>(2));
+    assert!(tombstone.starts_with("sha256:"));
+    assert_eq!(stored.get::<_, String>(1), tombstone);
+    assert_ne!(tombstone, initiator.principal.issuer);
+    assert_ne!(tombstone, initiator.principal.subject);
 }
 
 #[tokio::test]

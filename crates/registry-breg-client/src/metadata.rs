@@ -243,6 +243,7 @@ pub struct BRegChangeRequestPlannerCapability {
     limits: Option<BRegChangeRequestPlannerLimits>,
     possible_write_count: Option<u64>,
     possible_write_operations: Vec<BRegOperationKind>,
+    writes: Vec<BRegChangeRequestPlannerWrite>,
 }
 
 impl BRegChangeRequestPlannerCapability {
@@ -269,6 +270,128 @@ impl BRegChangeRequestPlannerCapability {
     #[must_use]
     pub fn possible_write_operations(&self) -> &[BRegOperationKind] {
         &self.possible_write_operations
+    }
+
+    /// Declared planner writes on entities the caller may read, each naming
+    /// only the fields the caller may read. `possible_write_count` still
+    /// counts every declared write.
+    #[must_use]
+    pub fn writes(&self) -> &[BRegChangeRequestPlannerWrite] {
+        &self.writes
+    }
+}
+
+/// Where a change-request target or value comes from, when the caller may
+/// read it: a field on the request entity, or the record another effect of
+/// the same request creates.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BRegChangeRequestBinding {
+    FromField(String),
+    FromEffect(String),
+}
+
+/// The entity a change-request effect or planner write changes. The binding
+/// is absent when the target is created by the effect itself or is chosen
+/// by a request field the caller cannot read.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BRegChangeRequestTarget {
+    entity: String,
+    binding: Option<BRegChangeRequestBinding>,
+}
+
+impl BRegChangeRequestTarget {
+    #[must_use]
+    pub fn entity(&self) -> &str {
+        &self.entity
+    }
+
+    #[must_use]
+    pub const fn binding(&self) -> Option<&BRegChangeRequestBinding> {
+        self.binding.as_ref()
+    }
+}
+
+/// One declared planner write, filtered to fields the caller may read.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BRegChangeRequestPlannerWrite {
+    target: BRegChangeRequestTarget,
+    operation: BRegOperationKind,
+    fields: Vec<String>,
+}
+
+impl BRegChangeRequestPlannerWrite {
+    #[must_use]
+    pub const fn target(&self) -> &BRegChangeRequestTarget {
+        &self.target
+    }
+
+    #[must_use]
+    pub const fn operation(&self) -> &BRegOperationKind {
+        &self.operation
+    }
+
+    #[must_use]
+    pub fn fields(&self) -> &[String] {
+        &self.fields
+    }
+}
+
+/// One field a change-request effect sets. The value source is absent when
+/// it is a request field the caller cannot read.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BRegChangeRequestFieldSet {
+    field: String,
+    value: Option<BRegChangeRequestBinding>,
+}
+
+impl BRegChangeRequestFieldSet {
+    #[must_use]
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+
+    #[must_use]
+    pub const fn value(&self) -> Option<&BRegChangeRequestBinding> {
+        self.value.as_ref()
+    }
+}
+
+/// One declared change-request effect on an entity the caller may read,
+/// naming only the target fields the caller may read. Descriptive only: it
+/// cannot create target-write authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BRegChangeRequestEffect {
+    id: String,
+    operation: BRegOperationKind,
+    target: BRegChangeRequestTarget,
+    set: Vec<BRegChangeRequestFieldSet>,
+    clear: Vec<String>,
+}
+
+impl BRegChangeRequestEffect {
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    #[must_use]
+    pub const fn operation(&self) -> &BRegOperationKind {
+        &self.operation
+    }
+
+    #[must_use]
+    pub const fn target(&self) -> &BRegChangeRequestTarget {
+        &self.target
+    }
+
+    #[must_use]
+    pub fn set(&self) -> &[BRegChangeRequestFieldSet] {
+        &self.set
+    }
+
+    #[must_use]
+    pub fn clear(&self) -> &[String] {
+        &self.clear
     }
 }
 
@@ -376,6 +499,7 @@ impl fmt::Debug for BRegChangeRequestApplicationCapability {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BRegChangeRequestCapability {
     planner: BRegChangeRequestPlannerCapability,
+    effects: Vec<BRegChangeRequestEffect>,
     review: BRegChangeRequestReviewRequirement,
     on_approved: BRegChangeRequestOnApprovedCapability,
     application: BRegChangeRequestApplicationCapability,
@@ -385,6 +509,10 @@ impl BRegChangeRequestCapability {
     #[must_use]
     pub const fn planner(&self) -> &BRegChangeRequestPlannerCapability {
         &self.planner
+    }
+    #[must_use]
+    pub fn effects(&self) -> &[BRegChangeRequestEffect] {
+        &self.effects
     }
     #[must_use]
     pub const fn review(&self) -> &BRegChangeRequestReviewRequirement {
@@ -2820,12 +2948,35 @@ fn parse_change_request_capability(
 ) -> Result<BRegChangeRequestCapability, BRegMetadataError> {
     let mut capability = object(value)?;
     let planner = parse_change_request_planner(required(&mut capability, "planner")?)?;
+    let effects = array(required(&mut capability, "effects")?)?
+        .into_iter()
+        .map(parse_change_request_effect)
+        .collect::<Result<Vec<_>, _>>()?;
+    ensure_unique(effects.iter().map(BRegChangeRequestEffect::id))?;
+    let listed = effects
+        .iter()
+        .map(BRegChangeRequestEffect::id)
+        .collect::<BTreeSet<_>>();
+    let dangling = effects.iter().any(|effect| {
+        effect
+            .target
+            .binding
+            .iter()
+            .chain(effect.set.iter().filter_map(|set| set.value.as_ref()))
+            .any(|binding| {
+                matches!(binding, BRegChangeRequestBinding::FromEffect(id) if !listed.contains(id.as_str()))
+            })
+    });
+    if dangling {
+        return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
+    }
     let review = parse_change_request_review(required(&mut capability, "review")?)?;
     let on_approved = parse_change_request_on_approved(required(&mut capability, "onApproved")?)?;
     let application = parse_change_request_application(required(&mut capability, "application")?)?;
     finish(capability)?;
     Ok(BRegChangeRequestCapability {
         planner,
+        effects,
         review,
         on_approved,
         application,
@@ -2897,6 +3048,7 @@ fn parse_change_request_planner(
                 limits: None,
                 possible_write_count: None,
                 possible_write_operations: Vec::new(),
+                writes: Vec::new(),
             })
         }
         "rhai" => {
@@ -2927,6 +3079,13 @@ fn parse_change_request_planner(
                     .iter()
                     .map(BRegOperationKind::as_str),
             )?;
+            let writes = array(required(&mut planner, "writes")?)?
+                .into_iter()
+                .map(parse_change_request_planner_write)
+                .collect::<Result<Vec<_>, _>>()?;
+            if u64::try_from(writes.len()).map_or(true, |count| count > possible_write_count) {
+                return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            }
             finish(planner)?;
             Ok(BRegChangeRequestPlannerCapability {
                 kind: BRegChangeRequestPlannerKind::Rhai,
@@ -2934,8 +3093,93 @@ fn parse_change_request_planner(
                 limits: Some(limits),
                 possible_write_count: Some(possible_write_count),
                 possible_write_operations,
+                writes,
             })
         }
+        _ => Err(metadata_error(BRegMetadataErrorKind::Shape)),
+    }
+}
+
+fn parse_change_request_planner_write(
+    value: Value,
+) -> Result<BRegChangeRequestPlannerWrite, BRegMetadataError> {
+    let mut write = object(value)?;
+    let target = parse_change_request_target(required(&mut write, "target")?)?;
+    // A planner write targets a stored record; only an effect's target or
+    // value may name another effect of the same request.
+    if matches!(
+        target.binding,
+        Some(BRegChangeRequestBinding::FromEffect(_))
+    ) {
+        return Err(metadata_error(BRegMetadataErrorKind::Shape));
+    }
+    let operation = parse_change_request_operation(required(&mut write, "operation")?)?;
+    let fields = identifier_array(required(&mut write, "fields")?)?;
+    ensure_unique(fields.iter().map(String::as_str))?;
+    finish(write)?;
+    Ok(BRegChangeRequestPlannerWrite {
+        target,
+        operation,
+        fields,
+    })
+}
+
+fn parse_change_request_effect(value: Value) -> Result<BRegChangeRequestEffect, BRegMetadataError> {
+    let mut effect = object(value)?;
+    let id = identifier(required(&mut effect, "id")?)?;
+    let operation = parse_change_request_operation(required(&mut effect, "operation")?)?;
+    let target = parse_change_request_target(required(&mut effect, "target")?)?;
+    let set = array(required(&mut effect, "set")?)?
+        .into_iter()
+        .map(|value| {
+            let mut entry = object(value)?;
+            let field = identifier(required(&mut entry, "field")?)?;
+            let value = parse_change_request_binding(&mut entry)?;
+            finish(entry)?;
+            Ok(BRegChangeRequestFieldSet { field, value })
+        })
+        .collect::<Result<Vec<_>, BRegMetadataError>>()?;
+    let clear = identifier_array(required(&mut effect, "clear")?)?;
+    ensure_unique(
+        set.iter()
+            .map(BRegChangeRequestFieldSet::field)
+            .chain(clear.iter().map(String::as_str)),
+    )?;
+    finish(effect)?;
+    Ok(BRegChangeRequestEffect {
+        id,
+        operation,
+        target,
+        set,
+        clear,
+    })
+}
+
+fn parse_change_request_target(value: Value) -> Result<BRegChangeRequestTarget, BRegMetadataError> {
+    let mut target = object(value)?;
+    let entity = identifier(required(&mut target, "entity")?)?;
+    let binding = parse_change_request_binding(&mut target)?;
+    finish(target)?;
+    Ok(BRegChangeRequestTarget { entity, binding })
+}
+
+fn parse_change_request_binding(
+    object: &mut Map<String, Value>,
+) -> Result<Option<BRegChangeRequestBinding>, BRegMetadataError> {
+    let from_field = object.remove("fromField").map(identifier).transpose()?;
+    let from_effect = object.remove("fromEffect").map(identifier).transpose()?;
+    match (from_field, from_effect) {
+        (Some(_), Some(_)) => Err(metadata_error(BRegMetadataErrorKind::Shape)),
+        (Some(field), None) => Ok(Some(BRegChangeRequestBinding::FromField(field))),
+        (None, Some(effect)) => Ok(Some(BRegChangeRequestBinding::FromEffect(effect))),
+        (None, None) => Ok(None),
+    }
+}
+
+fn parse_change_request_operation(value: Value) -> Result<BRegOperationKind, BRegMetadataError> {
+    match identifier(value)?.as_str() {
+        "create" => Ok(BRegOperationKind::Create),
+        "patch" => Ok(BRegOperationKind::Patch),
         _ => Err(metadata_error(BRegMetadataErrorKind::Shape)),
     }
 }
@@ -3772,6 +4016,64 @@ fn validate_metadata_references(
             }
         }
         let _ = (&entity.schema_path, &entity.change_control);
+        if let Some(change_request) = &entity.change_request {
+            validate_change_request_references(entities, entity, change_request)?;
+        }
+    }
+    Ok(())
+}
+
+/// A change request names only listed entities and fields the caller may
+/// read: target fields on the target entity, and value or target sources on
+/// the entity that carries the request.
+fn validate_change_request_references(
+    entities: &[BRegMetadataEntity],
+    request_entity: &BRegMetadataEntity,
+    change_request: &BRegChangeRequestCapability,
+) -> Result<(), BRegMetadataError> {
+    let readable = |entity: &BRegMetadataEntity, field: &str| {
+        entity
+            .readable_fields
+            .iter()
+            .any(|candidate| candidate == field)
+    };
+    let bound_readably = |binding: Option<&BRegChangeRequestBinding>| match binding {
+        Some(BRegChangeRequestBinding::FromField(field)) => readable(request_entity, field),
+        Some(BRegChangeRequestBinding::FromEffect(_)) | None => true,
+    };
+    let targets = change_request
+        .planner
+        .writes
+        .iter()
+        .map(|write| (&write.target, write.fields.iter().collect::<Vec<_>>()))
+        .chain(change_request.effects.iter().map(|effect| {
+            (
+                &effect.target,
+                effect
+                    .set
+                    .iter()
+                    .map(|set| &set.field)
+                    .chain(&effect.clear)
+                    .collect(),
+            )
+        }));
+    for (target, fields) in targets {
+        let Some(target_entity) = entities.iter().find(|entity| entity.id == target.entity) else {
+            return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
+        };
+        if !bound_readably(target.binding.as_ref())
+            || fields.iter().any(|field| !readable(target_entity, field))
+        {
+            return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
+        }
+    }
+    if change_request
+        .effects
+        .iter()
+        .flat_map(|effect| &effect.set)
+        .any(|set| !bound_readably(set.value.as_ref()))
+    {
+        return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
     }
     Ok(())
 }

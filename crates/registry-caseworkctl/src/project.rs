@@ -65,6 +65,9 @@ reviewKinds:
       - id: review
         queue: corrections
         decidingProfiles: [staff]
+        # The person who submitted the change request in the registry cannot
+        # claim, be assigned, or decide its review.
+        excludeInitiator: true
         requiredApprovals: 1
     retention:
       terminalDays: 30
@@ -95,6 +98,10 @@ reviewProducers:
     profile: integration-requester
     issuer: http://127.0.0.1:8091
     subject: professional-review-breg
+    # BReg names the submitting person with its own issuer and the value of
+    # its principal claim, the same `registry_principal` claim these
+    # profiles read.
+    trustedInitiatorIssuer: http://127.0.0.1:8091
     sourceNamespaces: [professional-licences]
     kinds: [scope-correction]
     recoveryDays: 7
@@ -1380,6 +1387,42 @@ mod tests {
     }
 
     #[test]
+    fn starter_review_excludes_the_person_who_submitted_the_request() {
+        let policy: CaseworkProject = serde_norway::from_str(CASEWORK_YAML).unwrap();
+        policy.check().unwrap();
+        for kind in &policy.review_kinds {
+            for stage in &kind.stages {
+                assert!(
+                    stage.exclude_initiator,
+                    "stage {} of {} lets a submitter approve their own request",
+                    stage.id, kind.id
+                );
+            }
+        }
+        // BReg names the initiator with its stock issuer and the same
+        // principal claim these profiles read, so the producer trusts
+        // initiators from the issuer it authenticates with.
+        for producer in &policy.review_producers {
+            assert_eq!(
+                producer.trusted_initiator_issuer.as_deref(),
+                Some(producer.issuer.as_str()),
+                "producer {} does not trust its own issuer for initiators",
+                producer.id
+            );
+        }
+        let principal_claims = policy
+            .access_profiles
+            .iter()
+            .map(|profile| profile.principal_claim.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            principal_claims,
+            ["registry_principal"].into_iter().collect(),
+            "an initiator matches a reviewer only when both read one principal claim"
+        );
+    }
+
+    #[test]
     fn doctor_never_reports_unattested_event_wiring_as_ready() {
         let check = doctor_source_check("professional-register");
         assert_eq!(check["sourceId"], "professional-register");
@@ -1748,6 +1791,36 @@ mod tests {
     }
 
     #[test]
+    fn doctor_refuses_a_completion_secret_in_a_reserved_header() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        init(&project, "standalone-decision").unwrap();
+        let runtime_config = project.join("runtime.example.yaml");
+        let mut document: Value =
+            serde_norway::from_str(&runtime_example(&project, false).unwrap()).unwrap();
+        document["reviewCompletionDestinations"] = json!({
+            "receiver": {
+                "url": "https://completion.example.test/v1/reviews",
+                "auth": {"header": "Host", "secretRef": "secret:file/completion-key"}
+            }
+        });
+        fs::write(&runtime_config, serde_norway::to_string(&document).unwrap()).unwrap();
+
+        let error = doctor(&runtime_config).unwrap_err();
+        let runtime_error = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<registry_casework::RuntimeConfigError>());
+        assert!(
+            matches!(
+                runtime_error,
+                Some(registry_casework::RuntimeConfigError::InvalidReviewCompletionAuth { path })
+                    if path == "reviewCompletionDestinations.receiver.auth.header"
+            ),
+            "{error:#}"
+        );
+    }
+
+    #[test]
     fn standalone_starter_checks_real_review_display_schema_without_a_source() {
         use std::os::unix::fs::PermissionsExt as _;
 
@@ -2085,7 +2158,7 @@ mod tests {
         // the credentials it writes into the description.
         let second_identity_yaml = CASEWORK_YAML.replace(
             "    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n",
-            "    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n  - id: registry-breg-failover\n    profile: integration-requester\n    issuer: http://127.0.0.1:8091\n    subject: professional-review-breg-failover\n    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n",
+            "    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n  - id: registry-breg-failover\n    profile: integration-requester\n    issuer: http://127.0.0.1:8091\n    subject: professional-review-breg-failover\n    trustedInitiatorIssuer: http://127.0.0.1:8091\n    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n",
         );
         let (_root, project) =
             write_offline_project(&second_identity_yaml, BREG_SOURCE_DESCRIPTION);
@@ -2102,7 +2175,7 @@ mod tests {
         // producers overall.
         let extra_producer_yaml = CASEWORK_YAML.replace(
             "    recoveryDays: 7\n",
-            "    recoveryDays: 7\n  - id: registry-breg-other\n    profile: integration-requester\n    issuer: http://127.0.0.1:8091\n    subject: professional-review-breg-other\n    sourceNamespaces: [other-source]\n    kinds: [scope-correction]\n    recoveryDays: 7\n",
+            "    recoveryDays: 7\n  - id: registry-breg-other\n    profile: integration-requester\n    issuer: http://127.0.0.1:8091\n    subject: professional-review-breg-other\n    trustedInitiatorIssuer: http://127.0.0.1:8091\n    sourceNamespaces: [other-source]\n    kinds: [scope-correction]\n    recoveryDays: 7\n",
         );
         let (_root, project) = write_offline_project(&extra_producer_yaml, BREG_SOURCE_DESCRIPTION);
 
@@ -2182,6 +2255,36 @@ mod tests {
             ["refused", "more-detail"]
         );
         assert_eq!(kind["outcomes"][1]["settlement"], "changes_requested");
+    }
+
+    #[test]
+    fn check_reports_the_initiator_profile_and_refuses_one_that_is_not_a_requester() {
+        let with_initiator = CASEWORK_YAML
+            .replace(
+                "sources:\n",
+                "  - id: change-submitter\n    principalClaim: registry_principal\n    requiredScopes: [casework:reviews:history]\n    role: requester\nsources:\n",
+            )
+            .replace(
+                "    subject: professional-review-breg\n",
+                "    subject: professional-review-breg\n    initiatorProfile: change-submitter\n",
+            );
+        let (_root, project) = write_offline_project(&with_initiator, BREG_SOURCE_DESCRIPTION);
+        let effective = check(&project, false, false).unwrap()["effective"].clone();
+        assert_eq!(
+            effective["reviewProducers"][0]["initiatorProfile"],
+            "change-submitter"
+        );
+
+        let staff_initiator = CASEWORK_YAML.replace(
+            "    subject: professional-review-breg\n",
+            "    subject: professional-review-breg\n    initiatorProfile: staff\n",
+        );
+        let (_root, project) = write_offline_project(&staff_initiator, BREG_SOURCE_DESCRIPTION);
+        let refused = format!("{:#}", check(&project, false, false).unwrap_err());
+        assert!(
+            refused.contains("reviewProducers[0].initiatorProfile"),
+            "{refused}"
+        );
     }
 
     #[test]

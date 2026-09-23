@@ -1146,7 +1146,39 @@ fn change_request_capability_value(value: &breg_client_sdk::BRegChangeRequestCap
                 .iter()
                 .map(|value| value.as_str())
                 .collect::<Vec<_>>(),
+            "writes": planner
+                .writes()
+                .iter()
+                .map(|write| {
+                    json!({
+                        "target": change_request_target_value(write.target()),
+                        "operation": write.operation().as_str(),
+                        "fields": write.fields(),
+                    })
+                })
+                .collect::<Vec<_>>(),
         },
+        "effects": value
+            .effects()
+            .iter()
+            .map(|effect| {
+                json!({
+                    "id": effect.id(),
+                    "operation": effect.operation().as_str(),
+                    "target": change_request_target_value(effect.target()),
+                    "set": effect
+                        .set()
+                        .iter()
+                        .map(|entry| {
+                            let mut value = json!({"field": entry.field()});
+                            change_request_binding_value(&mut value, entry.value());
+                            value
+                        })
+                        .collect::<Vec<_>>(),
+                    "clear": effect.clear(),
+                })
+            })
+            .collect::<Vec<_>>(),
         "review": match value.review() {
             ReviewRequirement::None => json!({"mode":"none"}),
             ReviewRequirement::External(requirement) => {
@@ -1164,6 +1196,27 @@ fn change_request_capability_value(value: &breg_client_sdk::BRegChangeRequestCap
             "preconditions": value.application().preconditions(),
         },
     })
+}
+
+fn change_request_binding_value(
+    target: &mut Value,
+    binding: Option<&breg_client_sdk::BRegChangeRequestBinding>,
+) {
+    match binding {
+        Some(breg_client_sdk::BRegChangeRequestBinding::FromField(field)) => {
+            target["from_field"] = json!(field);
+        }
+        Some(breg_client_sdk::BRegChangeRequestBinding::FromEffect(effect)) => {
+            target["from_effect"] = json!(effect);
+        }
+        None => {}
+    }
+}
+
+fn change_request_target_value(target: &breg_client_sdk::BRegChangeRequestTarget) -> Value {
+    let mut value = json!({"entity": target.entity()});
+    change_request_binding_value(&mut value, target.binding());
+    value
 }
 
 fn attachment_error(py: Python<'_>, error: breg_client_sdk::BRegAttachmentError) -> PyErr {

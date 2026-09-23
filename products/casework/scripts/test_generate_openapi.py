@@ -176,6 +176,8 @@ class GeneratedOpenApiTests(unittest.TestCase):
             schemas["ReviewerTask"]["properties"]["state"],
         )
         task_properties = schemas["ReviewerTask"]["properties"]
+        self.assertEqual({"type": "boolean"}, task_properties["decidedByCaller"])
+        self.assertNotIn("decidedByCaller", schemas["ReviewerTask"]["required"])
         self.assertEqual(
             (0, GENERATOR.MAXIMUM_PORTABLE_JSON_INTEGER),
             (

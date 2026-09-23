@@ -189,6 +189,9 @@ reviewProducers:
 ```
 
 Each ordered stage names its queue, eligible human profiles, positive-decision threshold, and optional exclusions for the initiator or previous-stage reviewers.
+An `excludeInitiator` stage needs `trustedInitiatorIssuer` on the producer, and it only works when the initiator's subject matches the principal the deciding profiles read from their `principalClaim`.
+A Base Registry Engine producer sends the submitting person's issuer and the value of its configured principal claim, so point the Casework profiles at that same claim and set `trustedInitiatorIssuer` to the issuer both products trust.
+BReg names an initiator only for a human caller, so a request a service or agent submits for an `excludeInitiator` kind is refused when Casework admits it.
 Only Staff and Supervisor profiles may decide.
 The policy identity, stages, context strategy, schemas, outcomes, clocks, and retention are covered by its digest and pinned once per request.
 
@@ -224,7 +227,11 @@ At decide time Casework validates the submitted result against the schema first 
 `reviewProducers` is separate from the human review policy.
 An entry admits one exact profile, issuer, and subject to a bounded source namespace and kind set.
 `recoveryDays` must fit within result retention.
+`initiatorProfile` optionally names a requester profile, distinct from every producer's `profile`, that the person named as a request's initiator selects to read that request's requester-visible history.
+It requires `trustedInitiatorIssuer`, matches the initiator's exact issuer and principal, and grants nothing else: any other request is not found, and notes, cancellation, results, and clocks stay with the producer.
+Like a reviewer profile, it accepts only a person acting for themselves: it refuses delegated (`act`), grant-bearing, and non-human tokens.
 Omit `completion` for polling-only integrations; when present, it names a configured logical destination and recipient binding rather than an arbitrary URL.
+The runtime configuration's `reviewCompletionDestinations.<id>` supplies that destination's URL and secret, presented as `Authorization: Bearer` by default or, with `auth: {header, secretRef}`, as the value of a named header such as `x-api-key`; reserved header names are refused at load.
 
 {/* Evidence: crates/registry-casework-core/src/review.rs, ReviewKindPolicy,
     ReviewRetentionPolicy, and ReviewOutcomePolicy;

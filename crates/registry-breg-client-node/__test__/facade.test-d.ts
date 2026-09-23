@@ -4,6 +4,8 @@ import {
   BRegAttachmentUpload,
   BRegActionTargetConditions,
   BRegBatchBinding,
+  BRegChangeRequestPlannerWrite,
+  BRegChangeRequestTarget,
   BRegCreateBinding,
   BRegImmediateActionBinding,
   BRegIngestionChunk,
@@ -169,6 +171,17 @@ continuation.entityTypeIdentifier.toUpperCase()
 if (metadata.etag !== null) metadata.etag.toUpperCase()
 const reviewRequirement = metadata.changeRequestCapability('person')?.review
 if (reviewRequirement && 'authority' in reviewRequirement) reviewRequirement.policyId.toUpperCase()
+const changeRequestEffect = metadata.changeRequestCapability('person')?.effects[0]
+changeRequestEffect?.target.entity.toUpperCase()
+changeRequestEffect?.target.fromField?.toUpperCase()
+changeRequestEffect?.set[0]?.fromEffect?.toUpperCase()
+metadata.changeRequestCapability('person')?.planner.writes[0]?.fields[0]?.toUpperCase()
+// @ts-expect-error A change-request binding names one source, never both.
+const bothBindings: BRegChangeRequestTarget = { entity: 'person', fromField: 'person', fromEffect: 'create' }
+bothBindings.entity.toUpperCase()
+// @ts-expect-error A planner write targets a stored record, never another effect.
+const plannerFromEffect: BRegChangeRequestPlannerWrite = { target: { entity: 'person', fromEffect: 'create' }, operation: 'patch', fields: [] }
+plannerFromEffect.operation.toUpperCase()
 record.data.request?.review?.submission.authority.toUpperCase()
 record.data.request?.submitterReference?.toUpperCase()
 client.executeLifecycleAction(action, 'actor-receipt').then((outcome) => outcome.value.actorReference?.toUpperCase())
