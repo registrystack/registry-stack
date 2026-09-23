@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `caseworkctl doctor` now checks the secret each review completion
+  destination names (`bearerTokenRef` or `auth.secretRef`) alongside the
+  database, audit, and source secrets, so an unreadable destination secret is
+  reported before the runtime first tries to deliver a completion.
 - Name the two initiator refusals. A person a stage excludes as the request's
   initiator is refused at claim and decision with
   `403 review.initiator-excluded` instead of `operation.not-authorized`, and

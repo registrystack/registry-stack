@@ -897,6 +897,19 @@ fn secret_references(config: &RuntimeConfig) -> Vec<(String, &str)> {
             }
         }
     }
+    for (id, destination) in &config.review_completion_destinations {
+        let setting = if destination.auth.is_some() {
+            "auth.secretRef"
+        } else {
+            "bearerTokenRef"
+        };
+        if let Some(reference) = destination.secret_ref() {
+            references.push((
+                format!("reviewCompletionDestinations.{id}.{setting}"),
+                reference,
+            ));
+        }
+    }
     references
 }
 
@@ -1697,6 +1710,72 @@ mod tests {
         let refusal = format!("{:#}", secret_file_checks(&config, &resolver).unwrap_err());
         assert!(refusal.contains("audit.hashKeyRef"), "{refusal}");
         assert!(refusal.contains("0400 or 0600"), "{refusal}");
+    }
+
+    #[test]
+    fn the_secret_file_preflight_checks_completion_destination_secrets() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        init(&project, "standalone-decision").unwrap();
+        let secrets = project.join("secrets");
+        fs::create_dir(&secrets).unwrap();
+        for name in ["casework-audit-key", "receiver-token", "notifier-key"] {
+            let path = secrets.join(name);
+            fs::write(&path, "0".repeat(64)).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let runtime_config = project.join("runtime.example.yaml");
+        let mut document: Value =
+            serde_norway::from_str(&runtime_example(&project, false).unwrap()).unwrap();
+        document["secretProviders"]["environment"] = json!({});
+        document["database"]["runtimeUrlRef"] = json!("secret:env/CASEWORK_DATABASE_URL");
+        document["database"]["migrationUrlRef"] =
+            json!("secret:env/CASEWORK_MIGRATION_DATABASE_URL");
+        document["reviewCompletionDestinations"] = json!({
+            "receiver": {
+                "url": "https://completion.example.test/v1/reviews",
+                "bearerTokenRef": "secret:file/receiver-token"
+            },
+            "notifier": {
+                "url": "https://notifier.example.test/v1/reviews",
+                "auth": {"header": "X-Api-Key", "secretRef": "secret:file/notifier-key"}
+            }
+        });
+        fs::write(&runtime_config, serde_norway::to_string(&document).unwrap()).unwrap();
+        let config = RuntimeConfig::load(&runtime_config).unwrap();
+        let resolver = secret_resolver(&config).unwrap();
+
+        let checks = secret_file_checks(&config, &resolver).unwrap();
+        let settings: Vec<&str> = checks
+            .iter()
+            .map(|check| check["setting"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            settings,
+            [
+                "database.runtimeUrlRef",
+                "database.migrationUrlRef",
+                "audit.hashKeyRef",
+                "reviewCompletionDestinations.notifier.auth.secretRef",
+                "reviewCompletionDestinations.receiver.bearerTokenRef"
+            ]
+        );
+        assert_eq!(checks[3]["status"], "ready");
+        assert_eq!(checks[4]["status"], "ready");
+
+        fs::set_permissions(
+            secrets.join("notifier-key"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        let refusal = format!("{:#}", secret_file_checks(&config, &resolver).unwrap_err());
+        assert!(
+            refusal.contains("reviewCompletionDestinations.notifier.auth.secretRef"),
+            "{refusal}"
+        );
+        assert!(!refusal.contains("receiver"), "{refusal}");
     }
 
     #[test]
