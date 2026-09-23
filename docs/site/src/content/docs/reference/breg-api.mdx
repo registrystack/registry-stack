@@ -587,7 +587,10 @@ likewise lists its declared `writes`, each with its target, operation, and field
 filtered to what the caller may read: an effect or write on an entity the caller cannot read is
 left out, a target field the caller cannot read is not named, and a request field the caller
 cannot read is never given as a source, nor is an effect that is left out. `possibleWriteCount` still counts every declared write.
-Fields are named by their field id, as in `readableFields`. The description cannot grant write
+Fields in `effects` and `writes` are named by their authored field id, as in `readableFields`,
+not by the `apiName` a record uses in `data.domainData`. To show one under its API name, look up
+the id in the `fields` list of a capability on that entity, which gives each readable field's `id`
+and `apiName`. The description cannot grant write
 authority: whether a request may be submitted or applied is still decided by the request routes.
 The Rust, Node.js, and Python clients require `effects`, and `writes` on a `rhai` planner, so
 use a client and runtime from the same release.
