@@ -110,7 +110,9 @@ in a family grants nothing on its own.
 
 `GET /v1/review-requests/{requestId}/history` pages minimized classified events. Human reviewers see
 reviewer-audience events under current task authority. The bound producer sees only requester-audience
-events and never sees private reasons, drafts, or raw reviewer identities. Source-context task lists,
+events and never sees private reasons, drafts, or raw reviewer identities. A person selecting the
+producer's `initiatorProfile` sees the same requester-audience events, only for a request that names
+them as its initiator; every other request is not found. Source-context task lists,
 reads, context, and history remain concealed when the human caller's current source read is revoked or
 unavailable.
 
@@ -125,7 +127,9 @@ unavailable.
 - Administrator manages directory teams, holiday revisions, and clock recomputation without gaining
   item payload access.
 - Requester is admitted as a producer only through an exact `reviewProducers` identity binding. It
-  creates and follows only requests inside that binding and cannot claim or decide work.
+  creates and follows only requests inside that binding and cannot claim or decide work. A person
+  selecting a producer's `initiatorProfile` reads only the history of a request naming them as its
+  initiator.
 
 Review result feeds expose stable event identifiers and terminal results without reviewer identity or
 private reasons. The separate accountability read returns raw issuer-qualified actor identity and
