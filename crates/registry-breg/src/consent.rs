@@ -1177,7 +1177,7 @@ pub(crate) fn index_statements(entity: &CompiledEntity) -> Vec<(String, String, 
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{parse_duration, validate};
+    use super::{parse_duration, validate, RowProbeForm};
     use crate::contract::{parse_project_yaml, EntitySource};
 
     /// The grammar refuses `encrypted` on reference, vocabulary-code and
@@ -1276,16 +1276,44 @@ mod tests {
             statement.sql
         );
         assert!(!statement.sql.contains("$1"), "{}", statement.sql);
-        let predicate =
-            crate::membership::predicate(&registry.entities()["person"], "food-targeting", |_| {
-                "record_id".to_owned()
-            });
-        assert_eq!(
-            predicate,
-            format!(
-                "record_id IN (SELECT consented.subject FROM registry_context.\"{name}\"() AS consented(subject))"
-            )
+        let predicate = crate::membership::predicate(
+            &registry.entities()["person"],
+            "food-targeting",
+            RowProbeForm::KeySet,
+            |_| "record_id".to_owned(),
         );
+        let probe = format!(
+            "record_id IN (SELECT consented.subject FROM registry_context.\"{name}\"() AS consented(subject))"
+        );
+        assert_eq!(predicate, probe);
+        assert!(crate::membership::predicate(
+            &registry.entities()["person"],
+            "food-targeting",
+            RowProbeForm::PerKey,
+            |_| "record_id".to_owned(),
+        )
+        .is_empty());
+        // After the one scan, the probe is a hash lookup per row, cheaper
+        // than parsing the row-boundary context, so it is tested first.
+        let policy = registry
+            .ddl()
+            .tables
+            .iter()
+            .find(|table| table.entity_id == "person")
+            .expect("person table")
+            .policies
+            .iter()
+            .find(|policy| {
+                policy.name.starts_with("registry_rls_select_")
+                    && policy.access_profile == "food-targeting"
+            })
+            .expect("gated select policy");
+        let using = policy.using_expression.as_deref().expect("using");
+        let probe_at = using
+            .find(&format!("registry_context.\"{name}\"()"))
+            .expect("probe in policy");
+        let boundaries_at = using.find("jsonb_typeof(").expect("row boundaries");
+        assert!(probe_at < boundaries_at, "{using}");
     }
 
     #[test]

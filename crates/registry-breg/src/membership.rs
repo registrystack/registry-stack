@@ -301,13 +301,17 @@ pub(crate) fn function_name(entity: &str, profile: &str, index: usize) -> String
     format!("membership_{}", hex_prefix(&hash.finalize(), 12))
 }
 
+/// The probes of one form, rendered against the protected row and joined
+/// with `AND`; empty when the profile has none of that form.
 pub(crate) fn predicate(
     entity: &CompiledEntity,
     profile: &str,
+    form: RowProbeForm,
     mut root_value: impl FnMut(&str) -> String,
 ) -> String {
     row_probes(entity, profile)
         .iter()
+        .filter(|probe| probe.form == form)
         .map(|probe| probe.sql(&root_value(&probe.field)))
         .collect::<Vec<_>>()
         .join(" AND ")

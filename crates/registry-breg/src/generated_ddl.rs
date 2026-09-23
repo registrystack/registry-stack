@@ -3594,6 +3594,19 @@ fn policy_authority_expression_for_alias(
         ));
     }
 
+    // A consent probe costs one consent scan per query and then a hash
+    // lookup per row, cheaper than parsing the row-boundary context, so it
+    // precedes those checks. A membership probe runs per row and stays last.
+    let consent = crate::membership::predicate(
+        entity,
+        &profile.id,
+        crate::membership::RowProbeForm::KeySet,
+        |field| field_name_with_alias(entity, field, alias),
+    );
+    if !consent.is_empty() {
+        predicates.push(consent);
+    }
+
     let context = "NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb";
     predicates.push(format!("jsonb_typeof({context}) = 'array'"));
     predicates.push(format!(
@@ -3634,9 +3647,12 @@ fn policy_authority_expression_for_alias(
             }
         }
     }
-    let membership = crate::membership::predicate(entity, &profile.id, |field| {
-        field_name_with_alias(entity, field, alias)
-    });
+    let membership = crate::membership::predicate(
+        entity,
+        &profile.id,
+        crate::membership::RowProbeForm::PerKey,
+        |field| field_name_with_alias(entity, field, alias),
+    );
     if !membership.is_empty() {
         predicates.push(membership);
     }
