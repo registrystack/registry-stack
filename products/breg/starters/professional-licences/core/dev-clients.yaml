@@ -11,9 +11,11 @@ clients:
   - id: editor
     accessProfiles:
       - editor
+    allowHumanFixture: true
     scopes:
       - starter:editor
     claims:
+      registry_actor_kind: human
       registry_principal: synthetic-editor
       registry_purpose: starter-learning
   - id: administrator

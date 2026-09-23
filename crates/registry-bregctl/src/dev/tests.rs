@@ -145,6 +145,34 @@ fn a_fresh_init_project_starts_without_edits() {
 }
 
 #[test]
+fn the_professional_licences_submitter_is_a_person_a_paired_review_can_exclude() {
+    // The paired `professional-review` Casework template excludes a change
+    // request's initiator from its review, and BReg names an initiator only
+    // for a human caller. A service submitter would have its review refused.
+    let client_bytes = fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/starters/professional-licences/core/dev-clients.yaml"),
+    )
+    .expect("the starter's clients");
+    let clients = config::clients(&client_bytes).expect("the starter's clients parse");
+    let submitter = clients
+        .clients
+        .iter()
+        .find(|client| {
+            client
+                .access_profiles
+                .iter()
+                .any(|profile| profile == "editor")
+        })
+        .expect("the editor profile has a local client");
+    assert_eq!(
+        submitter.claims.get("registry_actor_kind"),
+        Some(&serde_json::json!("human"))
+    );
+    assert!(submitter.allow_human_fixture);
+}
+
+#[test]
 fn the_generated_clients_header_names_the_teaching_bindings_section() {
     // The header explains the one binding it generates and points at the
     // section that documents the explicit binding it does not generate, so a

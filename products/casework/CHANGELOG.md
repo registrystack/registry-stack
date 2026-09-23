@@ -17,7 +17,10 @@
   so a stage with `excludeInitiator` refuses the submitter when the Casework
   profiles read that same claim. The professional-review starter and example
   now exclude the submitter from the review stage and set
-  `trustedInitiatorIssuer` on the BReg producer.
+  `trustedInitiatorIssuer` on the BReg producer. The paired
+  professional-licences BReg starter's `editor` client is now a human teaching
+  client, because BReg names an initiator only for a human caller and Casework
+  refuses a request for an `excludeInitiator` kind that names none.
 - Add an optional `initiatorProfile` on a review producer. The person a request
   names as its initiator reads that request's requester-visible history through
   `GET /v1/review-requests/{requestId}/history`, and nothing else. The initiator
