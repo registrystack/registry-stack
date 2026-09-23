@@ -65,6 +65,20 @@ sha256sum --check --strict SHA256SUMS
 `SHA256SUMS` intentionally excludes itself, its Sigstore bundle, and its
 provenance bundle.
 
+A release covers many platform assets, and `gh release download` can leave some of them absent,
+for example after an interrupted download or a rerun that only fetched a subset. Plain
+`--check --strict` then reports each absent file as a failure and exits nonzero alongside the
+files it did verify. Verify only the files you downloaded with `--ignore-missing`, then confirm
+by name that the files you meant to verify were the ones checked:
+
+```sh
+sha256sum --check --strict --ignore-missing SHA256SUMS
+```
+
+`--ignore-missing` silently skips an absent file; it does not prove that file is safe to trust
+unseen. Before relying on the result, list the checksum file's names and confirm every asset your
+deployment path depends on is among the ones actually checked, not among the ones skipped.
+
 ## Verify macOS native bundles
 
 Starting with v0.33.0, each macOS arm64 native executable asset is a
