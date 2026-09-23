@@ -296,6 +296,153 @@ fn reviewed_successor_does_not_drop_action_policies_for_absent_entity_table() {
     assert_eq!(create_policy_sql(&plan), Vec::<String>::new());
 }
 
+fn change_request_source(operator_operations: &[&str]) -> Value {
+    json!({
+        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
+        "registry":{"id":"change-request-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+        "entities":[{
+            "id":"asset", "primaryDataset":"test-dataset", "route":"assets", "mutationMode":"mutable",
+            "changeControl":{"requiredFor":["patch"]},
+            "fields":[{"id":"label", "type":"string", "maxLength":40, "required":true, "classification":"internal"}]
+        },{
+            "id":"asset-request", "primaryDataset":"test-dataset", "route":"asset-requests", "mutationMode":"mutable",
+            "fields":[
+                {"id":"asset", "type":"reference", "target":"asset", "required":true, "classification":"internal"},
+                {"id":"label", "type":"string", "maxLength":40, "required":true, "classification":"internal"}
+            ],
+            "changeRequest":{
+                "effects":[{"id":"apply-label","target":{"fromField":"asset"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
+                "review":{"authority":"casework-main","policyId":"request-review"},
+                "onApproved":{"mode":"manual"}
+            }
+        }],
+        "accessProfiles":[{
+            "id":"operator", "default":true, "principalClaim":"principal",
+            "permissions":[{
+                "entity":"asset-request", "operations": operator_operations,
+                "readableFields":["asset","label"], "writableFields":["asset","label"],
+                "applyTargets":[{"entity":"asset", "rowBoundaries":[]}],
+                "rowBoundaries":[]
+            }]
+        }]
+    })
+}
+
+/// A change-request action grant (`submit_request`, `revise_request`,
+/// `cancel_request`, `apply_request`) compiles to a `registry_cr_action_rls_`
+/// policy on the request entity's own table. Removing the grant must drop
+/// that policy in the reviewed successor plan, the same way removing an
+/// immediate-action grant drops its `registry_action_rls_` policy.
+#[test]
+fn reviewed_successor_drops_change_request_action_policy_when_grant_is_removed() {
+    let before = compile(&change_request_source(&[
+        "get",
+        "list",
+        "submit_request",
+        "cancel_request",
+        "apply_request",
+    ]));
+    let after = compile(&change_request_source(&[
+        "get",
+        "list",
+        "submit_request",
+        "apply_request",
+    ]));
+    let plan = reviewed_plan(&before, &after);
+
+    assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::AccessProfileChanged));
+    let drops = drop_policy_sql(&plan);
+    assert!(
+        drops
+            .iter()
+            .any(|sql| sql.contains("registry_cr_action_rls_")),
+        "removing the cancel_request grant must drop its registry_cr_action_rls_ policy, got: {drops:?}"
+    );
+}
+
+fn change_request_source_with_reviewer_profile(reviewer_operations: &[&str]) -> Value {
+    let mut source = change_request_source(&["get", "list", "submit_request", "apply_request"]);
+    source["accessProfiles"]
+        .as_array_mut()
+        .expect("accessProfiles array")
+        .push(json!({
+            "id":"reviewer-extra", "principalClaim":"principal",
+            "permissions":[{
+                "entity":"asset-request", "operations": reviewer_operations,
+                "readableFields":["asset","label"], "writableFields":["asset","label"],
+                "rowBoundaries":[]
+            }]
+        }));
+    source
+}
+
+/// The same stale-policy gap applies to the change-request target "prepare"
+/// policies (`registry_cr_rls_`), generated per profile holding submit or
+/// revise authority on the request entity. Removing a second profile's
+/// `submit_request` grant must drop its stale policy in the reviewed
+/// successor plan, while `operator` keeps the type's only apply coverage
+/// unchanged so the plan compiles on both sides.
+#[test]
+fn reviewed_successor_drops_change_request_target_policy_when_submit_grant_is_removed() {
+    let before = compile(&change_request_source_with_reviewer_profile(&[
+        "get",
+        "list",
+        "submit_request",
+    ]));
+    let after = compile(&change_request_source_with_reviewer_profile(&[
+        "get", "list",
+    ]));
+    let plan = reviewed_plan(&before, &after);
+
+    assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::AccessProfileChanged));
+    let drops = drop_policy_sql(&plan);
+    assert!(
+        drops.iter().any(|sql| sql.contains("registry_cr_rls_")),
+        "removing the reviewer profile's submit_request grant must drop its registry_cr_rls_ target policy, got: {drops:?}"
+    );
+}
+
+fn change_request_source_with_presence_profile(include_presence: bool) -> Value {
+    let mut source = change_request_source(&["get", "list", "submit_request", "apply_request"]);
+    let mut viewer_permission = json!({
+        "entity":"asset", "operations":["get"],
+        "readableFields":["label"], "writableFields":[],
+        "rowBoundaries":[]
+    });
+    if include_presence {
+        viewer_permission["requestPresence"] =
+            json!([{"requestType":"asset-request","rowBoundaries":[]}]);
+    }
+    source["accessProfiles"]
+        .as_array_mut()
+        .expect("accessProfiles array")
+        .push(json!({
+            "id":"asset-viewer", "principalClaim":"principal",
+            "permissions":[viewer_permission]
+        }));
+    source
+}
+
+/// Change-request presence policies (`registry_cr_presence_rls_`) come from a
+/// `requestPresence` grant on the target entity's own profile, independent of
+/// the request entity's submit or apply authority. Removing that grant must
+/// drop its stale presence policy in the reviewed successor plan.
+#[test]
+fn reviewed_successor_drops_change_request_presence_policy_when_grant_is_removed() {
+    let before = compile(&change_request_source_with_presence_profile(true));
+    let after = compile(&change_request_source_with_presence_profile(false));
+    let plan = reviewed_plan(&before, &after);
+
+    assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::AccessProfileChanged));
+    let drops = drop_policy_sql(&plan);
+    assert!(
+        drops
+            .iter()
+            .any(|sql| sql.contains("registry_cr_presence_rls_")),
+        "removing the requestPresence grant must drop its registry_cr_presence_rls_ policy, got: {drops:?}"
+    );
+}
+
 fn reviewed_plan(before: &CompiledRegistry, after: &CompiledRegistry) -> MigrationPlan {
     let change_set = compiled_registry_change_set(before, after, "prior-package");
     let baseline = CompiledRegistryMigrationBaseline::from_compiled("prior-package", before);

@@ -2285,7 +2285,7 @@ fn reviewed_successor_migration_plan(
                 .cloned(),
         );
     }
-    statements.extend(reviewed_immediate_action_policy_delta(baseline, candidate));
+    statements.extend(reviewed_successor_managed_policy_delta(baseline, candidate));
     Ok(MigrationPlan {
         from_revision: Some(change_set.from_revision.clone()),
         prior_baseline: Some(baseline.clone()),
@@ -2296,7 +2296,7 @@ fn reviewed_successor_migration_plan(
     })
 }
 
-fn reviewed_immediate_action_policy_delta(
+fn reviewed_successor_managed_policy_delta(
     baseline: &CompiledRegistryMigrationBaseline,
     candidate: &CompiledRegistry,
 ) -> Vec<DdlStatement> {
@@ -2332,8 +2332,8 @@ fn reviewed_immediate_action_policy_delta(
         if previous_table.physical_name != candidate_table.physical_name {
             continue;
         }
-        let previous_policies = immediate_action_policies(previous_table);
-        let candidate_policies = immediate_action_policies(candidate_table);
+        let previous_policies = reviewed_successor_managed_policies(previous_table);
+        let candidate_policies = reviewed_successor_managed_policies(candidate_table);
         for (name, previous_policy) in &previous_policies {
             if candidate_policies.get(name) != Some(previous_policy) {
                 statements.push(drop_policy_statement(entity_id, previous_table, name));
@@ -2352,13 +2352,16 @@ fn reviewed_immediate_action_policy_delta(
     statements
 }
 
-fn immediate_action_policies(table: &DdlTable) -> BTreeMap<&str, &DdlPolicy> {
+fn reviewed_successor_managed_policies(table: &DdlTable) -> BTreeMap<&str, &DdlPolicy> {
     table
         .policies
         .iter()
         .filter(|policy| {
             policy.name.starts_with("registry_action_rls_")
                 || policy.name.starts_with("registry_action_link_rls_")
+                || policy.name.starts_with("registry_cr_rls_")
+                || policy.name.starts_with("registry_cr_presence_rls_")
+                || policy.name.starts_with("registry_cr_action_rls_")
         })
         .map(|policy| (policy.name.as_str(), policy))
         .collect()
