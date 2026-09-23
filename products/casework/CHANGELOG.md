@@ -60,6 +60,11 @@
   with `the Casework database schema version N is newer than this binary
   supports (M); run a casework release that supports it`, and `migrate` writes
   nothing.
+- `caseworkctl attempt settle` now names the recovery step when it refuses a
+  pending attempt: once the execution lease expires, the actor who started the
+  attempt calls `POST /v1/work-items/{itemId}/attempts/{attemptId}/recover`
+  while the source is reachable, and the attempt is settled only if recovery
+  leaves it uncertain. Who may recover or settle is unchanged.
 - Fix the professional-review starter hiding every source-backed review task.
   Its `scope-correction` `displaySchema` described `record` as an object, but
   the professional-licences source discloses it as a UUID string, so every

@@ -597,11 +597,20 @@ fn operator_refusal(kind: CommandKind, error: &anyhow::Error) -> Option<Value> {
             ) {
                 return None;
             }
+            // A pending attempt is moved to uncertain only by the recover route,
+            // which the actor who started it calls once the lease expires.
+            let action = if matches!(settlement, AttemptSettlementError::NotUncertain("pending")) {
+                "After the attempt's execution lease expires, the actor who started it calls \
+                 POST /v1/work-items/{itemId}/attempts/{attemptId}/recover while the source is \
+                 reachable; settle the attempt only if recovery leaves it uncertain."
+            } else {
+                "Confirm the attempt and source outcome, then preview the settlement again."
+            };
             (
                 "casework.attempt-settlement.refused",
                 "attempt",
                 settlement.to_string(),
-                "Confirm the attempt and source outcome, then preview the settlement again.",
+                action,
             )
         }
         CommandKind::Authoring | CommandKind::Operational => return None,
@@ -1449,6 +1458,33 @@ mod tests {
         assert_eq!(
             diagnostic["suggestedAction"],
             "Correct the unavailable runtime dependency, then retry."
+        );
+    }
+
+    #[test]
+    fn a_pending_attempt_settlement_refusal_names_the_recovery_step() {
+        let pending = anyhow::Error::new(AttemptSettlementError::NotUncertain("pending"))
+            .context("settling the Casework source attempt");
+        let (exit, diagnostic) = classify_failure(CommandKind::AttemptSettlement, &pending);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(diagnostic["code"], "casework.attempt-settlement.refused");
+        assert_eq!(
+            diagnostic["message"],
+            "the source attempt is pending; only an uncertain attempt can be settled"
+        );
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "After the attempt's execution lease expires, the actor who started it calls \
+             POST /v1/work-items/{itemId}/attempts/{attemptId}/recover while the source is \
+             reachable; settle the attempt only if recovery leaves it uncertain."
+        );
+
+        let completed = anyhow::Error::new(AttemptSettlementError::NotUncertain("completed"))
+            .context("settling the Casework source attempt");
+        let (_, diagnostic) = classify_failure(CommandKind::AttemptSettlement, &completed);
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "Confirm the attempt and source outcome, then preview the settlement again."
         );
     }
 
