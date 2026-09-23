@@ -1332,6 +1332,28 @@ impl MutationCoordinator {
         } else if let Some(grant) = claims.task_grant() {
             self.check_task_authority(grant).await?;
         }
+        if let RequestActionBody::Revise { rebase } = &input.action {
+            // The read advertises revise from the same settled outcome: a
+            // rejection leaves only cancellation, and a send-back or an
+            // expired approval is answered by a revision, never a rebase.
+            match crate::review_store::settled_outcome(
+                transaction.transaction(),
+                &entity.id,
+                record_uuid,
+                workflow.current_version().get(),
+            )
+            .await?
+            {
+                Some(crate::review_store::SettledReviewOutcome::Rejected) => {
+                    return Err(MutationError::Conflict)
+                }
+                Some(
+                    crate::review_store::SettledReviewOutcome::ChangesRequested
+                    | crate::review_store::SettledReviewOutcome::Approved { expired: true },
+                ) if *rebase => return Err(MutationError::Conflict),
+                _ => {}
+            }
+        }
         let previous_revision = i64::try_from(workflow.workflow_revision().get())
             .map_err(|_| MutationError::Unavailable)?;
         let save_previous_revision = previous_revision;

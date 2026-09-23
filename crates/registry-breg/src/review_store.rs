@@ -2707,11 +2707,59 @@ fn result_status(status: registry_review_client::ReviewResultStatus) -> &'static
     }
 }
 
+/// The locally reconciled review result for one proposal, as far as it
+/// decides which request actions remain meaningful. The request workflow
+/// itself does not change when a result settles: the owner acts on it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SettledReviewOutcome {
+    Approved {
+        expired: bool,
+    },
+    Rejected,
+    ChangesRequested,
+    /// Answered, cancelled, or superseded: none of them narrows the actions.
+    Other,
+}
+
+pub(crate) async fn settled_outcome(
+    client: &impl GenericClient,
+    request_entity_id: &str,
+    request_id: Uuid,
+    proposal_version: u32,
+) -> Result<Option<SettledReviewOutcome>, MutationError> {
+    let row = client
+        .query_opt(
+            "SELECT status, available_until <= statement_timestamp()
+               FROM registry_internal.registry_request_review_results
+              WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3",
+            &[
+                &request_entity_id,
+                &request_id,
+                &i64::from(proposal_version),
+            ],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    Ok(Some(match row.get::<_, String>(0).as_str() {
+        "approved" => SettledReviewOutcome::Approved {
+            expired: row.get::<_, bool>(1),
+        },
+        "rejected" => SettledReviewOutcome::Rejected,
+        "changes_requested" => SettledReviewOutcome::ChangesRequested,
+        "answered" | "cancelled" | "superseded" => SettledReviewOutcome::Other,
+        _ => return Err(MutationError::Unavailable),
+    }))
+}
+
 pub(crate) async fn read_projection(
     transaction: &Transaction<'_>,
     request_entity_id: &str,
     request_id: Uuid,
     proposal: &ProposalSnapshot,
+    request_submitted: bool,
 ) -> Result<Option<Value>, MutationError> {
     let CompiledChangeRequestReview::Required(requirement) = proposal.review_requirement() else {
         return Ok(None);
@@ -2729,7 +2777,8 @@ pub(crate) async fn read_projection(
                     to_char(s.recovery_deadline AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
                     j.attempt_count,
                     to_char(j.next_attempt_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
-                    j.receipt_recovered
+                    j.receipt_recovered,
+                    r.available_until <= statement_timestamp()
                FROM registry_internal.registry_request_review_submissions s
                LEFT JOIN registry_internal.registry_request_review_results r
                  USING (request_entity_id,request_id,proposal_version)
@@ -2839,6 +2888,14 @@ pub(crate) async fn read_projection(
         // applied: the projection must not offer it as ready.
         None if withdrawn && row.get::<_, Option<String>>(5).as_deref() == Some("approved") => {
             "blocked"
+        }
+        // An unapplied approval past its availability can no longer be
+        // applied: the owner revises it or cancels it.
+        None if request_submitted
+            && row.get::<_, Option<String>>(5).as_deref() == Some("approved")
+            && row.get::<_, Option<bool>>(20) == Some(true) =>
+        {
+            "expired"
         }
         None if row.get::<_, Option<String>>(5).as_deref() == Some("approved") => "ready",
         None => "awaitingReview",

@@ -6158,6 +6158,13 @@ fn query_operation(
                         || field.field != crate::model::REQUEST_EFFECT_DIGEST_QUERY_FIELD
                 }),
         );
+        if !profile.anonymous
+            && profile
+                .readable_request_fields
+                .contains(&crate::contract::RequestMetadataFieldSource::ReviewState)
+        {
+            filter_fields.push(crate::model::request_review_query_filter_field());
+        }
         sort_fields.extend(
             request_state_query_sort_fields()
                 .into_iter()

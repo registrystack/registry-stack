@@ -577,6 +577,506 @@ async fn withdrawn_approval_blocks_the_manual_application_projection() {
     database.cleanup().await;
 }
 
+struct ReviewOutcomeFixture {
+    database: TestDatabase,
+    app: axum::Router,
+    authority_state: Arc<ReviewResultAuthorityState>,
+    authority_server: JoinHandle<()>,
+}
+
+impl ReviewOutcomeFixture {
+    async fn start(package_id: &str) -> Self {
+        let (endpoint, authority_state, authority_server) = serve_review_result_authority().await;
+        let database = TestDatabase::create(8).await;
+        let mut source = serde_json::to_value(two_stage_project()).unwrap();
+        source["entities"][2]["changeRequest"]["review"] =
+            json!({"authority":"casework-a","policyId":"correction-review"});
+        // Every revise or rebase is captured so the recorded draft reason is
+        // observable in the lifecycle event it emits.
+        source["entities"][2]["hooks"] = json!([{
+            "phase":"after","id":"request-returned-to-draft","trigger":"request_lifecycle",
+            "projection":["reason"],
+            "when":{"kind":"request_lifecycle","transitions":["revise","rebase"],"toStates":["draft"]}
+        }]);
+        for profile in [1, 4] {
+            source["accessProfiles"][profile]["permissions"][0]["readableRequestFields"] =
+                json!(["reason", "review_state"]);
+        }
+        let registry = Arc::new(
+            compile_project(
+                &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
+                &[],
+                CompileProfile::Authoring,
+            )
+            .unwrap(),
+        );
+        let identity = install_registry(&database, &registry, package_id, false).await;
+        let (service, _) = change_request_service_with_evidence_options(
+            &database,
+            registry,
+            identity,
+            package_id,
+            None,
+            None,
+            registry_breg::attachment_storage::AttachmentStorage::Database,
+            None,
+            registry_breg::attachment_verification::AttachmentVerification::Disabled,
+            None,
+            Some(review_authority_registry(endpoint)),
+        );
+        Self {
+            database,
+            app: router(service),
+            authority_state,
+            authority_server,
+        }
+    }
+
+    async fn settle(&self, request_id: &str, status: &str) {
+        let result =
+            reconcile_cached_external_result(&self.database, request_id, status, false).await;
+        *self.authority_state.result.lock().unwrap() = result;
+        self.authority_state.mode.store(2, Ordering::SeqCst);
+    }
+
+    async fn owner_view(&self, request_id: &str) -> Value {
+        get_record(
+            &self.app,
+            &format!("/v1/records/correction-requests/{request_id}?accessProfile=submitter"),
+            claims("submitter", SUBMITTER, None),
+        )
+        .await
+        .body
+    }
+
+    async fn applier_view(&self, request_id: &str) -> Value {
+        get_record(
+            &self.app,
+            &format!("/v1/records/correction-requests/{request_id}?accessProfile=applier"),
+            claims("applier", APPLIER, Some("apply")),
+        )
+        .await
+        .body
+    }
+
+    async fn finish(self) {
+        self.authority_server.abort();
+        self.database.cleanup().await;
+    }
+}
+
+fn offered_operations(body: &Value) -> Vec<String> {
+    body["request"]["actions"]
+        .as_array()
+        .map(|actions| {
+            actions
+                .iter()
+                .map(|action| action["operation"].as_str().unwrap().to_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn offered_rebase(body: &Value) -> Value {
+    body["request"]["actions"]
+        .as_array()
+        .and_then(|actions| {
+            actions
+                .iter()
+                .find(|action| action["operation"] == "revise_request")
+        })
+        .map(|action| action["rebase"].clone())
+        .unwrap_or(Value::Null)
+}
+
+async fn returned_to_draft_transitions(database: &TestDatabase) -> Vec<String> {
+    database
+        .admin
+        .query(
+            "SELECT payload FROM registry_internal.registry_outbox
+              WHERE event_type='request-returned-to-draft' ORDER BY outbox_id",
+            &[],
+        )
+        .await
+        .expect("lifecycle events are readable")
+        .iter()
+        .map(|row| {
+            let envelope: Value =
+                serde_json::from_slice(&row.get::<_, Vec<u8>>(0)).expect("envelope is JSON");
+            envelope["data"]["request"]["transition"]
+                .as_str()
+                .expect("lifecycle event names its transition")
+                .to_owned()
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rejected_review_offers_only_cancel_and_refuses_revise_and_apply() {
+    let fixture = ReviewOutcomeFixture::start("rejected-review-outcome").await;
+    let (request, digest) = submit_two_stage_correction(&fixture.app).await;
+    let revise = action(
+        &fixture.owner_view(&request.id).await,
+        "revise_request",
+        None,
+    );
+    let apply = action(
+        &fixture.applier_view(&request.id).await,
+        "apply_request",
+        None,
+    );
+
+    fixture.settle(&request.id, "rejected").await;
+    let owner = fixture.owner_view(&request.id).await;
+    assert_eq!(owner["request"]["review"]["result"]["state"], "rejected");
+    assert_eq!(offered_operations(&owner), ["cancel_request"]);
+    let applier = fixture.applier_view(&request.id).await;
+    assert_eq!(
+        applier["request"]["review"]["application"]["state"],
+        "awaitingReview"
+    );
+    assert!(
+        offered_operations(&applier).is_empty(),
+        "a rejected proposal must not advertise apply: {applier}"
+    );
+
+    for (key, rebase) in [("rejected-revise", false), ("rejected-rebase", true)] {
+        let refused = send_action(
+            &fixture.app,
+            &revise,
+            key,
+            claims("submitter", SUBMITTER, None),
+            json!({"rebase": rebase}),
+        )
+        .await;
+        assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.body);
+        assert_eq!(refused.body["code"], "mutation.conflict");
+    }
+    let refused_apply = send_action(
+        &fixture.app,
+        &apply,
+        "rejected-apply",
+        claims("applier", APPLIER, Some("apply")),
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(
+        refused_apply.status,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        refused_apply.body
+    );
+    assert_eq!(refused_apply.body["code"], "precondition.failed");
+    assert_eq!(application_result_count(&fixture.database).await, 0);
+    assert_eq!(
+        fixture.owner_view(&request.id).await["request"]["bregState"],
+        "submitted"
+    );
+
+    let cancelled = run_action(
+        &fixture.app,
+        &request.id,
+        "correction-requests",
+        "submitter",
+        claims("submitter", SUBMITTER, None),
+        "rejected-cancel",
+        "cancel_request",
+        None,
+        |_| json!({}),
+    )
+    .await;
+    assert_eq!(cancelled["request"]["bregState"], "cancelled");
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn changes_requested_review_offers_revision_and_cancel_and_refuses_rebase_and_apply() {
+    let fixture = ReviewOutcomeFixture::start("changes-requested-review-outcome").await;
+    let (request, digest) = submit_two_stage_correction(&fixture.app).await;
+    let apply = action(
+        &fixture.applier_view(&request.id).await,
+        "apply_request",
+        None,
+    );
+
+    fixture.settle(&request.id, "changes_requested").await;
+    let owner = fixture.owner_view(&request.id).await;
+    assert_eq!(
+        owner["request"]["review"]["result"]["state"],
+        "changesRequested"
+    );
+    assert_eq!(
+        offered_operations(&owner),
+        ["cancel_request", "revise_request"]
+    );
+    assert_eq!(
+        offered_rebase(&owner),
+        false,
+        "a send-back is answered by a revision"
+    );
+    let applier = fixture.applier_view(&request.id).await;
+    assert!(
+        offered_operations(&applier).is_empty(),
+        "a sent-back proposal must not advertise apply: {applier}"
+    );
+
+    let revise = action(&owner, "revise_request", None);
+    let refused_rebase = send_action(
+        &fixture.app,
+        &revise,
+        "changes-requested-rebase",
+        claims("submitter", SUBMITTER, None),
+        json!({"rebase":true}),
+    )
+    .await;
+    assert_eq!(
+        refused_rebase.status,
+        StatusCode::CONFLICT,
+        "{}",
+        refused_rebase.body
+    );
+    assert_eq!(refused_rebase.body["code"], "mutation.conflict");
+    let refused_apply = send_action(
+        &fixture.app,
+        &apply,
+        "changes-requested-apply",
+        claims("applier", APPLIER, Some("apply")),
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(
+        refused_apply.status,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        refused_apply.body
+    );
+    assert_eq!(refused_apply.body["code"], "precondition.failed");
+    assert_eq!(application_result_count(&fixture.database).await, 0);
+
+    let revised = send_action(
+        &fixture.app,
+        &revise,
+        "changes-requested-revise",
+        claims("submitter", SUBMITTER, None),
+        json!({"rebase":false}),
+    )
+    .await;
+    assert_eq!(revised.status, StatusCode::OK, "{}", revised.body);
+    assert_eq!(revised.body["request"]["bregState"], "draft");
+    assert_eq!(revised.body["request"]["proposalVersion"], 2);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revision_after_changes_requested_records_revision_not_rebase() {
+    let fixture = ReviewOutcomeFixture::start("changes-requested-revision-reason").await;
+    let (request, _digest) = submit_two_stage_correction(&fixture.app).await;
+    fixture.settle(&request.id, "changes_requested").await;
+    let owner = fixture.owner_view(&request.id).await;
+    let revise = action(&owner, "revise_request", None);
+    let revised = send_action(
+        &fixture.app,
+        &revise,
+        "follow-advertised-revise",
+        claims("submitter", SUBMITTER, None),
+        json!({"rebase": offered_rebase(&owner)}),
+    )
+    .await;
+    assert_eq!(revised.status, StatusCode::OK, "{}", revised.body);
+    assert_eq!(
+        returned_to_draft_transitions(&fixture.database).await,
+        ["revise"],
+        "following the advertised action after a send-back records a revision"
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn approved_review_offers_apply_until_the_result_expires() {
+    let fixture = ReviewOutcomeFixture::start("approved-review-outcome").await;
+    let (request, digest) = submit_two_stage_correction(&fixture.app).await;
+    fixture.settle(&request.id, "approved").await;
+
+    let owner = fixture.owner_view(&request.id).await;
+    assert_eq!(owner["request"]["review"]["result"]["state"], "approved");
+    assert_eq!(
+        offered_operations(&owner),
+        ["cancel_request", "revise_request"]
+    );
+    assert_eq!(offered_rebase(&owner), true);
+    let applier = fixture.applier_view(&request.id).await;
+    assert_eq!(offered_operations(&applier), ["apply_request"]);
+    assert_eq!(
+        applier["request"]["review"]["application"]["state"],
+        "ready"
+    );
+    let apply = action(&applier, "apply_request", None);
+    let revise = action(&owner, "revise_request", None);
+
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_results
+                SET available_until='2026-09-02T00:00:00Z'
+              WHERE request_entity_id='correction-request' AND request_id=$1",
+            &[&Uuid::parse_str(&request.id).unwrap()],
+        )
+        .await
+        .expect("the cached approval expires");
+
+    let owner = fixture.owner_view(&request.id).await;
+    assert_eq!(
+        owner["request"]["review"]["result"]["availableUntil"],
+        "2026-09-02T00:00:00.000000Z"
+    );
+    assert_eq!(
+        offered_operations(&owner),
+        ["cancel_request", "revise_request"]
+    );
+    assert_eq!(
+        offered_rebase(&owner),
+        false,
+        "an expired approval is answered by a revision"
+    );
+    let applier = fixture.applier_view(&request.id).await;
+    assert_eq!(
+        applier["request"]["review"]["application"]["state"],
+        "expired"
+    );
+    assert!(
+        offered_operations(&applier).is_empty(),
+        "an expired approval must not advertise apply: {applier}"
+    );
+    let refused_apply = send_action(
+        &fixture.app,
+        &apply,
+        "expired-approval-apply",
+        claims("applier", APPLIER, Some("apply")),
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(
+        refused_apply.status,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        refused_apply.body
+    );
+    assert_eq!(refused_apply.body["code"], "precondition.failed");
+    assert_eq!(application_result_count(&fixture.database).await, 0);
+    let refused_rebase = send_action(
+        &fixture.app,
+        &revise,
+        "expired-approval-rebase",
+        claims("submitter", SUBMITTER, None),
+        json!({"rebase":true}),
+    )
+    .await;
+    assert_eq!(
+        refused_rebase.status,
+        StatusCode::CONFLICT,
+        "{}",
+        refused_rebase.body
+    );
+    assert_eq!(refused_rebase.body["code"], "mutation.conflict");
+    let revised = send_action(
+        &fixture.app,
+        &revise,
+        "expired-approval-revise",
+        claims("submitter", SUBMITTER, None),
+        json!({"rebase":false}),
+    )
+    .await;
+    assert_eq!(revised.status, StatusCode::OK, "{}", revised.body);
+    assert_eq!(
+        returned_to_draft_transitions(&fixture.database).await,
+        ["revise"]
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn request_list_filters_on_the_settled_review_outcome() {
+    let fixture = ReviewOutcomeFixture::start("review-outcome-filter").await;
+    let (approved, _) = submit_two_stage_correction(&fixture.app).await;
+    fixture.settle(&approved.id, "approved").await;
+    let (expired, _) = submit_keyed_two_stage_correction(&fixture.app, "expired").await;
+    fixture.settle(&expired.id, "approved").await;
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_results
+                SET available_until='2026-09-02T00:00:00Z'
+              WHERE request_entity_id='correction-request' AND request_id=$1",
+            &[&Uuid::parse_str(&expired.id).unwrap()],
+        )
+        .await
+        .expect("the second approval expires");
+    let (rejected, _) = submit_keyed_two_stage_correction(&fixture.app, "rejected").await;
+    fixture.settle(&rejected.id, "rejected").await;
+    let (pending, _) = submit_keyed_two_stage_correction(&fixture.app, "pending").await;
+
+    let list = |filter: &'static str| {
+        let app = fixture.app.clone();
+        async move {
+            let response = get_record(
+                &app,
+                &format!(
+                    "/v1/records/correction-requests?accessProfile=submitter&$filter={filter}"
+                ),
+                claims("submitter", SUBMITTER, None),
+            )
+            .await;
+            assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+            let mut ids = response.body["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>();
+            ids.sort();
+            ids
+        }
+    };
+    let sorted = |ids: &[&str]| {
+        let mut ids = ids.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
+        ids.sort();
+        ids
+    };
+    assert_eq!(
+        list("bregState%20eq%20'submitted'%20and%20reviewOutcome%20eq%20'approved'").await,
+        sorted(&[approved.id.as_str()]),
+        "approved and awaiting application"
+    );
+    assert_eq!(
+        list("reviewOutcome%20eq%20'approvedExpired'").await,
+        sorted(&[expired.id.as_str()])
+    );
+    assert_eq!(
+        list("reviewOutcome%20in%20('rejected','pending')").await,
+        sorted(&[rejected.id.as_str(), pending.id.as_str()])
+    );
+
+    // The outcome is review state: a profile that cannot read it cannot
+    // filter on it either.
+    let refused = response_parts(
+        send(
+            &fixture.app,
+            Method::GET,
+            "/v1/records/correction-requests?accessProfile=reviewer&$filter=reviewOutcome%20eq%20'approved'",
+            Some(claims("reviewer", REVIEWER, Some("review"))),
+            &[],
+            Vec::new(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{}", refused.body);
+    assert_eq!(refused.body["code"], "query.invalid");
+    fixture.finish().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_receipt() {
     let provider = EvidenceProvider::start().await;
@@ -5605,29 +6105,36 @@ struct ApprovedRegistration {
 }
 
 async fn submit_two_stage_correction(app: &axum::Router) -> (CreatedRecord, String) {
+    submit_keyed_two_stage_correction(app, "two").await
+}
+
+async fn submit_keyed_two_stage_correction(
+    app: &axum::Router,
+    prefix: &str,
+) -> (CreatedRecord, String) {
     let steward = claims("steward", "two-stage-steward", None);
     let submitter = claims("submitter", SUBMITTER, None);
     let old_site = create_record(
         app,
         "/v1/records/sites?accessProfile=steward",
         steward.clone(),
-        "two-create-old-site",
-        json!({"tenant": TENANT, "name": "two-old"}),
+        &format!("{prefix}-create-old-site"),
+        json!({"tenant": TENANT, "name": format!("{prefix}-old")}),
     )
     .await;
     let new_site = create_record(
         app,
         "/v1/records/sites?accessProfile=steward",
         steward.clone(),
-        "two-create-new-site",
-        json!({"tenant": TENANT, "name": "two-new"}),
+        &format!("{prefix}-create-new-site"),
+        json!({"tenant": TENANT, "name": format!("{prefix}-new")}),
     )
     .await;
     let placement = create_record(
         app,
         "/v1/records/placements?accessProfile=steward",
         steward,
-        "two-create-placement",
+        &format!("{prefix}-create-placement"),
         json!({"tenant": TENANT, "site": old_site.id}),
     )
     .await;
@@ -5635,7 +6142,7 @@ async fn submit_two_stage_correction(app: &axum::Router) -> (CreatedRecord, Stri
         app,
         "/v1/records/correction-requests?accessProfile=submitter",
         submitter.clone(),
-        "two-create-correction-request",
+        &format!("{prefix}-create-correction-request"),
         json!({
             "tenant": TENANT,
             "placement": placement.id,
@@ -5650,7 +6157,7 @@ async fn submit_two_stage_correction(app: &axum::Router) -> (CreatedRecord, Stri
         "correction-requests",
         "submitter",
         submitter,
-        "two-submit-correction-request",
+        &format!("{prefix}-submit-correction-request"),
         "submit_request",
         None,
         |_| json!({}),
@@ -5666,6 +6173,15 @@ async fn submit_two_stage_correction(app: &axum::Router) -> (CreatedRecord, Stri
 async fn reconcile_cached_external_approval(
     database: &TestDatabase,
     request_id: &str,
+    automatic: bool,
+) -> Value {
+    reconcile_cached_external_result(database, request_id, "approved", automatic).await
+}
+
+async fn reconcile_cached_external_result(
+    database: &TestDatabase,
+    request_id: &str,
+    status: &str,
     automatic: bool,
 ) -> Value {
     let request_id = Uuid::parse_str(request_id).expect("request id");
@@ -5684,6 +6200,9 @@ async fn reconcile_cached_external_approval(
     let proposal_digest: String = row.get(2);
     let review_request_id = Uuid::new_v4();
     let result_id = Uuid::new_v4();
+    // The cached row stays available so the read keeps advertising the
+    // outcome's actions, while the authority's copy below has already
+    // expired: a fresh apply must not trust the cache.
     let accepted = json!({
         "requestId": review_request_id,
         "subject": create["subject"].clone(),
@@ -5694,16 +6213,20 @@ async fn reconcile_cached_external_approval(
         },
         "submissionDigest": submission_digest,
     });
-    let result = json!({
+    let mut result = json!({
         "resultId": result_id,
         "requestId": review_request_id,
         "subject": accepted["subject"].clone(),
         "policy": accepted["policy"].clone(),
         "submissionDigest": accepted["submissionDigest"].clone(),
-        "status": "approved",
+        "status": status,
         "completedAt": "2026-09-01T00:00:00Z",
         "availableUntil": "2026-09-02T00:00:00Z"
     });
+    if matches!(status, "rejected" | "changes_requested" | "answered") {
+        // The review protocol requires a terminal outcome for these statuses.
+        result["outcome"] = json!(status);
+    }
     database
         .admin
         .execute(
@@ -5720,9 +6243,9 @@ async fn reconcile_cached_external_approval(
             "INSERT INTO registry_internal.registry_request_review_results
              (request_entity_id,request_id,proposal_version,authority,result_id,result,status,
               completed_at,available_until)
-             VALUES ('correction-request',$1,1,'casework-a',$2,$3,'approved',
-                     '2026-09-01T00:00:00Z','2026-09-02T00:00:00Z')",
-            &[&request_id, &result_id, &result],
+             VALUES ('correction-request',$1,1,'casework-a',$2,$3,$4,
+                     '2026-09-01T00:00:00Z','2099-09-02T00:00:00Z')",
+            &[&request_id, &result_id, &result, &status],
         )
         .await
         .expect("stale reconciled review result");
