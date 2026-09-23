@@ -6809,3 +6809,107 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
         .get(0);
     assert!(rotated_at > stale_scan_time);
 }
+
+#[tokio::test]
+async fn an_initiator_is_refused_by_name_and_is_only_recorded_from_a_trusted_issuer() {
+    let fixture = fixture().await;
+
+    // A person recorded as the initiator after they claimed is still refused
+    // at decision time, with the initiator-specific error.
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request(
+                "record-initiator-decision",
+                "producer-ref-initiator-decision",
+            ),
+            "create-initiator-decision",
+        )
+        .await
+        .expect("create excluded-initiator review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    let claimed = fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-before-initiator-change",
+        )
+        .await
+        .expect("claim before the initiator changes");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests SET initiator_issuer=$2,initiator_subject=$3
+             WHERE request_id=$1",
+            &[
+                &created.accepted.request_id,
+                &fixture.reviewer_a.principal.issuer,
+                &fixture.reviewer_a.principal.subject,
+            ],
+        )
+        .await
+        .expect("record the holder as the initiator");
+    assert!(matches!(
+        fixture
+            .service_v1
+            .decide_review_task(
+                &fixture.reviewer_a,
+                task,
+                ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Approve,
+                },
+                None,
+                "",
+                claimed.revision,
+                "initiator-decision",
+            )
+            .await,
+        Err(ReviewRuntimeError::InitiatorExcluded)
+    ));
+
+    // A kind that excludes its initiator is refused without one.
+    let mut anonymous = request("record-no-initiator", "producer-ref-no-initiator");
+    anonymous.initiator = None;
+    assert!(matches!(
+        fixture
+            .service_v1
+            .create_review_request(&fixture.producer, anonymous, "create-no-initiator")
+            .await,
+        Err(ReviewRuntimeError::InitiatorRequired)
+    ));
+
+    // A producer trusted with no initiator issuer submits only kinds that
+    // exclude nobody. An initiator it names is not evidence of anyone, so it
+    // is admitted without being recorded.
+    let mut project = answer_project(false);
+    project.review_kinds[0].stages[0].exclude_initiator = false;
+    project.review_producers[0].trusted_initiator_issuer = None;
+    project.check().expect("untrusted initiator test project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("untrusted initiator test service");
+    let mut named = request("record-untrusted-initiator", "producer-ref-untrusted");
+    named.kind = "registry-answer".to_owned();
+    let created = service
+        .create_review_request(&fixture.producer, named, "create-untrusted-initiator")
+        .await
+        .expect("admit a request naming an untrusted initiator");
+    let stored = fixture
+        .database
+        .query_one(
+            "SELECT initiator_issuer IS NULL AND initiator_subject IS NULL
+             FROM casework_review_requests WHERE request_id=$1",
+            &[&created.accepted.request_id],
+        )
+        .await
+        .expect("inspect the untrusted initiator");
+    assert!(stored.get::<_, bool>(0));
+}

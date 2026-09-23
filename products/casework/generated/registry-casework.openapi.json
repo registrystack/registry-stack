@@ -1796,6 +1796,8 @@
               "request.source-rejected",
               "request.unprocessable",
               "request.unsupported-media-type",
+              "review.initiator-excluded",
+              "review.initiator-required",
               "review.result-expired",
               "review.submission-conflict",
               "review.task-not-held",
@@ -2461,6 +2463,60 @@
               },
               "type": {
                 "const": "https://id.registrystack.org/problems/registry-casework/request/unsupported-media-type"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemReviewInitiatorExcluded": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "review.initiator-excluded"
+              },
+              "detail": {
+                "const": "You submitted this request, and this review stage excludes the person who submitted it. Another reviewer must take it."
+              },
+              "status": {
+                "const": 403
+              },
+              "title": {
+                "const": "Review initiator excluded"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/review/initiator-excluded"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemReviewInitiatorRequired": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "review.initiator-required"
+              },
+              "detail": {
+                "const": "This review kind excludes the person who submitted the request, so the request must name its initiator."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Review initiator required"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/review/initiator-required"
               }
             },
             "type": "object"
@@ -11830,11 +11886,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.unprocessable",
+            "description": "Problem response: request.unprocessable, review.initiator-required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12112,11 +12175,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.unprocessable",
+            "description": "Problem response: request.unprocessable, review.initiator-required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12416,11 +12486,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.unprocessable",
+            "description": "Problem response: request.unprocessable, review.initiator-required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13602,11 +13679,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.unprocessable",
+            "description": "Problem response: request.unprocessable, review.initiator-required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13895,11 +13979,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.unprocessable",
+            "description": "Problem response: request.unprocessable, review.initiator-required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14990,12 +15081,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human",
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -15602,13 +15696,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemSourceReviewerNotAuthorized"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human, source.reviewer-not-authorized",
+            "description": "Problem response: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded, source.reviewer-not-authorized",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"

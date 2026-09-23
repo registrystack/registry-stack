@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Name the two initiator refusals. A person a stage excludes as the request's
+  initiator is refused at claim and decision with
+  `403 review.initiator-excluded` instead of `operation.not-authorized`, and
+  a request for an `excludeInitiator` kind that names no initiator is refused
+  with `422 review.initiator-required` instead of `request.invalid`. Assigning
+  or delegating to the initiator still answers `operation.not-authorized`, so
+  a supervisor learns nothing about who submitted the request.
+- Admit a request from a producer without `trustedInitiatorIssuer` when it
+  names an initiator, without recording that initiator. Such a producer only
+  submits kinds that exclude nobody, and it was refused with
+  `request.invalid`, which broke every human-submitted BReg request to it.
 - Let a review completion destination present its secret in a named header.
   `reviewCompletionDestinations.<id>.auth: {header, secretRef}` sends the raw
   secret in that header with no `Authorization` header; without `header`, or

@@ -2145,3 +2145,84 @@ async fn a_reviewer_confirms_from_the_task_read_whether_they_decided_it_over_htt
 
     idp.stop().await;
 }
+
+#[tokio::test]
+async fn an_excluded_initiator_and_a_missing_initiator_get_their_own_problem_codes_over_http() {
+    let idp = MockIdp::start().await;
+    let (app, _, _, _, _, _) = app(&idp).await;
+    let send = |request: Request<Body>| {
+        let app = app.clone();
+        async move {
+            let response = app
+                .oneshot(request)
+                .await
+                .expect("initiator problem response");
+            let status = response.status();
+            let body: Value = serde_json::from_slice(
+                &to_bytes(response.into_body(), 32 * 1024)
+                    .await
+                    .expect("bounded initiator problem body"),
+            )
+            .expect("initiator problem JSON");
+            (status, body)
+        }
+    };
+    let mut request = review_request("initiator-codes", &idp.issuer());
+    request.kind = "registry-answer".to_owned();
+    request.subject.id = "initiator-codes-record".to_owned();
+    request.subject.digest = ContentDigest::for_bytes(b"initiator-codes-record");
+    request.context = ReviewContext::Submitted {
+        snapshot: json!({}),
+    };
+
+    // A kind that excludes its initiator cannot be admitted without one.
+    let mut anonymous = request.clone();
+    anonymous.initiator = None;
+    let (status, problem) = send(create_http_request(&anonymous, Some(&token(&idp)))).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{problem}");
+    assert_eq!(problem["code"], "review.initiator-required");
+
+    // The reviewer submitted this request, so the stage refuses their claim
+    // with a code a UI can explain.
+    request.initiator = Some(HumanIdentity {
+        issuer: idp.issuer(),
+        subject: "reviewer".to_owned(),
+    });
+    let (status, created) = send(create_http_request(&request, Some(&token(&idp)))).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let reviewer = reviewer_token(&idp);
+    let (status, tasks) = send(
+        Request::builder()
+            .uri("/v1/review-tasks")
+            .header("authorization", format!("Bearer {reviewer}"))
+            .header(CASEWORK_PROFILE_HEADER, "staff")
+            .body(Body::empty())
+            .expect("initiator task list request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{tasks}");
+    let task_id = tasks["items"][0]["taskId"]
+        .as_str()
+        .expect("listed initiator task")
+        .to_owned();
+    let claim = |token: String, key: &'static str| {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/v1/review-tasks/{task_id}/claim"))
+            .header("authorization", format!("Bearer {token}"))
+            .header(CASEWORK_PROFILE_HEADER, "staff")
+            .header("if-match", "\"1\"")
+            .header("idempotency-key", key)
+            .body(Body::empty())
+            .expect("initiator claim request")
+    };
+    let (status, problem) = send(claim(reviewer, "claim-own-request")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "review.initiator-excluded");
+
+    // Anyone else on the stage still claims it.
+    let (status, claimed) = send(claim(colleague_token(&idp), "claim-colleague")).await;
+    assert_eq!(status, StatusCode::OK, "{claimed}");
+
+    idp.stop().await;
+}

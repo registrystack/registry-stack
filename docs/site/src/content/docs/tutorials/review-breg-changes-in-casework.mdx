@@ -196,7 +196,9 @@ setup. It does not report the progress of a submitted review. Use the resources 
 Create the request as its owner, read its advertised `submit_request` action, and send the returned
 `ifMatch` with a fresh `Idempotency-Key`. Submit as a person: the starter's `editor` client carries
 the human actor marker, because the review stage excludes the request's initiator and BReg names an
-initiator only for a human caller. A service or agent submission is refused when Casework admits it.
+initiator only for a human caller. A service or agent submission is refused with
+`review.initiator-required` when Casework admits it, and the submitter who tries to claim the review
+task is refused with `review.initiator-excluded`.
 Submission freezes:
 
 - the request and target facts used by the proposal;
