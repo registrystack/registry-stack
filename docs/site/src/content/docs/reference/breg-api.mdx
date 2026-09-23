@@ -589,6 +589,8 @@ left out, a target field the caller cannot read is not named, and a request fiel
 cannot read is never given as a source, nor is an effect that is left out. `possibleWriteCount` still counts every declared write.
 Fields are named by their field id, as in `readableFields`. The description cannot grant write
 authority: whether a request may be submitted or applied is still decided by the request routes.
+The Rust, Node.js, and Python clients require `effects`, and `writes` on a `rhai` planner, so
+use a client and runtime from the same release.
 
 {/* Evidence: crates/registry-breg/src/request_workflow.rs, RequestState;
     crates/registry-breg/src/mutation/request.rs, action_requires_request_owner();
