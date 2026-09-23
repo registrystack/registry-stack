@@ -130,7 +130,7 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "review_evidence_load",
-            description: "An apply on an entity whose plan requires review is routed through a path of its own before the coordinator runs, and this is where that path can refuse. The receipt and applied short-circuits named by the preflight below are consulted first, so a replay and an already-applied request never load review evidence at all. Otherwise the accepted review submission recorded for exactly this request, this proposal version, and this effect digest is loaded, and the evidence itself is fetched from the configured review authority: no accepted submission matching all three is a precondition failure, and so is an authority whose name does not match, a result that is pending, concealed, unknown, or expired, and one whose availability lapses between the fetch and the check. A review-result source that is not configured, a token that cannot be obtained, and an authority that does not answer are each refused as unavailable instead. What this layer obtains is only matched against the frozen review requirement much later, by the workflow transition below.",
+            description: "An apply on an entity whose plan requires review is routed through a path of its own before the coordinator runs, and this is where that path can refuse. The receipt and applied short-circuits named by the preflight below are consulted first, so a replay and an already-applied request never load review evidence at all. Otherwise the accepted review submission recorded for exactly this request, this proposal version, and this effect digest is loaded. With that row read and no further row held, the caller's task grant and the grant frozen on the proposal are each confirmed current and live, because acquiring a guard is itself a protected disclosure: a revoked or expired grant is refused here, ahead of the review authority, the same as it is ahead of the Evidence provider below. Only then is the evidence itself fetched from the configured review authority: no accepted submission matching all three is a precondition failure, and so is an authority whose name does not match, a result that is pending, concealed, unknown, or expired, and one whose availability lapses between the fetch and the check. A review-result source that is not configured, a token that cannot be obtained, and an authority that does not answer are each refused as unavailable instead. What this layer obtains is only matched against the frozen review requirement much later, by the workflow transition below.",
             events: &["apply"],
         },
         EnforcementLayer {
@@ -683,6 +683,34 @@ mod tests {
             assert!(
                 acquisition.contains(phrase),
                 "{phrase:?} stopped being reported: {acquisition}"
+            );
+        }
+    }
+
+    /// The review path checks the same two grants before it contacts the
+    /// review authority that the Evidence path checks before it contacts its
+    /// provider. Reporting the grant check only at the grant layer further
+    /// down would put it after remote I/O it actually precedes.
+    #[test]
+    fn the_review_layer_checks_both_grants_before_the_authority() {
+        let lifecycle = request_lifecycle();
+        let index = |id: &str| {
+            lifecycle
+                .enforcement
+                .iter()
+                .position(|layer| layer.id == id)
+                .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
+        };
+        assert!(index("review_evidence_load") < index("task_grant"));
+        let review = layer(&lifecycle, "review_evidence_load").description;
+        for phrase in [
+            "caller's task grant",
+            "frozen on the proposal",
+            "ahead of the review authority",
+        ] {
+            assert!(
+                review.contains(phrase),
+                "{phrase:?} stopped being reported: {review}"
             );
         }
     }
