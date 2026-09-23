@@ -37,6 +37,10 @@ const MAXIMUM_COMPLETION_SECRET_BYTES: usize = 8 * 1024;
 /// operator ships or prunes closed segments out of band.
 const MAXIMUM_AUDIT_SEGMENT_BYTES: u64 = 10 * 1024 * 1024;
 
+/// Sealed segments carry an eight-digit sequence suffix; any other numeric
+/// suffix beside the audit file is the rotating layout of an earlier release.
+const AUDIT_SEGMENT_SEQUENCE_DIGITS: usize = 8;
+
 /// The secret a completion destination presents on every wake-up.
 enum ReviewCompletionCredential {
     Bearer(BearerToken),
@@ -476,21 +480,8 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         &secrets,
     )?);
 
-    let audit_sink = Arc::new(
-        DurableSegmentedJsonlSink::open(&config.audit.path, MAXIMUM_AUDIT_SEGMENT_BYTES)
-            .map_err(|_| RuntimeError::Audit)?,
-    );
-    let audit_chain = Arc::new(
-        audit_profile
-            .bootstrap_or_start_empty(audit_sink.as_ref())
-            .await
-            .map_err(|_| RuntimeError::Audit)?,
-    );
-    // The keyed bootstrap above authenticates the retained chain before its
-    // tail identity is used to reconcile a possible append/mark crash gap.
-    let mut audit_publication_state = AuditPublicationState::from_verified_tail(
-        newest_segmented_audit_envelope(&config.audit.path)?.as_ref(),
-    );
+    let (audit_sink, audit_chain, mut audit_publication_state) =
+        open_audit_journal(&config.audit.path, &audit_profile).await?;
 
     // A bad signing key or audit configuration must not retire the live
     // instance's task templates before this instance can serve requests.
@@ -699,6 +690,125 @@ fn resolve_audit_secret(
             &error,
         ))
     })
+}
+
+/// Open the audit journal, authenticate its retained chain, and recover the
+/// publication state its tail implies.
+async fn open_audit_journal(
+    path: &Path,
+    profile: &AuditProfile,
+) -> Result<
+    (
+        Arc<DurableSegmentedJsonlSink>,
+        Arc<ChainState>,
+        AuditPublicationState,
+    ),
+    RuntimeError,
+> {
+    refuse_rotated_audit_layout(path)?;
+    let sink = Arc::new(
+        DurableSegmentedJsonlSink::open(path, MAXIMUM_AUDIT_SEGMENT_BYTES)
+            .map_err(|error| RuntimeError::AuditJournal(describe_audit_journal_failure(&error)))?,
+    );
+    let chain = Arc::new(
+        profile
+            .bootstrap_or_start_empty(sink.as_ref())
+            .await
+            .map_err(|error| RuntimeError::AuditJournal(describe_audit_journal_failure(&error)))?,
+    );
+    // The keyed bootstrap above authenticates the retained chain before its
+    // tail identity is used to reconcile a possible append/mark crash gap.
+    let publication_state =
+        AuditPublicationState::from_verified_tail(newest_segmented_audit_envelope(path)?.as_ref());
+    Ok((sink, chain, publication_state))
+}
+
+/// Refuse the numbered layout the rotating sink of earlier Casework releases
+/// left beside the audit file.
+///
+/// That sink renamed a full file to `<path>.1` and shifted older ones up to
+/// `<path>.49`, so its active file begins in the middle of the chain. The
+/// durable sink reads none of those files and would either refuse the active
+/// file or start a second chain beside them, so the operator archives the set
+/// once, by hand, before this release writes to the path.
+fn refuse_rotated_audit_layout(path: &Path) -> Result<(), RuntimeError> {
+    let (Some(directory), Some(active)) = (
+        path.parent(),
+        path.file_name().and_then(|name| name.to_str()),
+    ) else {
+        return Ok(());
+    };
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(RuntimeError::AuditJournal(format!(
+                "the audit directory could not be read ({})",
+                error.kind()
+            )))
+        }
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            RuntimeError::AuditJournal(format!(
+                "the audit directory could not be read ({})",
+                error.kind()
+            ))
+        })?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let rotated = name
+            .strip_prefix(active)
+            .and_then(|rest| rest.strip_prefix('.'))
+            .is_some_and(|suffix| {
+                !suffix.is_empty()
+                    && suffix.len() != AUDIT_SEGMENT_SEQUENCE_DIGITS
+                    && suffix.bytes().all(|byte| byte.is_ascii_digit())
+            });
+        if rotated {
+            return Err(RuntimeError::AuditJournal(format!(
+                "{name} beside audit.path was rotated by an earlier Casework release, and this \
+                 release neither reads nor continues that layout; stop every earlier process, \
+                 move audit.path and each numbered file beside it into an archive directory, \
+                 and start again"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Name the rule an audit journal refusal broke, without a record, a hash,
+/// or a path the operator did not configure.
+fn describe_audit_journal_failure(error: &registry_platform_audit::AuditError) -> String {
+    use registry_platform_audit::{AuditError, OptionalHashHex};
+
+    match error {
+        AuditError::SinkLocked { .. } => "another process holds the single-writer lock beside \
+             audit.path; stop it before starting this one"
+            .to_owned(),
+        AuditError::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied => format!(
+            "{io}; the audit directory must belong to the runtime user with mode 0700, and \
+             audit.path and its lock file must belong to that user with mode 0600 and one link"
+        ),
+        AuditError::ChainForkDetected {
+            expected: OptionalHashHex(None),
+            ..
+        } => "the retained audit file does not begin at the first record of its chain, as a \
+             file rotated by an earlier Casework release does; stop every earlier process, move \
+             audit.path and each numbered file beside it into an archive directory, and start \
+             again"
+            .to_owned(),
+        AuditError::SegmentMissing { .. } => error.to_string(),
+        AuditError::ChainForkDetected { .. }
+        | AuditError::ChainVerification(_)
+        | AuditError::HashMismatch => {
+            "the retained audit chain does not verify under audit.hashKeyRef".to_owned()
+        }
+        AuditError::Io(io) => format!("the audit file could not be opened or read ({})", io.kind()),
+        _ => "the audit file could not be opened or read".to_owned(),
+    }
 }
 
 /// Read the most recently written audit envelope straight off disk.
@@ -942,6 +1052,7 @@ fn update_audit_health(
 #[cfg(test)]
 mod tests {
     use chrono::{TimeZone as _, Utc};
+    use registry_platform_audit::JsonlFileSink;
     use tokio::sync::Mutex;
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1616,6 +1727,363 @@ mod tests {
         );
     }
 
+    fn upgrade_audit_profile() -> AuditProfile {
+        AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+            b"casework-audit-upgrade-secret-32-bytes".to_vec(),
+        ))
+        .expect("audit profile")
+    }
+
+    /// An audit directory the way an operator or the container image
+    /// provisions it, beside a sibling directory an archive may use.
+    fn audit_directory_with_mode(mode: u32) -> (tempfile::TempDir, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().expect("deployment root");
+        let audit = root.path().join("audit");
+        std::fs::create_dir(&audit).expect("audit directory");
+        std::fs::set_permissions(&audit, std::fs::Permissions::from_mode(mode))
+            .expect("audit directory mode");
+        (root, audit)
+    }
+
+    /// Write keyed records through the rotating sink every Casework release
+    /// up to and including 0.33.0 opened, and return their event ids.
+    async fn write_with_rotating_sink(
+        sink: &JsonlFileSink,
+        profile: &AuditProfile,
+        records: usize,
+    ) -> Vec<String> {
+        let chain = profile
+            .bootstrap_or_start_empty(sink)
+            .await
+            .expect("rotating sink keyed bootstrap");
+        let mut event_ids = Vec::new();
+        for index in 0..records {
+            let event_id = Uuid::new_v4().to_string();
+            chain
+                .append(
+                    sink,
+                    serde_json::json!({
+                        "eventId": event_id,
+                        "event": "casework.synthetic",
+                        "index": index,
+                        "padding": "x".repeat(160),
+                    }),
+                )
+                .await
+                .expect("rotating sink append");
+            event_ids.push(event_id);
+        }
+        event_ids
+    }
+
+    fn synthetic_pending(records: usize) -> Vec<(Uuid, Value)> {
+        (0..records)
+            .map(|index| {
+                (
+                    Uuid::new_v4(),
+                    serde_json::json!({"event": "casework.synthetic", "index": index}),
+                )
+            })
+            .collect()
+    }
+
+    async fn publish_into(
+        sink: Arc<DurableSegmentedJsonlSink>,
+        chain: Arc<ChainState>,
+        state: &mut AuditPublicationState,
+        pending: Vec<(Uuid, Value)>,
+    ) {
+        let database = Arc::new(Mutex::new(FileAuditState {
+            fail_marks: false,
+            pending,
+        }));
+        let publisher = FileAuditPublisher {
+            database: Arc::clone(&database),
+            chain,
+            sink,
+        };
+        publish_audit_pass(&publisher, state)
+            .await
+            .expect("pending records publish");
+        assert!(database.lock().await.pending.is_empty());
+    }
+
+    fn event_ids_in(files: &[std::path::PathBuf]) -> Vec<String> {
+        files
+            .iter()
+            .flat_map(|file| {
+                std::fs::read_to_string(file)
+                    .expect("audit segment")
+                    .lines()
+                    .map(|line| {
+                        let envelope =
+                            serde_json::from_str::<AuditEnvelope>(line).expect("audit envelope");
+                        envelope.record["eventId"]
+                            .as_str()
+                            .expect("event id")
+                            .to_owned()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn an_audit_file_from_the_rotating_sink_continues_its_chain_after_upgrade() {
+        let (_root, audit) = audit_directory_with_mode(0o700);
+        let audit_path = audit.join("casework.jsonl");
+        let profile = upgrade_audit_profile();
+        let earlier = {
+            let sink = JsonlFileSink::new_single_writer(&audit_path).expect("earlier writer");
+            write_with_rotating_sink(&sink, &profile, 3).await
+        };
+        assert!(
+            audit.join("casework.jsonl.lock").exists(),
+            "the earlier writer leaves its lock file behind"
+        );
+
+        let (sink, chain, mut state) = open_audit_journal(&audit_path, &profile)
+            .await
+            .expect("the upgraded runtime opens an audit file the rotating sink never rotated");
+        assert_eq!(
+            state.unconfirmed.map(|event_id| event_id.to_string()),
+            earlier.last().cloned(),
+            "restart reconciliation reads the earlier writer's tail"
+        );
+        publish_into(sink, chain, &mut state, synthetic_pending(2)).await;
+
+        let summary = registry_platform_audit::verify_segmented_audit_chain(
+            &audit_path,
+            &profile.chain_hasher(),
+        )
+        .expect("the whole history verifies as one chain");
+        assert_eq!(summary.records, 5);
+        assert_eq!(summary.segments, 1);
+        assert!(summary.active_verified);
+        let event_ids = event_ids_in(std::slice::from_ref(&audit_path));
+        assert_eq!(event_ids[..3], earlier[..]);
+
+        // Once the earlier writer's file fills, the durable sink seals it
+        // under the first sequence and the chain crosses the seam.
+        let small = Arc::new(
+            DurableSegmentedJsonlSink::open(&audit_path, 900).expect("small-segment sink"),
+        );
+        let chain = Arc::new(
+            profile
+                .bootstrap_or_start_empty(small.as_ref())
+                .await
+                .expect("keyed bootstrap"),
+        );
+        let mut state = AuditPublicationState::default();
+        publish_into(small, chain, &mut state, synthetic_pending(6)).await;
+        let summary = registry_platform_audit::verify_segmented_audit_chain(
+            &audit_path,
+            &profile.chain_hasher(),
+        )
+        .expect("the sealed earlier file and its successors verify as one chain");
+        assert_eq!(summary.records, 11);
+        assert_eq!(summary.first_sequence, Some(1));
+        assert!(summary.segments > 1);
+        let files =
+            registry_platform_audit::segmented_audit_paths(&audit_path).expect("segment listing");
+        assert_eq!(event_ids_in(&files)[..3], earlier[..]);
+    }
+
+    #[tokio::test]
+    async fn an_audit_file_the_rotating_sink_already_rotated_is_refused_with_the_upgrade_step() {
+        let (root, audit) = audit_directory_with_mode(0o700);
+        let audit_path = audit.join("casework.jsonl");
+        let profile = upgrade_audit_profile();
+        let earlier = {
+            let sink = JsonlFileSink::with_rotation_single_writer(&audit_path, 900, 50)
+                .expect("earlier writer");
+            write_with_rotating_sink(&sink, &profile, 12).await
+        };
+        assert!(audit.join("casework.jsonl.1").exists());
+        assert!(audit.join("casework.jsonl.2").exists());
+
+        // The durable layout's verifier reads none of the numbered files and
+        // refuses an active file that starts in the middle of the chain.
+        assert!(matches!(
+            registry_platform_audit::verify_segmented_audit_chain(
+                &audit_path,
+                &profile.chain_hasher()
+            ),
+            Err(registry_platform_audit::AuditError::ChainForkDetected { .. })
+        ));
+
+        let error = open_audit_journal(&audit_path, &profile)
+            .await
+            .err()
+            .expect("the upgraded runtime refuses the rotated layout")
+            .to_string();
+        assert!(
+            error.contains("casework.jsonl.1") && error.contains("earlier Casework release"),
+            "the refusal names the rotated file and where it came from: {error}"
+        );
+        assert!(
+            error.contains("archive"),
+            "the refusal names the step that clears it: {error}"
+        );
+
+        // The documented step: move the active file and its numbered
+        // siblings into an archive together, then start again.
+        let archive = root.path().join("audit-archive");
+        std::fs::create_dir(&archive).expect("archive directory");
+        let mut archived = Vec::new();
+        for entry in std::fs::read_dir(&audit).expect("audit directory") {
+            let name = entry.expect("audit entry").file_name();
+            let name = name.to_str().expect("utf-8 name").to_owned();
+            if name == "casework.jsonl"
+                || name
+                    .strip_prefix("casework.jsonl.")
+                    .is_some_and(|suffix| suffix.bytes().all(|byte| byte.is_ascii_digit()))
+            {
+                std::fs::rename(audit.join(&name), archive.join(&name)).expect("archive file");
+                archived.push(name);
+            }
+        }
+        assert!(archived.len() > 2);
+
+        let (sink, chain, mut state) = open_audit_journal(&audit_path, &profile)
+            .await
+            .expect("a fresh chain starts once the rotated set is archived");
+        assert_eq!(state.unconfirmed, None);
+        publish_into(sink, chain, &mut state, synthetic_pending(2)).await;
+        let summary = registry_platform_audit::verify_segmented_audit_chain(
+            &audit_path,
+            &profile.chain_hasher(),
+        )
+        .expect("the fresh chain verifies");
+        assert_eq!(summary.records, 2);
+
+        // The archived set still authenticates under the same key, read the
+        // way the earlier release's own keyed bootstrap read it.
+        let archived_sink = JsonlFileSink::with_rotation(archive.join("casework.jsonl"), 900, 50);
+        assert!(profile
+            .bootstrap_or_start_empty(&archived_sink)
+            .await
+            .expect("the archived history verifies under the audit key")
+            .last_hash()
+            .await
+            .is_some());
+        let mut archived_files: Vec<_> = (1..50)
+            .rev()
+            .map(|index| archive.join(format!("casework.jsonl.{index}")))
+            .filter(|file| file.exists())
+            .collect();
+        archived_files.push(archive.join("casework.jsonl"));
+        assert_eq!(event_ids_in(&archived_files), earlier);
+    }
+
+    #[tokio::test]
+    async fn an_audit_file_that_starts_mid_chain_is_refused_with_the_upgrade_step() {
+        let (_root, audit) = audit_directory_with_mode(0o700);
+        let audit_path = audit.join("casework.jsonl");
+        let profile = upgrade_audit_profile();
+        {
+            let sink = JsonlFileSink::with_rotation_single_writer(&audit_path, 900, 50)
+                .expect("earlier writer");
+            write_with_rotating_sink(&sink, &profile, 12).await;
+        }
+        // An operator already pruned the numbered files under their own
+        // retention policy, leaving an active file that begins mid-chain.
+        for index in 1..50 {
+            let rotated = audit.join(format!("casework.jsonl.{index}"));
+            if rotated.exists() {
+                std::fs::remove_file(rotated).expect("prune rotated file");
+            }
+        }
+
+        let error = open_audit_journal(&audit_path, &profile)
+            .await
+            .err()
+            .expect("the upgraded runtime refuses a mid-chain audit file")
+            .to_string();
+        assert!(
+            error.contains("does not begin at the first record")
+                && error.contains("earlier Casework release"),
+            "the refusal explains the mid-chain start: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_audit_directory_the_rotating_sink_accepted_is_refused_until_it_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        for mode in [0o755, 0o750] {
+            let (_root, audit) = audit_directory_with_mode(mode);
+            let audit_path = audit.join("casework.jsonl");
+            let profile = upgrade_audit_profile();
+            {
+                let sink = JsonlFileSink::new_single_writer(&audit_path)
+                    .expect("the earlier writer accepts a group-readable directory");
+                write_with_rotating_sink(&sink, &profile, 2).await;
+            }
+
+            let error = open_audit_journal(&audit_path, &profile)
+                .await
+                .err()
+                .expect("the upgraded runtime refuses a directory other users can read")
+                .to_string();
+            assert!(
+                error.contains("audit directory must be owner-only") && error.contains("0700"),
+                "the refusal names the mode the directory needs: {error}"
+            );
+
+            std::fs::set_permissions(&audit, std::fs::Permissions::from_mode(0o700))
+                .expect("restrict audit directory");
+            std::fs::set_permissions(&audit_path, std::fs::Permissions::from_mode(0o640))
+                .expect("loosen audit file");
+            let error = open_audit_journal(&audit_path, &profile)
+                .await
+                .err()
+                .expect("the upgraded runtime refuses an audit file other users can read")
+                .to_string();
+            assert!(
+                error.contains("owner-only") && error.contains("0600"),
+                "the refusal names the mode the audit file needs: {error}"
+            );
+
+            std::fs::set_permissions(&audit_path, std::fs::Permissions::from_mode(0o600))
+                .expect("restrict audit file");
+            open_audit_journal(&audit_path, &profile)
+                .await
+                .expect("the journal opens once the directory and file are owner-only");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_rotating_sink_and_the_durable_sink_share_one_writer_lock() {
+        let (_root, audit) = audit_directory_with_mode(0o700);
+        let audit_path = audit.join("casework.jsonl");
+        let profile = upgrade_audit_profile();
+
+        let earlier = JsonlFileSink::new_single_writer(&audit_path).expect("earlier writer");
+        write_with_rotating_sink(&earlier, &profile, 1).await;
+        let error = open_audit_journal(&audit_path, &profile)
+            .await
+            .err()
+            .expect("an overlapping earlier process keeps the lock")
+            .to_string();
+        assert!(
+            error.contains("single-writer lock"),
+            "the refusal names the lock: {error}"
+        );
+        drop(earlier);
+
+        let journal = open_audit_journal(&audit_path, &profile)
+            .await
+            .expect("the lock file an earlier process left behind does not block");
+        assert!(matches!(
+            JsonlFileSink::new_single_writer(&audit_path),
+            Err(registry_platform_audit::AuditError::SinkLocked { .. })
+        ));
+        drop(journal);
+    }
+
     #[test]
     fn audit_publication_owns_and_checks_the_event_identity() {
         let event_id = Uuid::new_v4();
@@ -1726,6 +2194,8 @@ pub enum RuntimeError {
     Audit,
     #[error("the Casework audit journal could not be initialized: {0}")]
     AuditSecret(String),
+    #[error("the Casework audit journal could not be initialized: {0}")]
+    AuditJournal(String),
     #[error("the Casework review completion destination configuration is invalid")]
     CompletionConfiguration,
     #[error("the CASEWORK_LOG level is invalid; it must be one of error, warn, or info")]
