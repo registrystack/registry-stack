@@ -75,12 +75,12 @@ pub(crate) struct TargetGovernance {
 pub(crate) struct TargetDocumentDiagnostic {
     pub(crate) code: &'static str,
     pub(crate) path: String,
-    pub(crate) message: &'static str,
+    pub(crate) message: String,
 }
 
 impl std::fmt::Display for TargetDocumentDiagnostic {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.message)
+        formatter.write_str(&self.message)
     }
 }
 
@@ -92,7 +92,7 @@ impl TargetGovernance {
             return Err(TargetDocumentDiagnostic {
                 code: "evidence.target.governance-version",
                 path: "governance.yaml:/version".to_owned(),
-                message: "deployment governance version must be 1",
+                message: "deployment governance version must be 1".to_owned(),
             }
             .into());
         }
@@ -103,7 +103,8 @@ impl TargetGovernance {
             return Err(TargetDocumentDiagnostic {
                 code: "evidence.target.assurance-profile",
                 path: "governance.yaml:/assuranceProfile".to_owned(),
-                message: "deployment governance assuranceProfile must be local, production, or evidence-grade",
+                message: "deployment governance assuranceProfile must be local, production, or evidence-grade"
+                    .to_owned(),
             }
             .into());
         }
@@ -115,7 +116,7 @@ impl TargetGovernance {
             return Err(TargetDocumentDiagnostic {
                 code: "evidence.target.authority-profiles",
                 path: "governance.yaml:/authorityProfiles".to_owned(),
-                message: "deployment governance requires at least one authority profile",
+                message: "deployment governance requires at least one authority profile".to_owned(),
             }
             .into());
         }
@@ -189,9 +190,13 @@ fn run_inner(
             code: "evidence.package.production-profile-required",
             path: "governance.yaml:/assuranceProfile".to_owned(),
             message:
-                "evidencectl package requires a production or evidence-grade deployment target",
+                "evidencectl package requires a production or evidence-grade deployment target"
+                    .to_owned(),
         }
         .into());
+    }
+    if require_deployable_assurance {
+        verify_bundle_directory_matches_candidate(&target.runtime, &candidate)?;
     }
     let evidence_bin = crate::evidence_binary::resolve_matching(None)?;
 
@@ -395,7 +400,8 @@ pub(crate) fn read_target_documents(target: &Path) -> Result<TargetDocuments> {
             TargetDocumentDiagnostic {
                 code: "evidence.target.governance-shape",
                 path: target_member_path("governance.yaml", &error.path().to_string()),
-                message: "deployment governance does not match the closed Version 1 target shape",
+                message: "deployment governance does not match the closed Version 1 target shape"
+                    .to_owned(),
             }
         })?;
     Ok(TargetDocuments {
@@ -476,6 +482,38 @@ fn prepare_candidate(
         )?;
     }
     Ok((revision, secret_references))
+}
+
+/// Refuse a packaged candidate whose deployment runtime would load a bundle
+/// left behind by a different `package` invocation. `bundleDirectory` is the
+/// one path the running process trusts at startup, so a candidate that copies
+/// a `runtime.yaml` naming another directory would report this build's bundle
+/// revision while quietly serving whatever bundle already sits at that other
+/// path. This check only compares the value against the candidate this
+/// invocation is producing; it leaves full runtime shape validation to
+/// `evidencectl doctor --runtime-config` and the `evidence` binary itself, so
+/// a runtime document that is otherwise malformed is still caught there
+/// rather than reported twice.
+fn verify_bundle_directory_matches_candidate(runtime_bytes: &[u8], candidate: &Path) -> Result<()> {
+    let Ok(document) = serde_norway::from_slice::<Value>(runtime_bytes) else {
+        return Ok(());
+    };
+    let Some(bundle_directory) = document.get("bundleDirectory").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let expected = candidate.join("bundle");
+    if Path::new(bundle_directory) == expected {
+        return Ok(());
+    }
+    Err(TargetDocumentDiagnostic {
+        code: "evidence.package.bundle-directory-mismatch",
+        path: "runtime.yaml:/bundleDirectory".to_owned(),
+        message: format!(
+            "deployment runtime bundleDirectory {bundle_directory} does not resolve to this candidate's own bundle path {}",
+            expected.display()
+        ),
+    }
+    .into())
 }
 
 fn run_bundle_check(

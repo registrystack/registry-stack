@@ -1196,7 +1196,7 @@ mod tests {
             Err(anyhow::Error::new(build::TargetDocumentDiagnostic {
                 code: "evidence.target.governance-version",
                 path: "governance.yaml:/version".to_owned(),
-                message: "deployment governance version must be 1",
+                message: "deployment governance version must be 1".to_owned(),
             })),
             "evidence.package.failed",
             "project".to_owned(),
