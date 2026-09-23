@@ -21,6 +21,7 @@
         "connection",
         "bregAuthoringChanges",
         "bregAuthoringPatch",
+        "findings",
         "activation",
         "next"
       ],
@@ -69,6 +70,9 @@
         },
         "candidateRuntimeBinding": {
           "type": "object"
+        },
+        "findings": {
+          "$ref": "#/$defs/findings"
         },
         "activation": {
           "const": "not_performed"

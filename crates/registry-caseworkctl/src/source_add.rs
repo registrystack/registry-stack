@@ -100,6 +100,7 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         "connection": candidate_request.connection_report(),
         "bregAuthoringChanges": breg_authoring_changes,
         "bregAuthoringPatch": {"event": event_patch, "accessProfile": reader_patch, "devClients": dev_clients_plan.patch},
+        "findings": dev_clients_plan.findings,
         "activation": "not_performed",
         "next": if args.apply {
             json!(["Review the generated BReg webhook binding and provision its secret reference. Configure the Casework source reader with the actual issuer tokenEndpoint, clientAssertionAudience, resource and scopes before activating through each product's normal path.", "Run caseworkctl doctor --runtime-config FILE after authenticated directory setup."])
@@ -306,11 +307,14 @@ fn require_ok(operation: &str, report: &Value) -> Result<()> {
 }
 
 /// The scopes and purpose a Casework staff or supervisor dev client inherits
-/// from the selected BReg request's review and apply access profiles.
+/// from the selected BReg request's review and apply access profiles, plus
+/// any finding raised because a profile's rowBoundaries claims are not
+/// reflected in the local dev-client export.
 struct ReviewerAuthority {
     profiles: BTreeSet<String>,
     scopes: BTreeSet<String>,
     purpose: Option<String>,
+    row_boundary_findings: Vec<Value>,
 }
 
 /// What it takes to write a planned set of BReg local dev clients back to the
@@ -325,13 +329,16 @@ struct DevClientsWrite {
 
 /// The outcome of planning the BReg `dev-clients.yaml` side of `source add`:
 /// the exact clients for the preview report, the authoring changes they
-/// correspond to, and, when the BReg project has a dev-clients.yaml to patch,
-/// what apply needs to write it.
+/// correspond to, what apply needs to write it when the BReg project has a
+/// dev-clients.yaml to patch, and any non-fatal findings the plan raised
+/// (for example, a reviewer access profile whose rowBoundaries claims the
+/// local dev-client export does not add).
 #[derive(Debug)]
 struct DevClientsPlan {
     patch: Value,
     changes: Value,
     write: Option<DevClientsWrite>,
+    findings: Vec<Value>,
 }
 
 struct SelectedRequest<'a> {
@@ -856,6 +863,7 @@ fn reviewer_authority(
         .context("BReg registry.yaml has no accessProfiles")?;
     let mut scopes = BTreeSet::new();
     let mut allowed_purposes: Option<BTreeSet<String>> = None;
+    let mut row_boundary_findings = Vec::new();
     for id in &profile_ids {
         let profile = profiles
             .iter()
@@ -881,9 +889,9 @@ fn reviewer_authority(
             bail!("BReg access profile {id} requesterClients must exactly match the Casework staff and supervisor clients");
         }
         if has_nonempty_row_boundaries(profile) {
-            bail!(
-                "BReg access profile {id} uses rowBoundaries, which local Casework reviewer client export does not support"
-            );
+            let mut claims = BTreeSet::new();
+            row_boundary_claims(profile, &mut claims);
+            row_boundary_findings.push(row_boundary_finding(id, &claims));
         }
         let required_scopes = match profile.get("requiredScopes") {
             None | Some(Value::Null) => &[][..],
@@ -933,6 +941,7 @@ fn reviewer_authority(
         profiles: profile_ids.into_iter().map(str::to_owned).collect(),
         scopes,
         purpose,
+        row_boundary_findings,
     })
 }
 
@@ -950,6 +959,54 @@ fn has_nonempty_row_boundaries(value: &Value) -> bool {
         }),
         _ => false,
     }
+}
+
+/// Collects the `rowBoundaries` claim names anywhere under `value`, mirroring
+/// `has_nonempty_row_boundaries`'s traversal.
+fn row_boundary_claims(value: &Value, claims: &mut BTreeSet<String>) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                row_boundary_claims(value, claims);
+            }
+        }
+        Value::Object(values) => {
+            for (key, value) in values {
+                if key == "rowBoundaries" {
+                    for boundary in value.as_array().into_iter().flatten() {
+                        if let Some(claim) = boundary["claim"].as_str() {
+                            claims.insert(claim.to_owned());
+                        }
+                    }
+                } else {
+                    row_boundary_claims(value, claims);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A finding warning that a BReg access profile's rowBoundaries claims are
+/// not reflected in the local dev-client export: BReg's runtime still
+/// refuses that profile for a local reviewer client whose token lacks the
+/// claim, so access is neither widened nor silently bypassed, but an
+/// operator who wants a local reviewer to exercise the profile must add the
+/// claim to that client by hand.
+fn row_boundary_finding(id: &str, claims: &BTreeSet<String>) -> Value {
+    let claim_list = claims.iter().cloned().collect::<Vec<_>>().join(", ");
+    json!({
+        "severity": "finding",
+        "code": "casework.source-add.row-boundary-claim-unsupported",
+        "artifact": "breg_access_profile",
+        "path": format!("registry.yaml:/accessProfiles/{id}/rowBoundaries"),
+        "message": format!(
+            "BReg access profile {id} uses rowBoundaries on claim(s) {claim_list}; the local dev-client export does not add these claims, so a local Casework reviewer client cannot exercise the profile until an operator adds them by hand"
+        ),
+        "suggestedAction": format!(
+            "Add claim(s) {claim_list} to the local Casework reviewer dev clients that need access profile {id}, matching the values BReg's rowBoundaries expects."
+        ),
+    })
 }
 
 /// The BReg dev client bound to one Casework dev client: same id, scopes, and
@@ -1132,6 +1189,10 @@ fn plan_breg_dev_clients(
     } else {
         None
     };
+    let findings = authority
+        .as_ref()
+        .map(|authority| authority.row_boundary_findings.clone())
+        .unwrap_or_default();
     let mut clients = vec![reader_dev_client()];
     for (client, role, principal_claim) in &eligible {
         clients.push(human_dev_client(
@@ -1178,9 +1239,13 @@ fn plan_breg_dev_clients(
                     original,
                     proposed,
                 }),
+                findings,
             })
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(absent_dev_clients_plan()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(DevClientsPlan {
+            findings,
+            ..absent_dev_clients_plan()
+        }),
         Err(error) => Err(error).context("reading BReg dev-clients.yaml"),
     }
 }
@@ -1221,6 +1286,7 @@ fn absent_dev_clients_plan() -> DevClientsPlan {
         patch: json!("absent"),
         changes: json!([]),
         write: None,
+        findings: Vec::new(),
     }
 }
 
@@ -2011,6 +2077,74 @@ mod tests {
     }
 
     #[test]
+    fn dev_clients_plan_reports_row_boundary_findings_and_still_writes_the_plan() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let registry = tempfile::tempdir().unwrap();
+        fs::write(
+            registry.path().join("dev-clients.yaml"),
+            serde_json::to_vec(&json!({
+                "version": 1,
+                "clients": [
+                    {"id":"operator","accessProfiles":["operator"],"scopes":["starter:operator"],"claims":{}}
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let (mut authored, request) = reviewer_fixture();
+        authored["accessProfiles"][0]["permissions"] = json!([{
+            "entity": "request",
+            "rowBoundaries": [{"field": "region", "claim": "allowed_regions", "operator": "in"}]
+        }]);
+
+        let plan = plan_breg_dev_clients(
+            registry.path(),
+            &project,
+            &authored,
+            &selected_request(&request),
+        )
+        .unwrap();
+
+        let [finding] = plan.findings.as_slice() else {
+            panic!(
+                "expected exactly one row-boundary finding, got {:?}",
+                plan.findings
+            );
+        };
+        assert_eq!(finding["severity"], "finding");
+        let message = finding["message"].as_str().unwrap();
+        assert!(message.contains("reviewer"), "{message}");
+        assert!(message.contains("allowed_regions"), "{message}");
+
+        // The rowBoundaries claim is not fabricated for the local reviewer
+        // clients: the profile is still granted as-is, and BReg's runtime
+        // enforcement (which fails closed when a token lacks the claim) is
+        // what actually gates access, not this export.
+        let supervisor = plan
+            .patch
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == "supervisor")
+            .unwrap();
+        assert_eq!(supervisor["accessProfiles"], json!(["reviewer"]));
+        assert!(supervisor["claims"].get("allowed_regions").is_none());
+
+        let write = plan.write.unwrap();
+        write_atomic(&write.path, write.proposed.as_bytes()).unwrap();
+        let written: Value = serde_json::from_slice(&fs::read(&write.path).unwrap()).unwrap();
+        let written_supervisor = written["clients"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == "supervisor")
+            .unwrap();
+        assert_eq!(written_supervisor["accessProfiles"], json!(["reviewer"]));
+    }
+
+    #[test]
     fn dev_clients_plan_refuses_a_merged_total_over_the_breg_client_bound() {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("project");
@@ -2400,7 +2534,7 @@ mod tests {
     }
 
     #[test]
-    fn reviewer_authority_refuses_profiles_with_row_boundary_claims() {
+    fn reviewer_authority_reports_a_finding_for_profiles_with_row_boundary_claims() {
         let authored = json!({
             "accessProfiles": [{
                 "id":"reviewer",
@@ -2415,13 +2549,25 @@ mod tests {
         });
         let request = json!({"reviewPermissions":[{"profile":"reviewer"}],"applyPermissions":[]});
 
-        let error = reviewer_authority(&authored, &request, &reviewer_clients())
-            .err()
-            .expect("row-boundary authority must be refused");
-        let message = format!("{error:#}");
+        let authority = reviewer_authority(&authored, &request, &reviewer_clients())
+            .expect("a rowBoundaries profile must not refuse the whole pairing");
+        assert_eq!(authority.profiles, BTreeSet::from(["reviewer".to_owned()]));
+        let [finding] = authority.row_boundary_findings.as_slice() else {
+            panic!(
+                "expected exactly one row-boundary finding, got {:?}",
+                authority.row_boundary_findings
+            );
+        };
+        assert_eq!(finding["severity"], "finding");
+        let message = finding["message"].as_str().unwrap();
         assert!(message.contains("reviewer"), "{message}");
-        assert!(message.contains("rowBoundaries"), "{message}");
-        assert!(!message.contains("allowed_regions"), "{message}");
+        assert!(message.contains("allowed_regions"), "{message}");
+        let suggested_action = finding["suggestedAction"].as_str().unwrap();
+        assert!(suggested_action.contains("reviewer"), "{suggested_action}");
+        assert!(
+            suggested_action.contains("allowed_regions"),
+            "{suggested_action}"
+        );
     }
 
     #[test]
@@ -2430,6 +2576,7 @@ mod tests {
             profiles: BTreeSet::from(["reviewer".to_owned()]),
             scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
             purpose: Some("starter-learning".to_owned()),
+            row_boundary_findings: Vec::new(),
         };
         let client = json!({
             "id":"staff",
@@ -2459,6 +2606,7 @@ mod tests {
             profiles: BTreeSet::from(["reviewer".to_owned()]),
             scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
             purpose: None,
+            row_boundary_findings: Vec::new(),
         };
         let client = json!({
             "id":"staff",
@@ -2489,6 +2637,7 @@ mod tests {
             profiles: BTreeSet::from(["reviewer".to_owned()]),
             scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
             purpose: None,
+            row_boundary_findings: Vec::new(),
         };
         let client = json!({
             "id":"staff",
@@ -2508,6 +2657,7 @@ mod tests {
             profiles: BTreeSet::from(["reviewer".to_owned()]),
             scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
             purpose: None,
+            row_boundary_findings: Vec::new(),
         };
         let scopes = (0..MAX_BREG_DEV_CLIENT_SCOPES)
             .map(|index| format!("casework:scope-{index}"))
@@ -2544,6 +2694,7 @@ mod tests {
                 profiles: BTreeSet::from(["reviewer".to_owned()]),
                 scopes: BTreeSet::new(),
                 purpose: None,
+                row_boundary_findings: Vec::new(),
             }),
         )
         .unwrap_err();

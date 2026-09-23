@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `caseworkctl source add` no longer refuses the whole pairing when a
+  selected request's review or apply access profile declares `rowBoundaries`.
+  It writes the source description and runtime binding as before, and the
+  local BReg dev-client export still grants the profile, since BReg's runtime
+  keeps enforcing the boundary and refuses a token that lacks the claim. What
+  changes is that the command now reports a finding naming the profile and
+  the boundary claim(s), so an operator knows a local Casework reviewer
+  client needs that claim added by hand to exercise the profile. Preview and
+  apply report the same finding.
 - Fix the professional-review starter hiding every source-backed review task.
   Its `scope-correction` `displaySchema` described `record` as an object, but
   the professional-licences source discloses it as a UUID string, so every
