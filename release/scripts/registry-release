@@ -3425,8 +3425,8 @@ def reusable_docs_publication_run(
             run_id, _ = workflow_run_identity(publication_run, "release publication")
             raise ReleasePlanError(
                 f"release publication run {run_id} concluded "
-                f"{publication_run.get('conclusion')!r}; its identifier catalog and "
-                "any other jobs gated on it did not run. Rerun its failed jobs with "
+                f"{publication_run.get('conclusion')!r}, so a closeout job such as "
+                "the identifier catalog did not complete. Rerun its failed jobs with "
                 f"`gh run rerun {run_id} --failed`"
             )
         if (
