@@ -3071,6 +3071,8 @@ async fn an_initiator_learns_their_own_result_expired_before_and_after_erasure()
     .expect("initiator retention test service");
     let initiator = actor("initiator", CaseworkRole::Requester, "initiator");
     let another_person = actor("another-person", CaseworkRole::Requester, "initiator");
+    let mut same_subject_elsewhere = actor("initiator", CaseworkRole::Requester, "initiator");
+    same_subject_elsewhere.principal.issuer = "https://other-issuer.test".to_owned();
     let mut answer_request = request("initiator-retention", "initiator-retention-ref");
     answer_request.kind = "registry-answer".to_owned();
     let created = service
@@ -3088,6 +3090,12 @@ async fn an_initiator_learns_their_own_result_expired_before_and_after_erasure()
         .expect("initiator reads an active request")
         .items
         .is_empty());
+    assert!(matches!(
+        service
+            .review_history(&same_subject_elsewhere, request_id, None, "", None, 10)
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
     let task = task_id(&fixture, request_id, 0).await;
     service
         .claim_review_task(
@@ -3159,6 +3167,15 @@ async fn an_initiator_learns_their_own_result_expired_before_and_after_erasure()
             matches!(
                 service
                     .review_history(&another_person, request_id, None, "", None, 10)
+                    .await,
+                Err(ReviewRuntimeError::NotFound)
+            ),
+            "{phase}"
+        );
+        assert!(
+            matches!(
+                service
+                    .review_history(&same_subject_elsewhere, request_id, None, "", None, 10)
                     .await,
                 Err(ReviewRuntimeError::NotFound)
             ),

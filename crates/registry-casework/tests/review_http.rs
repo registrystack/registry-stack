@@ -1938,6 +1938,37 @@ async fn an_initiator_reads_only_the_requester_visible_history_of_their_own_requ
     let (status, _) = send(read(Uuid::new_v4(), &own_token, "initiator")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
+    // The initiator reads as the person themselves: an agent acting for them,
+    // a grant-bearing token, or a non-human token naming the same subject is
+    // refused before any request is looked up.
+    for (extra, expected) in [
+        (
+            json!({"act": {"sub": "assistant-agent"}}),
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            json!({"registry_grant_request": "grant"}),
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            json!({"registry_actor_kind": "service"}),
+            StatusCode::FORBIDDEN,
+        ),
+    ] {
+        let mut claims = json!({
+            "aud": AUDIENCE,
+            "registry_principal": "initiator",
+            "scope": "casework:initiator",
+            "registry_actor_kind": "human"
+        });
+        for (key, value) in extra.as_object().expect("extra claims") {
+            claims[key] = value.clone();
+        }
+        let (status, body) = send(read(request_id, &idp.mint_token(claims), "initiator")).await;
+        assert_eq!(status, expected, "{extra}");
+        assert!(!body.contains("REQUESTER_REASON_CANARY"), "{extra}");
+    }
+
     // Read only: the initiator profile carries no producer authority.
     let (status, _) = send(note(
         request_id,

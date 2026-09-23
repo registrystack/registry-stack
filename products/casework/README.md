@@ -87,7 +87,9 @@ from every producer profile, that the person named as the initiator selects to
 read `GET /v1/review-requests/{requestId}/history`. They see the same
 requester-visible events and notes as the producer, only for a request that
 producer admitted naming their exact issuer and principal. Any other request is
-not found. Notes, cancellation, results, and clocks stay producer-only.
+not found. Notes, cancellation, results, and clocks stay producer-only. The
+initiator profile accepts only a person acting for themselves: like a reviewer
+profile, it refuses delegated (`act`), grant-bearing, and non-human tokens.
 
 It cannot select an actor, team, stage, outcome vocabulary, or arbitrary
 callback. A typed review validation failure keeps the six-field problem body

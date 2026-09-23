@@ -228,6 +228,7 @@ An entry admits one exact profile, issuer, and subject to a bounded source names
 `recoveryDays` must fit within result retention.
 `initiatorProfile` optionally names a requester profile, distinct from every producer's `profile`, that the person named as a request's initiator selects to read that request's requester-visible history.
 It requires `trustedInitiatorIssuer`, matches the initiator's exact issuer and principal, and grants nothing else: any other request is not found, and notes, cancellation, results, and clocks stay with the producer.
+Like a reviewer profile, it accepts only a person acting for themselves: it refuses delegated (`act`), grant-bearing, and non-human tokens.
 Omit `completion` for polling-only integrations; when present, it names a configured logical destination and recipient binding rather than an arbitrary URL.
 The runtime configuration's `reviewCompletionDestinations.<id>` supplies that destination's URL and secret, presented as `Authorization: Bearer` by default or, with `auth: {header, secretRef}`, as the value of a named header such as `x-api-key`; reserved header names are refused at load.
 

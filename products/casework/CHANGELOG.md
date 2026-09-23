@@ -20,7 +20,9 @@
   `trustedInitiatorIssuer` on the BReg producer.
 - Add an optional `initiatorProfile` on a review producer. The person a request
   names as its initiator reads that request's requester-visible history through
-  `GET /v1/review-requests/{requestId}/history`, and nothing else. Retention now
+  `GET /v1/review-requests/{requestId}/history`, and nothing else. The initiator
+  profile authenticates a person as strictly as a reviewer profile: it refuses
+  delegated (`act`), grant-bearing, and non-human tokens. Retention now
   keeps the initiator identity as a request-bound sha256 tombstone instead of clearing
   it, so the initiator receives the same `410` as the producer after expiry.
 
