@@ -98,3 +98,27 @@ fn fixtures_without_consent_keep_their_exact_ddl_and_revision() {
     }
     assert!(drift.is_empty(), "{}", drift.join("\n"));
 }
+
+/// Idempotent retries match a stored request against its action's contract
+/// fingerprint, so an engine upgrade that leaves a project unchanged must
+/// leave every action fingerprint unchanged too.
+#[test]
+fn fixtures_keep_their_action_contract_fingerprints() {
+    let mut fingerprints = Vec::new();
+    for fixture in FIXTURES {
+        for action in &compile(fixture).actions().actions {
+            fingerprints.push(format!(
+                "{}/{}: {}",
+                fixture.name, action.id, action.contract_fingerprint
+            ));
+        }
+    }
+    assert_eq!(fingerprints, ACTION_FINGERPRINTS);
+}
+
+const ACTION_FINGERPRINTS: &[&str] = &[
+    "asset-registration-actions/register-asset-with-inspection: sha256:3fa3f521dc91b83863d5afb93827fc6a85594d4af74b586afecd748a017402e1",
+    "facility-registry-actions/register-facility: sha256:14179e571a8c08e1fb368972534e29143f084d2e858eafa4542963cb0da7fff8",
+    "facility-registry-actions/transfer-facility: sha256:19df2b5b87d517e25815420acd0c3f8207575a2c48776eb451f62a2cd250c011",
+    "household-contact-actions/register-household-contact: sha256:121d47d280e477162d48a4c41d4db80d1778c1a6ab2252c8bf638deae997caab",
+];
