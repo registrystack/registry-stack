@@ -1281,6 +1281,119 @@ async fn draft_save_refuses_a_response_without_a_valid_draft_revision() {
     server.abort();
 }
 
+#[tokio::test]
+async fn decided_by_caller_appears_only_on_a_single_decided_task_read() {
+    let task_id = Uuid::from_u128(7);
+    let task = |state: Value, decided_by_caller: Option<bool>| {
+        let mut task = json!({
+            "taskId": task_id,
+            "requestId": Uuid::from_u128(9),
+            "stageIndex": 0,
+            "stageId": "review",
+            "queue": "reviews",
+            "revision": 2,
+            "eligibleProfiles": ["staff"],
+            "state": state,
+        });
+        if let Some(decided) = decided_by_caller {
+            task["decidedByCaller"] = json!(decided);
+        }
+        task
+    };
+    let held = json!({"held": {"holder": {"issuer": "https://issuer.example.test", "subject": "someone"}}});
+    let serve = |router: Router| async move {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fixture");
+        let address = listener.local_addr().expect("fixture address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.expect("serve fixture");
+        });
+        let client = CaseworkClient::new(CaseworkClientConfig::new(
+            Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+        ))
+        .expect("client");
+        (client, server)
+    };
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    fn refused<T>(result: Result<T, CaseworkClientError>) -> bool {
+        matches!(
+            result,
+            Err(CaseworkClientError::Protocol {
+                status: 200,
+                failure: CaseworkProtocolFailure::Body,
+                ..
+            })
+        )
+    }
+
+    for (read, accepted) in [
+        (task(json!("decided"), Some(true)), true),
+        (task(json!("decided"), Some(false)), true),
+        (task(json!("decided"), None), false),
+        (task(json!("open"), Some(false)), false),
+        (task(held.clone(), Some(true)), false),
+    ] {
+        let (client, server) = serve(
+            Router::new()
+                .route("/v1/review-tasks/{task}", get(review_task_fixture_response))
+                .with_state(read.clone()),
+        )
+        .await;
+        let result = client
+            .review_task(CaseworkAuth::new(&token, "staff"), task_id)
+            .await;
+        if accepted {
+            assert_eq!(
+                result
+                    .expect("a conforming decided read")
+                    .value
+                    .decided_by_caller,
+                read["decidedByCaller"].as_bool()
+            );
+        } else {
+            assert!(refused(result), "{read}");
+        }
+        server.abort();
+    }
+
+    let (client, server) = serve(
+        Router::new()
+            .route("/v1/review-tasks", get(review_task_fixture_response))
+            .with_state(json!({"items": [task(json!("decided"), Some(true))]})),
+    )
+    .await;
+    assert!(refused(
+        client
+            .review_tasks(
+                CaseworkAuth::new(&token, "staff"),
+                &registry_casework_client::ReviewTaskQuery {
+                    queue: None,
+                    cursor: None,
+                    limit: Some(100),
+                },
+            )
+            .await
+    ));
+    server.abort();
+
+    let (client, server) = serve(
+        Router::new()
+            .route(
+                "/v1/review-tasks/{task}/claim",
+                post(review_task_fixture_response),
+            )
+            .with_state(task(held, Some(false))),
+    )
+    .await;
+    assert!(refused(
+        client
+            .claim_review_task(CaseworkAuth::new(&token, "staff"), task_id, 1, "claim-7")
+            .await
+    ));
+    server.abort();
+}
+
 async fn review_task_fixture_response(State(response): State<Value>) -> impl IntoResponse {
     (
         StatusCode::OK,

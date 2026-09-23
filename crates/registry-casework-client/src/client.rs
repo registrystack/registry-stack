@@ -271,10 +271,11 @@ impl CaseworkClient {
             self.send_json(request, StatusCode::OK).await?;
         if complete.value.items.len() > MAXIMUM_PAGE_SIZE
             || complete.value.items.iter().any(|task| {
-                query
-                    .queue
-                    .as_ref()
-                    .is_some_and(|queue| &task.queue != queue)
+                task.decided_by_caller.is_some()
+                    || query
+                        .queue
+                        .as_ref()
+                        .is_some_and(|queue| &task.queue != queue)
                     || !task
                         .eligible_profiles
                         .iter()
@@ -1800,7 +1801,11 @@ fn require_review_task_id(
     expected_task_id: Uuid,
     status: StatusCode,
 ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
-    if complete.value.task_id != expected_task_id {
+    // `decidedByCaller` belongs to a single decided-task read, and only there.
+    if complete.value.task_id != expected_task_id
+        || complete.value.decided_by_caller.is_some()
+            != matches!(complete.value.state, ReviewerTaskState::Decided)
+    {
         return Err(protocol(
             status,
             CaseworkProtocolFailure::Body,
@@ -1821,6 +1826,7 @@ fn require_review_task_transition(
     status: StatusCode,
 ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
     if complete.value.task_id != expected_task_id
+        || complete.value.decided_by_caller.is_some()
         || !transition.completed(&complete.value, expected_revision)
     {
         return Err(protocol(
