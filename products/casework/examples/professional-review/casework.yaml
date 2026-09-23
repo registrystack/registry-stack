@@ -50,6 +50,9 @@ reviewKinds:
       - id: review
         queue: corrections
         decidingProfiles: [staff]
+        # The person who submitted the change request in the registry cannot
+        # claim, be assigned, or decide its review.
+        excludeInitiator: true
         requiredApprovals: 1
     retention:
       terminalDays: 30
@@ -80,6 +83,10 @@ reviewProducers:
     profile: integration-requester
     issuer: https://identity.example.test/realms/registry
     subject: professional-review-breg
+    # BReg names the submitting person with its own issuer and the value of
+    # its principal claim, the same `registry_principal` claim these
+    # profiles read.
+    trustedInitiatorIssuer: https://identity.example.test/realms/registry
     sourceNamespaces: [professional-licences]
     kinds: [scope-correction]
     recoveryDays: 7

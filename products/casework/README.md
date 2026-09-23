@@ -75,6 +75,13 @@ against the kind's bounded JSON Schema:
 }
 ```
 
+The initiator is compared with each reviewer's principal, which Casework
+reads from the profile's `principalClaim`. A BReg producer sends its own issuer
+and the value of its configured principal claim, so the exclusion holds only
+when the Casework profiles read that same claim and the producer sets
+`trustedInitiatorIssuer` to that issuer. The professional-review starter does
+both.
+
 It cannot select an actor, team, stage, outcome vocabulary, or arbitrary
 callback. A typed review validation failure keeps the six-field problem body
 value-free and may add the paired

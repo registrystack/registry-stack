@@ -189,6 +189,8 @@ reviewProducers:
 ```
 
 Each ordered stage names its queue, eligible human profiles, positive-decision threshold, and optional exclusions for the initiator or previous-stage reviewers.
+An `excludeInitiator` stage needs `trustedInitiatorIssuer` on the producer, and it only works when the initiator's subject matches the principal the deciding profiles read from their `principalClaim`.
+A Base Registry Engine producer sends the submitting person's issuer and the value of its configured principal claim, so point the Casework profiles at that same claim and set `trustedInitiatorIssuer` to the issuer both products trust.
 Only Staff and Supervisor profiles may decide.
 The policy identity, stages, context strategy, schemas, outcomes, clocks, and retention are covered by its digest and pinned once per request.
 

@@ -65,6 +65,9 @@ reviewKinds:
       - id: review
         queue: corrections
         decidingProfiles: [staff]
+        # The person who submitted the change request in the registry cannot
+        # claim, be assigned, or decide its review.
+        excludeInitiator: true
         requiredApprovals: 1
     retention:
       terminalDays: 30
@@ -95,6 +98,10 @@ reviewProducers:
     profile: integration-requester
     issuer: http://127.0.0.1:8091
     subject: professional-review-breg
+    # BReg names the submitting person with its own issuer and the value of
+    # its principal claim, the same `registry_principal` claim these
+    # profiles read.
+    trustedInitiatorIssuer: http://127.0.0.1:8091
     sourceNamespaces: [professional-licences]
     kinds: [scope-correction]
     recoveryDays: 7
@@ -1380,6 +1387,42 @@ mod tests {
     }
 
     #[test]
+    fn starter_review_excludes_the_person_who_submitted_the_request() {
+        let policy: CaseworkProject = serde_norway::from_str(CASEWORK_YAML).unwrap();
+        policy.check().unwrap();
+        for kind in &policy.review_kinds {
+            for stage in &kind.stages {
+                assert!(
+                    stage.exclude_initiator,
+                    "stage {} of {} lets a submitter approve their own request",
+                    stage.id, kind.id
+                );
+            }
+        }
+        // BReg names the initiator with its stock issuer and the same
+        // principal claim these profiles read, so the producer trusts
+        // initiators from the issuer it authenticates with.
+        for producer in &policy.review_producers {
+            assert_eq!(
+                producer.trusted_initiator_issuer.as_deref(),
+                Some(producer.issuer.as_str()),
+                "producer {} does not trust its own issuer for initiators",
+                producer.id
+            );
+        }
+        let principal_claims = policy
+            .access_profiles
+            .iter()
+            .map(|profile| profile.principal_claim.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            principal_claims,
+            ["registry_principal"].into_iter().collect(),
+            "an initiator matches a reviewer only when both read one principal claim"
+        );
+    }
+
+    #[test]
     fn doctor_never_reports_unattested_event_wiring_as_ready() {
         let check = doctor_source_check("professional-register");
         assert_eq!(check["sourceId"], "professional-register");
@@ -2085,7 +2128,7 @@ mod tests {
         // the credentials it writes into the description.
         let second_identity_yaml = CASEWORK_YAML.replace(
             "    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n",
-            "    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n  - id: registry-breg-failover\n    profile: integration-requester\n    issuer: http://127.0.0.1:8091\n    subject: professional-review-breg-failover\n    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n",
+            "    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n  - id: registry-breg-failover\n    profile: integration-requester\n    issuer: http://127.0.0.1:8091\n    subject: professional-review-breg-failover\n    trustedInitiatorIssuer: http://127.0.0.1:8091\n    sourceNamespaces: [professional-licences]\n    kinds: [scope-correction]\n    recoveryDays: 7\n",
         );
         let (_root, project) =
             write_offline_project(&second_identity_yaml, BREG_SOURCE_DESCRIPTION);
@@ -2102,7 +2145,7 @@ mod tests {
         // producers overall.
         let extra_producer_yaml = CASEWORK_YAML.replace(
             "    recoveryDays: 7\n",
-            "    recoveryDays: 7\n  - id: registry-breg-other\n    profile: integration-requester\n    issuer: http://127.0.0.1:8091\n    subject: professional-review-breg-other\n    sourceNamespaces: [other-source]\n    kinds: [scope-correction]\n    recoveryDays: 7\n",
+            "    recoveryDays: 7\n  - id: registry-breg-other\n    profile: integration-requester\n    issuer: http://127.0.0.1:8091\n    subject: professional-review-breg-other\n    trustedInitiatorIssuer: http://127.0.0.1:8091\n    sourceNamespaces: [other-source]\n    kinds: [scope-correction]\n    recoveryDays: 7\n",
         );
         let (_root, project) = write_offline_project(&extra_producer_yaml, BREG_SOURCE_DESCRIPTION);
 
