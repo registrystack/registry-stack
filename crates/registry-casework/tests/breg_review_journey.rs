@@ -1939,7 +1939,20 @@ async fn professional_review_template_sends_back_revises_approves_and_applies() 
     // BReg: the starter plus the casework-reader profile, compiled in
     // process, and explained the way `caseworkctl source add` explains it.
     let registry_dir = tempfile::tempdir().expect("registry directory");
-    let authored = starter_registry_with_casework_reader();
+    let mut authored = starter_registry_with_casework_reader();
+    // Every revise or rebase is captured so the draft reason BReg records
+    // for the answer to the send-back is observable in the lifecycle event
+    // it emits.
+    authored["entities"]
+        .as_array_mut()
+        .expect("starter entities")
+        .iter_mut()
+        .find(|entity| entity["id"] == "scope-correction")
+        .expect("scope-correction entity")["hooks"] = json!([{
+        "phase":"after","id":"request-returned-to-draft","trigger":"request_lifecycle",
+        "projection":["reason"],
+        "when":{"kind":"request_lifecycle","transitions":["revise","rebase"],"toStates":["draft"]}
+    }]);
     std::fs::write(
         registry_dir.path().join("registry.yaml"),
         serde_norway::to_string(&authored).expect("render registry.yaml"),
@@ -2330,17 +2343,53 @@ async fn professional_review_template_sends_back_revises_approves_and_applies() 
     .await;
     assert_eq!(status, StatusCode::OK, "{sent_back_view}");
     let (revise_href, revise_etag) = action(&sent_back_view, "revise_request");
+    let advertised_rebase = sent_back_view["data"]["request"]["actions"]
+        .as_array()
+        .expect("request actions")
+        .iter()
+        .find(|candidate| candidate["operation"] == "revise_request")
+        .map(|candidate| candidate["rebase"].clone())
+        .expect("revise action");
+    assert_eq!(
+        advertised_rebase,
+        json!(false),
+        "a send-back is answered by a revision: {sent_back_view}"
+    );
     let (status, revised) = request_json(
         &breg_url,
         Method::POST,
         &revise_href,
         &submitter,
-        Some(json!({"rebase":false})),
+        Some(json!({"rebase":advertised_rebase})),
         Some("revise-correction"),
         Some(&revise_etag),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{revised}");
+    let transitions: Vec<String> = database
+        .admin
+        .query(
+            "SELECT payload FROM registry_internal.registry_outbox
+              WHERE event_type='request-returned-to-draft' ORDER BY outbox_id",
+            &[],
+        )
+        .await
+        .expect("lifecycle events are readable")
+        .iter()
+        .map(|row| {
+            let envelope: Value =
+                serde_json::from_slice(&row.get::<_, Vec<u8>>(0)).expect("envelope is JSON");
+            envelope["data"]["request"]["transition"]
+                .as_str()
+                .expect("recorded transition")
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(
+        transitions,
+        ["revise"],
+        "following the advertised action records a revision, not a rebase"
+    );
     let draft_etag = reqwest::Client::new()
         .get(breg_url.join(&submitter_path).unwrap())
         .bearer_auth(&submitter)
