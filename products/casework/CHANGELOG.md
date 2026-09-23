@@ -21,7 +21,7 @@
 - Add an optional `initiatorProfile` on a review producer. The person a request
   names as its initiator reads that request's requester-visible history through
   `GET /v1/review-requests/{requestId}/history`, and nothing else. Retention now
-  keeps the initiator identity as a keyed sha256 tombstone instead of clearing
+  keeps the initiator identity as a request-bound sha256 tombstone instead of clearing
   it, so the initiator receives the same `410` as the producer after expiry.
 
 ## v0.33.0 - 2026-09-22
