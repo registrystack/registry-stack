@@ -396,7 +396,11 @@ fn classify(
 }
 
 fn unresolvable_reason(progress: Option<ReviewedMigrationProgress>) -> &'static str {
-    if progress.is_some_and(|progress| progress.durable_step_progress && !progress.closed) {
+    // Durable step progress is what refuses reversion in `classify` above,
+    // independently of whether the plan's own postconditions closed: that
+    // bundled self-check and the catalog fingerprint comparison can disagree,
+    // so `closed` must not decide this reason.
+    if progress.is_some_and(|progress| progress.durable_step_progress) {
         UNRESOLVABLE_STEPS_COMMITTED
     } else {
         UNRESOLVABLE_CATALOG_UNMATCHED
@@ -554,6 +558,35 @@ mod tests {
         );
         assert_eq!(
             unresolvable_reason(Some(committed)),
+            UNRESOLVABLE_STEPS_COMMITTED
+        );
+    }
+
+    #[test]
+    fn a_reviewed_plan_closed_with_committed_steps_still_reports_steps_committed() {
+        // The reviewed plan's own postconditions closed successfully and every
+        // step committed rows, but the independent catalog comparison still
+        // finds the live catalog short of the target: `closed` is the plan's
+        // bundled self-check, not the catalog fingerprint comparison, so the
+        // two can disagree. Revert is refused because steps already
+        // committed, not because the catalog matches neither package, so the
+        // reason must say so even though the plan reports closed.
+        let closed_with_committed_steps = ReviewedMigrationProgress {
+            closed: true,
+            durable_step_progress: true,
+        };
+        let unmatched_target = report(Some("differs"), None);
+        assert_eq!(
+            classify(
+                &unmatched_target,
+                Some(closed_with_committed_steps),
+                &snapshot("failed", Some("rev-2")),
+            ),
+            ReconcileOutcome::Unresolvable
+        );
+        assert!(unmatched_target.active_catalog_finding.is_none());
+        assert_eq!(
+            unresolvable_reason(Some(closed_with_committed_steps)),
             UNRESOLVABLE_STEPS_COMMITTED
         );
     }

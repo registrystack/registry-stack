@@ -4284,6 +4284,23 @@ fn migration_reconcile(
         execute: args.execute,
     })
     .map_err(reconcile_lifecycle_failure)?;
+    migration_reconcile_report(outcome)
+}
+
+fn migration_reconcile_report(
+    outcome: ReconcileLifecycleOutcome,
+) -> Result<MigrationReconcileSuccessReport, FailureReport> {
+    // Assessment always returns Ok from `reconcile_lifecycle::run`, even when
+    // the outcome is unresolvable: only `--execute` routes that outcome
+    // through `ReconcileError::NotExecutable`. Reporting it here too keeps an
+    // unresolvable assessment a refusal instead of a scriptable `ok: true`.
+    if outcome.outcome == ReconcileOutcome::Unresolvable.as_str() {
+        return Err(reconcile_lifecycle_failure(
+            ReconcileLifecycleError::Reconcile(ReconcileError::NotExecutable(
+                ReconcileOutcome::Unresolvable,
+            )),
+        ));
+    }
     Ok(MigrationReconcileSuccessReport {
         ok: true,
         command: "migration reconcile",
@@ -11313,6 +11330,49 @@ fn write_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reconcile_lifecycle_outcome(outcome: &'static str) -> ReconcileLifecycleOutcome {
+        ReconcileLifecycleOutcome {
+            outcome,
+            executed: false,
+            maintenance_status: Some("failed".to_owned()),
+            maintenance_target_revision: Some("rev-2".to_owned()),
+            active_package_revision: Some("rev-1".to_owned()),
+            target_package_revision: "rev-2".to_owned(),
+            target_catalog_finding: None,
+            active_catalog_finding: None,
+            unresolvable_reason: None,
+            plan_kind: "compiled_additive",
+            migration_step_count: 0,
+            reviewed_plan_closed: None,
+            durable_step_progress: None,
+        }
+    }
+
+    #[test]
+    fn migration_reconcile_reports_an_unresolvable_outcome_as_a_refusal() {
+        match migration_reconcile_report(reconcile_lifecycle_outcome("unresolvable")) {
+            Ok(_) => panic!("an unresolvable outcome must not be reported as ok: true"),
+            Err(report) => {
+                assert!(!report.ok);
+                assert_eq!(
+                    report.diagnostics[0].code,
+                    "migration.reconcile.outcome.unresolvable"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn migration_reconcile_reports_a_completable_outcome_as_success() {
+        match migration_reconcile_report(reconcile_lifecycle_outcome("completable")) {
+            Ok(report) => {
+                assert!(report.ok);
+                assert_eq!(report.outcome.outcome, "completable");
+            }
+            Err(_) => panic!("a completable outcome is an ordinary assessment success"),
+        }
+    }
 
     #[test]
     fn data_import_success_names_the_ingestion_run_it_drove() {
