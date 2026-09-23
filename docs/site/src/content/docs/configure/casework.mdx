@@ -548,7 +548,7 @@ Until the description exists, `caseworkctl check` reports `"sourceDescription": 
 
 The template's `scope-correction` review kind uses `contextStrategy: source`, so its `displaySchema` must admit exactly what the source discloses to a reviewer.
 It restates each projected field's schema under its API name, as `bregctl explain change-requests` reports it: `record` is a UUID string, not an object.
-Casework checks each reviewer's source read against the schema before it shows or acts on a task, and a task whose disclosed fields the schema refuses stays out of that reviewer's inbox.
+Casework checks each reviewer's source read against the schema before it shows or acts on a task, and a task whose disclosed fields the schema refuses stays out of that reviewer's inbox, and the runtime logs a `display_schema_rejected` warning naming the review kind.
 When you change a projected field in the register, change its schema here to match.
 The kind also declares a `changes-requested` outcome, labelled "Request changes", which settles as `changes_requested` and requires a reason; the submitter then revises and resubmits the request in BReg, which opens a fresh review.
 
