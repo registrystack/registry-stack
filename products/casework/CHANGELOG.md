@@ -28,6 +28,8 @@
   delegated (`act`), grant-bearing, and non-human tokens. Retention now
   keeps the initiator identity as a request-bound sha256 tombstone instead of clearing
   it, so the initiator receives the same `410` as the producer after expiry.
+  A request erased by an earlier release kept no initiator identity, so its
+  initiator receives `404`.
 
 ## v0.33.0 - 2026-09-22
 
