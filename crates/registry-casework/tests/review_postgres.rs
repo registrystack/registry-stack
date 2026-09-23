@@ -39,6 +39,8 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio::sync::Notify;
 use tokio_postgres::NoTls;
+use tracing::instrument::WithSubscriber;
+use tracing_subscriber::fmt::MakeWriter;
 use uuid::Uuid;
 
 struct Fixture {
@@ -190,6 +192,40 @@ impl SourceAdapter for ReviewSource {
         _request: ExecutePreparedRequest<'_>,
     ) -> Result<SourceReceipt, SourceAdapterError> {
         Err(SourceAdapterError::Invalid)
+    }
+}
+
+#[derive(Clone, Default)]
+struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
+
+struct CapturedLogWriter(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for CapturedLogWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("log capture").extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'writer> MakeWriter<'writer> for CapturedLogs {
+    type Writer = CapturedLogWriter;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        CapturedLogWriter(Arc::clone(&self.0))
+    }
+}
+
+impl CapturedLogs {
+    fn entries(&self) -> Vec<serde_json::Value> {
+        String::from_utf8(self.0.lock().expect("log capture").clone())
+            .expect("JSON logs are UTF-8")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("structured tracing entry"))
+            .collect()
     }
 }
 
@@ -5053,6 +5089,135 @@ async fn source_context_task_inbox_honors_the_configured_source_read_budget() {
 }
 
 #[tokio::test]
+async fn a_display_schema_the_source_disclosure_fails_is_logged_for_the_operator_and_hidden_from_the_reviewer(
+) {
+    let fixture = fixture().await;
+    let mut mismatched_project = project("2");
+    mismatched_project.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    mismatched_project.review_kinds[0].display_schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title"],
+        "properties": {"title": {"type": "string", "maxLength": 160}}
+    });
+    mismatched_project
+        .check()
+        .expect("a display schema the source does not satisfy still compiles");
+    let mismatched_service = CaseworkService::new(
+        fixture.store.clone(),
+        mismatched_project,
+        [Arc::new(ReviewSource {
+            revoked: Arc::clone(&fixture.source_revoked),
+            state: Arc::clone(&fixture.source_state),
+            read_blocked: Arc::clone(&fixture.source_read_blocked),
+            read_started: Arc::clone(&fixture.source_read_started),
+            read_continue: Arc::clone(&fixture.source_read_continue),
+            advanced: Arc::clone(&fixture.source_advanced),
+        }) as Arc<dyn SourceAdapter>],
+    )
+    .expect("mismatched review service");
+    let subject = "record-display-mismatch";
+    let mut source_request = request(subject, "producer-ref-display-mismatch");
+    source_request.context = ReviewContext::Source {
+        binding: SourceContextBinding {
+            reference: format!("registry:record:{subject}"),
+        },
+    };
+    let created = mismatched_service
+        .create_review_request(&fixture.producer, source_request, "create-display-mismatch")
+        .await
+        .expect("admission does not read the source");
+
+    let logs = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_ansi(false)
+        .with_writer(logs.clone())
+        .finish();
+    let page = mismatched_service
+        .review_tasks(
+            &fixture.reviewer_a,
+            Some("staff"),
+            "human-bearer",
+            None,
+            None,
+            10,
+        )
+        .with_subscriber(subscriber)
+        .await
+        .expect("the inbox still answers");
+    assert!(page.items.is_empty());
+    assert_eq!(page.next_cursor, None);
+
+    let entries = logs.entries();
+    let diagnostics = entries
+        .iter()
+        .filter(|entry| entry.pointer("/fields/reason").is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(diagnostics.len(), 1, "one operator diagnostic: {entries:?}");
+    assert_eq!(diagnostics[0]["level"], "WARN");
+    let fields = diagnostics[0]["fields"].as_object().expect("log fields");
+    assert_eq!(fields["review_kind"], "registry-correction");
+    assert_eq!(fields["reason"], "display_schema_rejected");
+    assert_eq!(fields["validation_reason"], "schema_mismatch");
+    assert_eq!(fields["path"], "$.display");
+    assert_eq!(
+        fields
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from([
+            "message",
+            "review_kind",
+            "reason",
+            "validation_reason",
+            "path"
+        ])
+    );
+    let rendered = serde_json::to_string(&entries).expect("render captured logs");
+    assert!(!rendered.contains(subject), "no subject data: {rendered}");
+
+    // A pinned binding the source no longer returns hides the task the same
+    // way and is reported under its own reason.
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests SET subject_version='stale' WHERE request_id=$1",
+            &[&created.accepted.request_id],
+        )
+        .await
+        .expect("pin a binding the source does not return");
+    let logs = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_ansi(false)
+        .with_writer(logs.clone())
+        .finish();
+    let page = mismatched_service
+        .review_tasks(
+            &fixture.reviewer_a,
+            Some("staff"),
+            "human-bearer",
+            None,
+            None,
+            10,
+        )
+        .with_subscriber(subscriber)
+        .await
+        .expect("the inbox still answers");
+    assert!(page.items.is_empty());
+    assert_eq!(page.next_cursor, None);
+    let entries = logs.entries();
+    let reasons = entries
+        .iter()
+        .filter_map(|entry| entry.pointer("/fields/reason"))
+        .collect::<Vec<_>>();
+    assert_eq!(reasons, [&json!("binding_mismatch")], "{entries:?}");
+}
+
+#[tokio::test]
 async fn source_context_task_inbox_reports_a_first_read_deadline_without_losing_the_task() {
     let fixture = fixture().await;
     let mut bounded_project = project("2");
@@ -6808,4 +6973,108 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
         .expect("read rotated absence candidate")
         .get(0);
     assert!(rotated_at > stale_scan_time);
+}
+
+#[tokio::test]
+async fn an_initiator_is_refused_by_name_and_is_only_recorded_from_a_trusted_issuer() {
+    let fixture = fixture().await;
+
+    // A person recorded as the initiator after they claimed is still refused
+    // at decision time, with the initiator-specific error.
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request(
+                "record-initiator-decision",
+                "producer-ref-initiator-decision",
+            ),
+            "create-initiator-decision",
+        )
+        .await
+        .expect("create excluded-initiator review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    let claimed = fixture
+        .service_v1
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-before-initiator-change",
+        )
+        .await
+        .expect("claim before the initiator changes");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests SET initiator_issuer=$2,initiator_subject=$3
+             WHERE request_id=$1",
+            &[
+                &created.accepted.request_id,
+                &fixture.reviewer_a.principal.issuer,
+                &fixture.reviewer_a.principal.subject,
+            ],
+        )
+        .await
+        .expect("record the holder as the initiator");
+    assert!(matches!(
+        fixture
+            .service_v1
+            .decide_review_task(
+                &fixture.reviewer_a,
+                task,
+                ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Approve,
+                },
+                None,
+                "",
+                claimed.revision,
+                "initiator-decision",
+            )
+            .await,
+        Err(ReviewRuntimeError::InitiatorExcluded)
+    ));
+
+    // A kind that excludes its initiator is refused without one.
+    let mut anonymous = request("record-no-initiator", "producer-ref-no-initiator");
+    anonymous.initiator = None;
+    assert!(matches!(
+        fixture
+            .service_v1
+            .create_review_request(&fixture.producer, anonymous, "create-no-initiator")
+            .await,
+        Err(ReviewRuntimeError::InitiatorRequired)
+    ));
+
+    // A producer trusted with no initiator issuer submits only kinds that
+    // exclude nobody. An initiator it names is not evidence of anyone, so it
+    // is admitted without being recorded.
+    let mut project = answer_project(false);
+    project.review_kinds[0].stages[0].exclude_initiator = false;
+    project.review_producers[0].trusted_initiator_issuer = None;
+    project.check().expect("untrusted initiator test project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("untrusted initiator test service");
+    let mut named = request("record-untrusted-initiator", "producer-ref-untrusted");
+    named.kind = "registry-answer".to_owned();
+    let created = service
+        .create_review_request(&fixture.producer, named, "create-untrusted-initiator")
+        .await
+        .expect("admit a request naming an untrusted initiator");
+    let stored = fixture
+        .database
+        .query_one(
+            "SELECT initiator_issuer IS NULL AND initiator_subject IS NULL
+             FROM casework_review_requests WHERE request_id=$1",
+            &[&created.accepted.request_id],
+        )
+        .await
+        .expect("inspect the untrusted initiator");
+    assert!(stored.get::<_, bool>(0));
 }

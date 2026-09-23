@@ -54,6 +54,8 @@ pub enum ProblemCode {
     RequestSourceRejected,
     RequestUnprocessable,
     RequestUnsupportedMediaType,
+    ReviewInitiatorExcluded,
+    ReviewInitiatorRequired,
     ReviewResultExpired,
     ReviewSubmissionConflict,
     ReviewTaskNotHeld,
@@ -102,6 +104,8 @@ impl ProblemCode {
         Self::RequestSourceRejected,
         Self::RequestUnprocessable,
         Self::RequestUnsupportedMediaType,
+        Self::ReviewInitiatorExcluded,
+        Self::ReviewInitiatorRequired,
         Self::ReviewResultExpired,
         Self::ReviewSubmissionConflict,
         Self::ReviewTaskNotHeld,
@@ -150,6 +154,8 @@ impl ProblemCode {
             Self::RequestSourceRejected => REQUEST_SOURCE_REJECTED_PROBLEM,
             Self::RequestUnprocessable => REQUEST_UNPROCESSABLE_PROBLEM,
             Self::RequestUnsupportedMediaType => REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM,
+            Self::ReviewInitiatorExcluded => "review.initiator-excluded",
+            Self::ReviewInitiatorRequired => "review.initiator-required",
             Self::ReviewResultExpired => "review.result-expired",
             Self::ReviewSubmissionConflict => "review.submission-conflict",
             Self::ReviewTaskNotHeld => "review.task-not-held",
@@ -185,9 +191,10 @@ impl ProblemCode {
             Self::CursorExpired => StatusCode::GONE,
             Self::CursorInvalid => StatusCode::BAD_REQUEST,
             Self::IdempotencyExpired => StatusCode::GONE,
-            Self::ProfileNotAuthorized | Self::ProfileNotHuman | Self::OperationNotAuthorized => {
-                StatusCode::FORBIDDEN
-            }
+            Self::ProfileNotAuthorized
+            | Self::ProfileNotHuman
+            | Self::OperationNotAuthorized
+            | Self::ReviewInitiatorExcluded => StatusCode::FORBIDDEN,
             Self::RequestInvalid
             | Self::SourceProfileNotApplicable
             | Self::SourceProfileRequired
@@ -211,7 +218,8 @@ impl ProblemCode {
             Self::RequestUnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::RequestReasonUnsupported
             | Self::RequestSourceRejected
-            | Self::RequestUnprocessable => StatusCode::UNPROCESSABLE_ENTITY,
+            | Self::RequestUnprocessable
+            | Self::ReviewInitiatorRequired => StatusCode::UNPROCESSABLE_ENTITY,
             Self::PreconditionRequired => StatusCode::PRECONDITION_REQUIRED,
             Self::SourceBadGateway => StatusCode::BAD_GATEWAY,
             Self::SourceReviewerNotAuthorized => StatusCode::FORBIDDEN,
@@ -248,6 +256,8 @@ impl ProblemCode {
             Self::RequestSourceRejected => "Source rejected request",
             Self::RequestUnprocessable => "Request could not be processed",
             Self::RequestUnsupportedMediaType => "Unsupported media type",
+            Self::ReviewInitiatorExcluded => "Review initiator excluded",
+            Self::ReviewInitiatorRequired => "Review initiator required",
             Self::ReviewResultExpired => "Review result expired",
             Self::ReviewSubmissionConflict => "Review submission conflict",
             Self::ReviewTaskNotHeld => "Review task not held",
@@ -318,6 +328,12 @@ impl ProblemCode {
             Self::RequestUnprocessable => "The request body does not match the Casework contract.",
             Self::RequestUnsupportedMediaType => {
                 "Send a JSON request body with Content-Type application/json."
+            }
+            Self::ReviewInitiatorExcluded => {
+                "You submitted this request, and this review stage excludes the person who submitted it. Another reviewer must take it."
+            }
+            Self::ReviewInitiatorRequired => {
+                "This review kind excludes the person who submitted the request, so the request must name its initiator."
             }
             Self::ReviewResultExpired => {
                 "The retained review result is no longer available. Reconcile through the producer's retained source correlation."
@@ -413,6 +429,7 @@ const REVIEW_PRODUCER: &[ProblemCode] = &[
     ProblemCode::RequestInvalid,
     ProblemCode::RequestUnprocessable,
     ProblemCode::RequestUnsupportedMediaType,
+    ProblemCode::ReviewInitiatorRequired,
     ProblemCode::ReviewResultExpired,
     ProblemCode::ReviewSubmissionConflict,
     ProblemCode::ServiceUnavailable,
@@ -499,6 +516,7 @@ const REVIEW_TASK_CLAIM: &[ProblemCode] = &[
     ProblemCode::ProfileNotAuthorized,
     ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
+    ProblemCode::ReviewInitiatorExcluded,
     ProblemCode::ReviewTaskNotHeld,
     ProblemCode::ServiceUnavailable,
     ProblemCode::SourceBadGateway,
@@ -582,6 +600,7 @@ const REVIEW_TASK_DECISION: &[ProblemCode] = &[
     ProblemCode::RequestSourceRejected,
     ProblemCode::RequestUnprocessable,
     ProblemCode::RequestUnsupportedMediaType,
+    ProblemCode::ReviewInitiatorExcluded,
     ProblemCode::ReviewTaskNotHeld,
     ProblemCode::ServiceUnavailable,
     ProblemCode::SourceBadGateway,

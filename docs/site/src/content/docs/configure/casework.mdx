@@ -191,13 +191,16 @@ reviewProducers:
 Each ordered stage names its queue, eligible human profiles, positive-decision threshold, and optional exclusions for the initiator or previous-stage reviewers.
 An `excludeInitiator` stage needs `trustedInitiatorIssuer` on the producer, and it only works when the initiator's subject matches the principal the deciding profiles read from their `principalClaim`.
 A Base Registry Engine producer sends the submitting person's issuer and the value of its configured principal claim, so point the Casework profiles at that same claim and set `trustedInitiatorIssuer` to the issuer both products trust.
-BReg names an initiator only for a human caller, so a request a service or agent submits for an `excludeInitiator` kind is refused when Casework admits it.
+BReg names an initiator only for a human caller, so a request a service or agent submits for an `excludeInitiator` kind is refused with `review.initiator-required` when Casework admits it.
+A person the stage excludes is refused with `review.initiator-excluded` when they claim or decide its task, so a reviewer app can tell them another reviewer must take it.
+A producer without `trustedInitiatorIssuer` submits only kinds that exclude nobody; an initiator it names is admitted but not recorded, so that person gains no history access.
 Only Staff and Supervisor profiles may decide.
 The policy identity, stages, context strategy, schemas, outcomes, clocks, and retention are covered by its digest and pinned once per request.
 
 `displaySchema` is a closed JSON Schema 2020-12 object, and closed is checked rather than assumed.
 The root carries `type: object` and `additionalProperties: false`, every nested object schema is closed the same way, every `$ref` points inside the same document, nesting stays within 16 levels, and the canonical schema stays under 64 KiB.
 A submitted snapshot is validated against it and stays under 16 KiB, so the schema is the whole contract for what the producer may send and what a person sees.
+A source-context kind validates the source's disclosure against it on every read. When the disclosure does not match, or the source no longer returns the pinned binding, the reviewer is refused and the inbox leaves the task out, as it does for any task the caller may not see. The runtime logs a warning naming the review kind and a reason (`display_schema_rejected` with the validation reason and path, or `binding_mismatch`) and no subject data, so the operator can find the defect.
 
 `retention` sets two clocks over the same item.
 `terminalDays` is how long a terminal result remains available, and `accountabilityDays` is how long the protected record of who decided what survives after that; `accountabilityDays` is at least `terminalDays`, and neither exceeds 3650.
@@ -542,6 +545,12 @@ selects the BReg adapter, and `description` points at the imported source descri
 `caseworkctl source add` writes.
 Each entry in `requests` binds one BReg entity to one fallback queue; `target` is the response time the team is measured against.
 Until the description exists, `caseworkctl check` reports `"sourceDescription": "pending_source_add"`.
+
+The template's `scope-correction` review kind uses `contextStrategy: source`, so its `displaySchema` must admit exactly what the source discloses to a reviewer.
+It restates each projected field's schema under its API name, as `bregctl explain change-requests` reports it: `record` is a UUID string, not an object.
+Casework checks each reviewer's source read against the schema before it shows or acts on a task, and a task whose disclosed fields the schema refuses stays out of that reviewer's inbox, and the runtime logs a `display_schema_rejected` warning naming the review kind.
+When you change a projected field in the register, change its schema here to match.
+The kind also declares a `changes-requested` outcome, labelled "Request changes", which settles as `changes_requested` and requires a reason; the submitter then revises and resubmits the request in BReg, which opens a fresh review.
 
 Continue from the register you built in [Create and query your first registry](../../tutorials/first-breg/), which leaves its project at `tutorial-work/project`.
 Before Casework can present its work, the entity named in `casework.yaml` must declare a change

@@ -69,6 +69,10 @@ pub enum ReviewRuntimeError {
     ResultExpired,
     #[error("the review task must be held by the caller")]
     TaskNotHeld,
+    #[error("the caller initiated this review and its stage excludes them")]
+    InitiatorExcluded,
+    #[error("the review kind excludes its initiator, so the request must name one")]
+    InitiatorRequired,
     #[error("the review resource revision changed")]
     RevisionConflict,
     #[error("the idempotency key was reused with different review input")]
@@ -117,8 +121,8 @@ fn map_review_decision_error(error: ReviewDecisionError) -> ReviewRuntimeError {
         ReviewDecisionError::TaskNotHeld | ReviewDecisionError::HolderMismatch => {
             ReviewRuntimeError::TaskNotHeld
         }
+        ReviewDecisionError::InitiatorExcluded => ReviewRuntimeError::InitiatorExcluded,
         ReviewDecisionError::DuplicateReviewer
-        | ReviewDecisionError::InitiatorExcluded
         | ReviewDecisionError::PreviousStageReviewerExcluded
         | ReviewDecisionError::ProfileNotEligible => ReviewRuntimeError::Forbidden,
         ReviewDecisionError::Validation(error) => review_validation_error(error),
@@ -241,14 +245,19 @@ impl CaseworkService {
             .ok_or(ReviewRuntimeError::Forbidden)?;
         let snapshot = policy.snapshot().map_err(|_| ReviewRuntimeError::Corrupt)?;
         let requires_initiator = snapshot.stages.iter().any(|stage| stage.exclude_initiator);
-        match (
+        // A producer with no trusted initiator issuer submits only kinds that
+        // exclude nobody, so an initiator it names is not recorded: storing it
+        // would let that unverified person read the request's history.
+        let initiator = match (
             request.initiator.as_ref(),
             admission.producer.trusted_initiator_issuer.as_deref(),
         ) {
-            (Some(initiator), Some(issuer)) if initiator.issuer == issuer => {}
-            (None, _) if !requires_initiator => {}
+            (Some(initiator), Some(issuer)) if initiator.issuer == issuer => Some(initiator),
+            (Some(_), None) if !requires_initiator => None,
+            (None, _) if requires_initiator => return Err(ReviewRuntimeError::InitiatorRequired),
+            (None, _) => None,
             _ => return Err(ReviewRuntimeError::Invalid),
-        }
+        };
         match (&snapshot.context_strategy, &request.context) {
             (
                 registry_casework_core::ReviewContextStrategy::Submitted,
@@ -267,7 +276,7 @@ impl CaseworkService {
                 .validate_result_constraints(constraints)
                 .map_err(review_validation_error)?;
         }
-        let initiator = request.initiator.as_ref().map(|person| IssuerPrincipal {
+        let initiator = initiator.map(|person| IssuerPrincipal {
             issuer: person.issuer.clone(),
             subject: person.subject.clone(),
         });
@@ -1011,16 +1020,47 @@ impl CaseworkService {
                     .read_for_caller(&subject, source_profile_id, EphemeralCredential::new(token))
                     .await
                     .map_err(map_review_source_error)?;
+                // The caller still sees only a refusal, but a binding the
+                // source does not return or a disclosure the kind's display
+                // schema rejects hides the task from every reviewer, so the
+                // operator is told which kind and why, without subject data.
                 if view.subject != subject
                     || view.binding.version != record.subject.version
                     || view.binding.integrity.as_deref() != Some(record.subject.digest.as_str())
                 {
+                    tracing::warn!(
+                        review_kind = %record.policy.identity.id,
+                        reason = "binding_mismatch",
+                        "Casework refused a review source read that does not match its pinned binding"
+                    );
                     return Err(ReviewRuntimeError::Forbidden);
                 }
-                record
+                if let Err(error) = record
                     .policy
                     .validate_display(&serde_json::to_value(&view.disclosed)?)
-                    .map_err(|_| ReviewRuntimeError::Forbidden)?;
+                {
+                    match error {
+                        registry_casework_core::ReviewDecisionValidationError::Structured(
+                            error,
+                        ) => tracing::warn!(
+                            review_kind = %record.policy.identity.id,
+                            reason = "display_schema_rejected",
+                            validation_reason = %serde_json::to_value(error.reason)?
+                                .as_str()
+                                .unwrap_or_default(),
+                            path = %error.path,
+                            "Casework refused a review source disclosure its display schema rejects"
+                        ),
+                        registry_casework_core::ReviewDecisionValidationError::Policy(_) => {
+                            tracing::warn!(
+                                review_kind = %record.policy.identity.id,
+                                reason = "policy_unverifiable",
+                                "Casework refused a review whose policy snapshot does not verify"
+                            )
+                        }
+                    }
+                    return Err(ReviewRuntimeError::Forbidden);
+                }
                 // The pinned binding can outlive the source occurrence it
                 // named, so a still-readable view is not enough: the source
                 // must also report live work. Withdrawn, superseded, and
@@ -2827,7 +2867,7 @@ impl PostgresStore {
         }
         ensure_actor_serves_review_queue(&transaction, actor, &row.get::<_, String>(2)).await?;
         if stage.exclude_initiator && record.initiator.as_ref() == Some(&actor.principal) {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::InitiatorExcluded);
         }
         if transaction
             .query_opt(

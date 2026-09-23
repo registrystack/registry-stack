@@ -628,6 +628,8 @@ KnownCaseworkProblemCode: TypeAlias = Literal[
     "request.source-rejected",
     "request.unprocessable",
     "request.unsupported-media-type",
+    "review.initiator-excluded",
+    "review.initiator-required",
     "review.result-expired",
     "review.submission-conflict",
     "review.task-not-held",

@@ -21,6 +21,8 @@ use registry_platform_httputil::client::TransportKind;
 use std::fmt;
 use thiserror::Error;
 
+const REVIEW_INITIATOR_EXCLUDED_PROBLEM: &str = "review.initiator-excluded";
+const REVIEW_INITIATOR_REQUIRED_PROBLEM: &str = "review.initiator-required";
 const REVIEW_RESULT_EXPIRED_PROBLEM: &str = "review.result-expired";
 const REVIEW_SUBMISSION_CONFLICT_PROBLEM: &str = "review.submission-conflict";
 const REVIEW_TASK_NOT_HELD_PROBLEM: &str = "review.task-not-held";
@@ -62,6 +64,8 @@ pub enum CaseworkProblemCode {
     RequestSourceRejected,
     RequestUnprocessable,
     RequestUnsupportedMediaType,
+    ReviewInitiatorExcluded,
+    ReviewInitiatorRequired,
     ReviewResultExpired,
     ReviewSubmissionConflict,
     ReviewTaskNotHeld,
@@ -91,7 +95,7 @@ impl CaseworkProblemCode {
     ///
     /// `Unknown` is absent: it carries whatever a newer Casework service
     /// answered, so it names no registered code.
-    pub const ALL: [Self; 43] = [
+    pub const ALL: [Self; 45] = [
         Self::AbsenceCoverCycle,
         Self::AbsenceInvalidPeriod,
         Self::AbsenceOverlap,
@@ -115,6 +119,8 @@ impl CaseworkProblemCode {
         Self::RequestSourceRejected,
         Self::RequestUnprocessable,
         Self::RequestUnsupportedMediaType,
+        Self::ReviewInitiatorExcluded,
+        Self::ReviewInitiatorRequired,
         Self::ReviewResultExpired,
         Self::ReviewSubmissionConflict,
         Self::ReviewTaskNotHeld,
@@ -164,6 +170,8 @@ impl CaseworkProblemCode {
             Self::RequestUnprocessable => REQUEST_UNPROCESSABLE_PROBLEM,
             Self::RequestUnsupportedMediaType => REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM,
             Self::ReviewResultExpired => REVIEW_RESULT_EXPIRED_PROBLEM,
+            Self::ReviewInitiatorExcluded => REVIEW_INITIATOR_EXCLUDED_PROBLEM,
+            Self::ReviewInitiatorRequired => REVIEW_INITIATOR_REQUIRED_PROBLEM,
             Self::ReviewSubmissionConflict => REVIEW_SUBMISSION_CONFLICT_PROBLEM,
             Self::ReviewTaskNotHeld => REVIEW_TASK_NOT_HELD_PROBLEM,
             Self::RuntimeFailure => RUNTIME_FAILURE_PROBLEM,
@@ -213,6 +221,8 @@ impl CaseworkProblemCode {
             REQUEST_UNPROCESSABLE_PROBLEM => Self::RequestUnprocessable,
             REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM => Self::RequestUnsupportedMediaType,
             REVIEW_RESULT_EXPIRED_PROBLEM => Self::ReviewResultExpired,
+            REVIEW_INITIATOR_EXCLUDED_PROBLEM => Self::ReviewInitiatorExcluded,
+            REVIEW_INITIATOR_REQUIRED_PROBLEM => Self::ReviewInitiatorRequired,
             REVIEW_SUBMISSION_CONFLICT_PROBLEM => Self::ReviewSubmissionConflict,
             REVIEW_TASK_NOT_HELD_PROBLEM => Self::ReviewTaskNotHeld,
             RUNTIME_FAILURE_PROBLEM => Self::RuntimeFailure,
@@ -251,9 +261,10 @@ impl CaseworkProblemCode {
             | Self::ReviewResultExpired => 410,
             Self::CursorInvalid => 400,
             Self::IdempotencyExpired => 410,
-            Self::ProfileNotAuthorized | Self::ProfileNotHuman | Self::OperationNotAuthorized => {
-                403
-            }
+            Self::ProfileNotAuthorized
+            | Self::ProfileNotHuman
+            | Self::OperationNotAuthorized
+            | Self::ReviewInitiatorExcluded => 403,
             Self::RequestInvalid
             | Self::SourceProfileNotApplicable
             | Self::SourceProfileRequired
@@ -277,7 +288,8 @@ impl CaseworkProblemCode {
             Self::RequestUnsupportedMediaType => 415,
             Self::RequestReasonUnsupported
             | Self::RequestSourceRejected
-            | Self::RequestUnprocessable => 422,
+            | Self::RequestUnprocessable
+            | Self::ReviewInitiatorRequired => 422,
             Self::PreconditionRequired => 428,
             Self::SourceBadGateway => 502,
             Self::SourceReviewerNotAuthorized => 403,
@@ -371,6 +383,14 @@ impl CaseworkProblemCode {
             Self::RequestUnsupportedMediaType => (
                 "Unsupported media type",
                 "Send a JSON request body with Content-Type application/json.",
+            ),
+            Self::ReviewInitiatorExcluded => (
+                "Review initiator excluded",
+                "You submitted this request, and this review stage excludes the person who submitted it. Another reviewer must take it.",
+            ),
+            Self::ReviewInitiatorRequired => (
+                "Review initiator required",
+                "This review kind excludes the person who submitted the request, so the request must name its initiator.",
             ),
             Self::ReviewResultExpired => (
                 "Review result expired",
@@ -734,6 +754,20 @@ mod tests {
     #[test]
     fn review_lifecycle_problems_have_exact_recovery_contracts() {
         for (value, expected, status, title, detail) in [
+            (
+                "review.initiator-excluded",
+                CaseworkProblemCode::ReviewInitiatorExcluded,
+                403,
+                "Review initiator excluded",
+                "You submitted this request, and this review stage excludes the person who submitted it. Another reviewer must take it.",
+            ),
+            (
+                "review.initiator-required",
+                CaseworkProblemCode::ReviewInitiatorRequired,
+                422,
+                "Review initiator required",
+                "This review kind excludes the person who submitted the request, so the request must name its initiator.",
+            ),
             (
                 "review.result-expired",
                 CaseworkProblemCode::ReviewResultExpired,

@@ -387,6 +387,26 @@ async fn casework_fixture(
     source: BregReviewSource,
     project: CaseworkProject,
 ) -> (Router, CaseworkService, tokio_postgres::Client, String) {
+    let directory = format!(
+        "INSERT INTO casework_teams(team_id,revision) VALUES('first-team',1),('second-team',1);
+         INSERT INTO casework_queue_service(queue_id,team_id,revision)
+         VALUES('first-review','first-team',1),('second-review','second-team',1);
+         INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
+         VALUES('first-team','{issuer}','reviewer-one','staff'),
+               ('second-team','{issuer}','reviewer-two','staff');",
+        issuer = idp.issuer()
+    );
+    casework_fixture_with_source(idp, Arc::new(source), project, &directory).await
+}
+
+/// A Casework service with one source adapter, backed by an isolated schema
+/// whose team, queue, and membership rows `directory` inserts.
+async fn casework_fixture_with_source(
+    idp: &MockIdp,
+    source: Arc<dyn SourceAdapter>,
+    project: CaseworkProject,
+    directory: &str,
+) -> (Router, CaseworkService, tokio_postgres::Client, String) {
     let base = env::var("BREG_TEST_DATABASE_URL").expect("BREG_TEST_DATABASE_URL");
     let schema = format!("casework_breg_journey_{}", Uuid::new_v4().simple());
     let separator = if base.contains('?') { '&' } else { '?' };
@@ -420,22 +440,14 @@ async fn casework_fixture(
     let casework_database = database.0;
     tokio::spawn(async move { database.1.await.expect("Casework inspection task") });
     casework_database
-        .batch_execute(&format!(
-            "INSERT INTO casework_teams(team_id,revision) VALUES('first-team',1),('second-team',1);
-             INSERT INTO casework_queue_service(queue_id,team_id,revision)
-             VALUES('first-review','first-team',1),('second-review','second-team',1);
-             INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
-             VALUES('first-team','{issuer}','reviewer-one','staff'),
-                   ('second-team','{issuer}','reviewer-two','staff');",
-            issuer = idp.issuer()
-        ))
+        .batch_execute(directory)
         .await
         .expect("Casework directory");
     project.check().expect("Casework project");
     let service = CaseworkService::new(
         PostgresStore::connect_runtime(&database_config, &secrets).expect("Casework runtime store"),
         project.clone(),
-        [Arc::new(source) as Arc<dyn SourceAdapter>],
+        [source],
     )
     .expect("Casework service");
     let authenticator = CaseworkAuthenticator::new(
@@ -558,15 +570,31 @@ fn breg_router(
     registry: &registry_breg::CompiledRegistry,
     idp: &MockIdp,
 ) -> Router {
+    breg_router_with(
+        service,
+        registry,
+        idp,
+        oidc_verifier_config(idp.issuer(), vec![BREG_AUDIENCE.to_owned()]),
+        AuthorityClaimConfig::new("registry_principal", None),
+    )
+}
+
+fn breg_router_with(
+    service: Arc<HttpService>,
+    registry: &registry_breg::CompiledRegistry,
+    idp: &MockIdp,
+    verifier: registry_platform_oidc::TokenVerifierConfig,
+    claims: AuthorityClaimConfig,
+) -> Router {
     let authenticator = RegistryAuthenticator::new(
         registry,
-        oidc_verifier_config(idp.issuer(), vec![BREG_AUDIENCE.to_owned()]),
+        verifier,
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
             FetchUrlPolicy::dev(),
         )),
-        AuthorityClaimConfig::new("registry_principal", None),
+        claims,
     )
     .expect("BReg authenticator");
     authenticated_router(service, Arc::new(authenticator))
@@ -574,6 +602,12 @@ fn breg_router(
 
 async fn serve(app: Router) -> (Url, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+    serve_on(listener, app)
+}
+
+/// Serve on a listener bound earlier, for services whose URLs must be known
+/// before the services they call are built.
+fn serve_on(listener: TcpListener, app: Router) -> (Url, tokio::task::JoinHandle<()>) {
     let address = listener.local_addr().expect("listener address");
     let task = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("HTTP service");
@@ -1672,6 +1706,810 @@ async fn breg_submitter_cannot_claim_or_decide_their_own_excluded_review() {
 
     breg_task.abort();
     casework_task.abort();
+    database.cleanup().await;
+    let (cleanup, cleanup_connection) =
+        tokio_postgres::connect(&env::var("BREG_TEST_DATABASE_URL").unwrap(), NoTls)
+            .await
+            .unwrap();
+    let cleanup_task = tokio::spawn(async move {
+        let _ = cleanup_connection.await;
+    });
+    cleanup
+        .batch_execute(&format!("DROP SCHEMA {casework_schema} CASCADE"))
+        .await
+        .unwrap();
+    cleanup_task.abort();
+}
+
+/// The professional-review Casework project exactly as `caseworkctl init`
+/// writes it.
+const PROFESSIONAL_REVIEW_TEMPLATE: &str =
+    include_str!("../../registry-caseworkctl/templates/professional-review/casework.yaml");
+/// The BReg professional-licences starter the template reviews.
+const PROFESSIONAL_LICENCES_STARTER: &str =
+    include_str!("../../../products/breg/starters/professional-licences/core/registry.yaml");
+const STARTER_SOURCE_ID: &str = "professional-licences";
+const STARTER_PURPOSE: &str = "starter-learning";
+
+/// A person's or service's token from one named OAuth client, carrying the
+/// deployment principal, purpose, and actor kind the starter profiles read.
+fn client_token(
+    idp: &MockIdp,
+    client: &str,
+    principal: &str,
+    scope: &str,
+    purpose: &str,
+    actor_kind: &str,
+) -> String {
+    idp.mint_token(json!({
+        "aud": BREG_AUDIENCE,
+        "sub": Uuid::new_v4().to_string(),
+        "azp": client,
+        "registry_principal": principal,
+        "scope": scope,
+        "registry_purpose": purpose,
+        "registry_actor_kind": actor_kind
+    }))
+}
+
+/// The starter registry project with the casework-reader access profile
+/// `caseworkctl source add` authors for the template's context projection.
+/// The lifecycle hook that command also adds is left out: this journey
+/// delivers reviews through the registry's review authority, not events.
+fn starter_registry_with_casework_reader() -> Value {
+    let mut project: Value =
+        serde_norway::from_str(PROFESSIONAL_LICENCES_STARTER).expect("starter registry.yaml");
+    project["accessProfiles"]
+        .as_array_mut()
+        .expect("starter access profiles")
+        .push(json!({
+            "id":"casework-reader","default":false,"principalClaim":"registry_principal",
+            "requiredScopes":["casework:source-reader"],"requiredPurposes":["casework-sync"],
+            "permissions":[{"entity":"scope-correction","operations":["get","list"],
+                "readableFields":["authorization-conditions","licensed-activities","record","supporting-reference"],
+                "readableRequestFields":["review_state"],"rowBoundaries":[]}]
+        }));
+    project
+}
+
+/// The source description `caseworkctl source add` writes: the
+/// `bregctl explain change-requests` report for the registry directory,
+/// narrowed to the one request entity the Casework project declares.
+fn explained_source_description(registry_dir: &std::path::Path, entity: &str) -> Value {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let status = registry_bregctl::run_from(
+        [
+            std::ffi::OsString::from("bregctl"),
+            "--format".into(),
+            "json".into(),
+            "explain".into(),
+            "change-requests".into(),
+            registry_dir.as_os_str().to_owned(),
+        ],
+        &mut stdout,
+        &mut stderr,
+    );
+    let report: Value = serde_json::from_slice(&stdout).unwrap_or_else(|_| {
+        panic!(
+            "bregctl explain change-requests returned invalid JSON; stderr: {}",
+            String::from_utf8_lossy(&stderr)
+        )
+    });
+    assert_eq!(
+        status,
+        std::process::ExitCode::SUCCESS,
+        "bregctl explain change-requests: {report}"
+    );
+    let request = report
+        .pointer("/explanation/requests")
+        .and_then(Value::as_array)
+        .and_then(|requests| {
+            requests
+                .iter()
+                .find(|candidate| candidate["requestEntity"] == entity)
+        })
+        .unwrap_or_else(|| panic!("explain omitted {entity}: {report}"))
+        .clone();
+    json!({
+        "apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1",
+        "kind":"BRegCaseworkSourceDescription",
+        "sourceId":STARTER_SOURCE_ID,
+        "authority":"none",
+        "origin":"bregctl explain change-requests",
+        "sourceRevision":report["revision"],
+        "request":request
+    })
+}
+
+fn write_secret(root: &std::path::Path, name: &str, value: &str) {
+    std::fs::write(root.join(name), value).expect("scratch secret");
+    std::fs::set_permissions(root.join(name), std::fs::Permissions::from_mode(0o600))
+        .expect("scratch secret permissions");
+}
+
+/// POST a request as a Casework staff member reading the source through the
+/// starter's reviewer profile.
+async fn casework_staff_call(
+    casework: &Url,
+    bearer: &str,
+    path: &str,
+    body: Option<Value>,
+    if_match: &str,
+    key: &str,
+) -> (StatusCode, Value) {
+    let mut call = reqwest::Client::new()
+        .post(casework.join(path).expect("Casework URL"))
+        .bearer_auth(bearer)
+        .header(registry_casework_core::CASEWORK_PROFILE_HEADER, "staff")
+        .header(registry_casework_core::SOURCE_PROFILE_HEADER, "reviewer")
+        .header("if-match", if_match)
+        .header("idempotency-key", key);
+    if let Some(body) = body {
+        call = call.json(&body);
+    }
+    let response = call.send().await.expect("Casework response");
+    let status = response.status();
+    let bytes = response.bytes().await.expect("Casework body");
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| json!({"raw":String::from_utf8_lossy(&bytes)}))
+    };
+    (status, body)
+}
+
+/// The corrections inbox a staff member sees, reading the source through
+/// the starter's reviewer profile.
+async fn corrections_inbox(casework: &Url, bearer: &str) -> Value {
+    let response = reqwest::Client::new()
+        .get(
+            casework
+                .join("/v1/review-tasks?queue=corrections")
+                .expect("inbox URL"),
+        )
+        .bearer_auth(bearer)
+        .header(registry_casework_core::CASEWORK_PROFILE_HEADER, "staff")
+        .header(registry_casework_core::SOURCE_PROFILE_HEADER, "reviewer")
+        .send()
+        .await
+        .expect("inbox response");
+    let status = response.status();
+    let body: Value = response.json().await.expect("inbox body");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body
+}
+
+/// Run the review authority until the request's projected review result
+/// reaches `expected`, making each pending result poll due first.
+async fn reconcile_until(
+    database: &TestDatabase,
+    authorities: &Arc<registry_breg::review_store::ReviewAuthorityRegistry>,
+    breg: &Url,
+    path: &str,
+    bearer: &str,
+    expected: &str,
+) -> Value {
+    let pool = database.runtime_config.build_pool().expect("worker pool");
+    let mut last = Value::Null;
+    for _ in 0..50 {
+        database
+            .admin
+            .batch_execute(
+                "UPDATE registry_internal.registry_request_review_submissions
+                 SET next_result_poll_at=transaction_timestamp()",
+            )
+            .await
+            .expect("make the result poll due");
+        run_review_authority_once_for_test(&pool, authorities)
+            .await
+            .expect("one review authority pass");
+        let (status, body) = request_json(breg, Method::GET, path, bearer, None, None, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if body.pointer("/data/request/review/result/state") == Some(&json!(expected)) {
+            return body;
+        }
+        last = body;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the review result never reconciled to {expected}: {last}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn professional_review_template_sends_back_revises_approves_and_applies() {
+    let idp = MockIdp::start().await;
+    // Every listener is bound first, so each service's configuration can
+    // name the others' URLs before any service is built.
+    let breg_listener = TcpListener::bind("127.0.0.1:0").await.expect("BReg");
+    let casework_listener = TcpListener::bind("127.0.0.1:0").await.expect("Casework");
+    let token_listener = TcpListener::bind("127.0.0.1:0").await.expect("token");
+    let breg_url = Url::parse(&format!("http://{}/", breg_listener.local_addr().unwrap())).unwrap();
+    let casework_url = Url::parse(&format!(
+        "http://{}/",
+        casework_listener.local_addr().unwrap()
+    ))
+    .unwrap();
+    let token_url = Url::parse(&format!(
+        "http://{}/oauth2/token",
+        token_listener.local_addr().unwrap()
+    ))
+    .unwrap();
+
+    // BReg: the starter plus the casework-reader profile, compiled in
+    // process, and explained the way `caseworkctl source add` explains it.
+    let registry_dir = tempfile::tempdir().expect("registry directory");
+    let authored = starter_registry_with_casework_reader();
+    std::fs::write(
+        registry_dir.path().join("registry.yaml"),
+        serde_norway::to_string(&authored).expect("render registry.yaml"),
+    )
+    .expect("write registry.yaml");
+    let registry = Arc::new(
+        compile_project(
+            &parse_project_json(&serde_json::to_vec(&authored).unwrap()).expect("starter parses"),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .expect("starter compiles"),
+    );
+    // bregctl refuses a project path through a symbolic link, and the system
+    // temporary directory can be one.
+    let description = explained_source_description(
+        &registry_dir
+            .path()
+            .canonicalize()
+            .expect("registry directory path"),
+        "scope-correction",
+    );
+    assert_eq!(
+        description["sourceRevision"],
+        registry.revision(),
+        "the explained revision is the revision the running registry reports"
+    );
+
+    // Casework: the template exactly as written, with only the deployment
+    // values a test cannot share with a real one replaced below.
+    let mut project: CaseworkProject =
+        serde_norway::from_str(PROFESSIONAL_REVIEW_TEMPLATE).expect("template parses");
+    // The template names a local identity provider at a fixed port; this
+    // journey's tokens come from a mock provider on an ephemeral port.
+    project.review_producers[0].issuer = idp.issuer();
+    // BReg names the submitting person with the issuer it verified their
+    // token against, which is the same mock provider.
+    project.review_producers[0].trusted_initiator_issuer = Some(idp.issuer());
+    let project_root = tempfile::tempdir().expect("Casework project directory");
+    std::fs::create_dir(project_root.path().join("sources")).unwrap();
+    std::fs::write(
+        project_root.path().join(&project.sources[0].description),
+        serde_json::to_vec_pretty(&description).unwrap(),
+    )
+    .expect("source description");
+
+    // The production BReg adapter, reading through casework-reader with a
+    // private_key_jwt client of the test-local token route below.
+    let casework_secrets = tempfile::tempdir().expect("Casework secrets");
+    let generated_key = registry_platform_crypto::generate_private_jwk(
+        registry_platform_crypto::GeneratedKeyAlgorithm::Es384,
+    )
+    .expect("reader key");
+    // A private JWK serializes only its public members, so the secret file
+    // restores the private scalar the adapter signs its assertions with.
+    let mut reader_key = serde_json::to_value(&generated_key).unwrap();
+    reader_key["d"] = json!(generated_key.d.clone().expect("private scalar"));
+    write_secret(
+        casework_secrets.path(),
+        "reader-client-id",
+        "casework-reader",
+    );
+    write_secret(
+        casework_secrets.path(),
+        "reader-key",
+        &reader_key.take().to_string(),
+    );
+    write_secret(
+        casework_secrets.path(),
+        "webhook",
+        "synthetic-webhook-secret-of-at-least-32-bytes",
+    );
+    let binding: registry_casework_breg::BregBinding = serde_json::from_value(json!({
+        "baseUrl": breg_url.as_str(),
+        "readerProfile": "casework-reader",
+        "tokenEndpoint": token_url.as_str(),
+        "clientIdRef": "secret:file/reader-client-id",
+        "clientAssertionKeyRef": "secret:file/reader-key",
+        "webhookSecretRef": "secret:file/webhook",
+        "eventSource": "urn:registrystack:registry:professional-licences:instance:professional-licences-starter"
+    }))
+    .expect("BReg binding");
+    let adapter = binding
+        .build_adapter(
+            &project.sources[0],
+            project_root.path(),
+            &SecretResolver::new([SecretProvider::File], casework_secrets.path())
+                .expect("Casework secret resolver"),
+        )
+        .expect("production BReg adapter");
+    // The token route issues the casework-reader service token for any
+    // client assertion; the adapter's assertion itself is not under test.
+    let reader_token = client_token(
+        &idp,
+        "casework-reader",
+        "casework-source-reader",
+        "casework:source-reader",
+        "casework-sync",
+        "service",
+    );
+    let token_app = Router::new().route(
+        "/oauth2/token",
+        axum::routing::post(move || {
+            let reader_token = reader_token.clone();
+            async move {
+                axum::Json(json!({
+                    "access_token": reader_token,
+                    "token_type": "Bearer",
+                    "expires_in": 300
+                }))
+            }
+        }),
+    );
+    let (_, token_task) = serve_on(token_listener, token_app);
+
+    let directory = format!(
+        "INSERT INTO casework_teams(team_id,revision) VALUES('licence-corrections',1);
+         INSERT INTO casework_queue_service(queue_id,team_id,revision)
+         VALUES('corrections','licence-corrections',1);
+         INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
+         VALUES('licence-corrections','{issuer}','licence-reviewer','staff'),
+               ('licence-corrections','{issuer}','scope-submitter','staff');",
+        issuer = idp.issuer()
+    );
+    let (casework_app, _casework, casework_db, casework_schema) =
+        casework_fixture_with_source(&idp, Arc::new(adapter), project, &directory).await;
+    let (_, casework_task) = serve_on(casework_listener, casework_app);
+
+    let database = TestDatabase::create(4).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("BReg schema");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &registry,
+        RegistryStateTestIdentity {
+            package_id: STARTER_SOURCE_ID,
+            environment: "local",
+            instance_id: "professional-licences-starter",
+            database_id: "professional-licences-database",
+            package_revision: PACKAGE_REVISION,
+            package_sequence: 1,
+        },
+    )
+    .await
+    .expect("BReg identity");
+    drop(migration);
+    migration_task.abort();
+
+    let scratch = tempfile::tempdir().expect("runtime binding directory");
+    write_secret(
+        scratch.path(),
+        "review-token",
+        &token(
+            &idp,
+            CASEWORK_AUDIENCE,
+            "professional-review-breg",
+            "casework:reviews:request",
+        ),
+    );
+    for name in ["database", "migration", "audit", "cursor"] {
+        write_secret(scratch.path(), name, "unused-test-secret");
+    }
+    let mut runtime = runtime_config(scratch.path(), &casework_url);
+    // The starter's review authority is `casework`, answered by the
+    // template's `registry-breg` producer through `integration-requester`.
+    runtime["reviewAuthorities"] = json!({"casework":{
+        "endpoint":casework_url.as_str(),"profile":"integration-requester",
+        "tokenRef":"secret:file/review-token","producerId":"registry-breg","recoveryDays":7
+    }});
+    let authorities = parse_runtime_config(&runtime.to_string())
+        .expect("BReg runtime binding")
+        .activate_review_authorities(&registry)
+        .expect("review authority activation")
+        .expect("review authority required");
+    let service = breg_service(
+        &database,
+        registry.clone(),
+        identity,
+        Arc::clone(&authorities),
+        None,
+    );
+    let mut verifier = oidc_verifier_config(idp.issuer(), vec![BREG_AUDIENCE.to_owned()]);
+    // The reviewer profile admits only the staff and supervisor clients, so
+    // the verifier names every client this journey's tokens come from.
+    verifier.allowed_clients = ["staff", "supervisor", "editor", "casework-reader"]
+        .map(str::to_owned)
+        .to_vec();
+    let breg_app = breg_router_with(
+        service,
+        &registry,
+        &idp,
+        verifier,
+        AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".to_owned())),
+    );
+    let (_, breg_task) = serve_on(breg_listener, breg_app);
+
+    // One person submits in BReg through the editor client and also serves
+    // the corrections queue through the staff client.
+    let submitter = client_token(
+        &idp,
+        "editor",
+        "scope-submitter",
+        "starter:editor",
+        STARTER_PURPOSE,
+        "human",
+    );
+    let submitter_as_staff = client_token(
+        &idp,
+        "staff",
+        "scope-submitter",
+        "casework:staff starter:reviewer",
+        STARTER_PURPOSE,
+        "human",
+    );
+    let reviewer = client_token(
+        &idp,
+        "staff",
+        "licence-reviewer",
+        "casework:staff starter:reviewer",
+        STARTER_PURPOSE,
+        "human",
+    );
+
+    let (status, licence) = request_json(
+        &breg_url,
+        Method::POST,
+        "/v1/records/professional-licenses?accessProfile=editor",
+        &submitter,
+        Some(json!({"data":{
+            "localIdentifier":"licence-0001",
+            "personReference":"person-0001",
+            "regulatorReference":"regulator-0001",
+            "jurisdictionReference":"jurisdiction-0001",
+            "professionCode":"example-nursing",
+            "licenceStatus":"recorded-active",
+            "validFrom":"2026-01-01",
+            "licensedActivities":["example-assessment"],
+            "authorizationConditions":"Supervised practice only."
+        }})),
+        Some("create-licence"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{licence}");
+    let licence_id = licence["data"]["recordIdentifier"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // 1. The submitter proposes a scope correction and submits it.
+    let (status, created) = request_json(
+        &breg_url,
+        Method::POST,
+        "/v1/records/scope-corrections?accessProfile=editor",
+        &submitter,
+        Some(json!({"data":{
+            "record":licence_id,
+            "licensedActivities":["example-assessment","example-advisory-services"],
+            "authorizationConditions":"",
+            "reason":"The advisory scope was recorded on paper but not entered.",
+            "supportingReference":"board-minute-0001"
+        }})),
+        Some("create-correction"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let request_id = created["data"]["recordIdentifier"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let submitter_path = format!("/v1/records/scope-corrections/{request_id}?accessProfile=editor");
+    let reviewer_path =
+        format!("/v1/records/scope-corrections/{request_id}?accessProfile=reviewer");
+    let (status, draft) = request_json(
+        &breg_url,
+        Method::GET,
+        &submitter_path,
+        &submitter,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{draft}");
+    let (submit_href, submit_etag) = action(&draft, "submit_request");
+    let (status, submitted) = request_json(
+        &breg_url,
+        Method::POST,
+        &submit_href,
+        &submitter,
+        Some(json!({})),
+        Some("submit-correction"),
+        Some(&submit_etag),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{submitted}");
+
+    // 2. The review authority delivers the submission to Casework.
+    let worker_pool = database.runtime_config.build_pool().expect("worker pool");
+    assert!(
+        run_review_authority_once_for_test(&worker_pool, &authorities)
+            .await
+            .expect("one review submission exchange"),
+        "the pending review submission is claimed"
+    );
+    let first_task: Uuid = casework_db
+        .query_one("SELECT task_id FROM casework_review_tasks", &[])
+        .await
+        .expect("Casework opened one review task")
+        .get(0);
+
+    // 3. A different reviewer sees the task in the corrections inbox.
+    let inbox = corrections_inbox(&casework_url, &reviewer).await;
+    assert_eq!(
+        inbox["items"]
+            .as_array()
+            .expect("inbox items")
+            .iter()
+            .map(|item| item["taskId"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!(first_task)],
+        "the reviewer's inbox shows the delivered review: {inbox}"
+    );
+
+    // 4. The submitter cannot claim the review of their own request.
+    let (status, refusal) = casework_staff_call(
+        &casework_url,
+        &submitter_as_staff,
+        &format!("/v1/review-tasks/{first_task}/claim"),
+        None,
+        "\"1\"",
+        "self-claim",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refusal}");
+
+    // 5. The reviewer claims it and sends it back.
+    let (status, claimed) = casework_staff_call(
+        &casework_url,
+        &reviewer,
+        &format!("/v1/review-tasks/{first_task}/claim"),
+        None,
+        "\"1\"",
+        "claim-first",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{claimed}");
+    let (status, sent_back) = casework_staff_call(
+        &casework_url,
+        &reviewer,
+        &format!("/v1/review-tasks/{first_task}/decisions"),
+        Some(json!({"decision":{
+            "type":"changes_requested",
+            "outcome":"changes-requested",
+            "reason":"Attach the board minute that records the advisory scope."
+        }})),
+        "\"2\"",
+        "send-back-first",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{sent_back}");
+
+    // 6. The send-back reconciles to BReg.
+    reconcile_until(
+        &database,
+        &authorities,
+        &breg_url,
+        &submitter_path,
+        &submitter,
+        "changesRequested",
+    )
+    .await;
+
+    // 7. The submitter revises the proposal and resubmits it.
+    let (status, sent_back_view) = request_json(
+        &breg_url,
+        Method::GET,
+        &submitter_path,
+        &submitter,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{sent_back_view}");
+    let (revise_href, revise_etag) = action(&sent_back_view, "revise_request");
+    let (status, revised) = request_json(
+        &breg_url,
+        Method::POST,
+        &revise_href,
+        &submitter,
+        Some(json!({"rebase":false})),
+        Some("revise-correction"),
+        Some(&revise_etag),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{revised}");
+    let draft_etag = reqwest::Client::new()
+        .get(breg_url.join(&submitter_path).unwrap())
+        .bearer_auth(&submitter)
+        .send()
+        .await
+        .expect("revised draft")
+        .headers()
+        .get("etag")
+        .expect("draft etag")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let patched = reqwest::Client::new()
+        .patch(breg_url.join(&submitter_path).unwrap())
+        .bearer_auth(&submitter)
+        .header("content-type", "application/json-patch+json")
+        .header("if-match", draft_etag)
+        .header("idempotency-key", "patch-correction")
+        .body(
+            json!([{"op":"replace","path":"/data/supportingReference","value":"board-minute-0001-attached"}])
+                .to_string(),
+        )
+        .send()
+        .await
+        .expect("patch response");
+    assert_eq!(
+        patched.status(),
+        StatusCode::OK,
+        "{}",
+        patched.text().await.unwrap_or_default()
+    );
+    let (status, revised_draft) = request_json(
+        &breg_url,
+        Method::GET,
+        &submitter_path,
+        &submitter,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{revised_draft}");
+    let (submit_href, submit_etag) = action(&revised_draft, "submit_request");
+    let (status, resubmitted) = request_json(
+        &breg_url,
+        Method::POST,
+        &submit_href,
+        &submitter,
+        Some(json!({})),
+        Some("resubmit-correction"),
+        Some(&submit_etag),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{resubmitted}");
+    let mut second_task = None;
+    // Revising a submitted request first withdraws its pending review, so
+    // the resubmission reaches Casework on a later pass.
+    for _ in 0..50 {
+        run_review_authority_once_for_test(&worker_pool, &authorities)
+            .await
+            .expect("one review authority pass");
+        second_task = casework_db
+            .query_opt(
+                "SELECT task_id FROM casework_review_tasks WHERE task_id<>$1",
+                &[&first_task],
+            )
+            .await
+            .expect("resubmission task query")
+            .map(|row| row.get::<_, Uuid>(0));
+        if second_task.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let submissions = database
+        .admin
+        .query(
+            "SELECT state::text FROM registry_internal.registry_request_review_submissions",
+            &[],
+        )
+        .await
+        .expect("review submissions");
+    let second_task = second_task.unwrap_or_else(|| {
+        panic!(
+            "Casework never opened a review task for the resubmission; submissions: {:?}",
+            submissions
+                .iter()
+                .map(|row| row.get::<_, String>(0))
+                .collect::<Vec<_>>()
+        )
+    });
+
+    // 8. A reviewer approves the resubmission, and the approval reconciles.
+    let inbox = corrections_inbox(&casework_url, &reviewer).await;
+    assert_eq!(
+        inbox["items"]
+            .as_array()
+            .expect("inbox items")
+            .iter()
+            .map(|item| item["taskId"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!(second_task)],
+        "the inbox shows only the resubmission's review: {inbox}"
+    );
+    let (status, claimed) = casework_staff_call(
+        &casework_url,
+        &reviewer,
+        &format!("/v1/review-tasks/{second_task}/claim"),
+        None,
+        "\"1\"",
+        "claim-second",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{claimed}");
+    let (status, approved) = casework_staff_call(
+        &casework_url,
+        &reviewer,
+        &format!("/v1/review-tasks/{second_task}/decisions"),
+        Some(json!({"decision":{"type":"approve"}})),
+        "\"2\"",
+        "approve-second",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{approved}");
+    let approved = reconcile_until(
+        &database,
+        &authorities,
+        &breg_url,
+        &reviewer_path,
+        &reviewer,
+        "approved",
+    )
+    .await;
+
+    // 9. onApproved is manual: the reviewer applies the approved request.
+    let (apply_href, apply_etag) = action(&approved, "apply_request");
+    let (status, applied) = request_json(
+        &breg_url,
+        Method::POST,
+        &apply_href,
+        &reviewer,
+        Some(json!({
+            "proposalVersion": approved["data"]["request"]["proposalVersion"],
+            "effectDigest": approved["data"]["request"]["effectDigest"]
+        })),
+        Some("apply-correction"),
+        Some(&apply_etag),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let (status, corrected) = request_json(
+        &breg_url,
+        Method::GET,
+        &format!("/v1/records/professional-licenses/{licence_id}?accessProfile=reviewer"),
+        &reviewer,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{corrected}");
+    assert_eq!(
+        corrected["data"]["domainData"]["licensedActivities"],
+        json!(["example-assessment", "example-advisory-services"])
+    );
+
+    breg_task.abort();
+    casework_task.abort();
+    token_task.abort();
     database.cleanup().await;
     let (cleanup, cleanup_connection) =
         tokio_postgres::connect(&env::var("BREG_TEST_DATABASE_URL").unwrap(), NoTls)

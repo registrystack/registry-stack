@@ -196,7 +196,9 @@ setup. It does not report the progress of a submitted review. Use the resources 
 Create the request as its owner, read its advertised `submit_request` action, and send the returned
 `ifMatch` with a fresh `Idempotency-Key`. Submit as a person: the starter's `editor` client carries
 the human actor marker, because the review stage excludes the request's initiator and BReg names an
-initiator only for a human caller. A service or agent submission is refused when Casework admits it.
+initiator only for a human caller. A service or agent submission is refused with
+`review.initiator-required` when Casework admits it, and the submitter who tries to claim the review
+task is refused with `review.initiator-excluded`.
 Submission freezes:
 
 - the request and target facts used by the proposal;
@@ -223,6 +225,13 @@ Open the task through the Casework profile authorized by the policy. Casework ob
 context with the caller's delegated credential and the configured source profile, then enforces
 its stage, queue, assignment, independence, and decision rules. Complete every stage required by
 the policy.
+
+The starter's review stage excludes the submitter, so the person who submitted the request cannot
+claim, be assigned, or decide its review. A reviewer either approves or chooses the
+`changes-requested` outcome ("Request changes") with a reason. A send-back reaches BReg as a
+`changesRequested` review result; the submitter follows the request's `revise_request` action,
+patches the draft, and submits it again, and Casework opens a fresh review for the new proposal
+version.
 
 The terminal result carries the exact review request id, subject binding, full policy binding, and
 submission digest. BReg accepts it only when every value matches the durable submission. An early

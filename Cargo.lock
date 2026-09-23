@@ -5004,6 +5004,7 @@ dependencies = [
  "jsonschema",
  "jsonwebtoken",
  "registry-breg",
+ "registry-bregctl",
  "registry-casework-breg",
  "registry-casework-client",
  "registry-casework-core",

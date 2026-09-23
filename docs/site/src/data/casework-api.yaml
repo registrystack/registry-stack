@@ -25,6 +25,8 @@
     - ['`request.source-rejected`', '422', 'The source refused the promoted action body. Fix the decision request before trying again.']
     - ['`request.unprocessable`', '422', 'The request body does not match the Casework contract. `validation` names the member and the closed reason.']
     - ['`request.unsupported-media-type`', '415', 'A body without `Content-Type: application/json`.']
+    - ['`review.initiator-excluded`', '403', 'The caller submitted this request and the review stage excludes its initiator. Another reviewer must claim or decide it.']
+    - ['`review.initiator-required`', '422', 'The review kind excludes its initiator, so the producer must name the initiator when it submits the request.']
     - ['`review.result-expired`', '410', 'The retained review result is no longer available. Reconcile it through the producer''s retained source correlation.']
     - ['`review.submission-conflict`', '409', 'The same producer, source subject, version, and policy were already submitted with different canonical content.']
     - ['`review.task-not-held`', '409', 'The caller tried to decide a review task without holding its current revision.']
