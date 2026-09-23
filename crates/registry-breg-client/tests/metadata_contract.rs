@@ -304,6 +304,29 @@ fn runtime_v1_promotes_only_exact_direct_create_and_patch_contracts() {
     );
 }
 
+/// A company carrying `capability`, with every field the capability names
+/// readable on the entity and on each of its operations, as a conforming
+/// runtime publishes it.
+fn change_request_fixture(capability: &Value) -> Value {
+    let mut value = fixture();
+    let readable = [
+        ("legal-name", "legalName"),
+        ("company", "company"),
+        ("proposed-name", "proposedName"),
+        ("name", "name"),
+        ("status", "status"),
+        ("note", "note"),
+        ("parent", "parent"),
+    ];
+    value["entities"][0]["readableFields"] = json!(readable.map(|(id, _)| id));
+    for operation in value["operations"].as_array_mut().unwrap() {
+        operation["fields"] = json!(readable.map(|(id, api_name)| field(id, api_name)));
+        operation["readableFields"] = json!(readable.map(|(id, _)| id));
+    }
+    value["entities"][0]["changeRequest"] = capability.clone();
+    value
+}
+
 #[test]
 fn change_request_capability_is_strict_typed_and_never_creates_authority() {
     let capability = json!({
@@ -356,8 +379,7 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
         "onApproved": {"mode":"automatic", "executor":"breg-worker"},
         "application": {"preconditions":{"request":[]}}
     });
-    let mut value = fixture();
-    value["entities"][0]["changeRequest"] = capability.clone();
+    let value = change_request_fixture(&capability);
     let metadata = parse(&value);
     let change_request = metadata.change_request_capability("company").unwrap();
     assert_eq!(
@@ -532,27 +554,31 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
             malformed
         },
     ] {
-        let mut value = fixture();
-        value["entities"][0]["changeRequest"] = malformed;
+        let value = change_request_fixture(&malformed);
         assert!(BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
     }
 
-    // A source naming an effect the document does not list is a dangling
-    // reference, never an effect the caller may assume exists.
+    // A source naming an effect the document does not list, an entity it
+    // does not list, or a field the caller cannot read is a dangling
+    // reference, never a name the caller may assume exists or may read.
+    let dangling_at = |pointer: &str, replacement: Value| {
+        let mut dangling = capability_for_references.clone();
+        *dangling.pointer_mut(pointer).unwrap() = replacement;
+        dangling
+    };
     for dangling in [
-        {
-            let mut dangling = capability_for_references.clone();
-            dangling["effects"][2]["target"]["fromEffect"] = json!("hidden");
-            dangling
-        },
-        {
-            let mut dangling = capability_for_references;
-            dangling["effects"][2]["set"][0]["fromEffect"] = json!("hidden");
-            dangling
-        },
+        dangling_at("/effects/2/target/fromEffect", json!("hidden")),
+        dangling_at("/effects/2/set/0/fromEffect", json!("hidden")),
+        dangling_at("/effects/0/target/entity", json!("hidden-company")),
+        dangling_at("/effects/0/target/fromField", json!("secret")),
+        dangling_at("/effects/0/set/0/field", json!("secret")),
+        dangling_at("/effects/0/set/0/fromField", json!("secret")),
+        dangling_at("/effects/0/clear/0", json!("secret")),
+        dangling_at("/planner/writes/0/target/entity", json!("hidden-company")),
+        dangling_at("/planner/writes/0/target/fromField", json!("secret")),
+        dangling_at("/planner/writes/0/fields/0", json!("secret")),
     ] {
-        let mut value = fixture();
-        value["entities"][0]["changeRequest"] = dangling;
+        let value = change_request_fixture(&dangling);
         assert_eq!(
             BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap())
                 .unwrap_err()

@@ -4008,6 +4008,64 @@ fn validate_metadata_references(
             }
         }
         let _ = (&entity.schema_path, &entity.change_control);
+        if let Some(change_request) = &entity.change_request {
+            validate_change_request_references(entities, entity, change_request)?;
+        }
+    }
+    Ok(())
+}
+
+/// A change request names only listed entities and fields the caller may
+/// read: target fields on the target entity, and value or target sources on
+/// the entity that carries the request.
+fn validate_change_request_references(
+    entities: &[BRegMetadataEntity],
+    request_entity: &BRegMetadataEntity,
+    change_request: &BRegChangeRequestCapability,
+) -> Result<(), BRegMetadataError> {
+    let readable = |entity: &BRegMetadataEntity, field: &str| {
+        entity
+            .readable_fields
+            .iter()
+            .any(|candidate| candidate == field)
+    };
+    let bound_readably = |binding: Option<&BRegChangeRequestBinding>| match binding {
+        Some(BRegChangeRequestBinding::FromField(field)) => readable(request_entity, field),
+        Some(BRegChangeRequestBinding::FromEffect(_)) | None => true,
+    };
+    let targets = change_request
+        .planner
+        .writes
+        .iter()
+        .map(|write| (&write.target, write.fields.iter().collect::<Vec<_>>()))
+        .chain(change_request.effects.iter().map(|effect| {
+            (
+                &effect.target,
+                effect
+                    .set
+                    .iter()
+                    .map(|set| &set.field)
+                    .chain(&effect.clear)
+                    .collect(),
+            )
+        }));
+    for (target, fields) in targets {
+        let Some(target_entity) = entities.iter().find(|entity| entity.id == target.entity) else {
+            return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
+        };
+        if !bound_readably(target.binding.as_ref())
+            || fields.iter().any(|field| !readable(target_entity, field))
+        {
+            return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
+        }
+    }
+    if change_request
+        .effects
+        .iter()
+        .flat_map(|effect| &effect.set)
+        .any(|set| !bound_readably(set.value.as_ref()))
+    {
+        return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
     }
     Ok(())
 }

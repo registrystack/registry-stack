@@ -221,7 +221,7 @@ def metadata() -> dict:
                             {
                                 "target": {
                                     "entity": "company",
-                                    "fromField": "company",
+                                    "fromField": "legal-name",
                                 },
                                 "operation": "patch",
                                 "fields": ["legal-name"],
@@ -240,8 +240,8 @@ def metadata() -> dict:
                             "id": "rename",
                             "operation": "patch",
                             "target": {"entity": "company", "fromEffect": "branch"},
-                            "set": [{"field": "legal-name", "fromField": "proposed"}],
-                            "clear": ["note"],
+                            "set": [{"field": "legal-name", "fromField": "legal-name"}],
+                            "clear": [],
                         },
                     ],
                     "review": {
@@ -449,7 +449,7 @@ class MutationParityTests(unittest.TestCase):
             capability["planner"]["writes"],
             [
                 {
-                    "target": {"entity": "company", "from_field": "company"},
+                    "target": {"entity": "company", "from_field": "legal-name"},
                     "operation": "patch",
                     "fields": ["legal-name"],
                 }
@@ -469,8 +469,8 @@ class MutationParityTests(unittest.TestCase):
                     "id": "rename",
                     "operation": "patch",
                     "target": {"entity": "company", "from_effect": "branch"},
-                    "set": [{"field": "legal-name", "from_field": "proposed"}],
-                    "clear": ["note"],
+                    "set": [{"field": "legal-name", "from_field": "legal-name"}],
+                    "clear": [],
                 },
             ],
         )
