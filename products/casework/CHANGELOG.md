@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fix initiator exclusion for BReg-sourced reviews. BReg now names a review's
+  initiator by the value of its configured principal claim rather than `sub`,
+  so a stage with `excludeInitiator` refuses the submitter when the Casework
+  profiles read that same claim. The professional-review starter and example
+  now exclude the submitter from the review stage and set
+  `trustedInitiatorIssuer` on the BReg producer.
 - Add an optional `initiatorProfile` on a review producer. The person a request
   names as its initiator reads that request's requester-visible history through
   `GET /v1/review-requests/{requestId}/history`, and nothing else. Retention now
