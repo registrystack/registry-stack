@@ -4780,7 +4780,7 @@ fn assert_review_application(value: &Value) -> Result<(), FixtureError> {
     if !matches!(mode, "manual" | "automatic")
         || !matches!(
             state,
-            "awaitingReview" | "ready" | "queued" | "applying" | "applied" | "blocked"
+            "awaitingReview" | "ready" | "queued" | "applying" | "applied" | "blocked" | "expired"
         )
         || (mode == "manual" && application.contains_key("executor"))
         || (mode == "automatic" && !application.contains_key("executor"))
