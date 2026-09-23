@@ -396,11 +396,10 @@ fn classify(
 }
 
 fn unresolvable_reason(progress: Option<ReviewedMigrationProgress>) -> &'static str {
-    // Durable step progress is what refuses reversion in `classify` above,
-    // independently of whether the plan's own postconditions closed: that
-    // bundled self-check and the catalog fingerprint comparison can disagree,
-    // so `closed` must not decide this reason.
-    if progress.is_some_and(|progress| progress.durable_step_progress) {
+    // Once every step closed, only the catalog stands between the target and
+    // completion: an operator who removes the unmanaged difference can then
+    // complete it, so the reason must name the catalog, not the steps.
+    if progress.is_some_and(|progress| progress.durable_step_progress && !progress.closed) {
         UNRESOLVABLE_STEPS_COMMITTED
     } else {
         UNRESOLVABLE_CATALOG_UNMATCHED
@@ -563,19 +562,16 @@ mod tests {
     }
 
     #[test]
-    fn a_reviewed_plan_closed_with_committed_steps_still_reports_steps_committed() {
-        // The reviewed plan's own postconditions closed successfully and every
-        // step committed rows, but the independent catalog comparison still
-        // finds the live catalog short of the target: `closed` is the plan's
-        // bundled self-check, not the catalog fingerprint comparison, so the
-        // two can disagree. Revert is refused because steps already
-        // committed, not because the catalog matches neither package, so the
-        // reason must say so even though the plan reports closed.
+    fn a_reviewed_plan_closed_with_committed_steps_names_the_catalog() {
+        // Every step closed and committed rows, but the live catalog still
+        // differs from the target, for example by an object an administrator
+        // left behind. The steps are finished; the catalog is what the
+        // operator must correct before the target can complete.
         let closed_with_committed_steps = ReviewedMigrationProgress {
             closed: true,
             durable_step_progress: true,
         };
-        let unmatched_target = report(Some("differs"), None);
+        let unmatched_target = report(Some("differs"), Some("differs"));
         assert_eq!(
             classify(
                 &unmatched_target,
@@ -584,10 +580,9 @@ mod tests {
             ),
             ReconcileOutcome::Unresolvable
         );
-        assert!(unmatched_target.active_catalog_finding.is_none());
         assert_eq!(
             unresolvable_reason(Some(closed_with_committed_steps)),
-            UNRESOLVABLE_STEPS_COMMITTED
+            UNRESOLVABLE_CATALOG_UNMATCHED
         );
     }
 
