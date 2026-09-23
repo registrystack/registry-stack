@@ -1148,18 +1148,11 @@ fn snapshot_where_sql(
             }
         }
     }
-    for (index, boundary) in crate::membership::boundaries(entity, claims.access_profile())
-        .iter()
-        .enumerate()
-    {
-        let field = fields.field(&boundary.field)?;
+    for probe in crate::membership::row_probes(entity, claims.access_profile()) {
+        let field = fields.field(&probe.field)?;
         predicates.push(format!(
             "registry_context.{}({})",
-            crate::generated_ddl::quote_identifier(&crate::membership::function_name(
-                &entity.id,
-                claims.access_profile(),
-                index
-            )),
+            crate::generated_ddl::quote_identifier(&probe.function),
             field_typed_sql(field)?
         ));
     }
