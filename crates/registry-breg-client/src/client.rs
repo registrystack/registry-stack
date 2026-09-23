@@ -112,11 +112,11 @@ impl BaseRegistryClient {
     ) -> Result<BRegComplete<BRegMetadata>, BaseRegistryClientError> {
         let raw = self.registry_metadata(access_profile).await?;
         let value = BRegMetadata::from_slice(raw.value.as_bytes())
-            .map_err(|_| {
-                BaseRegistryClientError::protocol(
+            .map_err(|error| {
+                BaseRegistryClientError::protocol_metadata(
                     StatusCode::OK.as_u16(),
-                    BRegProtocolFailure::Body,
                     Some(raw.metadata.trace_id().clone()),
+                    error,
                 )
             })?
             .bind_source(self.source_binding());

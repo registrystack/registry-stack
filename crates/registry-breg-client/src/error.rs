@@ -2,6 +2,8 @@ use registry_platform_httpsec::TraceId;
 use registry_platform_httputil::client::TokenError;
 use thiserror::Error;
 
+use crate::{BRegMetadataError, BRegMetadataErrorKind};
+
 pub use registry_platform_httputil::client::TransportKind;
 
 /// One closed kind of change-request plan refusal named by Base Registry Engine.
@@ -397,6 +399,11 @@ pub enum BaseRegistryClientError {
         status: u16,
         failure: BRegProtocolFailure,
         trace_id: Option<TraceId>,
+        /// The specific runtime metadata decode failure, when `failure` is
+        /// `BRegProtocolFailure::Body` and the response was Registry Metadata.
+        /// `None` for every other body-shape refusal; never rendered by
+        /// `Display`, so a caller must read it explicitly for diagnostics.
+        metadata: Option<BRegMetadataErrorKind>,
     },
 }
 
@@ -422,6 +429,23 @@ impl BaseRegistryClientError {
             status,
             failure,
             trace_id,
+            metadata: None,
+        }
+    }
+
+    /// Build the `Protocol`/`Body` refusal for a runtime metadata document
+    /// that failed to decode, keeping the specific kind for diagnostics
+    /// instead of discarding it.
+    pub(crate) fn protocol_metadata(
+        status: u16,
+        trace_id: Option<TraceId>,
+        error: BRegMetadataError,
+    ) -> Self {
+        Self::Protocol {
+            status,
+            failure: BRegProtocolFailure::Body,
+            trace_id,
+            metadata: Some(error.kind()),
         }
     }
 
@@ -430,6 +454,17 @@ impl BaseRegistryClientError {
         match self {
             Self::Problem { trace_id, .. } => Some(trace_id),
             Self::Protocol { trace_id, .. } => trace_id.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// The specific runtime metadata decode failure carried by this error,
+    /// when it came from a Registry Metadata document that did not decode.
+    /// `None` for every other error, including every other protocol failure.
+    #[must_use]
+    pub fn metadata_error_kind(&self) -> Option<BRegMetadataErrorKind> {
+        match self {
+            Self::Protocol { metadata, .. } => *metadata,
             _ => None,
         }
     }

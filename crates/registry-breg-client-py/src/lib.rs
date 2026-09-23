@@ -172,6 +172,7 @@ fn sdk_error(py: Python<'_>, error: RustClientError) -> PyErr {
             status,
             failure,
             trace_id,
+            ..
         } => {
             mapped.status = Some(status);
             mapped.code = Some(

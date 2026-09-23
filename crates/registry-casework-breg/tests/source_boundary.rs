@@ -431,6 +431,28 @@ async fn reader_diagnostic_refuses_an_unready_source_before_using_reader_credent
         Err(SourceAdapterError::Unavailable)
     );
 }
+
+#[tokio::test]
+async fn reader_diagnostic_names_the_route_and_reason_for_malformed_registry_metadata() {
+    let server = MockServer::start().await;
+    let mut metadata = diagnostic_metadata(&["get", "list"], &[("record", "record")]);
+    metadata["entities"] = json!("not-an-array");
+    let logs = captured_logs(async {
+        mount_reader_diagnostic(&server, metadata, 200, false).await;
+        assert_eq!(
+            adapter(&server.uri()).verify_reader_readiness().await,
+            Err(SourceAdapterError::Unavailable)
+        );
+    })
+    .await;
+
+    let entry: Value = serde_json::from_str(logs.lines().next().expect("one log entry"))
+        .expect("structured tracing entry");
+    assert_eq!(entry["level"], "WARN");
+    assert_eq!(entry["fields"]["route"], "GET /v1/registry");
+    assert_eq!(entry["fields"]["metadata_error_kind"], "Shape");
+}
+
 #[tokio::test]
 async fn authoritative_read_retains_representation_etag_at_unchanged_record_revision() {
     let mut observations = Vec::new();
