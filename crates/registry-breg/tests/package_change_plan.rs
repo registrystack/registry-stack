@@ -9,7 +9,9 @@ use registry_breg::compiler::{
     compile_project, compile_project_with_assets, module_digest, module_digest_with_assets,
     CompileProfile,
 };
-use registry_breg::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
+use registry_breg::contract::{
+    parse_module_yaml, parse_project_json, parse_project_yaml, ModuleAssetSource,
+};
 #[cfg(feature = "tooling")]
 use registry_breg::migration_plan::{
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
@@ -765,6 +767,59 @@ fn data_destructive_and_unsupported_changes_cannot_create_applicable_plans() {
 }
 
 #[test]
+fn vocabulary_code_additions_are_additive_and_replace_the_column_check() {
+    let previous = vocabulary_registry("status", &["open", "closed"]);
+    let candidate = vocabulary_registry("status", &["open", "closed", "archived"]);
+    let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+
+    assert_eq!(change_set.changes.len(), 1, "{:#?}", change_set.changes);
+    assert_change(
+        &change_set,
+        CompiledRegistryChangeClass::CompatibleAdditive,
+        CompiledRegistryChangeCode::FieldVocabularyCodesAdded,
+    );
+    let plan = change_set_to_applicable_migration_plan(&change_set)
+        .expect("a vocabulary code addition is applicable");
+    let ids = plan
+        .statements
+        .iter()
+        .map(|statement| statement.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["entity.entry.field.status.vocabulary"]);
+    let sql = &plan.statements[0].sql;
+    assert!(
+        sql.contains("'archived'") && sql.contains("DROP CONSTRAINT"),
+        "the statement replaces the column check with the candidate codes: {sql}"
+    );
+
+    for (candidate, reason) in [
+        (
+            vocabulary_registry("status", &["open"]),
+            "removing a code can strand existing rows",
+        ),
+        (
+            vocabulary_registry("state", &["open", "closed"]),
+            "pointing the field at another vocabulary is not an addition",
+        ),
+    ] {
+        let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+        assert!(
+            change_set.changes.iter().any(|change| {
+                change.class == CompiledRegistryChangeClass::DestructiveOrIrreversible
+                    && change.code == CompiledRegistryChangeCode::FieldTypeChanged
+            }),
+            "{reason}: {:#?}",
+            change_set.changes
+        );
+        assert_eq!(change_set.migration_plan, None, "{reason}");
+        assert!(
+            change_set_to_applicable_migration_plan(&change_set).is_err(),
+            "{reason}"
+        );
+    }
+}
+
+#[test]
 fn plaintext_to_encrypted_type_change_is_unsupported() {
     let previous = compile_variant(Variant::PlaintextSecret, 1);
     let candidate = compile_variant(Variant::EncryptedStructuredSecret, 2);
@@ -1315,6 +1370,56 @@ fn tampered_package_never_returns_a_migration_summary_or_canary() {
     let rendered = format!("{error:?}");
     assert!(!rendered.contains(SUMMARY_CANARY));
     assert!(!rendered.contains(package.to_string_lossy().as_ref()));
+}
+
+/// A plain registry whose one entity stores a code from `vocabulary`. The
+/// project's `status` vocabulary holds `values`; its `state` vocabulary always
+/// holds open, closed, and archived.
+fn vocabulary_registry(vocabulary: &str, values: &[&str]) -> CompiledRegistry {
+    let project = serde_json::json!({
+        "apiVersion": "registry.registrystack.org/v1alpha1",
+        "kind": "RegistryProject",
+        "registry": {
+            "id": "vocabulary-catalog",
+            "version": "1",
+            "defaultLanguage": "en",
+            "canonicalBaseIri": "https://authoring.example.test"
+        },
+        "vocabularies": [
+            {"id": "status", "values": values},
+            {"id": "state", "values": ["open", "closed", "archived"]}
+        ],
+        "entities": [{
+            "id": "entry",
+            "primaryDataset": "test-dataset",
+            "route": "entries",
+            "mutationMode": "mutable",
+            "fields": [
+                {
+                    "id": "status",
+                    "type": "vocabulary-code",
+                    "vocabulary": vocabulary,
+                    "required": true,
+                    "classification": "internal"
+                }
+            ]
+        }],
+        "accessProfiles": [{
+            "id": "writer",
+            "default": true,
+            "principalClaim": "registry_principal",
+            "permissions": [{
+                "entity": "entry",
+                "operations": ["create", "get", "list", "patch"],
+                "readableFields": ["status"],
+                "writableFields": ["status"],
+                "rowBoundaries": []
+            }]
+        }]
+    });
+    let bytes = serde_json::to_vec(&project).expect("fixture serializes");
+    let project = parse_project_json(&bytes).expect("vocabulary fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring).expect("vocabulary fixture compiles")
 }
 
 fn assert_change(

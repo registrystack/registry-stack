@@ -1985,6 +1985,27 @@ pub enum FieldTypeSource {
     },
 }
 
+impl FieldTypeSource {
+    /// Whether this type keeps `previous`'s vocabulary and every code it
+    /// declared, possibly adding codes. A stored code of `previous` is then
+    /// always a valid code of this type.
+    pub fn keeps_vocabulary_codes_of(&self, previous: &FieldTypeSource) -> bool {
+        match (previous, self) {
+            (
+                FieldTypeSource::VocabularyCode {
+                    vocabulary: previous_vocabulary,
+                    values: previous_values,
+                },
+                FieldTypeSource::VocabularyCode { vocabulary, values },
+            ) => {
+                previous_vocabulary == vocabulary
+                    && previous_values.iter().all(|value| values.contains(value))
+            }
+            _ => false,
+        }
+    }
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

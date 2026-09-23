@@ -801,6 +801,49 @@ pub(crate) fn set_column_not_null_statement(
     })
 }
 
+/// The statement that widens a stored vocabulary-code column to the codes
+/// the candidate field declares, or `None` for an encrypted column, which
+/// stores envelopes and carries no code check.
+///
+/// The check was declared inline, so PostgreSQL chose its name. The statement
+/// finds the one `CHECK` over exactly this column and replaces it under that
+/// same name, which keeps the managed catalog identical to a fresh install.
+/// A tombstone-aware requiredness check also reads `record_lifecycle`, so it
+/// never matches.
+#[cfg(feature = "runtime")]
+pub(crate) fn replace_vocabulary_check_statement(
+    entity: &CompiledEntity,
+    field: &crate::model::CompiledField,
+) -> Option<DdlStatement> {
+    if field.encryption.is_some() {
+        return None;
+    }
+    let check = field_check(&quote_identifier(&field.physical_name), &field.field_type)?;
+    let table = quote_literal(&entity.physical_table);
+    Some(DdlStatement {
+        id: format!("entity.{}.field.{}.vocabulary", entity.id, field.id),
+        kind: DdlStatementKind::Constraint,
+        sql: format!(
+            "DO $breg_vocabulary$\n\
+             DECLARE\n\
+             \x20   check_name name;\n\
+             BEGIN\n\
+             \x20   SELECT c.conname INTO STRICT check_name\n\
+             \x20   FROM pg_catalog.pg_constraint c\n\
+             \x20   JOIN pg_catalog.pg_class t ON t.oid = c.conrelid\n\
+             \x20   JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace\n\
+             \x20   JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attname = {column}\n\
+             \x20   WHERE n.nspname = 'registry_data' AND t.relname = {table}\n\
+             \x20     AND c.contype = 'c' AND c.conkey = ARRAY[a.attnum];\n\
+             \x20   EXECUTE format('ALTER TABLE registry_data.%I DROP CONSTRAINT %I, ADD CONSTRAINT %I CHECK (%s)', {table}, check_name, check_name, {check});\n\
+             END\n\
+             $breg_vocabulary$",
+            column = quote_literal(&field.physical_name),
+            check = quote_literal(&check),
+        ),
+    })
+}
+
 /// Requiredness expressed as a tombstone-aware `CHECK` stays inline, because
 /// its constraint name is chosen by PostgreSQL from the column definition and
 /// a separately added constraint would not carry the same managed identity.

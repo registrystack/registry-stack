@@ -27,9 +27,9 @@ use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::generated_ddl::{
     add_blind_index_column_statement, add_column_statement, drop_spatial_bbox_function_statement,
     drop_spatial_candidate_view_statement, generate_ddl_with_actions, quote_identifier,
-    set_column_not_null_statement, spatial_bbox_function_statement, spatial_projection_fields,
-    spatial_projection_statements, DdlPolicy, DdlPolicyRole, DdlStatement, DdlStatementKind,
-    DdlTable,
+    replace_vocabulary_check_statement, set_column_not_null_statement,
+    spatial_bbox_function_statement, spatial_projection_fields, spatial_projection_statements,
+    DdlPolicy, DdlPolicyRole, DdlStatement, DdlStatementKind, DdlTable,
 };
 use crate::history_schema::{
     serialize_descriptor, HistoryEntityDescriptor, HistoryLifecycleDescriptor,
@@ -281,6 +281,7 @@ pub enum CompiledRegistryChangeCode {
     FieldAddedRequired,
     FieldRemoved,
     FieldTypeChanged,
+    FieldVocabularyCodesAdded,
     FieldPhysicalNameChanged,
     FieldRequirednessChanged,
     FieldPatternAdded,
@@ -1447,7 +1448,24 @@ fn compare_fields(
                 ),
             );
         }
-        if previous_field.field_type != candidate_field.field_type {
+        if previous_field.field_type != candidate_field.field_type
+            && candidate_field
+                .field_type
+                .keeps_vocabulary_codes_of(&previous_field.field_type)
+        {
+            // Every stored code stays valid, so the change only widens the
+            // column check. An encrypted column carries no check to widen.
+            push_change(
+                changes,
+                CompiledRegistryChangeClass::CompatibleAdditive,
+                CompiledRegistryChangeCode::FieldVocabularyCodesAdded,
+                target(
+                    CompiledRegistryChangeTargetKind::Field,
+                    Some(entity_id),
+                    Some(field_id.as_str()),
+                ),
+            );
+        } else if previous_field.field_type != candidate_field.field_type {
             let code = match (&previous_field.field_type, &candidate_field.field_type) {
                 (
                     FieldTypeSource::Reference {
@@ -1873,6 +1891,7 @@ fn additive_migration_plan(
     let mut new_statement_ids = BTreeSet::<String>::new();
     let mut replacement_statement_ids = BTreeSet::<String>::new();
     let mut added_columns = BTreeMap::<String, Vec<DdlStatement>>::new();
+    let mut widened_checks = BTreeMap::<String, Vec<DdlStatement>>::new();
     let previous_ddl = generate_ddl_with_actions(
         &previous.entities,
         &previous.physical_names,
@@ -2050,6 +2069,16 @@ fn additive_migration_plan(
                 new_statement_ids.insert(format!("entity.{entity_id}.field.{field_id}.pattern"));
             }
             if let Some(previous_field) = previous_entity.fields.get(field_id) {
+                if previous_field.field_type != field.field_type
+                    && field
+                        .field_type
+                        .keeps_vocabulary_codes_of(&previous_field.field_type)
+                {
+                    widened_checks
+                        .entry(entity_id.clone())
+                        .or_default()
+                        .extend(replace_vocabulary_check_statement(candidate_entity, field));
+                }
                 // Turning encryption on swaps the field's storage: the envelope
                 // and blind-index columns arrive nullable, a unique lookup
                 // index lands empty ahead of the reviewed backfill that fills
@@ -2173,6 +2202,9 @@ fn additive_migration_plan(
         if let Some(entity_id) = table_statement_entity_id(&statement.id) {
             if let Some(columns) = added_columns.get(entity_id) {
                 statements.extend(columns.iter().cloned());
+            }
+            if let Some(checks) = widened_checks.get(entity_id) {
+                statements.extend(checks.iter().cloned());
             }
         }
         if new_statement_ids.contains(statement.id.as_str()) {
