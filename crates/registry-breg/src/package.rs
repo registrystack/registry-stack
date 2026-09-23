@@ -314,6 +314,7 @@ pub enum CompiledRegistryChangeCode {
     ActionAdded,
     ActionRemoved,
     ActionChanged,
+    ActionVocabularyCodesAdded,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -1661,14 +1662,35 @@ fn compare_actions(
         .map(|action| (action.id.as_str(), action))
         .collect::<BTreeMap<_, _>>();
     for (id, before) in &previous_actions {
-        let code = match candidate_actions.get(id) {
+        let (class, code) = match candidate_actions.get(id) {
             Some(after) if before.contract_fingerprint == after.contract_fingerprint => continue,
-            Some(_) => CompiledRegistryChangeCode::ActionChanged,
-            None => CompiledRegistryChangeCode::ActionRemoved,
+            // Every request the previous contract accepted keeps its meaning;
+            // the action only accepts the codes its fields gained.
+            Some(after)
+                if crate::immediate_actions::contract_only_adds_vocabulary_codes(
+                    before,
+                    &previous.entities,
+                    after,
+                    &candidate.entities,
+                ) =>
+            {
+                (
+                    CompiledRegistryChangeClass::CompatibleAdditive,
+                    CompiledRegistryChangeCode::ActionVocabularyCodesAdded,
+                )
+            }
+            Some(_) => (
+                CompiledRegistryChangeClass::AccessOrDisclosureChange,
+                CompiledRegistryChangeCode::ActionChanged,
+            ),
+            None => (
+                CompiledRegistryChangeClass::AccessOrDisclosureChange,
+                CompiledRegistryChangeCode::ActionRemoved,
+            ),
         };
         push_change(
             changes,
-            CompiledRegistryChangeClass::AccessOrDisclosureChange,
+            class,
             code,
             target(CompiledRegistryChangeTargetKind::Action, None, Some(id)),
         );

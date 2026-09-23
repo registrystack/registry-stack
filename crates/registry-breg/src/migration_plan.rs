@@ -1994,6 +1994,7 @@ fn covers_are_metadata_only(covers: &[ReviewedChangeCover]) -> bool {
                 | CompiledRegistryChangeCode::ActionAdded
                 | CompiledRegistryChangeCode::ActionRemoved
                 | CompiledRegistryChangeCode::ActionChanged
+                | CompiledRegistryChangeCode::ActionVocabularyCodesAdded
         )
     })
 }

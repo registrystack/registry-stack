@@ -764,3 +764,56 @@ fn a_consent_record_needs_declared_recipients() {
     object.remove("retiredConsentScopes");
     assert_refused(&value, "consent.record.fields");
 }
+
+#[cfg(feature = "runtime")]
+#[test]
+fn adding_a_recipient_migrates_the_issuing_action_without_review() {
+    use registry_breg::package::{
+        change_set_to_applicable_migration_plan, compiled_registry_change_set,
+        CompiledRegistryChangeClass, CompiledRegistryChangeCode,
+    };
+    let before = compile(&source()).unwrap();
+    let mut added = source();
+    added["recipients"]["organizations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "ngo-gamma",
+            "name": "NGO Gamma",
+            "contact": "privacy@ngo-gamma.example.test",
+            "clients": []
+        }));
+    let after = compile(&added).unwrap();
+    let changes = compiled_registry_change_set(&before, &after, "prior-package");
+    let codes = changes
+        .changes
+        .iter()
+        .map(|change| (change.code, change.class))
+        .collect::<Vec<_>>();
+    assert!(
+        codes.contains(&(
+            CompiledRegistryChangeCode::ActionVocabularyCodesAdded,
+            CompiledRegistryChangeClass::CompatibleAdditive
+        )),
+        "{codes:?}"
+    );
+    assert!(
+        !codes
+            .iter()
+            .any(|(code, _)| *code == CompiledRegistryChangeCode::ActionChanged),
+        "{codes:?}"
+    );
+    assert!(change_set_to_applicable_migration_plan(&changes).is_ok());
+
+    // Any other contract difference beside the added code stays a reviewed
+    // action change.
+    let mut renamed = added.clone();
+    renamed["actions"][0]["inputs"][6]["apiName"] = json!("expiry");
+    let renamed = compile(&renamed).unwrap();
+    let changes = compiled_registry_change_set(&before, &renamed, "prior-package");
+    assert!(changes
+        .changes
+        .iter()
+        .any(|change| change.code == CompiledRegistryChangeCode::ActionChanged));
+    assert!(change_set_to_applicable_migration_plan(&changes).is_err());
+}

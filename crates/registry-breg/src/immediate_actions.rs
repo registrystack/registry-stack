@@ -181,7 +181,7 @@ fn compile_action(
         route: format!("/v1/actions/{}", action.id),
         condition_route,
         contract_fingerprint: contract_fingerprint(
-            action,
+            &action.id,
             entities,
             &inputs,
             (&effects, handler.as_ref()),
@@ -2001,8 +2001,64 @@ fn entity_permission_fields_empty(grant: &crate::contract::AccessPermissionSourc
         && !grant.allow_data_export
 }
 
+/// Whether `after` differs from `before` only by vocabulary codes added to its
+/// inputs or to the fields of the entities it targets, so every request the
+/// previous contract accepted keeps the same meaning. Any other difference,
+/// including a fingerprint an earlier compiler derived differently, is not.
+#[cfg(feature = "runtime")]
+pub(crate) fn contract_only_adds_vocabulary_codes(
+    before: &CompiledAction,
+    previous_entities: &BTreeMap<String, CompiledEntity>,
+    after: &CompiledAction,
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> bool {
+    let inputs = after
+        .inputs
+        .iter()
+        .map(|input| {
+            let mut input = input.clone();
+            if let Some(previous) = before.inputs.iter().find(|other| other.id == input.id) {
+                if input
+                    .field_type
+                    .keeps_vocabulary_codes_of(&previous.field_type)
+                {
+                    input.field_type = previous.field_type.clone();
+                }
+            }
+            input
+        })
+        .collect::<Vec<_>>();
+    let entities = entities
+        .iter()
+        .map(|(entity_id, entity)| {
+            let mut entity = entity.clone();
+            if let Some(previous) = previous_entities.get(entity_id) {
+                for (field_id, field) in &mut entity.fields {
+                    if let Some(previous_field) = previous.fields.get(field_id) {
+                        if field
+                            .field_type
+                            .keeps_vocabulary_codes_of(&previous_field.field_type)
+                        {
+                            field.field_type = previous_field.field_type.clone();
+                        }
+                    }
+                }
+            }
+            (entity_id.clone(), entity)
+        })
+        .collect::<BTreeMap<_, _>>();
+    contract_fingerprint(
+        &after.id,
+        &entities,
+        &inputs,
+        (&after.effects, after.handler.as_ref()),
+        &after.requires,
+        &after.permissions,
+    ) == before.contract_fingerprint
+}
+
 fn contract_fingerprint(
-    action: &ActionSource,
+    action_id: &str,
     entities: &BTreeMap<String, CompiledEntity>,
     inputs: &[CompiledActionInput],
     (effects, handler): (
@@ -2031,7 +2087,7 @@ fn contract_fingerprint(
         .collect::<BTreeMap<_, _>>();
     let mut payload = json!({
         "version": 1,
-        "id": action.id,
+        "id": action_id,
         "inputs": inputs,
         "targetEntities": target_contracts,
         "effects": effects,
