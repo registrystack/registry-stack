@@ -53,7 +53,9 @@ lifetime: a package that changes it can only initialize a new database.
 
 Pass the active runtime file as `--baseline-runtime-config` to both `test` and `package`, so the
 receipt and the package bind to the baseline they will succeed. A change the migration planner
-classifies as additive, such as a new optional field or a widened grant, needs no further evidence.
+classifies as compatible additive, such as a new optional field, needs no further evidence. A
+widened grant is an access change: the planner accepts it as metadata-only, but it still needs a
+reviewed migration descriptor and rehearsal evidence, as the metadata-only case below describes.
 When `test` or `package` reports `migration.review.required`, prepare a reviewed migration
 directory and pass it to both commands as `--reviewed-migrations`:
 
@@ -115,7 +117,7 @@ descriptor path:
 bregctl --format json apply \
   --runtime-config /etc/breg/runtime.yaml \
   --package /srv/registry/build-2/package \
-  --backup modules/core/migrations/0002/backup.json=/srv/registry/backups/0002.dump
+  --backup modules/core/migrations/retire-legacy-field/backup.json=/srv/registry/backups/retire-legacy-field.dump
 ```
 
 :::caution[A failed activation pins its target]
@@ -130,9 +132,12 @@ hand or edit migration state. Take a backup before every `apply`.
 
 A successful report carries the activated revision, sequence, and schema fingerprint. Update the
 runtime file to the successor's package directory, revision, and sequence, run
-`bregctl verify --runtime-config /etc/breg/runtime.yaml`, and restart the server. Editing the
-runtime file does not change the active process: until the restart, the process keeps serving the
-package it started with.
+`bregctl verify --runtime-config /etc/breg/runtime.yaml`, and restart the server promptly. Editing
+the runtime file does not change the active process, but the still-running old process does not
+keep serving the package it started with either: its readiness check re-verifies the database's
+active identity on every poll, and once the successor's `apply` moves that identity forward, the
+check fails. `GET /ready` and record reads return 503 and the process logs repeated claim
+refusals until you restart it onto the successor package.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, ApplyArgs;
     crates/registry-bregctl/src/apply_lifecycle.rs;
