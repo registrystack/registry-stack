@@ -369,6 +369,7 @@ fn casework_project(issuer: &str) -> CaseworkProject {
             issuer: issuer.to_owned(),
             subject: "registry-service".to_owned(),
             trusted_initiator_issuer: None,
+            initiator_profile: None,
             source_namespaces: vec![REGISTRY_ID.to_owned()],
             kinds: vec!["registry-correction".to_owned()],
             recovery_days: 7,

@@ -2228,6 +2228,36 @@ mod tests {
     }
 
     #[test]
+    fn check_reports_the_initiator_profile_and_refuses_one_that_is_not_a_requester() {
+        let with_initiator = CASEWORK_YAML
+            .replace(
+                "sources:\n",
+                "  - id: change-submitter\n    principalClaim: registry_principal\n    requiredScopes: [casework:reviews:history]\n    role: requester\nsources:\n",
+            )
+            .replace(
+                "    subject: professional-review-breg\n",
+                "    subject: professional-review-breg\n    initiatorProfile: change-submitter\n",
+            );
+        let (_root, project) = write_offline_project(&with_initiator, BREG_SOURCE_DESCRIPTION);
+        let effective = check(&project, false, false).unwrap()["effective"].clone();
+        assert_eq!(
+            effective["reviewProducers"][0]["initiatorProfile"],
+            "change-submitter"
+        );
+
+        let staff_initiator = CASEWORK_YAML.replace(
+            "    subject: professional-review-breg\n",
+            "    subject: professional-review-breg\n    initiatorProfile: staff\n",
+        );
+        let (_root, project) = write_offline_project(&staff_initiator, BREG_SOURCE_DESCRIPTION);
+        let refused = format!("{:#}", check(&project, false, false).unwrap_err());
+        assert!(
+            refused.contains("reviewProducers[0].initiatorProfile"),
+            "{refused}"
+        );
+    }
+
+    #[test]
     fn source_backed_check_reports_review_kinds_and_their_producers() {
         let (_root, project) = write_offline_project(CASEWORK_YAML, BREG_SOURCE_DESCRIPTION);
 

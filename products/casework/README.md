@@ -82,6 +82,13 @@ when the Casework profiles read that same claim and the producer sets
 `trustedInitiatorIssuer` to that issuer. The professional-review starter does
 both.
 
+A producer may also name an `initiatorProfile`: a requester profile, distinct
+from every producer profile, that the person named as the initiator selects to
+read `GET /v1/review-requests/{requestId}/history`. They see the same
+requester-visible events and notes as the producer, only for a request that
+producer admitted naming their exact issuer and principal. Any other request is
+not found. Notes, cancellation, results, and clocks stay producer-only.
+
 It cannot select an actor, team, stage, outcome vocabulary, or arbitrary
 callback. A typed review validation failure keeps the six-field problem body
 value-free and may add the paired
@@ -123,7 +130,10 @@ bounds protected accountability state and must be at least as long. Result-feed
 and history cursors are bound to their caller and query context. After result
 expiry, Casework erases request, context, result, history, notes, drafts, tasks,
 and replay response payloads while retaining only the bounded tombstone needed
-to prevent unsafe idempotency-key reissue until accountability expiry.
+to prevent unsafe idempotency-key reissue until accountability expiry. The
+producer and initiator identities are kept as keyed sha256 tombstones for the
+same period, so either one still receives `410` rather than `404` for an
+expired request.
 
 ## Absence cover and explicit assignment
 

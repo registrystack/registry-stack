@@ -247,6 +247,27 @@ impl CaseworkProject {
             {
                 return Err(ConfigError::ReviewProducers);
             }
+            if let Some(initiator_profile) = &producer.initiator_profile {
+                let requester_profile = self.access_profiles.iter().any(|profile| {
+                    profile.id == *initiator_profile && profile.role == CaseworkRole::Requester
+                });
+                let producer_profile = self
+                    .review_producers
+                    .iter()
+                    .any(|other| other.profile == *initiator_profile);
+                if !requester_profile || producer_profile {
+                    return Err(ConfigError::Reference {
+                        path: format!("reviewProducers[{producer_index}].initiatorProfile"),
+                        target: "requester access profile no review producer uses",
+                    });
+                }
+                if producer.trusted_initiator_issuer.is_none() {
+                    return Err(ConfigError::Semantic {
+                        path: format!("reviewProducers[{producer_index}].trustedInitiatorIssuer"),
+                        member: "trusted initiator issuer required by an initiator profile",
+                    });
+                }
+            }
             for (kind_index, kind_id) in producer.kinds.iter().enumerate() {
                 let kind = self.review_kinds.iter().find(|kind| kind.id == *kind_id);
                 if kind.is_none() {
@@ -437,6 +458,11 @@ pub struct ReviewProducerPolicy {
     pub subject: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trusted_initiator_issuer: Option<String>,
+    /// The requester profile a person named as this producer's initiator
+    /// authenticates with to read the requester-visible history of their own
+    /// requests. Absent, no initiator reads anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initiator_profile: Option<String>,
     pub source_namespaces: Vec<String>,
     pub kinds: Vec<String>,
     pub recovery_days: u32,
@@ -454,6 +480,10 @@ impl ReviewProducerPolicy {
                 .trusted_initiator_issuer
                 .as_ref()
                 .is_none_or(|issuer| bounded_config_text(issuer, 256))
+            && self
+                .initiator_profile
+                .as_ref()
+                .is_none_or(|profile| valid_profile_identifier(profile))
             && (1..=crate::MAXIMUM_REVIEW_RETENTION_DAYS).contains(&self.recovery_days)
             && !self.source_namespaces.is_empty()
             && self.source_namespaces.len() <= 64
@@ -780,6 +810,7 @@ mod tests {
             issuer: "https://registry.example".to_owned(),
             subject: "registry-service".to_owned(),
             trusted_initiator_issuer: Some("https://people.example".to_owned()),
+            initiator_profile: None,
             source_namespaces: vec!["registry".to_owned()],
             kinds: vec!["registry-correction".to_owned()],
             recovery_days: 30,
@@ -878,6 +909,50 @@ mod tests {
             undeclared_namespace.check(),
             Err(ConfigError::ReviewProducers)
         );
+    }
+
+    #[test]
+    fn an_initiator_profile_is_a_distinct_requester_profile_with_a_trusted_issuer() {
+        let mut candidate = project();
+        candidate
+            .access_profiles
+            .push(profile("initiator", CaseworkRole::Requester));
+        candidate.review_producers[0].initiator_profile = Some("initiator".to_owned());
+        assert_eq!(candidate.check(), Ok(()));
+
+        let mut undeclared = candidate.clone();
+        undeclared.review_producers[0].initiator_profile = Some("missing".to_owned());
+        assert_eq!(
+            undeclared.check().unwrap_err().path(),
+            "reviewProducers[0].initiatorProfile"
+        );
+
+        let mut reviewer_profile = candidate.clone();
+        reviewer_profile.review_producers[0].initiator_profile = Some("staff".to_owned());
+        assert_eq!(
+            reviewer_profile.check().unwrap_err().path(),
+            "reviewProducers[0].initiatorProfile"
+        );
+
+        // A producer's own profile authenticates the service, not the people
+        // it names, so it can never double as an initiator profile.
+        let mut producer_profile = candidate.clone();
+        producer_profile.review_producers[0].initiator_profile = Some("requester".to_owned());
+        assert_eq!(
+            producer_profile.check().unwrap_err().path(),
+            "reviewProducers[0].initiatorProfile"
+        );
+
+        let mut untrusted = candidate;
+        untrusted.review_kinds[0].stages[0].exclude_initiator = false;
+        untrusted.review_producers[0].trusted_initiator_issuer = None;
+        assert!(matches!(
+            untrusted.check(),
+            Err(ConfigError::Semantic {
+                member: "trusted initiator issuer required by an initiator profile",
+                ..
+            })
+        ));
     }
 
     #[test]

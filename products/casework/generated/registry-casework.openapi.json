@@ -3942,6 +3942,16 @@
           "id": {
             "type": "string"
           },
+          "initiatorProfile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "issuer": {
             "type": "string"
           },
@@ -12750,7 +12760,7 @@
     },
     "/v1/review-requests/{request_id}/history": {
       "get": {
-        "description": "Requester history remains bound to the admitted producer. Human reviewer history requires current Casework queue authority; source context also requires the current caller's source profile and token to disclose the pinned source binding, while submitted context rejects a source profile.",
+        "description": "Requester history remains bound to the admitted producer. A person selecting a producer's initiatorProfile reads the same requester-visible history, only for a request that producer admitted naming them as its exact initiator; any other request is not found. Human reviewer history requires current Casework queue authority; source context also requires the current caller's source profile and token to disclose the pinned source binding, while submitted context rejects a source profile.",
         "operationId": "getReviewHistory",
         "parameters": [
           {
