@@ -1143,7 +1143,7 @@ async fn real_postgres_consent_probe_is_blind_and_recipients_parse_strictly() {
     verify().await.expect("installed catalog matches");
     migration
         .batch_execute(&format!(
-            "ALTER FUNCTION registry_context.\"{}\"(uuid) SECURITY DEFINER",
+            "ALTER FUNCTION registry_context.\"{}\"() SECURITY DEFINER",
             probe.name
         ))
         .await
@@ -1151,21 +1151,147 @@ async fn real_postgres_consent_probe_is_blind_and_recipients_parse_strictly() {
     assert!(verify().await.is_err());
     migration
         .batch_execute(&format!(
-            "ALTER FUNCTION registry_context.\"{}\"(uuid) SECURITY INVOKER",
+            "ALTER FUNCTION registry_context.\"{}\"() SECURITY INVOKER",
             probe.name
         ))
         .await
         .unwrap();
     verify().await.expect("restored probe matches");
+    // A probe keeps the set shape: the per-key shape of a membership probe
+    // under a consent name is foreign, and so is a plausible extra probe.
     migration
-        .batch_execute(
-            "CREATE FUNCTION registry_context.consent_aaaaaaaaaaaaaaaaaaaaaaaa(uuid) \
-             RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER AS 'SELECT true'",
-        )
+        .batch_execute(&format!(
+            "ALTER FUNCTION registry_context.\"{}\"() STRICT",
+            probe.name
+        ))
         .await
         .unwrap();
     assert!(verify().await.is_err());
+    migration
+        .batch_execute(&format!(
+            "ALTER FUNCTION registry_context.\"{}\"() CALLED ON NULL INPUT",
+            probe.name
+        ))
+        .await
+        .unwrap();
+    verify().await.expect("restored probe matches");
+    for extra in [
+        "CREATE FUNCTION registry_context.consent_aaaaaaaaaaaaaaaaaaaaaaaa(uuid) \
+         RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER AS 'SELECT true'",
+        "CREATE FUNCTION registry_context.consent_aaaaaaaaaaaaaaaaaaaaaaaa() \
+         RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY INVOKER \
+         AS 'SELECT NULL::uuid WHERE false'",
+    ] {
+        migration.batch_execute(extra).await.unwrap();
+        assert!(verify().await.is_err(), "{extra}");
+        migration
+            .batch_execute(
+                "DROP FUNCTION registry_context.consent_aaaaaaaaaaaaaaaaaaaaaaaa; \
+                 SELECT 1",
+            )
+            .await
+            .unwrap();
+        verify().await.expect("the extra probe is gone");
+    }
     task.abort();
+    h.database.cleanup().await;
+}
+
+/// Every `Function Scan` node of a consent probe in an `EXPLAIN (ANALYZE,
+/// FORMAT JSON)` plan, as `(function name, actual loops)`.
+fn consent_probe_scans(node: &Value, scans: &mut Vec<(String, u64)>) {
+    if node["Node Type"] == "Function Scan" {
+        if let Some(name) = node["Function Name"]
+            .as_str()
+            .filter(|name| name.starts_with("consent_"))
+        {
+            scans.push((
+                name.to_owned(),
+                node["Actual Loops"].as_u64().expect("analyzed loops"),
+            ));
+        }
+    }
+    for child in node["Plans"].as_array().into_iter().flatten() {
+        consent_probe_scans(child, scans);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_consent_probe_runs_once_per_list_and_count() {
+    let h = Harness::start().await;
+    let mut consented = 0;
+    for index in 0..6 {
+        let subject = h.person(&format!("Planned {index}")).await;
+        h.create(
+            "enrolments",
+            json!({"person": subject, "programme": "meals"}),
+        )
+        .await;
+        if index % 2 == 0 {
+            h.decide(decision(&subject, "wfp", "given")).await;
+            consented += 1;
+        }
+    }
+    let wfp = h.reader(WFP_CLIENT, PURPOSE);
+    let page = h
+        .get(
+            &format!("/v1/records/persons?accessProfile={SCOPE}&$top=100&$count=true"),
+            &wfp,
+        )
+        .await;
+    assert_eq!(page["count"], consented);
+
+    // The probe is uncorrelated, so however many rows the policy tests, the
+    // consent table is scanned once per query, for the table and for the
+    // source view the runtime reads, gated on the row's own id (person) and
+    // through a reference (enrolment).
+    for entity in ["person", "enrolment"] {
+        let source = format!(
+            "registry_source.\"{}\"",
+            h.registry.entities()[entity].source_relation.sql_name
+        );
+        let mut client = h.pool.get_for_test().await.unwrap();
+        let transaction = begin_record_transaction(
+            &mut client,
+            h.lock_key,
+            Duration::from_secs(2),
+            &h.identity,
+            &h.claim_context(entity, &["wfp"]),
+        )
+        .await
+        .unwrap();
+        let sql = transaction.transaction_for_test();
+        for relation in [h.table(entity), source] {
+            for query in [
+                format!("SELECT count(*) FROM {relation}"),
+                format!("SELECT * FROM {relation} ORDER BY 1 LIMIT 100"),
+            ] {
+                let plan: Value = sql
+                    .query_one(&format!("EXPLAIN (ANALYZE, FORMAT JSON) {query}"), &[])
+                    .await
+                    .unwrap()
+                    .get(0);
+                // One probe call per policy that references it; a read-path
+                // policy tests its path setting first, so outside that path
+                // its probe never runs.
+                let mut scans = Vec::new();
+                consent_probe_scans(&plan[0]["Plan"], &mut scans);
+                let executed = scans.iter().filter(|(_, loops)| *loops > 0).count();
+                assert_eq!(executed, 1, "{entity}: {query}: {plan}");
+                assert!(
+                    scans.iter().all(|(_, loops)| *loops <= 1),
+                    "{entity}: {query}: {plan}"
+                );
+            }
+            let rows: i64 = sql
+                .query_one(&format!("SELECT count(*) FROM {relation}"), &[])
+                .await
+                .unwrap()
+                .get(0);
+            assert_eq!(rows, consented, "{entity}: {relation}");
+        }
+        transaction.commit().await.unwrap();
+    }
     h.database.cleanup().await;
 }
 

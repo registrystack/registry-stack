@@ -1987,8 +1987,9 @@ fn additive_migration_plan(
                 id: format!("{}.drop", function.id),
                 kind: DdlStatementKind::Function,
                 sql: format!(
-                    "DROP FUNCTION registry_context.{}(uuid)",
-                    quote_identifier(&function.name)
+                    "DROP FUNCTION registry_context.{}({})",
+                    quote_identifier(&function.name),
+                    function.arguments
                 ),
             });
         }

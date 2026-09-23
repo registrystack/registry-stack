@@ -17,7 +17,7 @@ use crate::contract::{
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::{quote_identifier, quote_literal};
-use crate::membership::RowProbe;
+use crate::membership::{RowProbe, RowProbeForm};
 use crate::model::{
     CompiledConsentDuration, CompiledConsentRecord, CompiledConsentRequirement, CompiledEntity,
     CompiledRecipients,
@@ -1027,6 +1027,7 @@ pub(crate) fn row_probes(entity: &CompiledEntity, profile: &str) -> Vec<RowProbe
         .map(|(index, requirement)| RowProbe {
             function: function_name(&entity.id, profile, index),
             field: requirement.on.clone(),
+            form: RowProbeForm::KeySet,
         })
         .collect()
 }
@@ -1039,17 +1040,22 @@ pub(crate) fn source_guard(entity: &str, profile: &str, index: usize) -> String 
 }
 
 /// The consent table's rows under a probe guard: every active decision. The
-/// probe's own query restricts to the key; a narrower policy would hide
-/// revokes and resurrect withdrawn consent.
+/// probe's own query restricts to the request's recipients, purpose and
+/// scope; a narrower policy would hide revokes and resurrect withdrawn
+/// consent.
 pub(crate) fn source_predicate(alias: &str) -> String {
     format!("{alias}.record_lifecycle = 'active'")
 }
 
-/// The plpgsql body of one consent probe: whether the caller's recipient set
-/// holds a current, unsuperseded give for key `$1` under the request purpose
-/// and the active profile. `registry.recipients` must be a JSON array of
-/// strings; a missing or empty value matches nothing and anything else
-/// raises, so both fail closed.
+/// The plpgsql body of one consent probe: every subject for which the
+/// caller's recipient set holds a current, unsuperseded give under the
+/// request purpose and the active profile. The probe takes no key, so a read
+/// path tests its rows against the one set the query computes once, rather
+/// than scanning the consent table per row. `registry.recipients` must be a
+/// JSON array of strings; a missing or empty value matches nothing and
+/// anything else raises, so both fail closed. The marker is set only while
+/// `RETURN QUERY` runs the scan; the rows it returns are already collected
+/// when the marker is restored.
 pub(crate) fn probe_body(name: &str, table: &str, record: &CompiledConsentRecord) -> String {
     let column = |alias: &str, column: &str| format!("{alias}.{}", quote_identifier(column));
     let order = |alias: &str| {
@@ -1085,8 +1091,7 @@ pub(crate) fn probe_body(name: &str, table: &str, record: &CompiledConsentRecord
         None => cap,
     };
     let given = format!(
-        "{subject} = $1 AND {recipient} = ANY(recipients) AND {purpose} = NULLIF(current_setting('registry.purpose', true), '') AND {scope} = NULLIF(current_setting('registry.access_profile', true), '') AND {decision} IN ({gives}) AND given.record_lifecycle = 'active' AND {from} <= now() AND now() < {expiry}",
-        subject = column("given", &record.subject_column),
+        "{scope} = NULLIF(current_setting('registry.access_profile', true), '') AND {purpose} = NULLIF(current_setting('registry.purpose', true), '') AND {recipient} = ANY(recipients) AND {decision} IN ({gives}) AND given.record_lifecycle = 'active' AND {from} <= now() AND now() < {expiry}",
         recipient = column("given", &record.recipient_column),
         purpose = column("given", &record.purpose_column),
         scope = column("given", &record.scope_column),
@@ -1103,8 +1108,9 @@ pub(crate) fn probe_body(name: &str, table: &str, record: &CompiledConsentRecord
         given_order = order("given"),
     );
     format!(
-        "DECLARE prior_marker text := current_setting('registry.consent_probe', true); recipients_text text := NULLIF(current_setting('registry.recipients', true), ''); recipients_json jsonb; recipients text[] := ARRAY[]::text[]; authorized boolean; BEGIN PERFORM set_config('registry.consent_probe', {marker}, true); IF recipients_text IS NOT NULL THEN recipients_json := recipients_text::jsonb; IF jsonb_typeof(recipients_json) <> 'array' OR EXISTS (SELECT 1 FROM jsonb_array_elements(recipients_json) AS element(value) WHERE jsonb_typeof(element.value) <> 'string') THEN RAISE EXCEPTION 'registry.recipients must be a JSON array of strings' USING ERRCODE = '22023'; END IF; recipients := ARRAY(SELECT jsonb_array_elements_text(recipients_json)); END IF; SELECT EXISTS (SELECT 1 FROM registry_data.{table} AS given WHERE {given} AND NOT EXISTS ({superseded})) INTO authorized; PERFORM set_config('registry.consent_probe', COALESCE(prior_marker, ''), true); RETURN authorized; EXCEPTION WHEN OTHERS THEN RAISE; END",
+        "DECLARE prior_marker text := current_setting('registry.consent_probe', true); recipients_text text := NULLIF(current_setting('registry.recipients', true), ''); recipients_json jsonb; recipients text[] := ARRAY[]::text[]; BEGIN PERFORM set_config('registry.consent_probe', {marker}, true); IF recipients_text IS NOT NULL THEN recipients_json := recipients_text::jsonb; IF jsonb_typeof(recipients_json) <> 'array' OR EXISTS (SELECT 1 FROM jsonb_array_elements(recipients_json) AS element(value) WHERE jsonb_typeof(element.value) <> 'string') THEN RAISE EXCEPTION 'registry.recipients must be a JSON array of strings' USING ERRCODE = '22023'; END IF; recipients := ARRAY(SELECT jsonb_array_elements_text(recipients_json)); END IF; RETURN QUERY SELECT {subject} FROM registry_data.{table} AS given WHERE {given} AND NOT EXISTS ({superseded}); PERFORM set_config('registry.consent_probe', COALESCE(prior_marker, ''), true); RETURN; EXCEPTION WHEN OTHERS THEN RAISE; END",
         marker = quote_literal(name),
+        subject = column("given", &record.subject_column),
         table = quote_identifier(table),
     )
 }
@@ -1125,11 +1131,13 @@ pub(crate) fn index_statements(entity: &CompiledEntity) -> Vec<(String, String, 
         return Vec::new();
     };
     let table = quote_identifier(&entity.physical_table);
+    // The probe's scan fixes scope and purpose, matches a few recipients and
+    // reads subjects, so the key leads with the columns it fixes.
     let key = [
-        &record.subject_column,
-        &record.recipient_column,
-        &record.purpose_column,
         &record.scope_column,
+        &record.purpose_column,
+        &record.recipient_column,
+        &record.subject_column,
     ]
     .into_iter()
     .map(|column| quote_identifier(column))
@@ -1240,6 +1248,47 @@ mod tests {
     }
 
     #[test]
+    fn consent_probes_return_the_consented_set_for_one_uncorrelated_scan() {
+        let project =
+            crate::parse_project_yaml(include_bytes!("../tests/fixtures/consent-access.yaml"))
+                .expect("consent fixture parses");
+        let registry = crate::compile_project(&project, &[], crate::CompileProfile::Authoring)
+            .expect("consent fixture compiles");
+        let name = super::function_name("person", "food-targeting", 0);
+        let function = registry
+            .ddl()
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the gated profile compiles a consent probe");
+        assert_eq!(function.arguments, "");
+        let statement = registry
+            .ddl()
+            .statements
+            .iter()
+            .find(|statement| statement.id == format!("registry_context.{name}"))
+            .expect("probe statement");
+        assert!(
+            statement.sql.starts_with(&format!(
+                "CREATE FUNCTION registry_context.\"{name}\"() RETURNS SETOF uuid LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = pg_catalog AS "
+            )),
+            "{}",
+            statement.sql
+        );
+        assert!(!statement.sql.contains("$1"), "{}", statement.sql);
+        let predicate =
+            crate::membership::predicate(&registry.entities()["person"], "food-targeting", |_| {
+                "record_id".to_owned()
+            });
+        assert_eq!(
+            predicate,
+            format!(
+                "record_id IN (SELECT consented.subject FROM registry_context.\"{name}\"() AS consented(subject))"
+            )
+        );
+    }
+
+    #[test]
     fn consent_indexes_cover_the_key_and_the_active_revokes() {
         let project =
             crate::parse_project_yaml(include_bytes!("../tests/fixtures/consent-access.yaml"))
@@ -1263,6 +1312,22 @@ mod tests {
         let (_, key_name, key_sql) = &indexes[0];
         assert!(key_name.starts_with("breg_consent_key_"), "{key_name}");
         assert!(!key_sql.contains("WHERE"), "{key_sql}");
+        // The consented-set scan fixes scope, purpose and recipients and
+        // reads subjects, so the key index leads with the fixed columns.
+        let record = entities["consent-decision"]
+            .consent_record
+            .as_ref()
+            .expect("consent record");
+        assert!(
+            key_sql.ends_with(&format!(
+                "(\"{}\", \"{}\", \"{}\", \"{}\")",
+                record.scope_column,
+                record.purpose_column,
+                record.recipient_column,
+                record.subject_column
+            )),
+            "{key_sql}"
+        );
         let (_, revoke_name, revoke_sql) = &indexes[1];
         assert!(
             revoke_name.starts_with("breg_consent_revoke_"),

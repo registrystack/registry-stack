@@ -532,10 +532,7 @@ fn revision_sql(
                 parameters.len()
             )
         };
-        predicates.push(format!(
-            "registry_context.{}({key})",
-            crate::generated_ddl::quote_identifier(&probe.function),
-        ));
+        predicates.push(probe.sql(&key));
     }
     let limit =
         i64::try_from(request.maximum_records).map_err(|_| ReadServiceError::Unavailable)?;
@@ -894,13 +891,7 @@ async fn row_probes_authorized(
         };
         let key = Uuid::parse_str(value).map_err(|_| ReadServiceError::Unavailable)?;
         let row = transaction
-            .query_one(
-                &format!(
-                    "SELECT registry_context.{}($1::uuid)",
-                    crate::generated_ddl::quote_identifier(&probe.function)
-                ),
-                &[&key],
-            )
+            .query_one(&format!("SELECT {}", probe.sql("$1::uuid")), &[&key])
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
         if !row.get::<_, bool>(0) {

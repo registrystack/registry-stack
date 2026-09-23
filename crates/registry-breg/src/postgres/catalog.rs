@@ -1063,9 +1063,16 @@ async fn verify_closed_ambient_catalog(client: &impl GenericClient) -> Result<()
                            n.nspname = 'registry_context'
                            AND ((p.proname IN ('evaluation_date', 'spatial_bbox_geometry')
                                  AND pg_catalog.pg_get_function_identity_arguments(p.oid) = '')
-                                OR (p.proname ~ '^(membership|consent)_[0-9a-f]{24}$'
+                                OR (p.proname ~ '^membership_[0-9a-f]{24}$'
                                     AND pg_catalog.pg_get_function_identity_arguments(p.oid) = 'uuid'
                                     AND p.prorettype = 'boolean'::regtype
+                                    AND NOT p.proretset
+                                    AND NOT p.prosecdef
+                                    AND p.provolatile = 's')
+                                OR (p.proname ~ '^consent_[0-9a-f]{24}$'
+                                    AND pg_catalog.pg_get_function_identity_arguments(p.oid) = ''
+                                    AND p.prorettype = 'uuid'::regtype
+                                    AND p.proretset
                                     AND NOT p.prosecdef
                                     AND p.provolatile = 's'))
                        )

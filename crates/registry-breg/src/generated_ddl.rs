@@ -419,8 +419,10 @@ pub(crate) fn generate_ddl_with_actions(
             }
         }
     }
-    // Consent probes share the membership shape: an invoker helper whose own
-    // marker opens the consent table's guarded policy for this probe alone.
+    // Consent probes share the membership security shape: an invoker helper
+    // whose own marker opens the consent table's guarded policy for this
+    // probe alone. They take no key and return the consented subjects, so a
+    // read path evaluates each one once per query rather than once per row.
     for entity in entities.values() {
         for (profile_id, requirements) in &entity.consent_requirements {
             for (index, requirement) in requirements.iter().enumerate() {
@@ -435,7 +437,7 @@ pub(crate) fn generate_ddl_with_actions(
                     id: format!("registry_context.{name}"),
                     kind: DdlStatementKind::Function,
                     sql: format!(
-                        "CREATE FUNCTION registry_context.{}(uuid) RETURNS boolean LANGUAGE plpgsql STABLE STRICT SECURITY INVOKER SET search_path = pg_catalog AS {}",
+                        "CREATE FUNCTION registry_context.{}() RETURNS SETOF uuid LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = pg_catalog AS {}",
                         quote_identifier(&name), quote_literal(&body),
                     ),
                 });
@@ -443,7 +445,7 @@ pub(crate) fn generate_ddl_with_actions(
                     id: format!("registry_context.{name}"),
                     schema: "registry_context".to_owned(),
                     name,
-                    arguments: "uuid".to_owned(),
+                    arguments: String::new(),
                     runtime_execute: true,
                     spatial_bbox_execute: false,
                 });
@@ -1546,16 +1548,26 @@ fn read_path_source_policy(
     path: &crate::model::CompiledReadPath,
 ) -> DdlPolicy {
     let root_id = "NULLIF(current_setting('registry.read_path_root_id', true), '')::uuid";
+    let authority = policy_authority_expression(source, profile);
+    let setting = read_path_setting_expression(path);
+    // A consent probe scans the consent table once per query that reaches
+    // it, so the path's own setting is tested first, as `IS TRUE` because an
+    // unset path is NULL and AND only stops early on false: a query outside
+    // this path never runs that scan. Without a consent probe the order is
+    // left as it was, so the DDL of registries without consent is unchanged.
+    let using_expression = if crate::consent::requirements(source, &profile.id).is_empty() {
+        format!(
+            "({authority}) AND {setting} AND record_id = {root_id} AND record_lifecycle = 'active'"
+        )
+    } else {
+        format!("({setting}) IS TRUE AND ({authority}) AND record_id = {root_id} AND record_lifecycle = 'active'")
+    };
     DdlPolicy {
         name: read_path_policy_name(&source.id, &source.id, &profile.id, &path.id, "source"),
         command: PolicyCommand::Select,
         access_profile: profile.id.clone(),
         applies_to: DdlPolicyRole::Public,
-        using_expression: Some(format!(
-            "({}) AND {} AND record_id = {root_id} AND record_lifecycle = 'active'",
-            policy_authority_expression(source, profile),
-            read_path_setting_expression(path),
-        )),
+        using_expression: Some(using_expression),
         check_expression: None,
     }
 }

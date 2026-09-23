@@ -1150,11 +1150,7 @@ fn snapshot_where_sql(
     }
     for probe in crate::membership::row_probes(entity, claims.access_profile()) {
         let field = fields.field(&probe.field)?;
-        predicates.push(format!(
-            "registry_context.{}({})",
-            crate::generated_ddl::quote_identifier(&probe.function),
-            field_typed_sql(field)?
-        ));
+        predicates.push(probe.sql(&field_typed_sql(field)?));
     }
     if let Some(instant) = &query.temporal_instant {
         let temporal = entity
