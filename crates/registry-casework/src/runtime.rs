@@ -16,6 +16,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{Interval, MissedTickBehavior};
+use tracing_subscriber::filter::LevelFilter;
 use uuid::Uuid;
 
 use crate::{
@@ -371,6 +372,20 @@ pub fn command() -> Command {
         .subcommand_required(true)
         .subcommand(Command::new("migrate").about("Apply Casework database migrations"))
         .subcommand(Command::new("serve").about("Run the Casework HTTP service"))
+}
+
+/// `CASEWORK_LOG` is a closed vocabulary, not a tracing filter directive: it
+/// accepts exactly `error`, `warn`, or `info`, and the level applies to the
+/// Casework crates only. Any other value, including a tracing directive that
+/// would otherwise enable a dependency's own debug or trace logging, is
+/// refused rather than silently accepted.
+pub fn operational_log_level(value: Option<&str>) -> Result<LevelFilter, RuntimeError> {
+    match value.unwrap_or("info") {
+        "error" => Ok(LevelFilter::ERROR),
+        "warn" => Ok(LevelFilter::WARN),
+        "info" => Ok(LevelFilter::INFO),
+        _ => Err(RuntimeError::Logging),
+    }
 }
 
 pub async fn run(matches: &clap::ArgMatches) -> Result<(), RuntimeError> {
@@ -1666,6 +1681,30 @@ mod tests {
         assert_eq!(interval.period(), Duration::from_secs(1));
         assert_eq!(interval.missed_tick_behavior(), MissedTickBehavior::Skip);
     }
+
+    #[test]
+    fn operational_log_level_is_a_closed_vocabulary() {
+        assert_eq!(
+            operational_log_level(None).expect("default log level"),
+            LevelFilter::INFO
+        );
+        assert_eq!(
+            operational_log_level(Some("info")).expect("info level"),
+            LevelFilter::INFO
+        );
+        assert_eq!(
+            operational_log_level(Some("warn")).expect("warn level"),
+            LevelFilter::WARN
+        );
+        assert_eq!(
+            operational_log_level(Some("error")).expect("error level"),
+            LevelFilter::ERROR
+        );
+        assert!(operational_log_level(Some("debug")).is_err());
+        assert!(operational_log_level(Some("trace")).is_err());
+        assert!(operational_log_level(Some("registry_casework=trace")).is_err());
+        assert!(operational_log_level(Some("")).is_err());
+    }
 }
 
 #[derive(Debug, Error)]
@@ -1689,6 +1728,8 @@ pub enum RuntimeError {
     AuditSecret(String),
     #[error("the Casework review completion destination configuration is invalid")]
     CompletionConfiguration,
+    #[error("the CASEWORK_LOG level is invalid; it must be one of error, warn, or info")]
+    Logging,
     #[error(transparent)]
     Store(#[from] crate::StoreError),
     #[error(transparent)]

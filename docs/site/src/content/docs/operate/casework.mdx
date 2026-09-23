@@ -372,6 +372,13 @@ Then run the service:
 casework --runtime-config /etc/registry-casework/runtime.yaml serve
 ```
 
+Set `CASEWORK_LOG` to choose the operational log level: `error`, `warn`, or `info`, which is the
+default when the variable is unset. Any other value, including a tracing filter directive that
+would enable a dependency's own debug or trace logging, refuses to start. `serve` writes structured
+JSON to standard output at every level, so redirecting it to a file never carries colour codes, and
+the level applies to Casework's own logging only; the ambient `RUST_LOG` variable has no effect on
+this process.
+
 A restart of this same version against the same package, runtime file, and database is the normal
 recovery path after process or host interruption. It reloads the verified package and resumes the
 durable review, clock, result-delivery, and reconciliation state. Run `migrate` again only when the
@@ -413,7 +420,8 @@ approval, and caseload move apply. A caseload move preview is refused as a whole
 is among the items it reads.
 
 {/* Evidence: crates/registry-casework/src/runtime.rs, migrate_from_path(), serve_from_path(),
-    serve_until_worker_stops(), supervise(), and AuditPublicationFailure;
+    serve_until_worker_stops(), supervise(), operational_log_level(), and AuditPublicationFailure;
+    crates/registry-casework/src/main.rs, initialize_logging();
     crates/registry-casework/src/store.rs, migrate();
     crates/registry-casework/src/http.rs, health() and ready();
     crates/registry-casework/src/service.rs, ready() and assemble_caller_visible_item();
