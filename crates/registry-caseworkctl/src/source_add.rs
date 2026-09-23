@@ -63,6 +63,7 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     }
     let request = select_request(&project, &args.source_id, &registry_id, &explained)?;
     let request_entity = request.entity().to_owned();
+    check_unpaired_review_policies(&project, &authored, &request_entity, &request.authority)?;
     let projection = source_projection(&project, &args.source_id, request.metadata)?;
     let changes = apply_breg_candidate(&mut authored, &request_entity, &projection)?;
     let proposed =
@@ -534,6 +535,56 @@ fn select_request<'a>(
         completion,
         application,
     })
+}
+
+/// select_request already refuses an unresolvable review.policyId on the one
+/// BReg change-request entity this invocation is pairing. A BReg registry.yaml
+/// can declare other change-request entities that name the same review
+/// authority (the one this Casework project was just proven to own) but that
+/// are not paired to any source: those entities pass BReg's own compile
+/// check, since it only validates that authority and policyId are well-formed
+/// identifiers, not that a bound review authority actually declares that
+/// policy. source add is the only place both projects are read together, so
+/// it is where that gap is caught.
+fn check_unpaired_review_policies(
+    project: &Path,
+    authored: &Value,
+    paired_entity: &str,
+    authority: &str,
+) -> Result<()> {
+    let policy = load_casework_policy(project)?;
+    let review_kind_ids: BTreeSet<&str> = policy["reviewKinds"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|kind| kind["id"].as_str())
+        .collect();
+    let entities = authored["entities"]
+        .as_array()
+        .context("BReg registry.yaml has no entities")?;
+    for entity in entities {
+        let Some(entity_id) = entity["id"].as_str() else {
+            continue;
+        };
+        if entity_id == paired_entity {
+            continue;
+        }
+        let Some(review) = entity.pointer("/changeRequest/review") else {
+            continue;
+        };
+        if review["authority"] != authority {
+            continue;
+        }
+        let Some(policy_id) = review["policyId"].as_str() else {
+            continue;
+        };
+        if !review_kind_ids.contains(policy_id) {
+            bail!(
+                "BReg change-request entity {entity_id} declares review authority {authority} with policyId {policy_id}, but casework.yaml has no reviewKinds[].id matching {policy_id}"
+            );
+        }
+    }
+    Ok(())
 }
 
 fn source_projection(project: &Path, source_id: &str, metadata: &Value) -> Result<Vec<String>> {
@@ -1789,6 +1840,56 @@ mod tests {
         assert!(
             select_request(project.path(), "professional", "another-registry", &report).is_err()
         );
+    }
+
+    fn casework_policy_with_one_review_kind() -> Value {
+        json!({
+            "sources": [{"id":"professional", "adapter":"breg", "requests":[{"entity":"correction"}]}],
+            "reviewKinds":[{"id":"registry-correction", "purpose":"approval", "contextStrategy":"source"}],
+            "reviewProducers":[]
+        })
+    }
+
+    #[test]
+    fn unpaired_casework_review_policies_bail_when_a_sibling_entity_names_an_undeclared_policy() {
+        let project = tempfile::tempdir().unwrap();
+        fs::write(
+            project.path().join("casework.yaml"),
+            serde_json::to_vec(&casework_policy_with_one_review_kind()).unwrap(),
+        )
+        .unwrap();
+        let authored = json!({"entities":[
+            {"id":"correction", "changeRequest":{"review":{"authority":"casework","policyId":"registry-correction"}}},
+            {"id":"address-correction", "changeRequest":{"review":{"authority":"casework","policyId":"missing-kind"}}}
+        ]});
+
+        let error =
+            check_unpaired_review_policies(project.path(), &authored, "correction", "casework")
+                .expect_err("an unresolvable sibling review policy must be a check error");
+
+        let message = format!("{error:#}");
+        assert!(message.contains("address-correction"));
+        assert!(message.contains("missing-kind"));
+        assert!(message.contains("no reviewKinds[].id matching"));
+    }
+
+    #[test]
+    fn unpaired_casework_review_policies_ignore_the_paired_entity_and_other_authorities() {
+        let project = tempfile::tempdir().unwrap();
+        fs::write(
+            project.path().join("casework.yaml"),
+            serde_json::to_vec(&casework_policy_with_one_review_kind()).unwrap(),
+        )
+        .unwrap();
+        let authored = json!({"entities":[
+            {"id":"correction", "changeRequest":{"review":{"authority":"casework","policyId":"undeclared-but-paired-so-skipped"}}},
+            {"id":"external-workflow", "changeRequest":{"review":{"authority":"external-reviewer","policyId":"anything"}}},
+            {"id":"plain-dataset"},
+            {"id":"sibling-correction", "changeRequest":{"review":{"authority":"casework","policyId":"registry-correction"}}}
+        ]});
+
+        check_unpaired_review_policies(project.path(), &authored, "correction", "casework")
+            .unwrap();
     }
 
     #[test]

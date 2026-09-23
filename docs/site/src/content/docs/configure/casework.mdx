@@ -567,7 +567,7 @@ caseworkctl source add ./tutorial-work/project \
   --project ./licence-casework --source-id professional-licences
 ```
 
-`source add` drives your own `bregctl` of the same Registry Stack version, requires it on `PATH` or named with `--bregctl-bin`, runs its public `check` and `explain change-requests`, and refuses a mismatched source namespace, policy, producer admission, or application binding.
+`source add` drives your own `bregctl` of the same Registry Stack version, requires it on `PATH` or named with `--bregctl-bin`, runs its public `check` and `explain change-requests`, and refuses a mismatched source namespace, policy, producer admission, or application binding. It also refuses the pairing when another change-request entity in the same BReg registry names this Casework project's review authority with a `policyId` that no declared `reviewKinds` entry matches, since that entity would pass BReg's own compile check yet still be unreviewable here.
 Without `--apply` it previews the lifecycle event, the least-privilege `casework-reader` profile,
 the paired local clients, and the authority and optional executor runtime bindings.
 The report includes the exact candidate fragments, `status: preview`, and

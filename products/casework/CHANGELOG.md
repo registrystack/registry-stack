@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- `caseworkctl source add` now refuses the pairing when the BReg registry
+  declares another change-request entity, besides the one being paired, that
+  names this Casework project's review authority with a `policyId` no
+  `reviewKinds` entry matches. BReg's own compile check only validates that
+  `review.authority` and `review.policyId` are well-formed identifiers, so
+  such an entity previously passed unnoticed until something tried to submit
+  a change request against it. The error names the entity, the declared
+  `policyId`, and that no `reviewKinds[].id` matches it. A `policyId` edited
+  in the BReg project after pairing is not caught: nothing `source add`
+  writes records the BReg project's location or content, and the existing
+  pinned-description re-check is deliberately scoped to the casework.yaml
+  on disk now, not a re-derived BReg source.
 - `caseworkctl source add` no longer refuses the whole pairing when a
   selected request's review or apply access profile declares `rowBoundaries`.
   It writes the source description and runtime binding as before, and the
