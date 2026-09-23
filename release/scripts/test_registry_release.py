@@ -867,6 +867,40 @@ class RegistryReleaseTest(TestCase):
             ),
         )
 
+    def test_docs_recovery_rejects_reuse_of_failed_publication_run(self) -> None:
+        registry_release = load_registry_release()
+        request_id = "e" * 32
+        failed_publication = {
+            "id": 88,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/88",
+            "status": "completed",
+            "conclusion": "failure",
+            "display_title": registry_release.publication_run_title(
+                "v0.31.1",
+                request_id,
+            ),
+        }
+        healthy_docs = {
+            "id": 98,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/98",
+            "status": "completed",
+            "conclusion": "success",
+            "display_title": registry_release.docs_run_title(
+                "v0.31.1",
+                request_id,
+            ),
+        }
+
+        with self.assertRaises(registry_release.ReleasePlanError) as raised:
+            registry_release.reusable_docs_publication_run(
+                [failed_publication],
+                [healthy_docs],
+                tag="v0.31.1",
+            )
+
+        self.assertIn("release publication run 88 concluded", str(raised.exception))
+        self.assertIn("gh run rerun 88 --failed", str(raised.exception))
+
     def test_publish_tags_dispatches_waits_and_verifies_docs(self) -> None:
         registry_release = load_registry_release()
         plan = candidate_verification_plan(registry_release)
@@ -1223,6 +1257,99 @@ class RegistryReleaseTest(TestCase):
         dispatch_publication.assert_not_called()
         self.assertIn('"docs_recovery": "dispatched"', output.getvalue())
         self.assertIn('"docs_run_id": 99', output.getvalue())
+
+    def test_publish_reports_failed_publication_run_instead_of_false_completion(
+        self,
+    ) -> None:
+        registry_release = load_registry_release()
+        plan = candidate_verification_plan(registry_release)
+        request_id = "e" * 32
+        failed_publication = {
+            "id": 88,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/88",
+            "event": "workflow_dispatch",
+            "head_branch": "main",
+            "head_sha": "e" * 40,
+            "status": "completed",
+            "conclusion": "failure",
+            "display_title": registry_release.publication_run_title(
+                "v0.31.1",
+                request_id,
+            ),
+        }
+        healthy_docs = {
+            "id": 98,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/98",
+            "status": "completed",
+            "conclusion": "success",
+            "display_title": registry_release.docs_run_title(
+                "v0.31.1",
+                request_id,
+            ),
+        }
+        with (
+            mock.patch.object(
+                registry_release,
+                "load_candidate_verification_plan",
+                return_value=plan,
+            ),
+            mock.patch.object(registry_release, "verify_origin_repository"),
+            mock.patch.object(
+                registry_release,
+                "refresh_protected_main",
+                return_value="e" * 40,
+            ),
+            mock.patch.object(
+                registry_release,
+                "release_for_tag",
+                return_value={"draft": False},
+            ),
+            mock.patch.object(
+                registry_release,
+                "remote_candidate_tag",
+                return_value={"remote": "tag"},
+            ),
+            mock.patch.object(registry_release, "ensure_candidate_tag"),
+            mock.patch.object(registry_release, "validate_candidate_source_commit"),
+            mock.patch.object(
+                registry_release.verify_public_release,
+                "verify",
+                return_value={"tag": "v0.31.1", "status": "verified"},
+            ),
+            mock.patch.object(
+                registry_release,
+                "publication_runs_for_tag",
+                return_value=[failed_publication],
+            ),
+            mock.patch.object(
+                registry_release,
+                "docs_runs_for_tag",
+                return_value=[healthy_docs],
+            ),
+            mock.patch.object(
+                registry_release,
+                "dispatch_docs_publication_run",
+            ) as dispatch_docs,
+            mock.patch.object(
+                registry_release,
+                "dispatch_publication_run",
+            ) as dispatch_publication,
+            redirect_stdout(io.StringIO()) as output,
+            redirect_stderr(io.StringIO()) as errors,
+        ):
+            result = registry_release.publish_candidate_plan(
+                ROOT,
+                plan_path=ROOT / "candidate-plan.json",
+                repository="registrystack/registry-stack",
+                wait=True,
+                verbose_wait=False,
+            )
+
+        self.assertEqual(1, result)
+        dispatch_docs.assert_not_called()
+        dispatch_publication.assert_not_called()
+        self.assertNotIn('"status": "complete"', output.getvalue())
+        self.assertIn("gh run rerun 88 --failed", errors.getvalue())
 
     def test_recovery_draft_must_keep_the_candidate_binding(self) -> None:
         registry_release = load_registry_release()
