@@ -84,7 +84,9 @@ The container image is `ghcr.io/registrystack/casework:v0.30.0`, built on a dist
 for `linux/amd64`. Its entrypoint is `/usr/local/bin/casework`, its default arguments are
 `--runtime-config /etc/registry-casework/runtime.yaml serve`, and it exposes port 8100. It carries the
 runtime binary and its license and nothing else: no shell, no healthcheck command, and no
-`caseworkctl`, so migration and `doctor` run from a separate operator host. One directory is
+`caseworkctl`. `migrate` is a `casework` subcommand, so the same image runs it, given the
+migration credential instead of the runtime one; `doctor` belongs to `caseworkctl`, so it still
+runs from a separate operator host that has that binary installed. One directory is
 writable, `/var/lib/registry-casework/audit`, owned by UID and GID 65532 with mode `0700`, for the
 audit chain; mount the runtime file, the policy package, and the secret root read-only. The
 release manifest published beside the binaries records the promoted digest of the image; pin that
@@ -93,6 +95,52 @@ digest rather than the movable tag.
 {/* Evidence: crates/registry-casework/install.sh; release/docker/Dockerfile.casework;
     release/scripts/release_candidate.py, CASEWORK_RUNTIME_IMAGE_NAMES and
     CASEWORK_RELEASE_MINIMUM_VERSION; release/scripts/build-release-image.sh. */}
+
+## Provision PostgreSQL
+
+Create two login roles: a migration role that owns the schema and applies migrations, and a
+runtime role the serving process and background workers use. Keep the migration credential off the
+serving host when no migration is in progress.
+
+```sql
+CREATE ROLE casework_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOINHERIT NOBYPASSRLS PASSWORD '<migration-password>';
+CREATE ROLE casework_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOINHERIT NOBYPASSRLS PASSWORD '<runtime-password>';
+CREATE DATABASE casework;
+```
+
+Casework's migrations create ordinary tables in the database's default `public` schema and declare
+no extension and no other schema, so the migration role owns that one schema and the runtime role
+only reads and writes through it. As an administrator, in the `casework` database:
+
+```sql
+REVOKE ALL ON DATABASE casework FROM PUBLIC;
+GRANT CONNECT ON DATABASE casework TO casework_migration, casework_runtime;
+ALTER SCHEMA public OWNER TO casework_migration;
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+GRANT USAGE ON SCHEMA public TO casework_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE casework_migration IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO casework_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE casework_migration IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO casework_runtime;
+```
+
+Those default privileges cover every table and sequence [`migrate`](#migrate-and-serve) creates
+afterwards, because it always runs as the migration role. After the first `migrate`, or when
+reusing a database an earlier session already migrated, grant the runtime role the same privileges
+on the objects that already exist:
+
+```sql
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO casework_runtime;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO casework_runtime;
+```
+
+Casework creates no extension, no schema, and no role of its own, so a missing grant here surfaces
+as a permission-denied database error at `serve` rather than at `migrate`.
+
+{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, database provisioning and grants();
+    crates/registry-casework/migrations. */}
 
 ## Write the runtime file
 
