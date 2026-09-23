@@ -441,6 +441,11 @@ pub struct ReviewerTask {
     pub revision: i64,
     pub eligible_profiles: Vec<String>,
     pub state: ReviewerTaskState,
+    /// Whether the current caller recorded this task's decision. Present only
+    /// on a single decided-task read, so a reviewer whose decide response was
+    /// lost can confirm the outcome without learning who else decided.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decided_by_caller: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1858,6 +1863,7 @@ mod tests {
             state: ReviewerTaskState::Held {
                 holder: person(holder),
             },
+            decided_by_caller: None,
         }
     }
 

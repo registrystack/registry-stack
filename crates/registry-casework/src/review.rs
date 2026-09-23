@@ -1591,7 +1591,10 @@ impl PostgresStore {
             .query_opt(
                 "SELECT t.task_id,t.request_id,t.stage_index,t.stage_id,t.queue_id,t.state,
                         t.holder_issuer,t.holder_subject,t.revision,r.policy_snapshot,
-                        r.lifecycle,r.result_available_until,r.result_erased_at
+                        r.lifecycle,r.result_available_until,r.result_erased_at,
+                        EXISTS(SELECT 1 FROM casework_review_decisions d
+                               WHERE d.task_id=t.task_id
+                                 AND d.actor_issuer=$2 AND d.actor_subject=$3)
                  FROM casework_review_tasks t
                  JOIN casework_review_requests r ON r.request_id=t.request_id
                  JOIN casework_queue_service q ON q.queue_id=t.queue_id
@@ -1628,7 +1631,13 @@ impl PostgresStore {
         {
             return Err(ReviewRuntimeError::NotFound);
         }
-        reviewer_task_from_row(&row, &policy)
+        let mut task = reviewer_task_from_row(&row, &policy)?;
+        // Only the caller's own decision is compared, so the read confirms a
+        // lost decide response without naming any other reviewer.
+        if task.state == ReviewerTaskState::Decided {
+            task.decided_by_caller = Some(row.get(13));
+        }
+        Ok(task)
     }
 
     async fn review_absence_candidates(
@@ -2890,6 +2899,7 @@ impl PostgresStore {
             state: ReviewerTaskState::Held {
                 holder: actor.principal.clone(),
             },
+            decided_by_caller: None,
         };
         let claim_event_id = Uuid::new_v4();
         {
@@ -3214,6 +3224,7 @@ impl PostgresStore {
             } else {
                 ReviewerTaskState::Open
             },
+            decided_by_caller: None,
         };
         insert_review_idempotency(
             &transaction,
@@ -3818,6 +3829,7 @@ impl PostgresStore {
             revision: expected_revision + 1,
             eligible_profiles: stage.deciding_profiles.clone(),
             state: ReviewerTaskState::Open,
+            decided_by_caller: None,
         };
         let actor_ref = actor_reference(&actor.principal);
         let release_event_id = Uuid::new_v4();
@@ -3958,6 +3970,7 @@ impl PostgresStore {
                 "decided" | "closed" => ReviewerTaskState::Decided,
                 _ => return Err(ReviewRuntimeError::Corrupt),
             },
+            decided_by_caller: None,
         };
         check_task_holder(&task.state, &actor.principal).map_err(map_review_decision_error)?;
         let mut progress = ReviewProgress::new(
@@ -4928,6 +4941,7 @@ fn reviewer_task_from_row(
         revision: row.get(8),
         eligible_profiles: stage.deciding_profiles.clone(),
         state,
+        decided_by_caller: None,
     })
 }
 

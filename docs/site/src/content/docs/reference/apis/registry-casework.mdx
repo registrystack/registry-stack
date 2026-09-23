@@ -134,7 +134,9 @@ unavailable.
 Review result feeds expose stable event identifiers and terminal results without reviewer identity or
 private reasons. The separate accountability read returns raw issuer-qualified actor identity and
 private reason only to an authorized Supervisor, records that read in the audit journal, and stops
-returning the record after accountability expiry.
+returning the record after accountability expiry. A reviewer who loses a decide response reads the
+task again instead: `GET /v1/review-tasks/{taskId}` on a decided task carries `decidedByCaller`, true
+only when the current caller recorded that decision, and names no other reviewer.
 
 {/* Evidence: crates/registry-casework/src/{auth,assignment,review}.rs;
     products/casework/README.md. */}

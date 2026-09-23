@@ -4766,6 +4766,9 @@
             "items": {
               "additionalProperties": false,
               "properties": {
+                "decidedByCaller": {
+                  "type": "boolean"
+                },
                 "eligibleProfiles": {
                   "items": {
                     "type": "string"
@@ -4828,6 +4831,9 @@
       "ReviewerTask": {
         "additionalProperties": false,
         "properties": {
+          "decidedByCaller": {
+            "type": "boolean"
+          },
           "eligibleProfiles": {
             "items": {
               "type": "string"
@@ -14227,6 +14233,7 @@
     },
     "/v1/review-tasks/{task_id}": {
       "get": {
+        "description": "A decided task carries decidedByCaller, true only when the current caller recorded its decision, so a reviewer whose decide response was lost can confirm the outcome. It never names another reviewer; the accountability record stays with supervisors.",
         "operationId": "getReviewTask",
         "parameters": [
           {

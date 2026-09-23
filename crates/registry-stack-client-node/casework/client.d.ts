@@ -403,6 +403,7 @@ export interface ReviewerTask {
   revision: SafeInteger
   eligibleProfiles: ReadonlyArray<string>
   state: ReviewerTaskState
+  decidedByCaller?: boolean
 }
 export interface ReviewTaskPage { items: ReadonlyArray<ReviewerTask>; nextCursor?: Uuid }
 export type ReviewSourceBindingStatus = 'current' | 'binding_changed'

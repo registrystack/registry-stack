@@ -371,13 +371,15 @@ async fn app(
              INSERT INTO casework_queue_service(queue_id,team_id,revision)
              VALUES('review','review-team',1);
              INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
-             VALUES('review-team','https://placeholder.invalid','reviewer','staff');",
+             VALUES('review-team','https://placeholder.invalid','reviewer','staff'),
+                   ('review-team','https://placeholder.invalid','colleague','staff');",
         )
         .await
         .expect("seed review HTTP directory");
     database
         .execute(
-            "UPDATE casework_memberships SET issuer=$1 WHERE subject='reviewer'",
+            "UPDATE casework_memberships SET issuer=$1
+             WHERE issuer='https://placeholder.invalid'",
             &[&idp.issuer()],
         )
         .await
@@ -446,6 +448,15 @@ fn reviewer_token(idp: &MockIdp) -> String {
     idp.mint_token(json!({
         "aud": AUDIENCE,
         "registry_principal": "reviewer",
+        "scope": "casework:staff",
+        "registry_actor_kind": "human"
+    }))
+}
+
+fn colleague_token(idp: &MockIdp) -> String {
+    idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "registry_principal": "colleague",
         "scope": "casework:staff",
         "registry_actor_kind": "human"
     }))
@@ -1951,6 +1962,148 @@ async fn an_initiator_reads_only_the_requester_visible_history_of_their_own_requ
     }
     let (_, history) = send(read(request_id, &producer_token, "producer")).await;
     assert!(!history.contains("INITIATOR_NOTE_CANARY"));
+
+    idp.stop().await;
+}
+
+async fn read_task_json(app: &axum::Router, task_id: Uuid, token: &str) -> Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-tasks/{task_id}"))
+                .header("authorization", format!("Bearer {token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .body(Body::empty())
+                .expect("review task read request"),
+        )
+        .await
+        .expect("review task read response");
+    assert_eq!(response.status(), StatusCode::OK);
+    serde_json::from_slice(
+        &to_bytes(response.into_body(), 32 * 1024)
+            .await
+            .expect("bounded review task read"),
+    )
+    .expect("review task read JSON")
+}
+
+#[tokio::test]
+async fn a_reviewer_confirms_from_the_task_read_whether_they_decided_it_over_http() {
+    let idp = MockIdp::start().await;
+    let (app, _, _, _, _, _) = app(&idp).await;
+    let mut request = review_request("decided-by-caller-ref", &idp.issuer());
+    request.kind = "registry-answer".to_owned();
+    request.subject.id = "decided-by-caller-record".to_owned();
+    request.subject.digest = ContentDigest::for_bytes(b"decided-by-caller-record");
+    request.context = ReviewContext::Submitted {
+        snapshot: json!({}),
+    };
+    let created = app
+        .clone()
+        .oneshot(create_http_request(&request, Some(&token(&idp))))
+        .await
+        .expect("create review response");
+    assert_eq!(created.status(), StatusCode::CREATED);
+
+    let reviewer_token = reviewer_token(&idp);
+    let colleague_token = colleague_token(&idp);
+    let tasks = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/review-tasks")
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .body(Body::empty())
+                .expect("task list request"),
+        )
+        .await
+        .expect("task list response");
+    let tasks: ReviewTaskPage = serde_json::from_slice(
+        &to_bytes(tasks.into_body(), 32 * 1024)
+            .await
+            .expect("bounded task list"),
+    )
+    .expect("task list JSON");
+    assert_eq!(tasks.items.len(), 1);
+    let task_id = tasks.items[0].task_id;
+
+    // Undecided work says nothing about who decided it.
+    let open = read_task_json(&app, task_id, &reviewer_token).await;
+    assert_eq!(open["state"], "open");
+    assert!(open.get("decidedByCaller").is_none(), "{open}");
+
+    let claimed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/review-tasks/{task_id}/claim"))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header("if-match", "\"1\"")
+                .header("idempotency-key", "claim-decided-by-caller")
+                .body(Body::empty())
+                .expect("claim request"),
+        )
+        .await
+        .expect("claim response");
+    assert_eq!(claimed.status(), StatusCode::OK);
+    let decided = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/review-tasks/{task_id}/decisions"))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(CONTENT_TYPE, "application/json")
+                .header("if-match", "\"2\"")
+                .header("idempotency-key", "decide-decided-by-caller")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "decision": {
+                            "type": "answer",
+                            "outcome": "found",
+                            "result": {"answer": "Recorded"}
+                        }
+                    }))
+                    .expect("serialize decision"),
+                ))
+                .expect("decide request"),
+        )
+        .await
+        .expect("decide response");
+    assert_eq!(decided.status(), StatusCode::NO_CONTENT);
+
+    // The reviewer whose decide response was lost learns the decision is
+    // theirs, while a colleague on the same queue learns only that it is
+    // not theirs, and neither read names the decider.
+    let own = read_task_json(&app, task_id, &reviewer_token).await;
+    assert_eq!(own["state"], "decided");
+    assert_eq!(own["decidedByCaller"], true);
+    let other = read_task_json(&app, task_id, &colleague_token).await;
+    assert_eq!(other["state"], "decided");
+    assert_eq!(other["decidedByCaller"], false);
+    assert_eq!(
+        {
+            let mut own = own.clone();
+            own.as_object_mut()
+                .expect("task object")
+                .remove("decidedByCaller");
+            own
+        },
+        {
+            let mut other = other.clone();
+            other
+                .as_object_mut()
+                .expect("task object")
+                .remove("decidedByCaller");
+            other
+        },
+        "the two reads differ only by the caller-relative flag"
+    );
 
     idp.stop().await;
 }

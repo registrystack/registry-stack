@@ -98,7 +98,10 @@ value-free and may add the paired
 rejected values.
 
 Human reviewers use `/v1/review-tasks` to list, read, claim, assign, delegate,
-release, draft, and decide work. Every mutation checks the current task revision,
+release, draft, and decide work. A decided task read carries `decidedByCaller`,
+true only when the current caller recorded the decision, so a reviewer whose
+decide response was lost can confirm the outcome without the Supervisor-only
+accountability record. Every mutation checks the current task revision,
 membership, queue service, exclusions, and idempotency binding in the committing
 transaction. `GET /v1/review-tasks/{taskId}/context` returns only the frozen
 submitted context, or a bounded current source projection authorized for the

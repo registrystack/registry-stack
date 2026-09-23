@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add `decidedByCaller` to `GET /v1/review-tasks/{taskId}` for a decided task.
+  It is true only when the current caller recorded the decision, so a reviewer
+  whose decide response was lost can confirm the outcome. It names no other
+  reviewer.
 - Fix initiator exclusion for BReg-sourced reviews. BReg now names a review's
   initiator by the value of its configured principal claim rather than `sub`,
   so a stage with `excludeInitiator` refuses the submitter when the Casework

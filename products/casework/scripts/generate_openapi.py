@@ -381,6 +381,7 @@ def review_schemas() -> dict:
             "revision": integer,
             "eligibleProfiles": array(text),
             "state": ref("ReviewerTaskState"),
+            "decidedByCaller": {"type": "boolean"},
         },
         ["taskId", "requestId", "stageIndex", "stageId", "queue", "revision", "eligibleProfiles", "state"],
     )
@@ -1544,7 +1545,7 @@ def document(contract: dict) -> dict:
         "/v1/review-requests/{request_id}/cancel": {"post": operation("Cancel a requester-owned active review", "ReviewCancelResponse", idempotency=True, body="ReviewCancelRequest", parameters=[REQUEST_ID])},
         "/v1/review-results": {"get": operation("List requester result-feed events", "ReviewResultFeedPage", parameters=[parameter("cursor", "query", "Last delivered event UUID.", {"type": "string", "format": "uuid"}, required=False), parameter("limit", "query", "Bounded page size.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)])},
         "/v1/review-tasks": {"get": operation("List current reviewer tasks", "ReviewTaskPage", source=True, source_required=False, parameters=[parameter("queue", "query", "Optional queue filter.", required=False), parameter("cursor", "query", "Last delivered task UUID.", {"type": "string", "format": "uuid"}, required=False), parameter("limit", "query", "Bounded page size.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)])},
-        "/v1/review-tasks/{task_id}": {"get": operation("Read one current reviewer task", "ReviewerTask", source=True, source_required=False, parameters=[TASK_ID])},
+        "/v1/review-tasks/{task_id}": {"get": operation("Read one current reviewer task", "ReviewerTask", source=True, source_required=False, parameters=[TASK_ID], description="A decided task carries decidedByCaller, true only when the current caller recorded its decision, so a reviewer whose decide response was lost can confirm the outcome. It never names another reviewer; the accountability record stays with supervisors.")},
         "/v1/review-tasks/{task_id}/context": {"get": operation("Read bounded review task context", "ReviewTaskContext", source=True, source_required=False, parameters=[TASK_ID], description="Submitted context returns the immutable snapshot. Source context requires the current human caller's source profile and token, exact binding, and configured contextProjection; binding changes suppress projected values.")},
         "/v1/review-tasks/{task_id}/claim": {"post": operation("Claim a review task", "ReviewerTask", source=True, source_required=False, mutation=True, parameters=[TASK_ID])},
         "/v1/review-tasks/{task_id}/assign": {"post": operation("Assign a review task", "ReviewerTask", source=True, source_required=False, mutation=True, body="AssignmentRequest", parameters=[TASK_ID])},
