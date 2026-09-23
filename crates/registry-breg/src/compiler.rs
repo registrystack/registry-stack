@@ -1889,6 +1889,17 @@ fn expand_project_access(
                     "a task-grant profile can author only governed request drafts; direct target mutations, batch operations, tombstones, and immediate actions are forbidden",
                 ));
             }
+            if profile
+                .permissions
+                .iter()
+                .any(|permission| permission.operations.contains(&Operation::ApplyRequest))
+            {
+                errors.push(Diagnostic::error(
+                    "access_profile.task_grant.operation_forbidden",
+                    "project.accessProfiles[].permissions[].operations",
+                    "a task-grant profile cannot apply a reviewed request; review-decision operations require a non-delegated authority",
+                ));
+            }
         }
         let compiled_task_grant = profile.task_grant.as_ref().map(|task_grant| {
             let permissions = profile
