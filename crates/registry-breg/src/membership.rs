@@ -242,7 +242,8 @@ pub(crate) struct RowProbe {
     pub(crate) field: String,
 }
 
-/// Every per-row probe of one profile, membership boundaries first.
+/// Every per-row probe of one profile: membership boundaries first, then
+/// consent requirements.
 pub(crate) fn row_probes(entity: &CompiledEntity, profile: &str) -> Vec<RowProbe> {
     boundaries(entity, profile)
         .iter()
@@ -251,6 +252,7 @@ pub(crate) fn row_probes(entity: &CompiledEntity, profile: &str) -> Vec<RowProbe
             function: function_name(&entity.id, profile, index),
             field: boundary.field.clone(),
         })
+        .chain(crate::consent::row_probes(entity, profile))
         .collect()
 }
 

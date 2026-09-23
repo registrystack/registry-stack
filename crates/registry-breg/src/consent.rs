@@ -16,10 +16,14 @@ use crate::contract::{
     RowBoundarySource,
 };
 use crate::diagnostics::Diagnostic;
+use crate::generated_ddl::{quote_identifier, quote_literal};
+use crate::membership::RowProbe;
 use crate::model::{
     CompiledConsentDuration, CompiledConsentRecord, CompiledConsentRequirement, CompiledEntity,
     CompiledRecipients,
 };
+use crate::physical_names::hex_prefix;
+use sha2::{Digest, Sha256};
 
 /// The synthesized vocabulary of every organization and group id.
 pub const RECIPIENTS_VOCABULARY: &str = "registry-recipients";
@@ -1001,6 +1005,166 @@ fn valid_identifier(value: &str) -> bool {
         })
 }
 
+/// The `registry_context` probe answering one `requireConsent` entry of one
+/// profile. Its hash domain is its own, so it never collides with a
+/// membership probe of the same entity, profile and index.
+pub(crate) fn function_name(entity: &str, profile: &str, index: usize) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"breg/consent-probe/v1");
+    for part in [entity, profile, &index.to_string()] {
+        hash.update((part.len() as u64).to_be_bytes());
+        hash.update(part.as_bytes());
+    }
+    format!("consent_{}", hex_prefix(&hash.finalize(), 12))
+}
+
+/// Every consent probe of one profile over one entity, keyed by the
+/// requirement's `on` field.
+pub(crate) fn row_probes(entity: &CompiledEntity, profile: &str) -> Vec<RowProbe> {
+    requirements(entity, profile)
+        .iter()
+        .enumerate()
+        .map(|(index, requirement)| RowProbe {
+            function: function_name(&entity.id, profile, index),
+            field: requirement.on.clone(),
+        })
+        .collect()
+}
+
+/// The consent table's policy guard for one probe: only that probe, running
+/// under the gated profile, sees the decision rows.
+pub(crate) fn source_guard(entity: &str, profile: &str, index: usize) -> String {
+    format!("NULLIF(current_setting('registry.consent_probe', true), '') = {} AND NULLIF(current_setting('registry.access_profile', true), '') = {}",
+        quote_literal(&function_name(entity, profile, index)), quote_literal(profile))
+}
+
+/// The consent table's rows under a probe guard: every active decision. The
+/// probe's own query restricts to the key; a narrower policy would hide
+/// revokes and resurrect withdrawn consent.
+pub(crate) fn source_predicate(alias: &str) -> String {
+    format!("{alias}.record_lifecycle = 'active'")
+}
+
+/// The plpgsql body of one consent probe: whether the caller's recipient set
+/// holds a current, unsuperseded give for key `$1` under the request purpose
+/// and the active profile. `registry.recipients` must be a JSON array of
+/// strings; a missing or empty value matches nothing and anything else
+/// raises, so both fail closed.
+pub(crate) fn probe_body(name: &str, table: &str, record: &CompiledConsentRecord) -> String {
+    let column = |alias: &str, column: &str| format!("{alias}.{}", quote_identifier(column));
+    let order = |alias: &str| {
+        format!(
+            "LEAST({}, {alias}.created_at)",
+            column(alias, &record.from_column)
+        )
+    };
+    let key_matches = [
+        &record.subject_column,
+        &record.recipient_column,
+        &record.purpose_column,
+        &record.scope_column,
+    ]
+    .into_iter()
+    .map(|key| format!("revoked.{0} = given.{0}", quote_identifier(key)))
+    .collect::<Vec<_>>()
+    .join(" AND ");
+    let duration = &record.max_duration;
+    let cap = format!(
+        "{} + make_interval({}, {}, {}, {}, {}, {}, {})",
+        order("given"),
+        duration.years,
+        duration.months,
+        duration.weeks,
+        duration.days,
+        duration.hours,
+        duration.minutes,
+        duration.seconds,
+    );
+    let expiry = match &record.until_column {
+        Some(until) => format!("LEAST({}, {cap})", column("given", until)),
+        None => cap,
+    };
+    let given = format!(
+        "{subject} = $1 AND {recipient} = ANY(recipients) AND {purpose} = NULLIF(current_setting('registry.purpose', true), '') AND {scope} = NULLIF(current_setting('registry.access_profile', true), '') AND {decision} IN ({gives}) AND given.record_lifecycle = 'active' AND {from} <= now() AND now() < {expiry}",
+        subject = column("given", &record.subject_column),
+        recipient = column("given", &record.recipient_column),
+        purpose = column("given", &record.purpose_column),
+        scope = column("given", &record.scope_column),
+        decision = column("given", &record.decision_column),
+        gives = literal_list(&record.gives),
+        from = column("given", &record.from_column),
+    );
+    let superseded = format!(
+        "SELECT 1 FROM registry_data.{table} AS revoked WHERE {key_matches} AND {decision} IN ({revokes}) AND revoked.record_lifecycle = 'active' AND {revoked_order} >= {given_order}",
+        table = quote_identifier(table),
+        decision = column("revoked", &record.decision_column),
+        revokes = literal_list(&record.revokes),
+        revoked_order = order("revoked"),
+        given_order = order("given"),
+    );
+    format!(
+        "DECLARE prior_marker text := current_setting('registry.consent_probe', true); recipients_text text := NULLIF(current_setting('registry.recipients', true), ''); recipients_json jsonb; recipients text[] := ARRAY[]::text[]; authorized boolean; BEGIN PERFORM set_config('registry.consent_probe', {marker}, true); IF recipients_text IS NOT NULL THEN recipients_json := recipients_text::jsonb; IF jsonb_typeof(recipients_json) <> 'array' OR EXISTS (SELECT 1 FROM jsonb_array_elements(recipients_json) AS element(value) WHERE jsonb_typeof(element.value) <> 'string') THEN RAISE EXCEPTION 'registry.recipients must be a JSON array of strings' USING ERRCODE = '22023'; END IF; recipients := ARRAY(SELECT jsonb_array_elements_text(recipients_json)); END IF; SELECT EXISTS (SELECT 1 FROM registry_data.{table} AS given WHERE {given} AND NOT EXISTS ({superseded})) INTO authorized; PERFORM set_config('registry.consent_probe', COALESCE(prior_marker, ''), true); RETURN authorized; EXCEPTION WHEN OTHERS THEN RAISE; END",
+        marker = quote_literal(name),
+        table = quote_identifier(table),
+    )
+}
+
+fn literal_list(values: &BTreeSet<String>) -> String {
+    values
+        .iter()
+        .map(|value| quote_literal(value))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The two indexes behind a consent record's probe: the decision key, and a
+/// partial index over active revokes ordered by `LEAST(from, created_at)` for
+/// the supersession check. Each is `(statement id, index name, SQL)`.
+pub(crate) fn index_statements(entity: &CompiledEntity) -> Vec<(String, String, String)> {
+    let Some(record) = &entity.consent_record else {
+        return Vec::new();
+    };
+    let table = quote_identifier(&entity.physical_table);
+    let key = [
+        &record.subject_column,
+        &record.recipient_column,
+        &record.purpose_column,
+        &record.scope_column,
+    ]
+    .into_iter()
+    .map(|column| quote_identifier(column))
+    .collect::<Vec<_>>()
+    .join(", ");
+    let name = |kind: &str| {
+        let digest =
+            Sha256::digest(format!("breg/consent-index/v1/{}/{kind}", entity.id).as_bytes());
+        format!("breg_consent_{kind}_{}", hex_prefix(&digest, 10))
+    };
+    let key_name = name("key");
+    let revoke_name = name("revoke");
+    vec![
+        (
+            format!("entity.{}.consent.key-index", entity.id),
+            key_name.clone(),
+            format!(
+                "CREATE INDEX {} ON registry_data.{table} ({key})",
+                quote_identifier(&key_name)
+            ),
+        ),
+        (
+            format!("entity.{}.consent.revoke-index", entity.id),
+            revoke_name.clone(),
+            format!(
+                "CREATE INDEX {} ON registry_data.{table} ({key}, (LEAST({}, created_at))) WHERE {} IN ({}) AND record_lifecycle = 'active'",
+                quote_identifier(&revoke_name),
+                quote_identifier(&record.from_column),
+                quote_identifier(&record.decision_column),
+                literal_list(&record.revokes),
+            ),
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -1058,6 +1222,58 @@ mod tests {
         let unrelated = codes_with_encrypted("enrolment", "programme");
         assert!(!unrelated.contains(&"consent.require.key".to_owned()));
         assert!(!unrelated.contains(&"consent.record.plaintext".to_owned()));
+    }
+
+    #[test]
+    fn probe_names_have_their_own_hash_domain() {
+        let name = super::function_name("person", "food-targeting", 0);
+        assert!(name.starts_with("consent_"), "{name}");
+        assert_eq!(name.len(), "consent_".len() + 24, "{name}");
+        assert_eq!(name, super::function_name("person", "food-targeting", 0));
+        assert_ne!(name, super::function_name("person", "food-targeting", 1));
+        assert_ne!(name, super::function_name("person", "food-targeting-2", 0));
+        let membership = crate::membership::function_name("person", "food-targeting", 0);
+        assert_ne!(
+            name.trim_start_matches("consent_"),
+            membership.trim_start_matches("membership_")
+        );
+    }
+
+    #[test]
+    fn consent_indexes_cover_the_key_and_the_active_revokes() {
+        let project =
+            crate::parse_project_yaml(include_bytes!("../tests/fixtures/consent-access.yaml"))
+                .expect("consent fixture parses");
+        let registry = crate::compile_project(&project, &[], crate::CompileProfile::Authoring)
+            .expect("consent fixture compiles");
+        let entities = registry.entities();
+        assert!(super::index_statements(&entities["person"]).is_empty());
+        let indexes = super::index_statements(&entities["consent-decision"]);
+        let ids = indexes
+            .iter()
+            .map(|(id, _, _)| id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            [
+                "entity.consent-decision.consent.key-index",
+                "entity.consent-decision.consent.revoke-index"
+            ]
+        );
+        let (_, key_name, key_sql) = &indexes[0];
+        assert!(key_name.starts_with("breg_consent_key_"), "{key_name}");
+        assert!(!key_sql.contains("WHERE"), "{key_sql}");
+        let (_, revoke_name, revoke_sql) = &indexes[1];
+        assert!(
+            revoke_name.starts_with("breg_consent_revoke_"),
+            "{revoke_name}"
+        );
+        assert!(
+            revoke_sql.contains("IN ('invalidated', 'refused', 'withdrawn')")
+                && revoke_sql.ends_with("AND record_lifecycle = 'active'")
+                && revoke_sql.contains("created_at)))"),
+            "{revoke_sql}"
+        );
     }
 
     #[test]

@@ -357,6 +357,13 @@ pub(crate) fn generate_ddl_with_actions(
         for field_id in spatial_projection_fields(entity) {
             statements.push(spatial_projection_statements(entity, &field_id).create_index);
         }
+        for (id, _, sql) in crate::consent::index_statements(entity) {
+            statements.push(DdlStatement {
+                id,
+                kind: DdlStatementKind::Index,
+                sql,
+            });
+        }
     }
 
     let mut tables = Vec::new();
@@ -393,6 +400,37 @@ pub(crate) fn generate_ddl_with_actions(
                     crate::membership::source_predicate(boundary, "membership"),
                     quote_identifier(&boundary.membership_key_column),
                 );
+                statements.push(DdlStatement {
+                    id: format!("registry_context.{name}"),
+                    kind: DdlStatementKind::Function,
+                    sql: format!(
+                        "CREATE FUNCTION registry_context.{}(uuid) RETURNS boolean LANGUAGE plpgsql STABLE STRICT SECURITY INVOKER SET search_path = pg_catalog AS {}",
+                        quote_identifier(&name), quote_literal(&body),
+                    ),
+                });
+                functions.push(DdlFunction {
+                    id: format!("registry_context.{name}"),
+                    schema: "registry_context".to_owned(),
+                    name,
+                    arguments: "uuid".to_owned(),
+                    runtime_execute: true,
+                    spatial_bbox_execute: false,
+                });
+            }
+        }
+    }
+    // Consent probes share the membership shape: an invoker helper whose own
+    // marker opens the consent table's guarded policy for this probe alone.
+    for entity in entities.values() {
+        for (profile_id, requirements) in &entity.consent_requirements {
+            for (index, requirement) in requirements.iter().enumerate() {
+                let record_entity = &entities[&requirement.record];
+                let record = record_entity
+                    .consent_record
+                    .as_ref()
+                    .expect("validated consent record");
+                let name = crate::consent::function_name(&entity.id, profile_id, index);
+                let body = crate::consent::probe_body(&name, &record_entity.physical_table, record);
                 statements.push(DdlStatement {
                     id: format!("registry_context.{name}"),
                     kind: DdlStatementKind::Function,
@@ -987,6 +1025,11 @@ fn runtime_privileges(
                 .values()
                 .flatten()
                 .any(|boundary| boundary.membership_entity == entity.id)
+                || root
+                    .consent_requirements
+                    .values()
+                    .flatten()
+                    .any(|requirement| requirement.record == entity.id)
         })
     {
         privileges.insert(TablePrivilege::Select);
@@ -1177,6 +1220,7 @@ fn policies(
         }
     }
     policies.extend(membership_source_policies(entity, entities));
+    policies.extend(consent_source_policies(entity, entities));
     policies.extend(change_request_action_policies_for_table(entity));
     policies.extend(change_request_presence_policies_for_table(entity, entities));
     policies.extend(read_path_policies_for_table(entity, entities));
@@ -1212,6 +1256,41 @@ fn membership_source_policies(
                             boundary,
                             &quote_identifier(&entity.physical_table)
                         )
+                    )),
+                    check_expression: None,
+                });
+            }
+        }
+    }
+    policies
+}
+
+/// One SELECT policy per consent probe reading this consent table. It has no
+/// decision, validity or boundary filter: the probe's query restricts to the
+/// key, and hiding revokes here would resurrect withdrawn consent.
+fn consent_source_policies(
+    entity: &CompiledEntity,
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> Vec<DdlPolicy> {
+    let mut policies = Vec::new();
+    for root in entities.values() {
+        for (profile, requirements) in &root.consent_requirements {
+            for (index, requirement) in requirements.iter().enumerate() {
+                if requirement.record != entity.id {
+                    continue;
+                }
+                policies.push(DdlPolicy {
+                    name: format!(
+                        "registry_{}",
+                        crate::consent::function_name(&root.id, profile, index)
+                    ),
+                    command: PolicyCommand::Select,
+                    access_profile: profile.clone(),
+                    applies_to: DdlPolicyRole::Runtime,
+                    using_expression: Some(format!(
+                        "({}) AND ({})",
+                        crate::consent::source_guard(&root.id, profile, index),
+                        crate::consent::source_predicate(&quote_identifier(&entity.physical_table))
                     )),
                     check_expression: None,
                 });

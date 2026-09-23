@@ -1920,35 +1920,36 @@ fn additive_migration_plan(
         &previous.actions,
     );
     let mut removed_dependency_statements = Vec::new();
-    let previous_membership_functions = previous_ddl
+    let previous_probe_functions = previous_ddl
         .statements
         .iter()
         .filter(|statement| {
             statement.kind == DdlStatementKind::Function
-                && statement.id.starts_with("registry_context.membership_")
+                && is_row_probe_function_statement(&statement.id)
         })
         .map(|statement| (statement.id.as_str(), statement))
         .collect::<BTreeMap<_, _>>();
-    let candidate_membership_functions = candidate
+    let candidate_probe_functions = candidate
         .ddl()
         .statements
         .iter()
         .filter(|statement| {
             statement.kind == DdlStatementKind::Function
-                && statement.id.starts_with("registry_context.membership_")
+                && is_row_probe_function_statement(&statement.id)
         })
         .map(|statement| (statement.id.as_str(), statement))
         .collect::<BTreeMap<_, _>>();
-    for (id, statement) in &candidate_membership_functions {
-        if previous_membership_functions.get(id) != Some(statement) {
+    for (id, statement) in &candidate_probe_functions {
+        if previous_probe_functions.get(id) != Some(statement) {
             new_statement_ids.insert((*id).to_owned());
-            if previous_membership_functions.contains_key(id) {
+            if previous_probe_functions.contains_key(id) {
                 replacement_statement_ids.insert((*id).to_owned());
             }
         }
     }
-    // Drop obsolete membership policies before their helper dependencies. The
-    // activation ACL reconciliation installs the candidate policies afterward.
+    // Drop obsolete membership and consent policies before their helper
+    // dependencies. The activation ACL reconciliation installs the candidate
+    // policies afterward.
     for table in &previous_ddl.tables {
         let candidate_table = candidate
             .ddl()
@@ -1956,14 +1957,17 @@ fn additive_migration_plan(
             .iter()
             .find(|other| other.entity_id == table.entity_id);
         for policy in &table.policies {
-            let membership_policy = policy.name.starts_with("registry_membership_")
-                || policy
-                    .using_expression
-                    .iter()
-                    .chain(&policy.check_expression)
-                    .any(|expression| expression.contains("registry_context.\"membership_"));
-            if membership_policy
-                && !candidate_table.is_some_and(|other| other.policies.contains(policy))
+            let probe_policy = ROW_PROBE_PREFIXES.iter().any(|prefix| {
+                policy.name.starts_with(&format!("registry_{prefix}"))
+                    || policy
+                        .using_expression
+                        .iter()
+                        .chain(&policy.check_expression)
+                        .any(|expression| {
+                            expression.contains(&format!("registry_context.\"{prefix}"))
+                        })
+            });
+            if probe_policy && !candidate_table.is_some_and(|other| other.policies.contains(policy))
             {
                 removed_dependency_statements.push(drop_policy_statement(
                     &table.entity_id,
@@ -1974,8 +1978,10 @@ fn additive_migration_plan(
         }
     }
     for function in &previous_ddl.functions {
-        if function.name.starts_with("membership_")
-            && !candidate_membership_functions.contains_key(function.id.as_str())
+        if ROW_PROBE_PREFIXES
+            .iter()
+            .any(|prefix| function.name.starts_with(prefix))
+            && !candidate_probe_functions.contains_key(function.id.as_str())
         {
             removed_dependency_statements.push(DdlStatement {
                 id: format!("{}.drop", function.id),
@@ -2217,6 +2223,30 @@ fn additive_migration_plan(
                 new_statement_ids.insert(format!("entity.{entity_id}.index.{index_id}"));
             }
         }
+        // Consent indexes follow the consent record: a changed key or revoke
+        // set drops the prior index and builds the candidate one.
+        let previous_indexes = crate::consent::index_statements(previous_entity);
+        let candidate_indexes = crate::consent::index_statements(candidate_entity);
+        for (id, name, sql) in &previous_indexes {
+            if !candidate_indexes
+                .iter()
+                .any(|candidate| &candidate.2 == sql)
+            {
+                removed_dependency_statements.push(DdlStatement {
+                    id: format!("{id}.drop"),
+                    kind: DdlStatementKind::Index,
+                    sql: format!(
+                        "DROP INDEX IF EXISTS registry_data.{}",
+                        quote_identifier(name)
+                    ),
+                });
+            }
+        }
+        for (id, _, sql) in &candidate_indexes {
+            if !previous_indexes.iter().any(|previous| &previous.2 == sql) {
+                new_statement_ids.insert(id.clone());
+            }
+        }
     }
 
     let mut statements = removed_dependency_statements;
@@ -2249,9 +2279,21 @@ fn additive_migration_plan(
     }
 }
 
+/// Name prefixes of the generated per-row probe helpers, membership and
+/// consent, which migrations replace and drop together with their policies.
+const ROW_PROBE_PREFIXES: [&str; 2] = ["membership_", "consent_"];
+
+fn is_row_probe_function_statement(id: &str) -> bool {
+    id.strip_prefix("registry_context.").is_some_and(|name| {
+        ROW_PROBE_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+    })
+}
+
 fn replacement_statement(statement: &DdlStatement) -> DdlStatement {
     if statement.kind == DdlStatementKind::Function
-        && statement.id.starts_with("registry_context.membership_")
+        && is_row_probe_function_statement(&statement.id)
     {
         return DdlStatement {
             id: statement.id.clone(),
