@@ -136,7 +136,8 @@ private reasons. The separate accountability read returns raw issuer-qualified a
 private reason only to an authorized Supervisor, records that read in the audit journal, and stops
 returning the record after accountability expiry. A reviewer who loses a decide response reads the
 task again instead: `GET /v1/review-tasks/{taskId}` on a decided task carries `decidedByCaller`, true
-only when the current caller recorded that decision, and names no other reviewer.
+only when the current caller recorded that decision, and names no other reviewer. The member is absent
+from a task in any other state and from the task list.
 
 {/* Evidence: crates/registry-casework/src/{auth,assignment,review}.rs;
     products/casework/README.md. */}
