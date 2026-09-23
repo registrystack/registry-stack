@@ -534,18 +534,36 @@ fn task_profiles_allow_governed_draft_authoring_and_refuse_direct_target_mutatio
         diagnostic.code == "access_profile.task_grant.direct_mutation_forbidden"
     }));
 
-    let governed = include_str!("fixtures/authority-mapping.yaml")
-        .replace(
-            "  - id: reviewer\n    default: true\n    principalClaim: registry_principal",
-            "  - id: reviewer\n    default: true\n    principalClaim: registry_principal\n    actorKind: agent\n    requesterClients: [agent-client]\n    requiredPurposes: [record-review]\n    taskGrant: {sourceIssuer: https://casework.example}",
-        )
+    let task_grant_reviewer = include_str!("fixtures/authority-mapping.yaml").replace(
+        "  - id: reviewer\n    default: true\n    principalClaim: registry_principal",
+        "  - id: reviewer\n    default: true\n    principalClaim: registry_principal\n    actorKind: agent\n    requesterClients: [agent-client]\n    requiredPurposes: [record-review]\n    taskGrant: {sourceIssuer: https://casework.example}",
+    );
+
+    // A task-grant profile can no longer hold apply_request, so applying the
+    // change request needs its own, non-delegated profile; otherwise the
+    // fixture's applyTargets completeness check has nothing to satisfy it.
+    let governed = task_grant_reviewer
         .replace(
             "operations: [get, submit_request, apply_request",
-            "operations: [create, get, patch, submit_request, apply_request",
-        );
+            "operations: [create, get, patch, submit_request",
+        )
+        .replace(
+            "        applyTargets:\n          - entity: asset\n            rowBoundaries: [{field: label, claim: apply_label, operator: equals}]\n",
+            "",
+        )
+        + "  - id: applier\n    principalClaim: registry_principal\n    permissions:\n      - entity: correction\n        operations: [apply_request]\n        readableFields: [asset, label]\n        rowBoundaries: []\n        applyTargets:\n          - entity: asset\n            rowBoundaries: [{field: label, claim: apply_label, operator: equals}]\n";
     let project = parse_project_yaml(governed.as_bytes()).expect("governed draft project parses");
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("governed request draft create and patch remain available");
+
+    let project = parse_project_yaml(task_grant_reviewer.as_bytes())
+        .expect("task-grant apply_request project parses");
+    let failure = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect_err("a task-grant profile cannot apply a reviewed request");
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| { diagnostic.code == "access_profile.task_grant.operation_forbidden" }));
 }
 
 fn read_identity() -> ReadRuntimeIdentity {
