@@ -4201,6 +4201,82 @@ async fn a_result_lookup_token_outage_asks_for_attention_without_spending_the_po
 }
 
 #[tokio::test]
+async fn a_404_result_lookup_clears_a_stale_token_outage_code() {
+    let mut database = prepare_review_database().await;
+    let request_id = Uuid::from_u128(0xa9);
+    let accepted = seed_accepted_submission(&database, request_id, Uuid::from_u128(0xaa)).await;
+    let attempts_before: i32 = database
+        .admin
+        .query_one(
+            "SELECT result_poll_attempts
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("accepted attempts")
+        .get(0);
+
+    // The authority's credential provider is down when the result poll is
+    // due, recording a token-outage diagnostic on the row.
+    make_result_poll_due(&database.admin, request_id).await;
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let authorities = authority_registry_with_token(
+        "casework-a",
+        "producer-a",
+        "sender",
+        "registry-a",
+        Arc::new(UnavailableToken),
+    );
+    assert!(matches!(
+        run_review_authority_once_for_test(&pool, &authorities).await,
+        Err(MutationError::Unavailable)
+    ));
+    let outage: Option<String> = database
+        .admin
+        .query_one(
+            "SELECT last_error_code
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("row after token outage")
+        .get(0);
+    assert_eq!(outage.as_deref(), Some("token-unavailable"));
+
+    // Credentials recover and the authenticated lookup answers 404. The
+    // lookup succeeded, so the stale credential-outage code must not keep
+    // telling an operator that credentials are still failing.
+    let (endpoint, _script, server) =
+        serve_scripted_result_authority(accepted, ScriptedLookup::ConcealedOrUnknown).await;
+    make_result_poll_due(&database.admin, request_id).await;
+    assert!(poll_scripted_result(&mut database, &endpoint)
+        .await
+        .expect("concealed result lookup completes"));
+    let row = database
+        .admin
+        .query_one(
+            "SELECT result_poll_attempts,last_error_code
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("row after 404 lookup");
+    assert_eq!(
+        row.get::<_, i32>(0),
+        attempts_before + 1,
+        "a 404 still spends the give-up budget"
+    );
+    assert_eq!(row.get::<_, Option<String>>(1), None);
+
+    drop(pool);
+    server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
 async fn a_concealed_or_unknown_result_stream_still_exhausts_the_poll_budget() {
     let mut database = prepare_review_database().await;
     let request_id = Uuid::from_u128(0xa5);
