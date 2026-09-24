@@ -994,12 +994,26 @@ fn render_candidate_preserving_authored_text(
     Ok(rendered)
 }
 
-fn insert_entity_hook(text: &str, entity_id: &str, event_field: &str) -> Result<String> {
-    let lines = text.split_inclusive('\n').collect::<Vec<_>>();
-    let marker = format!("- id: {entity_id}");
+/// Find the line of the item `- id: {id}` inside the top-level `{key}:` block,
+/// so an identical id under another top-level key is never matched.
+fn find_collection_item(lines: &[&str], key: &str, id: &str) -> Option<usize> {
+    let prefix = format!("{key}:");
+    let marker = format!("- id: {id}");
     let start = lines
         .iter()
-        .position(|line| line.trim() == marker)
+        .position(|line| leading_spaces(line) == 0 && line.starts_with(&prefix))?;
+    let end = (start + 1..lines.len())
+        .find(|index| {
+            let line = lines[*index];
+            leading_spaces(line) == 0 && !line.trim().is_empty() && !line.starts_with('#')
+        })
+        .unwrap_or(lines.len());
+    (start + 1..end).find(|index| lines[*index].trim() == marker)
+}
+
+fn insert_entity_hook(text: &str, entity_id: &str, event_field: &str) -> Result<String> {
+    let lines = text.split_inclusive('\n').collect::<Vec<_>>();
+    let start = find_collection_item(&lines, "entities", entity_id)
         .context("narrow YAML patch could not locate the declared BReg entity")?;
     let item_indent = leading_spaces(lines[start]);
     let next_item = (start + 1..lines.len()).find(|index| {
@@ -1054,10 +1068,7 @@ fn reader_permission_yaml(indent: usize, entity_id: &str, reader: &ReaderGrant) 
 fn insert_reader_permission(text: &str, entity_id: &str, reader: &ReaderGrant) -> Result<String> {
     let lines = text.split_inclusive('\n').collect::<Vec<_>>();
     let significant = |line: &str| !line.trim().is_empty() && !line.trim_start().starts_with('#');
-    let marker = format!("- id: {READER_CLIENT_ID}");
-    let start = lines
-        .iter()
-        .position(|line| line.trim() == marker)
+    let start = find_collection_item(&lines, "accessProfiles", READER_CLIENT_ID)
         .context("narrow YAML patch could not locate the casework-reader access profile")?;
     let item_indent = leading_spaces(lines[start]);
     let end = (start + 1..lines.len())
@@ -2680,6 +2691,45 @@ mod tests {
         .unwrap();
         assert!(rendered.contains("# keep the grant context"));
         assert_eq!(serde_norway::from_str::<Value>(&rendered).unwrap(), second);
+    }
+
+    #[test]
+    fn narrow_yaml_patch_finds_the_reader_profile_under_access_profiles_only() {
+        let input = "entities:\n  - id: request\n    route: requests\n  - id: casework-reader\n    route: readers\n  - id: transfer\n    route: transfers\naccessProfiles: []\n";
+        let mut first: Value = serde_norway::from_str(input).unwrap();
+        apply_breg_candidate(&mut first, "request", &record_reader(&[])).unwrap();
+        let paired = render_candidate_preserving_authored_text(
+            input.as_bytes(),
+            "request",
+            &first,
+            &record_reader(&[]),
+        )
+        .unwrap();
+        let mut second = first.clone();
+        apply_breg_candidate(&mut second, "transfer", &record_reader(&[])).unwrap();
+        let rendered = render_candidate_preserving_authored_text(
+            paired.as_bytes(),
+            "transfer",
+            &second,
+            &record_reader(&[]),
+        )
+        .unwrap();
+        assert_eq!(serde_norway::from_str::<Value>(&rendered).unwrap(), second);
+    }
+
+    #[test]
+    fn narrow_yaml_patch_finds_the_entity_under_entities_only() {
+        let input = "accessProfiles:\n  - id: request\n    permissions: []\nentities:\n  - id: request\n    route: requests\n";
+        let mut expected: Value = serde_norway::from_str(input).unwrap();
+        apply_breg_candidate(&mut expected, "request", &record_reader(&[])).unwrap();
+        let patched = render_candidate_preserving_authored_text(
+            input.as_bytes(),
+            "request",
+            &expected,
+            &record_reader(&[]),
+        )
+        .unwrap();
+        assert_eq!(serde_norway::from_str::<Value>(&patched).unwrap(), expected);
     }
 
     #[test]
