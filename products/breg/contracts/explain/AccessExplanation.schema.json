@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/breg-explain/v1alpha2/AccessExplanation.schema.json",
+  "$id": "https://registrystack.org/breg-explain/v1alpha3/AccessExplanation.schema.json",
   "title": "AccessExplanation",
-  "description": "Wire shape of `explanation` for `bregctl explain access` without `--scenario`. The evaluation-rule strings are hand-authored constants and are pinned; `routes`, `entities`, `actions`, `rowReach`, `claimContract`, and `claimContractError` are passthroughs of compiled-model values and are declared opaque, except `routes.entries[].entityId`, which is pinned because consumers read it today.",
+  "description": "Wire shape of `explanation` for `bregctl explain access` without `--scenario`. The evaluation-rule strings are hand-authored constants and are pinned; `routes`, `entities`, `actions`, `rowReach`, `claimContract`, and `claimContractError` are passthroughs of compiled-model values and are declared opaque, except `routes.entries[].entityId`, which is pinned because consumers read it today. `consent` is pinned in full: its structure exists only to be this payload.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -20,11 +20,12 @@
     "actions",
     "rowReach",
     "claimContract",
-    "claimContractError"
+    "claimContractError",
+    "consent"
   ],
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha2"
+      "const": "registry.registrystack.org/breg-explain/v1alpha3"
     },
     "kind": {
       "const": "AccessExplanation"
@@ -87,6 +88,323 @@
         "conflicting_claim_expectation",
         null
       ]
+    },
+    "consent": {
+      "description": "Consent-gated permissions, the recipient set of every client, and the consent records they check; null when the project declares no recipients, consent record, or requireConsent permission. Built only for this payload and pinned in full.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "condition",
+        "unmappedClients",
+        "trustModel",
+        "ungating",
+        "organizations",
+        "groups",
+        "clients",
+        "records",
+        "permissions",
+        "issuers"
+      ],
+      "properties": {
+        "condition": {
+          "type": "string"
+        },
+        "unmappedClients": {
+          "type": "string"
+        },
+        "trustModel": {
+          "type": "string"
+        },
+        "ungating": {
+          "type": "string"
+        },
+        "organizations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "name",
+              "clients",
+              "groups",
+              "retired"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "clients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "groups": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "retired": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "name",
+              "members",
+              "clients"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "members": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "clients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "clients": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/consentClient"
+          }
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "entity",
+              "maxDuration",
+              "gives",
+              "revokes",
+              "refusals",
+              "scopes",
+              "indexes"
+            ],
+            "properties": {
+              "entity": {
+                "type": "string"
+              },
+              "maxDuration": {
+                "type": "string"
+              },
+              "gives": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "revokes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "refusals": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "scopes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "indexes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "entity",
+              "profile",
+              "sourcePath",
+              "record",
+              "on",
+              "condition",
+              "purposes",
+              "scope",
+              "maxDuration",
+              "probeFunction",
+              "indexes",
+              "readableFields",
+              "clients",
+              "issuingActions"
+            ],
+            "properties": {
+              "entity": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              },
+              "sourcePath": {
+                "type": "string"
+              },
+              "record": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "condition": {
+                "type": "string"
+              },
+              "purposes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "scope": {
+                "type": "string"
+              },
+              "maxDuration": {
+                "type": "string"
+              },
+              "probeFunction": {
+                "type": "string"
+              },
+              "indexes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "readableFields": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "field",
+                    "classification"
+                  ],
+                  "properties": {
+                    "field": {
+                      "type": "string"
+                    },
+                    "classification": {
+                      "enum": [
+                        "public",
+                        "internal",
+                        "restricted",
+                        null
+                      ]
+                    }
+                  }
+                }
+              },
+              "clients": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/consentClient"
+                }
+              },
+              "issuingActions": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/consentIssuer"
+                }
+              }
+            }
+          }
+        },
+        "issuers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/consentIssuer"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "consentIssuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "issuer"
+      ],
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "issuer": {
+          "enum": [
+            "self",
+            "steward"
+          ]
+        }
+      }
+    },
+    "consentClient": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "client",
+        "organization",
+        "recipients"
+      ],
+      "properties": {
+        "client": {
+          "type": "string"
+        },
+        "organization": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recipients": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
     }
   }
 }

@@ -1164,6 +1164,7 @@ mod tests {
                 operations: Vec::new(),
             },
             actions: CompiledActionInventory::default(),
+            recipients: Default::default(),
         }
     }
 

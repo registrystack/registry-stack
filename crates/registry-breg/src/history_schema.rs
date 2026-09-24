@@ -461,7 +461,15 @@ impl HistoryFieldDescriptor {
         allow_retained_plaintext: bool,
     ) -> Result<bool, HistorySchemaError> {
         self.validate()?;
-        if self.id != active.id || self.field_type != *active.field_type {
+        // A revision recorded under fewer vocabulary codes stays readable:
+        // it is decoded against the codes it was recorded under, each of
+        // which the active field still declares.
+        if self.id != active.id
+            || (self.field_type != *active.field_type
+                && !active
+                    .field_type
+                    .keeps_vocabulary_codes_of(&self.field_type))
+        {
             return Ok(false);
         }
         if active.required && (self.nullable || !self.required) {
@@ -842,6 +850,8 @@ mod tests {
             indexes: BTreeMap::new(),
             access_profiles: BTreeMap::new(),
             membership_boundaries: BTreeMap::new(),
+            consent_record: None,
+            consent_requirements: BTreeMap::new(),
             hooks: BTreeMap::new(),
             module_origins: Default::default(),
         }
@@ -1090,6 +1100,82 @@ mod tests {
                 .expect_err("a validity boundary cannot read as null"),
             HistorySchemaError::MissingRequiredField
         );
+    }
+
+    fn with_status_field(vocabulary: &str, values: &[&str]) -> CompiledEntity {
+        let mut entity = membership_entity();
+        let status = stored(
+            "status",
+            "status",
+            FieldTypeSource::VocabularyCode {
+                vocabulary: vocabulary.to_owned(),
+                values: values.iter().map(|value| (*value).to_owned()).collect(),
+            },
+            true,
+            None,
+        );
+        entity.fields.insert(
+            "status".to_owned(),
+            crate::model::CompiledField {
+                pattern: None,
+                id: "status".to_owned(),
+                field_type: status.logical.field_type.clone(),
+                required: true,
+                classification: Classification::Restricted,
+                valid_time_role: None,
+                physical_name: "f_status".to_owned(),
+                encryption: None,
+            },
+        );
+        entity.stored_fields.push(status);
+        entity
+    }
+
+    #[test]
+    fn vocabulary_code_additions_keep_recorded_values_readable() {
+        let old = with_status_field("status", &["open", "closed"]);
+        let descriptor = descriptor_for(&old);
+        let added = with_status_field("status", &["open", "closed", "archived"]);
+
+        let compatibility = descriptor
+            .compatibility_for_fields(&added, &required(&["status"]), &required(&["status"]))
+            .expect("added vocabulary codes keep every recorded code valid");
+        assert_eq!(
+            compatibility.fields["status"].field_type, old.fields["status"].field_type,
+            "a revision is decoded against the codes it was recorded under"
+        );
+        let decoded = descriptor
+            .decode_snapshot_for_fields(
+                &compatibility,
+                &snapshot(json!({
+                    "person": "00000000-0000-4000-8000-000000000001",
+                    "household": "A",
+                    "valid-from": "2026-01-01",
+                    "valid-to": null,
+                    "status": "closed"
+                })),
+                None,
+            )
+            .expect("a snapshot recorded before the addition decodes");
+        assert_eq!(decoded.by_field_id["status"], json!("closed"));
+
+        for (active, reason) in [
+            (
+                with_status_field("status", &["open"]),
+                "a removed code could surface a value the active vocabulary refuses",
+            ),
+            (
+                with_status_field("state", &["open", "closed", "archived"]),
+                "a renamed vocabulary is not an addition",
+            ),
+        ] {
+            assert_eq!(
+                descriptor
+                    .compatibility_for_fields(&active, &required(&["status"]), &required(&[]))
+                    .expect_err(reason),
+                HistorySchemaError::IncompatibleField
+            );
+        }
     }
 
     #[test]

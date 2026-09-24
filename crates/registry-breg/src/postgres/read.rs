@@ -2253,6 +2253,7 @@ fn strict_claim_context(
         row_boundaries,
     )
     .and_then(|claims| claims.with_api_submitter_targets(registry, context))
+    .and_then(|claims| claims.with_recipients(context.recipients().clone()))
     .map_err(|_| ReadServiceError::Unavailable)
 }
 

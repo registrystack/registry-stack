@@ -636,6 +636,7 @@ pub(crate) fn compile_change_requests(
                                 .is_some_and(|target_profile| {
                                     target_profile.operations.contains(&Operation::Get)
                                         && target_profile.membership_boundaries.is_empty()
+                                        && target_profile.require_consent.is_empty()
                                 })
                     })
                     && !profile.anonymous
@@ -645,7 +646,7 @@ pub(crate) fn compile_change_requests(
                 errors.push(Diagnostic::error(
                     "change_request.submitter_targets.invalid",
                     format!("{}.submitterTargets", profile_path(&entity.id, &profile.id)),
-                    "submitterTargets requires manual application and exactly the fixed existing effect and application-guard reference targets; each reference must be required, readable, and writable wherever the profile authors the request, and each non-request target needs a same-profile get grant without membership boundaries",
+                    "submitterTargets requires manual application and exactly the fixed existing effect and application-guard reference targets; each reference must be required, readable, and writable wherever the profile authors the request, and each non-request target needs a same-profile get grant without membership boundaries or consent checks",
                 ));
             }
         }

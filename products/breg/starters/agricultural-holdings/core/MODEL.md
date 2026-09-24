@@ -52,7 +52,7 @@ state binds exact input bytes and captured UUIDs to each attempt.
 
 Farm is a production unit, not a Group. Person, Organization and InformalGroup
 are separate minimal identities. The three concrete holder roles target Farm
-and exactly Person, Organization or InformalGroup. HoldingOperatorRole is
+and exactly Person, Organization or InformalGroup. AgriculturalHolderRole is
 abstract and has no route. The draft permits broader Group types, while this
 fixed profile deliberately restricts group holders to InformalGroup.
 
@@ -74,7 +74,7 @@ are outside this package.
 ## Attribution and adoption
 
 The model maps selected fields and native references to PublicSchema draft
-concepts at commit `1ea9ce333918693b29aec31068fac412e02cb8dc`, under CC BY 4.0.
+concepts at commit `bd07bda1fe9cb9eb8582cf7bc1c77367e2455e5b`, under CC BY 4.0.
 See `PUBLICSCHEMA-LICENSE.txt` and the pinned source in `starter-template.json`.
 The local key representation, permissions, review policy, reference target
 narrowing and validation rules are Registry Stack starter decisions. Local

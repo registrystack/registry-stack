@@ -111,6 +111,58 @@ REQUEST_ATTACHMENT_PATHS = (
     "generated/schemas/correction-request.schema.json",
 )
 
+CONSENT_PERSON_REGISTRY_PATHS = (
+    "compiled/actions.json",
+    "generated/action-schemas/give-person-consent.invoke.input.schema.json",
+    "generated/action-schemas/give-person-consent.invoke.response.schema.json",
+    "generated/action-schemas/import-person-consent.invoke.input.schema.json",
+    "generated/action-schemas/import-person-consent.invoke.response.schema.json",
+    "generated/action-schemas/invalidate-person-consent.invoke.input.schema.json",
+    "generated/action-schemas/invalidate-person-consent.invoke.response.schema.json",
+    "generated/action-schemas/record-person-consent-assisted.invoke.input.schema.json",
+    "generated/action-schemas/record-person-consent-assisted.invoke.response.schema.json",
+    "generated/action-schemas/refuse-person-consent.invoke.input.schema.json",
+    "generated/action-schemas/refuse-person-consent.invoke.response.schema.json",
+    "generated/action-schemas/withdraw-person-consent.invoke.input.schema.json",
+    "generated/action-schemas/withdraw-person-consent.invoke.response.schema.json",
+    "generated/manifest/dcat.jsonld",
+    "generated/manifest/registry-manifest.json",
+    "generated/metadata/registry.json",
+    "generated/openapi.json",
+    "generated/postgres/schema.sql",
+    "generated/schemas/person-consent-decision.schema.json",
+    "generated/schemas/person-consent-link.schema.json",
+    "generated/schemas/person-notice-clause.schema.json",
+    "generated/schemas/person-privacy-notice.schema.json",
+    "generated/schemas/person.schema.json",
+)
+CONSENT_LAND_REGISTRY_PATHS = (
+    "compiled/actions.json",
+    "generated/action-schemas/give-tenure-right-consent.invoke.input.schema.json",
+    "generated/action-schemas/give-tenure-right-consent.invoke.response.schema.json",
+    "generated/action-schemas/import-tenure-right-consent.invoke.input.schema.json",
+    "generated/action-schemas/import-tenure-right-consent.invoke.response.schema.json",
+    "generated/action-schemas/invalidate-tenure-right-consent.invoke.input.schema.json",
+    "generated/action-schemas/invalidate-tenure-right-consent.invoke.response.schema.json",
+    "generated/action-schemas/record-tenure-right-consent-assisted.invoke.input.schema.json",
+    "generated/action-schemas/record-tenure-right-consent-assisted.invoke.response.schema.json",
+    "generated/action-schemas/refuse-tenure-right-consent.invoke.input.schema.json",
+    "generated/action-schemas/refuse-tenure-right-consent.invoke.response.schema.json",
+    "generated/action-schemas/withdraw-tenure-right-consent.invoke.input.schema.json",
+    "generated/action-schemas/withdraw-tenure-right-consent.invoke.response.schema.json",
+    "generated/manifest/dcat.jsonld",
+    "generated/manifest/registry-manifest.json",
+    "generated/metadata/registry.json",
+    "generated/openapi.json",
+    "generated/postgres/schema.sql",
+    "generated/schemas/parcel.schema.json",
+    "generated/schemas/tenure-right-consent-decision.schema.json",
+    "generated/schemas/tenure-right-consent-link.schema.json",
+    "generated/schemas/tenure-right-notice-clause.schema.json",
+    "generated/schemas/tenure-right-privacy-notice.schema.json",
+    "generated/schemas/tenure-right.schema.json",
+)
+
 EXPECTED_PATHS_BY_BASELINE = {
     "asset-site-placement": ASSET_SITE_PLACEMENT_PATHS,
     "business-establishments": BUSINESS_ESTABLISHMENTS_PATHS,
@@ -121,6 +173,8 @@ EXPECTED_PATHS_BY_BASELINE = {
     "request-attachments": REQUEST_ATTACHMENT_PATHS,
     "asset-registration-actions": ASSET_REGISTRATION_ACTIONS_PATHS,
     "household-contact-actions": HOUSEHOLD_CONTACT_ACTIONS_PATHS,
+    "consent-person-registry": CONSENT_PERSON_REGISTRY_PATHS,
+    "consent-land-registry": CONSENT_LAND_REGISTRY_PATHS,
 }
 EXPECTED_PATHS = ASSET_SITE_PLACEMENT_PATHS
 

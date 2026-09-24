@@ -1,0 +1,78 @@
+id: https://publicschema.org/linkml/tax
+name: publicschema-tax
+title: Tax registration
+description: Registration of persons and organizations with tax authorities.
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+imports:
+- linkml:types
+- value_types
+- registry
+classes:
+  TaxRegistration:
+    class_uri: publicschema:tax/TaxRegistration
+    title: Tax Registration
+    description: A tax authority's recognition that a person or organization is registered for a tax, or group
+      of taxes, in its jurisdiction. A subject registered for several taxes can hold one registration
+      for each. Neither the registration nor the tax identifier it issues shows by itself that tax is
+      owed, that returns are due, that the subject is resident there, or that it complies.
+    slots:
+    - tax_type
+    status: bibo:draft
+    is_a: Registration
+    annotations:
+      label_es: Registro fiscal
+      label_fr: Enregistrement fiscal
+      description_es: El reconocimiento por una administración tributaria de que una persona u
+        organización está registrada para un impuesto, o un grupo de impuestos, en su
+        jurisdicción. Un sujeto registrado para varios impuestos puede tener un registro para cada
+        uno. Ni el registro ni el identificador fiscal que expide muestran por sí solos que se
+        adeuda un impuesto, que una declaración está pendiente, que el sujeto reside allí, o que
+        cumple con sus obligaciones.
+      description_fr: La reconnaissance par une administration fiscale qu'une personne ou une
+        organisation est enregistrée pour un impôt, ou un groupe d'impôts, dans sa
+        juridiction. Un sujet enregistré pour plusieurs impôts peut détenir un enregistrement pour
+        chacun. Ni l'enregistrement ni l'identifiant fiscal qu'il délivre ne montrent à eux seuls
+        qu'un impôt est dû, qu'une déclaration est exigible, que le sujet y réside, ou qu'il est en
+        conformité.
+      source_domain: tax
+      bibliography_refs: '["eu-dir-2006-112", "oecd-aeoi-tin", "tadat-field-guide-2019", "us-irs-tin"]'
+      external_alignments_json: '[{"label": "POA 1: Integrity of the Registered Taxpayer Base", "match":
+        "related", "note": "TADAT Field Guide (2019), indicators P1-1 and P1-2, assess the accuracy and coverage
+        of the taxpayer register that these records make up.", "uri": "https://www.tadat.org/content/dam/tadat/en/assessments/TADAT%20Field%20Guide%202019%20-%20English.pdf",
+        "vocabulary": "TADAT Field Guide 2019", "vocabulary_id": "tadat-field-guide-2019"}, {"label": "VAT
+        identification", "match": "related", "note": "Council Directive 2006/112/EC, Articles 213 to 215,
+        requires registration for one tax, value added tax, with its own identification number.", "uri":
+        "https://eur-lex.europa.eu/eli/dir/2006/112/oj", "vocabulary": "Council Directive 2006/112/EC", "vocabulary_id":
+        "eu-dir-2006-112"}]'
+slots:
+  tax_type:
+    slot_uri: publicschema:tax/tax_type
+    title: Tax type
+    description: The tax, or group of taxes, that the registration covers, such as value added tax or
+      personal income tax, taken from a named classification.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de impuesto
+      label_fr: Type d'impôt
+      description_es: El impuesto, o el grupo de impuestos, que cubre el registro, por ejemplo el
+        impuesto sobre el valor añadido o el impuesto sobre la renta de las personas físicas, tomado
+        de una clasificación designada.
+      description_fr: L'impôt, ou le groupe d'impôts, que couvre l'enregistrement, par exemple la
+        taxe sur la valeur ajoutée ou l'impôt sur le revenu des personnes physiques, tiré d'une
+        classification nommée.
+      source_domain: tax
+      category: classification
+      external_alignments_json: '[{"label": "OECD classification of taxes", "match": "broad", "note": "The
+        OECD Revenue Statistics headings 1000 to 6000 classify taxes, not registrations.", "uri": "https://www.oecd.org/content/dam/oecd/en/topics/policy-sub-issues/global-tax-revenues/oecd-classification-taxes-interpretative-guide.pdf",
+        "vocabulary": "OECD Classification of Taxes", "vocabulary_id": "oecd-tax-classification"}, {"label":
+        "Taxes (GFSM 2014 classification 11)", "match": "broad", "note": "IMF Government Finance Statistics
+        Manual 2014 heading 11 and its subheadings classify taxes, not registrations.", "uri": "https://www.imf.org/external/pubs/ft/gfs/manual/pdf/class.pdf",
+        "vocabulary": "IMF GFSM 2014", "vocabulary_id": "imf-gfsm-2014"}]'
+      bibliography_refs: '["imf-gfsm-2014", "oecd-tax-classification"]'

@@ -77,6 +77,75 @@ relevant product pages on this site rather than duplicating release notes.
 {/* Evidence: crates/registry-breg/src/postgres/mutation.rs, request_reviewed_apply;
     crates/registry-breg/tests/postgres_task_grants.rs, review_apply_checks_original_task_before_authority_and_before_commit. */}
 
+- Base Registry Engine (BReg) read permissions can require the subject's
+  recorded consent with
+  `requireConsent`. A row reaches a declared recipient organization only while
+  a live give for that recipient, purpose, and profile is recorded; PostgreSQL
+  checks it on every read, and a withdrawal applies to the next request.
+  `bregctl module add consent` generates the consent records, actions, and
+  profiles for one subject entity. `bregctl check` reports
+  `access.consent.ungated_client` for an ungated profile that reads the same
+  rows. Access preview scenarios accept `actorKind` and `requesterClient` and
+  report the derived `recipients`. See
+  [require consent for a read](../configure/breg-access/#require-consent-for-a-read)
+  and [membership and consent read boundaries](../explanation/membership-read-boundaries/).
+
+{/* Evidence: crates/registry-breg/src/consent.rs;
+    crates/registry-bregctl/src/consent_module.rs, plan();
+    crates/registry-breg/src/access_preview.rs, ScenarioClaims and AccessPreview. */}
+
+- A code added to a BReg field vocabulary is now a compatible additive
+  migration, so it needs no reviewed migration evidence; `bregctl diff`
+  classifies it `lock_or_rewrite_risk` because the column check is replaced
+  under a table lock. An action input that starts accepting codes is additive
+  only when each gained code is new to its vocabulary in the same successor.
+  `bregctl diff` attaches a review `reason` to consent-related access changes.
+  See [change an active registry](../operate/breg-changes/).
+
+{/* Evidence: crates/registry-breg/src/package.rs, FieldVocabularyCodesAdded and ActionVocabularyCodesAdded;
+    crates/registry-breg/src/immediate_actions.rs, contract_only_adds_vocabulary_codes();
+    crates/registry-breg/src/tooling.rs, ACTION_CODES_ADDED. */}
+
+- BREAKING: `bregctl init --from publicschema` and the four BReg starters
+  follow PublicSchema `main` at commit `bd07bda`, version 0.3.0. The
+  `agricultural-holdings` starter takes PublicSchema's agricultural holder
+  names: its `*-holding-operator-role` entities and routes become
+  `*-agricultural-holder-role`, and the `operatedHolding` and
+  `holdingOperator*` fields become `holderFarm` and `holderPerson`,
+  `holderOrganization`, or `holderGroup`. A project copied from that starter
+  keeps working as written; initialize it again to take the new names, which
+  come without a data migration. The `seed-lots` starter aligns its fields
+  to renamed PublicSchema concepts. PublicSchema retired `public_mandate`, so
+  the `public-organizations` starter aligns its free-text `description`
+  field to PublicSchema's `description` instead. Neither starter changes a
+  field, route, or record. See
+  [derive a registry from PublicSchema](../tutorials/derive-a-registry-from-publicschema/).
+
+{/* Evidence: crates/registry-linkml/publicschema/PIN.yaml;
+    crates/registry-linkml/tests/snapshot.rs;
+    products/breg/starters/agricultural-holdings/core/registry.yaml;
+    products/breg/starters/seed-lots/core/registry.yaml;
+    products/breg/starters/public-organizations/core/registry.yaml;
+    products/breg/starters/public-organizations/core/MODEL.md;
+    products/breg/starters/README.md. */}
+
+- A `--selection` document for `bregctl init --from publicschema` may now name
+  a `modelRevision` alongside `modelVersion`. PublicSchema can keep one
+  version label across structurally different revisions, so `modelVersion`
+  alone does not pin one; `modelRevision` pins the upstream commit the
+  embedded snapshot was copied from, and `init` refuses a selection naming a
+  different one. The wizard, the `household` starter selection, and the
+  Evidence tutorial's selection write it, and the generated README's
+  attribution section states it beside the version. See
+  [derive a registry from PublicSchema](../tutorials/derive-a-registry-from-publicschema/).
+
+{/* Evidence: crates/registry-bregctl/src/init_from_model/selection.rs, Selection;
+    crates/registry-bregctl/src/init_from_model/resolve.rs, ModelFacts and resolve();
+    crates/registry-bregctl/src/init_from_model/render.rs, readme();
+    crates/registry-bregctl/src/init_from_model/wizard.rs, assemble();
+    crates/registry-linkml/publicschema/starters/household.yaml;
+    products/breg/evidence/organization-selection.yaml. */}
+
 ## v0.33.0 beta-45
 
 - Registry Scheduling joins the release with published openings, exact-time

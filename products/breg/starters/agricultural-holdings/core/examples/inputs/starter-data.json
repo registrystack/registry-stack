@@ -28,37 +28,37 @@
     "name": "Hill Growers Group"
   },
   "ana-role": {
-    "operatedHolding": {
+    "holderFarm": {
       "recordRef": "river"
     },
-    "holdingOperatorPerson": {
+    "holderPerson": {
       "recordRef": "ana"
     },
     "startDate": "2026-01-01"
   },
   "bo-role": {
-    "operatedHolding": {
+    "holderFarm": {
       "recordRef": "river"
     },
-    "holdingOperatorPerson": {
+    "holderPerson": {
       "recordRef": "bo"
     },
     "startDate": "2026-01-01"
   },
   "cooperative-role": {
-    "operatedHolding": {
+    "holderFarm": {
       "recordRef": "landless"
     },
-    "holdingOperatorOrganization": {
+    "holderOrganization": {
       "recordRef": "cooperative"
     },
     "startDate": "2026-01-01"
   },
   "group-role": {
-    "operatedHolding": {
+    "holderFarm": {
       "recordRef": "collective"
     },
-    "holdingOperatorGroup": {
+    "holderGroup": {
       "recordRef": "group"
     },
     "startDate": "2026-01-01"

@@ -1,0 +1,304 @@
+id: https://publicschema.org/linkml/value_types
+name: publicschema-value-types
+title: Coded, quantity and spatial values
+description: Value structures for codes interpreted within a named scheme, measured quantities with
+  their unit, and spatial geometries with their encoding and coordinate reference system.
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+  skos: http://www.w3.org/2004/02/skos/core#
+  geo: http://www.opengis.net/ont/geosparql#
+  locn: http://www.w3.org/ns/locn#
+imports:
+- linkml:types
+- vocabularies
+classes:
+  CodedValue:
+    class_uri: publicschema:CodedValue
+    title: Coded Value
+    description: A code together with the code scheme that gives it meaning, optionally with the display
+      label supplied by the source and the URI of the concept it denotes. Unknown, retired and local
+      codes remain representable; a label alone does not establish equivalence.
+    slots:
+    - code_value
+    - code_scheme
+    - code_label
+    - code_meaning
+    status: bibo:draft
+    annotations:
+      inline_only: true
+      label_es: Valor codificado
+      label_fr: Valeur codée
+      description_es: Un código junto con el esquema de código que le da sentido, con la etiqueta de
+        visualización proporcionada por la fuente y el URI del concepto que denota cuando corresponda.
+        Los códigos desconocidos, retirados y locales siguen siendo representables; una etiqueta por
+        sí sola no establece equivalencia.
+      description_fr: Un code accompagné du schéma de code qui lui donne son sens, avec le cas échéant
+        le libellé d'affichage fourni par la source et l'URI du concept qu'il désigne. Les codes inconnus,
+        retirés et locaux restent représentables; un libellé seul n'établit pas d'équivalence.
+      bibliography_refs: '["fhir-r5", "skos"]'
+  QuantityValue:
+    class_uri: publicschema:QuantityValue
+    title: Quantity Value
+    description: A numeric amount with its unit of measure, where the unit is a code from a named unit
+      system. The property holding the value says what is measured.
+    slots:
+    - quantity_value
+    - unit_code
+    - unit_scheme
+    status: bibo:draft
+    annotations:
+      inline_only: true
+      label_es: Valor cuantitativo
+      label_fr: Valeur quantitative
+      description_es: Una cantidad numérica con su unidad de medida, donde la unidad es un código de
+        un sistema de unidades con nombre. La propiedad que contiene el valor indica qué se mide.
+      description_fr: Un montant numérique avec son unité de mesure, l'unité étant un code issu d'un
+        système d'unités nommé. La propriété qui porte la valeur indique ce qui est mesuré.
+      bibliography_refs: '["regenstrief-ucum", "un-cefact-rec20"]'
+  SpatialGeometry:
+    class_uri: publicschema:SpatialGeometry
+    title: Spatial Geometry
+    description: A shape or position written in a named geometry encoding and coordinate reference
+      system. It says where something is, not what it is; addresses, named areas and land parcels are
+      described separately.
+    slots:
+    - geometry_encoding
+    - geometry_literal
+    - coordinate_reference_system
+    status: bibo:draft
+    annotations:
+      label_es: Geometría espacial
+      label_fr: Géométrie spatiale
+      description_es: Una forma o posición escrita en una codificación de geometría con nombre y un
+        sistema de referencia de coordenadas. Indica dónde está algo, no qué es; las direcciones, las
+        áreas con nombre y las parcelas de tierra se describen por separado.
+      description_fr: Une forme ou une position écrite dans un encodage de géométrie nommé et un système
+        de référence de coordonnées. Elle indique où se trouve une chose, non ce qu'elle est; les adresses,
+        les zones nommées et les parcelles de terrain sont décrites séparément.
+      bibliography_refs: '["ogc-geosparql-11", "rfc-7946", "semic-core-location"]'
+slots:
+  code_value:
+    slot_uri: publicschema:code_value
+    title: Code value
+    description: The code exactly as issued by its scheme, including codes that are unknown or retired.
+    range: string
+    required: true
+    multivalued: false
+    close_mappings:
+    - skos:notation
+    status: bibo:draft
+    annotations:
+      label_es: Valor del código
+      label_fr: Valeur du code
+      description_es: El código exactamente tal como lo emite su esquema, incluidos los códigos desconocidos
+        o retirados.
+      description_fr: Le code exactement tel qu'émis par son schéma, y compris les codes inconnus ou
+        retirés.
+      category: classification
+      external_alignments_json: '[{"label": "notation", "match": "close", "note": "A string that identifies
+        a concept within the scope of its concept scheme.", "uri": "http://www.w3.org/2004/02/skos/core#notation",
+        "vocabulary": "SKOS", "vocabulary_id": "skos"}]'
+      bibliography_refs: '["skos"]'
+  code_scheme:
+    slot_uri: publicschema:code_scheme
+    title: Code scheme
+    description: The URI of the code scheme, including its edition when the edition changes what codes
+      mean.
+    range: uri
+    required: true
+    multivalued: false
+    close_mappings:
+    - skos:inScheme
+    status: bibo:draft
+    annotations:
+      label_es: Esquema de código
+      label_fr: Schéma de code
+      description_es: El URI del esquema de código, incluida su edición cuando la edición cambia el
+        significado de los códigos.
+      description_fr: L'URI du schéma de code, y compris son édition lorsque l'édition change le sens
+        des codes.
+      category: classification
+      external_alignments_json: '[{"label": "inScheme", "match": "close", "note": "Relates a concept to
+        the concept scheme it belongs to. Here the scheme is named by URI on the coded value rather than
+        on a concept resource.", "uri": "http://www.w3.org/2004/02/skos/core#inScheme", "vocabulary":
+        "SKOS", "vocabulary_id": "skos"}]'
+      bibliography_refs: '["skos"]'
+  code_label:
+    slot_uri: publicschema:code_label
+    title: Code label
+    description: The display text supplied with the code by its source. It does not replace the scheme
+      and code.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Etiqueta del código
+      label_fr: Libellé du code
+      description_es: El texto de visualización proporcionado con el código por su fuente. No reemplaza
+        al esquema y al código.
+      description_fr: Le texte d'affichage fourni avec le code par sa source. Il ne remplace pas le
+        schéma et le code.
+      category: classification
+  code_meaning:
+    slot_uri: publicschema:code_meaning
+    title: Code meaning
+    description: The URI of the concept the code denotes, when that concept has been confirmed. Leave
+      it absent when no verified interpretation exists.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Significado del código
+      label_fr: Signification du code
+      description_es: El URI del concepto que denota el código, cuando ese concepto ha sido confirmado.
+        Déjelo ausente cuando no exista una interpretación verificada.
+      description_fr: L'URI du concept que le code désigne, lorsque ce concept a été confirmé. Le laisser
+        absent en l'absence d'interprétation vérifiée.
+      category: classification
+      bibliography_refs: '["skos"]'
+  quantity_value:
+    slot_uri: publicschema:quantity_value
+    title: Quantity value
+    description: The numeric amount, expressed in the stated unit without implicit conversion or rounding.
+    range: decimal
+    required: true
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Valor cuantitativo
+      label_fr: Valeur quantitative
+      description_es: La cantidad numérica, expresada en la unidad indicada sin conversión ni redondeo
+        implícitos.
+      description_fr: Le montant numérique, exprimé dans l'unité indiquée sans conversion ni arrondi
+        implicites.
+      category: other
+  unit_code:
+    slot_uri: publicschema:unit_code
+    title: Unit code
+    description: The code of the unit of measure within the unit system named by unit_scheme.
+    range: string
+    required: true
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Código de la unidad
+      label_fr: Code de l'unité
+      description_es: El código de la unidad de medida dentro del sistema de unidades nombrado por
+        unit_scheme.
+      description_fr: Le code de l'unité de mesure au sein du système d'unités nommé par unit_scheme.
+      category: other
+      bibliography_refs: '["regenstrief-ucum", "un-cefact-rec20"]'
+  unit_scheme:
+    slot_uri: publicschema:unit_scheme
+    title: Unit scheme
+    description: The unit system that defines unit_code, such as the Unified Code for Units of Measure.
+    range: UnitSystem
+    required: true
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Esquema de unidades
+      label_fr: Schéma d'unités
+      description_es: El sistema de unidades que define unit_code, como el Unified Code for Units of
+        Measure.
+      description_fr: Le système d'unités qui définit unit_code, tel que le Unified Code for Units of
+        Measure.
+      category: other
+      bibliography_refs: '["regenstrief-ucum"]'
+  geometry_encoding:
+    slot_uri: publicschema:geometry_encoding
+    title: Geometry encoding
+    description: The format in which the geometry is written, such as GeoJSON or Well-Known Text.
+    range: GeometryEncoding
+    required: true
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Codificación de la geometría
+      label_fr: Encodage de la géométrie
+      description_es: El formato en el que se escribe la geometría, como GeoJSON o Well-Known Text.
+      description_fr: Le format dans lequel la géométrie est écrite, tel que GeoJSON ou Well-Known Text.
+      category: location
+      bibliography_refs: '["ogc-geosparql-11"]'
+  geometry_literal:
+    slot_uri: publicschema:geometry_literal
+    title: Geometry literal
+    description: The geometry written in the stated encoding. Coordinate order is determined by that
+      encoding and the coordinate reference system.
+    range: string
+    required: true
+    multivalued: false
+    close_mappings:
+    - geo:hasSerialization
+    status: bibo:draft
+    annotations:
+      label_es: Literal de geometría
+      label_fr: Littéral de géométrie
+      description_es: La geometría escrita en la codificación indicada. El orden de las coordenadas
+        lo determina esa codificación y el sistema de referencia de coordenadas.
+      description_fr: La géométrie écrite dans l'encodage indiqué. L'ordre des coordonnées est déterminé
+        par cet encodage et par le système de référence de coordonnées.
+      category: location
+      external_alignments_json: '[{"label": "hasSerialization", "match": "close", "note": "Connects a
+        geometry with its text serialization. GeoSPARQL carries the encoding in the literal datatype;
+        here it is stated in geometry_encoding.", "uri": "http://www.opengis.net/ont/geosparql#hasSerialization",
+        "vocabulary": "GeoSPARQL 1.1", "vocabulary_id": "geosparql"}]'
+      bibliography_refs: '["ogc-geosparql-11"]'
+  coordinate_reference_system:
+    slot_uri: publicschema:coordinate_reference_system
+    title: Coordinate reference system
+    description: The URI of the coordinate reference system for the coordinates. When it is absent,
+      the system stated in the geometry literal applies, such as the URI that can precede a Well-Known Text literal;
+      when neither states one, the longitude-then-latitude system named CRS84 applies, which GeoJSON
+      always uses. When both state one, they must agree.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Sistema de referencia de coordenadas
+      label_fr: Système de référence de coordonnées
+      description_es: El URI del sistema de referencia de coordenadas aplicable a las coordenadas.
+        Cuando está ausente, se aplica el sistema indicado en el literal geométrico, como el URI que
+        puede preceder a un literal Well-Known Text; cuando ninguno lo indica, se aplica el sistema
+        longitud-luego-latitud denominado CRS84, que GeoJSON utiliza siempre. Cuando ambos lo indican,
+        deben coincidir.
+      description_fr: L'URI du système de référence de coordonnées applicable aux coordonnées. En son
+        absence, le système indiqué dans le littéral géométrique s'applique, comme l'URI qui peut
+        précéder un littéral Well-Known Text ; lorsqu'aucun des deux n'en indique, le système longitude-puis-latitude
+        nommé CRS84 s'applique, celui que GeoJSON utilise toujours. Lorsque les deux en indiquent un,
+        ils doivent concorder.
+      category: location
+      bibliography_refs: '["ogc-geosparql-11"]'
+  spatial_geometry:
+    slot_uri: publicschema:spatial_geometry
+    title: Spatial geometry
+    description: A geometric representation of the described resource. The type of that resource, not
+      this property, says what the shape belongs to. It is separate from an address or a named administrative
+      area.
+    range: SpatialGeometry
+    multivalued: true
+    close_mappings:
+    - geo:hasGeometry
+    - locn:geometry
+    status: bibo:draft
+    annotations:
+      label_es: Geometría espacial
+      label_fr: Géométrie spatiale
+      description_es: Una representación geométrica del recurso descrito. Es el tipo de ese recurso,
+        y no esta propiedad, el que indica a qué pertenece la forma. Es independiente de una dirección
+        o de un área administrativa con nombre.
+      description_fr: Une représentation géométrique de la ressource décrite. C'est le type de cette
+        ressource, et non cette propriété, qui indique à quoi appartient la forme. Elle est distincte
+        d'une adresse ou d'une zone administrative nommée.
+      category: location
+      external_alignments_json: '[{"label": "hasGeometry", "match": "close", "note": "A spatial representation
+        for a given feature. The value here is a structured geometry with an explicit encoding and coordinate
+        reference system.", "uri": "http://www.opengis.net/ont/geosparql#hasGeometry", "vocabulary": "GeoSPARQL
+        1.1", "vocabulary_id": "geosparql"}, {"label": "geometry", "match": "close", "note": "Associates
+        any resource with its geometry.", "uri": "http://www.w3.org/ns/locn#geometry", "vocabulary": "Core
+        Location", "vocabulary_id": "semic"}]'
+      bibliography_refs: '["ogc-geosparql-11", "semic-core-location"]'

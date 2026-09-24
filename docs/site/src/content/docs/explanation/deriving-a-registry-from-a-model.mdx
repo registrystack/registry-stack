@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-07"
+last_reviewed: "2026-09-24"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -125,8 +125,9 @@ Beyond property refusals, the derivation refuses a selection naming an unknown o
 one giving two entities the same identifier or route, one selecting a property twice, one whose
 properties would produce two fields of the same identifier or the same API or database name, one
 naming an identifying field after a column the compiler keeps for itself, one giving a target to a
-property that does not point at a concept, one naming an unknown or unused enumeration, and one whose
-model version does not match the embedded snapshot. Nothing is written when a selection is refused.
+property that does not point at a concept, one naming an unknown or unused enumeration, one whose
+model version does not match the embedded snapshot, and one whose model revision does not match the
+embedded snapshot's upstream commit. Nothing is written when a selection is refused.
 
 {/* Evidence: crates/registry-bregctl/src/init_from_model/resolve.rs, field_kind(), property_support(), and resolve(). */}
 
@@ -154,12 +155,14 @@ and requires attribution, and a derived project is a derived work: the derivatio
 the concepts, renames them into identifiers a registry can route, and retypes their properties into
 bounded field types. Nothing that comes out is the model unchanged.
 
-The generated README opens with an attribution section naming the model, its version, its repository,
-its licence, and the licence URL, and stating that the project is a modified form. The obligation
-travels with the project: keep the notice with the source, and with any package built from it. It is
-a copyright notice about the vocabulary, not a claim about the records a registry goes on to hold.
+The generated README opens with an attribution section naming the model, its version, its revision,
+its repository, its licence, and the licence URL, and stating that the project is a modified form. The
+revision is the upstream commit the embedded snapshot was copied from: a version label alone can
+repeat across structurally different revisions, so the README states both. The obligation travels with
+the project: keep the notice with the source, and with any package built from it. It is a copyright
+notice about the vocabulary, not a claim about the records a registry goes on to hold.
 
-{/* Evidence: crates/registry-linkml/publicschema/PIN.yaml, version and license;
+{/* Evidence: crates/registry-linkml/publicschema/PIN.yaml, commit, version and license;
     crates/registry-bregctl/src/init_from_model/render.rs, readme(). */}
 
 ## Next

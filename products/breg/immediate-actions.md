@@ -173,6 +173,15 @@ Use `in` to distinguish absence from an explicitly supplied value. The example
 name policy treats omission, null and blank strings as empty name parts.
 Fixed-effect actions reject explicit null inputs. Supply a typed value for each
 input used by a fixed mapping.
+
+A fixed mapping may set an optional field from an optional input. When the
+caller omits that input, the effect leaves the field out: a create stores the
+field's ordinary absent value and a patch leaves the stored value unchanged.
+Only omission skips the field: an explicit JSON `null` for that optional input
+returns HTTP `400 request.invalid` and changes nothing.
+Omitting a required input still refuses the request, as does an absent input
+mapped to a required field. A handler's proposal is taken as written, so a
+proposal that names an absent input is refused rather than skipped.
 Rhai has no database query, stored-record snapshot, clock, filesystem or network
 API. The script returns exactly one of `effects` or `refusal`:
 
@@ -250,7 +259,9 @@ requires:
 reference target. Each input must be required and already used by the action's
 effects. Exactly one of `equals` and `equalsInput` is required. `equalsInput`
 names a required action input with the same compiled scalar type as the stored
-target field. Requirements are combined with AND.
+target field; the compiler refuses one that names an optional input, and a
+request without the named input is refused, never admitted with the check
+skipped. Requirements are combined with AND.
 Null is permitted only for an optional target field. Structured values and
 points are not supported. The compiler rejects unknown inputs, fields,
 incompatible values, duplicate checks, and requirements above the existing

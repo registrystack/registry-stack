@@ -7,34 +7,50 @@ prefixes:
   publicschema: https://publicschema.org/
   linkml: https://w3id.org/linkml/
   bibo: http://purl.org/ontology/bibo/
+  foaf: http://xmlns.com/foaf/0.1/
+  prov: http://www.w3.org/ns/prov#
+  dct: http://purl.org/dc/terms/
+  cpov: http://data.europa.eu/m8g/
 imports:
 - linkml:types
 - common
 - core
 - identity
 - document
+- misc
+- value_types
 classes:
   Register:
     class_uri: publicschema:Register
     title: Register
-    description: An organized collection of records maintained by an identified authority
-      for a stated administrative purpose. Its identity is separate from the identities
-      of its records and their subjects.
+    description: An authoritative collection of records about subjects of stated types, kept by an accountable
+      organization for a stated administrative purpose. A register is distinct from the records it holds,
+      from the subjects they describe and from the information system that stores it.
     slots:
     - name
-    - maintaining_authority
+    - register_owner
     - register_jurisdiction
     - register_subject_types
     - description
     status: bibo:draft
     annotations:
-      bibliography_refs: '["w3c-dcat-3-2024", "ec-inspire-registers-2017"]'
+      label_es: Registro
+      label_fr: Registre
+      description_es: Una colección oficial de entradas de registro sobre sujetos de tipos determinados,
+        mantenida por una organización responsable para un fin administrativo determinado. Un registro
+        es distinto de las entradas de registro que contiene, de los sujetos que describen y del sistema
+        de información que lo almacena.
+      description_fr: Une collection officielle d'entrées de registre concernant des sujets de types
+        déterminés, tenue par une organisation responsable pour une finalité administrative déterminée.
+        Un registre est distinct des entrées de registre qu'il contient, des sujets qu'elles décrivent
+        et du système d'information qui le stocke.
+      bibliography_refs: '["ec-inspire-registers-2017", "iso-19135-1", "spdci-social-registry", "w3c-dcat-3"]'
   RegistryEntry:
     class_uri: publicschema:RegistryEntry
     title: Registry Entry
-    description: A record about a subject in a register. The register and local record
-      identifier identify the record; subject_uri identifies the thing described.
-      Recording does not itself grant legal recognition or prove the assertion.
+    description: A record in a register that describes one subject. The register and the record's local
+      identifier together identify the record; the subject has its own separate identity. Entering a record
+      does not in itself grant recognition or prove what the record states.
     slots:
     - register_uri
     - record_id
@@ -48,14 +64,22 @@ classes:
     - evidence_assertions
     status: bibo:draft
     annotations:
-      bibliography_refs: '["w3c-dcat-3-2024", "ec-inspire-registers-2017"]'
+      label_es: Entrada de registro
+      label_fr: Entrée de registre
+      description_es: Una entrada de un registro que describe un sujeto. El registro y el identificador
+        local de la entrada la identifican conjuntamente; el sujeto tiene su propia identidad separada.
+        Incluir una entrada no otorga por sí mismo reconocimiento ni prueba lo que la entrada afirma.
+      description_fr: Une entrée d'un registre qui décrit un sujet. Le registre et l'identifiant local
+        de l'entrée l'identifient conjointement; le sujet possède sa propre identité distincte. Le fait
+        d'inscrire une entrée n'accorde pas en soi une reconnaissance et ne prouve pas ce que l'entrée
+        affirme.
+      bibliography_refs: '["ec-inspire-registers-2017", "iso-19135-1", "w3c-dcat-3"]'
   RecordReference:
     class_uri: publicschema:RecordReference
     title: Record Reference
-    description: A reference to a record qualified by its register. An optional subject
-      URI is an explicit assertion about that record, not a replacement for its qualified
-      key. Resolving a record to a subject requires a checked local record or an explicit
-      unresolved result.
+    description: A reference to a record, given by the register that holds it and the record's identifier
+      within that register. It may also state which subject the record describes. It identifies a record
+      in the way an Identifier identifies a subject, and a record identifier is not a subject identifier.
     slots:
     - register_uri
     - record_id
@@ -63,14 +87,23 @@ classes:
     - subject_type
     status: bibo:draft
     annotations:
-      bibliography_refs: '["w3c-dcat-3-2024"]'
+      label_es: Referencia de entrada
+      label_fr: Référence d'entrée
+      description_es: Una referencia a una entrada de registro, dada por el registro que la contiene
+        y el identificador de la entrada dentro de ese registro. También puede indicar qué sujeto describe
+        la entrada. Identifica una entrada de registro del mismo modo que un Identifier identifica a
+        un sujeto, y el identificador de una entrada no es el identificador de un sujeto.
+      description_fr: Une référence à une entrée de registre, donnée par le registre qui la détient
+        et l'identifiant de l'entrée au sein de ce registre. Elle peut aussi indiquer quel sujet l'entrée
+        décrit. Elle identifie une entrée de registre de la même manière qu'un Identifier identifie
+        un sujet, et l'identifiant d'une entrée n'est pas l'identifiant d'un sujet.
+      bibliography_refs: '["ec-inspire-registers-2017", "semic-adms", "w3c-dcat-3"]'
   Registration:
     class_uri: publicschema:Registration
     title: Registration
-    description: An authority's recognition of a subject for a stated administrative
-      purpose and jurisdiction. Recognition is separate from subject identity and
-      from the record that describes it; it does not inherently authorize an activity
-      or confer benefits.
+    description: An authority's formal recognition of a subject for a stated administrative purpose within
+      a jurisdiction. Recognition is distinct from the subject, from the record that documents it and
+      from any permission or benefit.
     slots:
     - registered_subject
     - registration_authority
@@ -81,130 +114,143 @@ classes:
     - evidence_assertions
     status: bibo:draft
     annotations:
-      bibliography_refs: '["w3c-dcat-3-2024"]'
+      label_es: Inscripción registral
+      label_fr: Enregistrement
+      description_es: El reconocimiento formal que una autoridad otorga a un sujeto para un fin administrativo
+        determinado dentro de una jurisdicción. El reconocimiento es distinto del sujeto, de la entrada
+        de registro que lo documenta y de cualquier permiso o beneficio.
+      description_fr: La reconnaissance formelle qu'une autorité accorde à un sujet pour une finalité
+        administrative déterminée au sein d'une juridiction. La reconnaissance est distincte du sujet,
+        de l'entrée de registre qui la documente et de tout permis ou avantage.
+      bibliography_refs: '["semic-core-business", "semic-cpsv-ap", "w3c-regorg"]'
   Authorization:
     class_uri: publicschema:Authorization
     title: Authorization
-    description: An authority's grant of permission to a subject to carry out a specified
-      activity within stated conditions. A record of permission does not establish
-      that the activity occurred.
+    description: An authority's grant of permission to a holder to carry out a stated activity, subject
+      to stated conditions. The registered subject is the holder; an installation, asset or site the
+      permission covers is the authorized object. A permission does not show that the activity took
+      place.
     slots:
+    - authorized_object
     - authorized_activity
     - authorization_conditions
     status: bibo:draft
-    annotations:
-      bibliography_refs: '["w3c-dcat-3-2024"]'
     is_a: Registration
-  CodedValue:
-    class_uri: publicschema:CodedValue
-    title: Coded Value
-    description: A code interpreted within an identified scheme, optionally retaining
-      its source label and a known meaning URI. Unknown, retired and local codes remain
-      representable; a label alone does not establish equivalence.
-    slots:
-    - code_value
-    - code_scheme
-    - code_label
-    - code_meaning
-    status: bibo:draft
     annotations:
-      bibliography_refs: '["w3c-dcat-3-2024"]'
-  QuantityValue:
-    class_uri: publicschema:QuantityValue
-    title: Quantity Value
-    description: A numerical magnitude together with a unit identified within a scheme.
-      The surrounding property establishes the measured kind; conversion and dimension
-      checks belong to the consuming profile.
-    slots:
-    - quantity_value
-    - unit_code
-    - unit_scheme
-    status: bibo:draft
-    annotations:
-      bibliography_refs: '["ucum-specification"]'
-  SpatialGeometry:
-    class_uri: publicschema:SpatialGeometry
-    title: Spatial Geometry
-    description: A geometric representation of a feature, with explicit serialization
-      and coordinate reference system. This value is distinct from a named area, postal
-      address, land title or physical facility.
-    slots:
-    - geometry_encoding
-    - geometry_literal
-    - coordinate_reference_system
-    status: bibo:draft
-    annotations:
-      bibliography_refs: '["ogc-geosparql-11", "ietf-geojson-7946"]'
+      label_es: Autorización
+      label_fr: Autorisation
+      description_es: El otorgamiento por parte de una autoridad de un permiso a un titular para llevar
+        a cabo una actividad determinada, sujeto a condiciones determinadas. El sujeto registrado es
+        el titular; una instalación, un activo o un emplazamiento que cubre el permiso es el objeto
+        autorizado. Un permiso no demuestra que la actividad haya tenido lugar.
+      description_fr: L'octroi par une autorité d'une permission à un titulaire d'exercer une activité
+        déterminée, sous réserve de conditions déterminées. Le sujet enregistré est le titulaire ; une
+        installation, un bien ou un site que couvre la permission est l'objet autorisé. Une permission
+        ne prouve pas que l'activité a eu lieu.
+      bibliography_refs: '["schema-org", "semic-cpsv-ap"]'
   IdentifierAssignment:
     class_uri: publicschema:IdentifierAssignment
     title: Identifier Assignment
-    description: An assertion that an issuer assigned an Identifier to a subject for
-      a period. It preserves the distinction between the identifier value and the
-      act of assignment.
+    description: The assignment of an identifier to a subject by an issuing organization, valid over a
+      stated period. The identifier is distinct from the act of assigning it.
     slots:
     - assigned_identifier
-    - identifier_subject
+    - subject_uri
     - identifier_issuer
     - start_date
     - end_date
     status: bibo:draft
     annotations:
-      bibliography_refs: '["w3c-adms-2013"]'
+      label_es: Asignación de identificador
+      label_fr: Attribution d'identifiant
+      description_es: La asignación de un identificador a un sujeto por parte de una organización emisora,
+        válida durante un período determinado. El identificador es distinto del acto de asignarlo.
+      description_fr: L'attribution d'un identifiant à un sujet par une organisation émettrice, valable
+        pendant une période déterminée. L'identifiant est distinct de l'acte qui l'attribue.
+      bibliography_refs: '["fhir-r5", "semic-adms"]'
   EvidenceAssertion:
     class_uri: publicschema:EvidenceAssertion
     title: Evidence Assertion
-    description: A statement linking an assertion to supporting or contradicting source
-      material, with its evidential role and responsible organization. Merely attaching
-      a source is not verification of its truth.
+    description: A statement that a source supports or contradicts a claim, made by an accountable organization.
+      Citing a source does not verify the claim.
     slots:
     - assertion_uri
     - evidence_source
     - evidence_role
-    - evidence_authority
+    - assertion_authority
     - recorded_at
     status: bibo:draft
     annotations:
-      bibliography_refs: '["w3c-prov-o-2013"]'
+      label_es: Aseveración de evidencia
+      label_fr: Assertion de preuve
+      description_es: Una declaración de que una fuente respalda o contradice una afirmación, realizada
+        por una organización responsable. Citar una fuente no verifica la afirmación.
+      description_fr: Une déclaration selon laquelle une source appuie ou contredit une affirmation,
+        faite par une organisation responsable. Citer une source ne vérifie pas l'affirmation.
+      bibliography_refs: '["semic-cccev", "spar-cito", "w3c-prov-o"]'
   RecordLifecycleEvent:
     class_uri: publicschema:RecordLifecycleEvent
     title: Record Lifecycle Event
-    description: A reported change affecting a registry subject, with the effective
-      time distinguished from when the change was recorded. Correction and supersession
-      describe records and need not change the subject's identity.
+    description: A change in the standing of a register record, such as invalidation, retirement or supersession,
+      with the time the change takes effect and the time it was recorded. Changes to the subject itself,
+      such as a death or a dissolution, are recorded as domain events.
+    is_a: Event
     slots:
-    - subject_uri
-    - lifecycle_kind
+    - affected_record
+    - record_change_kind
     - effective_at
     - recorded_at
-    - event_authority
+    - authority
     - evidence_assertions
     - supersedes_record
     status: bibo:draft
     annotations:
-      bibliography_refs: '["w3c-prov-o-2013", "ec-inspire-registers-2017"]'
+      label_es: Evento del ciclo de vida de la entrada
+      label_fr: Événement du cycle de vie de l'entrée
+      description_es: Un cambio en el estado de una entrada de registro, como su invalidación, retiro
+        o sustitución, junto con el momento en que el cambio surte efecto y el momento en que fue registrado.
+        Los cambios en el propio sujeto, como un fallecimiento o una disolución, se registran como eventos
+        de dominio.
+      description_fr: Un changement dans le statut d'une entrée de registre, tel que son invalidation,
+        son retrait ou son remplacement, avec le moment où le changement prend effet et le moment où
+        il a été enregistré. Les changements affectant le sujet lui-même, tels qu'un décès ou une dissolution,
+        sont enregistrés comme des événements de domaine.
+      bibliography_refs: '["ec-inspire-registers-2017", "iso-19135-1", "w3c-prov-o"]'
   SubjectMatchAssertion:
     class_uri: publicschema:SubjectMatchAssertion
     title: Subject Match Assertion
-    description: A reviewed or automated assertion that a source record describes
-      a subject. It records the method and responsible authority without asserting
-      universal identity or instructing automatic record merging.
+    description: A reviewed or automated judgement about whether a source record describes a given subject,
+      with the method used and the accountable organization. It does not merge records or declare two
+      identities interchangeable everywhere.
     slots:
     - matched_source
     - matched_subject
+    - match_outcome
     - match_method
-    - match_authority
+    - assertion_authority
     - recorded_at
     - evidence_assertions
     status: bibo:draft
     annotations:
-      bibliography_refs: '["w3c-prov-o-2013"]'
+      label_es: Aseveración de coincidencia de sujeto
+      label_fr: Assertion de correspondance de sujet
+      description_es: Una evaluación revisada o automatizada sobre si una entrada de registro fuente
+        describe a un sujeto determinado, junto con el método utilizado y la organización responsable.
+        No fusiona entradas de registro ni declara que dos identidades sean intercambiables en todos
+        los contextos.
+      description_fr: Une évaluation revue ou automatisée déterminant si une entrée de registre source
+        décrit un sujet donné, avec la méthode utilisée et l'organisation responsable. Elle ne fusionne
+        pas les entrées de registre et ne déclare pas que deux identités sont interchangeables en toute
+        circonstance.
+      bibliography_refs: '["sssom", "w3c-prov-o"]'
   NameUsage:
     class_uri: publicschema:NameUsage
     title: Name Usage
-    description: A name used for a subject in a stated language and context over a
-      period. Multiple usages can coexist without changing the subject identity.
+    description: A name by which a subject is known, with its language, the context of use and the period
+      of use. A subject can have several names at once. A current name can also be recorded directly
+      with name on an organization, or with given_name and family_name on a person.
     slots:
-    - named_subject
+    - subject_uri
     - name
     - name_language
     - name_use
@@ -212,15 +258,26 @@ classes:
     - end_date
     status: bibo:draft
     annotations:
-      bibliography_refs: '["w3c-vcard-2014"]'
+      label_es: Uso de nombre
+      label_fr: Usage du nom
+      description_es: Un nombre por el cual se conoce a un sujeto, con su idioma, el contexto de uso
+        y el período de uso. Un sujeto puede tener varios nombres a la vez. Un nombre actual también
+        puede registrarse directamente con name para una organización, o con given_name y
+        family_name para una persona.
+      description_fr: Un nom sous lequel un sujet est connu, avec sa langue, le contexte d'utilisation
+        et la période d'utilisation. Un sujet peut avoir plusieurs noms à la fois. Un nom actuel
+        peut aussi être enregistré directement avec name pour une organisation, ou avec given_name
+        et family_name pour une personne.
+      bibliography_refs: '["fhir-r5", "semic-core-business", "w3c-vcard-rdf"]'
   ContactPoint:
     class_uri: publicschema:ContactPoint
     title: Contact Point
-    description: A communication channel for reaching a subject for a stated purpose
-      during a period. Possession of the channel does not prove subject identity or
-      consent to contact.
+    description: A single means of reaching a subject, such as a telephone number or email address, offered
+      for a stated purpose over a period. Holding a contact detail does not prove identity or consent to
+      be contacted. A person's usual telephone number and email address can also be recorded
+      directly with phone_number and email_address.
     slots:
-    - contact_subject
+    - subject_uri
     - contact_channel
     - contact_value
     - contact_purpose
@@ -228,482 +285,728 @@ classes:
     - end_date
     status: bibo:draft
     annotations:
-      bibliography_refs: '["w3c-vcard-2014"]'
+      label_es: Punto de contacto
+      label_fr: Point de contact
+      description_es: Un único medio para comunicarse con un sujeto, como un número de teléfono o una
+        dirección de correo electrónico, ofrecido para un fin determinado durante un período. Disponer
+        de un dato de contacto no prueba la identidad ni el consentimiento a ser contactado. El
+        número de teléfono y la dirección de correo electrónico habituales de una persona también
+        pueden registrarse directamente con phone_number y email_address.
+      description_fr: Un moyen unique de joindre un sujet, tel qu'un numéro de téléphone ou une adresse
+        électronique, proposé pour une finalité déterminée pendant une période. Disposer d'une coordonnée
+        de contact ne prouve ni l'identité ni le consentement à être contacté. Le numéro de
+        téléphone et l'adresse électronique habituels d'une personne peuvent aussi être enregistrés
+        directement avec phone_number et email_address.
+      bibliography_refs: '["fhir-r5", "w3c-vcard-rdf"]'
 slots:
-  maintaining_authority:
-    slot_uri: publicschema:maintaining_authority
-    title: Register authority
-    description: The organization responsible for maintaining this register.
+  register_owner:
+    slot_uri: publicschema:register_owner
+    title: Register owner
+    description: The organization accountable for the register and its content.
     range: Organization
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Titular del registro
+      label_fr: Titulaire du registre
+      description_es: La organización responsable del registro y de su contenido.
+      description_fr: L'organisation responsable du registre et de son contenu.
       category: administrative
+      bibliography_refs: '["ec-inspire-registers-2017", "iso-19135-1"]'
   register_jurisdiction:
     slot_uri: publicschema:register_jurisdiction
     title: Register jurisdiction
-    description: The named geographic or administrative area in which this register
-      operates.
+    description: The geographic or administrative area that the register covers.
     range: Location
     multivalued: false
+    close_mappings:
+    - dct:spatial
     status: bibo:draft
     annotations:
-      category: administrative
+      label_es: Jurisdicción del registro
+      label_fr: Juridiction du registre
+      description_es: El área geográfica o administrativa que cubre el registro.
+      description_fr: La zone géographique ou administrative que le registre couvre.
+      category: location
+      external_alignments_json: '[{"label": "spatial", "match": "close", "note": "Links a resource to
+        the area it covers, as the Core Public Organisation Vocabulary uses it for the administrative
+        regions an organization covers.", "uri": "http://purl.org/dc/terms/spatial", "vocabulary": "DCMI
+        Metadata Terms", "vocabulary_id": "dcterms"}]'
+      bibliography_refs: '["dcterms", "semic-cpov"]'
   register_subject_types:
     slot_uri: publicschema:register_subject_types
     title: Register subject types
-    description: Semantic type URIs of the subjects described by the register.
+    description: The classes of subject that records in this register describe, identified by URI.
     range: uri
     multivalued: true
     status: bibo:draft
     annotations:
+      label_es: Tipos de sujeto del registro
+      label_fr: Types de sujet du registre
+      description_es: Las clases de sujeto que describen las entradas de este registro, identificadas
+        por URI.
+      description_fr: Les classes de sujet que décrivent les entrées de ce registre, identifiées par
+        URI.
       category: administrative
   register_uri:
     slot_uri: publicschema:register_uri
-    title: Register uri
-    description: The stable URI of the register that scopes record_id; it is not a
-      fetch instruction.
+    title: Register URI
+    description: The persistent URI of the register that holds the record and gives meaning to its local
+      identifier. It reveals which register a subject appears in.
     range: uri
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: URI del registro
+      label_fr: URI du registre
+      description_es: El URI persistente del registro que contiene la entrada y da sentido a su identificador
+        local. Revela en qué registro figura un sujeto.
+      description_fr: L'URI persistant du registre qui détient l'entrée et donne son sens à l'identifiant
+        local. Il révèle dans quel registre un sujet figure.
       category: administrative
+      sensitivity: sensitive
+      bibliography_refs: '["ec-inspire-registers-2017"]'
   record_id:
     slot_uri: publicschema:record_id
-    title: Record id
-    description: The local identifier of a record within register_uri. Preserve the
-      original string, including leading zeros.
+    title: Record ID
+    description: The identifier of the record within its register, exactly as the register issues it,
+      including any leading zeros.
     range: string
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Id de entrada
+      label_fr: Id d'entrée
+      description_es: El identificador de la entrada dentro de su registro, exactamente como lo emite
+        el registro, incluidos los ceros a la izquierda.
+      description_fr: L'identifiant de l'entrée au sein de son registre, exactement tel que le registre
+        l'émet, y compris les zéros initiaux.
       category: administrative
   subject_uri:
     slot_uri: publicschema:subject_uri
-    title: Subject uri
-    description: The explicit identity of the subject described by a record, distinct
-      from record identity.
+    title: Subject URI
+    description: The URI of the thing this record or statement is about.
     range: uri
     multivalued: false
+    close_mappings:
+    - foaf:primaryTopic
     status: bibo:draft
     annotations:
+      label_es: URI del sujeto
+      label_fr: URI du sujet
+      description_es: El URI de aquello sobre lo que trata esta entrada de registro o declaración.
+      description_fr: L'URI de ce dont traite cette entrée de registre ou déclaration.
       category: administrative
+      external_alignments_json: '[{"label": "primaryTopic", "match": "close", "note": "DCAT uses it to
+        link a catalog record to the one resource it describes. Here it links any record or dated statement
+        to its subject.", "uri": "http://xmlns.com/foaf/0.1/primaryTopic", "vocabulary": "FOAF", "vocabulary_id":
+        "foaf"}]'
+      bibliography_refs: '["foaf"]'
   subject_type:
     slot_uri: publicschema:subject_type
     title: Subject type
-    description: The semantic class URI expected for the described subject, not a
-      source library class name.
+    description: The URI of the class that the subject is expected to belong to.
     range: uri
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Tipo de sujeto
+      label_fr: Type de sujet
+      description_es: El URI de la clase a la que se espera que pertenezca el sujeto.
+      description_fr: L'URI de la classe à laquelle le sujet est censé appartenir.
       category: administrative
   recorded_at:
     slot_uri: publicschema:recorded_at
     title: Recorded at
-    description: The timestamp when an assertion or event was entered into its source
-      record, distinct from its effective time.
+    description: The date and time the statement or event was entered into its source record. It can differ
+      from when the fact took effect.
     range: datetime
     multivalued: false
+    close_mappings:
+    - dct:issued
     status: bibo:draft
     annotations:
+      label_es: Registrado el
+      label_fr: Enregistré le
+      description_es: La fecha y hora en que la declaración o el evento se incorporó a su entrada de
+        registro fuente. Puede diferir del momento en que el hecho surtió efecto.
+      description_fr: La date et l'heure auxquelles la déclaration ou l'événement a été inscrit dans
+        son entrée de registre source. Ce moment peut différer de celui où le fait a pris effet.
       category: administrative
+      external_alignments_json: '[{"label": "issued", "match": "close", "note": "DCAT uses it on a catalog
+        record for the date of formal recording. It is usually given as a date, while this value carries
+        a time.", "uri": "http://purl.org/dc/terms/issued", "vocabulary": "DCMI Metadata Terms", "vocabulary_id":
+        "dcterms"}]'
+      bibliography_refs: '["dcterms"]'
   valid_from:
     slot_uri: publicschema:valid_from
     title: Valid from
-    description: The first calendar date on which the relationship or assertion applies,
-      when known.
+    description: The first calendar day on which the registration, permission, certification or other
+      stated fact applies, as its source states it, when known. A later suspension, withdrawal or correction
+      is recorded separately and does not overwrite this date.
     range: date
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Vigente desde
+      label_fr: Valide à partir de
+      description_es: El primer día calendario en que se aplica el registro, la autorización, la
+        certificación u otro hecho declarado, tal como lo indica su fuente, cuando se conoce. Una suspensión,
+        un retiro o una corrección posteriores se registran por separado y no sustituyen esta fecha.
+      description_fr: Le premier jour calendaire où s'applique l'enregistrement, l'autorisation, la
+        certification ou un autre fait déclaré, tel que sa source l'indique, lorsqu'il est connu. Une
+        suspension, un retrait ou une correction ultérieurs sont consignés séparément et ne remplacent
+        pas cette date.
       category: administrative
   valid_to:
     slot_uri: publicschema:valid_to
     title: Valid to
-    description: The last calendar date on which the relationship or assertion applies,
-      when known. Omission does not assert perpetual validity.
+    description: The last calendar day on which the registration, permission, certification or other
+      stated fact applies, as its source states it. A later suspension, withdrawal or correction is recorded
+      separately and does not overwrite this date. If absent, the end is unknown, not unlimited.
     range: date
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Vigente hasta
+      label_fr: Valide jusqu'à
+      description_es: El último día calendario en que se aplica el registro, la autorización, la
+        certificación u otro hecho declarado, tal como lo indica su fuente. Una suspensión, un retiro
+        o una corrección posteriores se registran por separado y no sustituyen esta fecha. Si está
+        ausente, el final es desconocido, no ilimitado.
+      description_fr: Le dernier jour calendaire où s'applique l'enregistrement, l'autorisation, la
+        certification ou un autre fait déclaré, tel que sa source l'indique. Une suspension, un retrait
+        ou une correction ultérieurs sont consignés séparément et ne remplacent pas cette date. En son
+        absence, la fin est inconnue, et non illimitée.
       category: administrative
   supersedes_record:
     slot_uri: publicschema:supersedes_record
     title: Supersedes record
-    description: Earlier records replaced by this assertion or event without implying
-      that their subjects were replaced.
+    description: Earlier records that this record or event replaces. Replacing a record does not replace
+      its subject.
     range: RecordReference
     multivalued: true
+    close_mappings:
+    - dct:replaces
     status: bibo:draft
     annotations:
+      label_es: Sustituye a la entrada
+      label_fr: Remplace l'entrée
+      description_es: Entradas de registro anteriores que esta entrada o evento reemplaza. Reemplazar
+        una entrada no reemplaza a su sujeto.
+      description_fr: Les entrées de registre antérieures que cette entrée ou cet événement remplace.
+        Remplacer une entrée ne remplace pas son sujet.
       category: administrative
+      external_alignments_json: '[{"label": "replaces", "match": "close", "note": "A related resource that
+        is supplanted, displaced or superseded by the described resource. Here the replaced resource is
+        always a register record.", "uri": "http://purl.org/dc/terms/replaces", "vocabulary": "DCMI Metadata
+        Terms", "vocabulary_id": "dcterms"}]'
+      bibliography_refs: '["dcterms", "ec-inspire-registers-2017"]'
   source_records:
     slot_uri: publicschema:source_records
     title: Source records
-    description: Qualified upstream records retained as provenance for this assertion.
+    description: Upstream records from which this statement was taken or derived.
     range: RecordReference
     multivalued: true
+    close_mappings:
+    - prov:wasDerivedFrom
     status: bibo:draft
     annotations:
+      label_es: Entradas de origen
+      label_fr: Entrées d'origine
+      description_es: Entradas de registro previas de las que se tomó o derivó esta declaración.
+      description_fr: Les entrées de registre amont à partir desquelles cette déclaration a été reprise
+        ou dérivée.
       category: administrative
+      external_alignments_json: '[{"label": "wasDerivedFrom", "match": "close", "note": "The construction
+        of a new entity based on a pre-existing entity. Here the pre-existing entity is always a register
+        record.", "uri": "http://www.w3.org/ns/prov#wasDerivedFrom", "vocabulary": "PROV-O", "vocabulary_id":
+        "prov"}]'
+      bibliography_refs: '["w3c-prov-o"]'
   evidence_assertions:
     slot_uri: publicschema:evidence_assertions
     title: Evidence assertions
-    description: Statements identifying the role of source material in supporting
-      or contradicting this assertion.
+    description: Statements identifying sources that support or contradict this statement.
     range: EvidenceAssertion
     multivalued: true
     status: bibo:draft
     annotations:
+      label_es: Aseveraciones de evidencia
+      label_fr: Assertions de preuve
+      description_es: Declaraciones que identifican fuentes que respaldan o contradicen esta declaración.
+      description_fr: Des déclarations identifiant des sources qui appuient ou contredisent cette déclaration.
       category: administrative
   registered_subject:
     slot_uri: publicschema:registered_subject
     title: Registered subject
-    description: The URI of the person, organization, asset or other subject receiving
-      administrative recognition.
+    description: The URI of the person, organization, asset or other thing that the registration recognizes.
+      On an authorization it is the holder of the permission, and an installation, asset or site the
+      permission covers is the authorized object. An asset registration, such as a vehicle registration,
+      recognizes the asset; its keeper is recorded as an asset party role.
     range: uri
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Sujeto registrado
+      label_fr: Sujet enregistré
+      description_es: El URI de la persona, organización, activo u otra cosa que reconoce el registro.
+        En una autorización es el titular del permiso, y una instalación, un activo o un emplazamiento
+        que cubre el permiso es el objeto autorizado. Un registro de activo, como el registro de un
+        vehículo, reconoce el activo; su tenedor se registra como una función de parte sobre el activo.
+      description_fr: L'URI de la personne, de l'organisation, du bien ou de toute autre chose que l'enregistrement
+        reconnaît. Pour une autorisation, c'est le titulaire de la permission, et une installation, un
+        bien ou un site que couvre la permission est l'objet autorisé. Un enregistrement de bien, tel
+        que l'immatriculation d'un véhicule, reconnaît le bien ; son détenteur est enregistré comme un
+        rôle de partie sur le bien.
       category: administrative
+      sensitivity: sensitive
   registration_authority:
     slot_uri: publicschema:registration_authority
     title: Registration authority
-    description: The organization granting or recording administrative recognition.
+    description: The organization that confers the recognition.
     range: Organization
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Autoridad de registro
+      label_fr: Autorité d'enregistrement
+      description_es: La organización que otorga el reconocimiento.
+      description_fr: L'organisation qui accorde la reconnaissance.
       category: administrative
   registration_jurisdiction:
     slot_uri: publicschema:registration_jurisdiction
     title: Registration jurisdiction
-    description: The named geographic or administrative area of the recognition.
+    description: The area within which the recognition applies.
     range: Location
     multivalued: false
     status: bibo:draft
     annotations:
-      category: administrative
+      label_es: Jurisdicción de registro
+      label_fr: Juridiction d'enregistrement
+      description_es: El área dentro de la cual se aplica el reconocimiento.
+      description_fr: La zone au sein de laquelle la reconnaissance s'applique.
+      category: location
   registration_purpose:
     slot_uri: publicschema:registration_purpose
     title: Registration purpose
-    description: The explicitly stated purpose or category of administrative recognition;
-      it does not imply eligibility for a benefit.
+    description: The administrative purpose or category of the recognition, stated as text. It does
+      not imply eligibility for a benefit.
     range: string
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Finalidad del registro
+      label_fr: Finalité de l'enregistrement
+      description_es: La finalidad o categoría administrativa del reconocimiento, expresada en
+        texto. No implica elegibilidad para un beneficio.
+      description_fr: La finalité ou la catégorie administrative de la reconnaissance, énoncée sous
+        forme de texte. N'implique pas l'éligibilité à un avantage.
       category: administrative
+      sensitivity: sensitive
+  authorized_object:
+    slot_uri: publicschema:authorized_object
+    title: Authorized object
+    description: The URI of the installation, asset or site that the permission covers, when it covers
+      one. The holder is the registered subject. A transfer of the permission to another holder is a
+      separate authorization for that holder.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Objeto autorizado
+      label_fr: Objet autorisé
+      description_es: El URI de la instalación, el activo o el emplazamiento que cubre el permiso, cuando
+        cubre uno. El titular es el sujeto registrado. La transferencia del permiso a otro titular es
+        una autorización distinta para ese titular.
+      description_fr: L'URI de l'installation, du bien ou du site que couvre la permission, lorsqu'elle
+        en couvre un. Le titulaire est le sujet enregistré. Le transfert de la permission à un autre
+        titulaire est une autorisation distincte pour ce titulaire.
+      category: administrative
+      sensitivity: sensitive
   authorized_activity:
     slot_uri: publicschema:authorized_activity
     title: Authorized activity
-    description: The activity that permission explicitly covers.
+    description: The activity that the permission covers, stated as text.
     range: string
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Actividad autorizada
+      label_fr: Activité autorisée
+      description_es: La actividad que cubre el permiso, expresada en texto.
+      description_fr: L'activité que couvre la permission, énoncée sous forme de texte.
       category: administrative
   authorization_conditions:
     slot_uri: publicschema:authorization_conditions
     title: Authorization conditions
-    description: Conditions limiting the grant, expressed as human-readable text rather
-      than executable policy.
+    description: Conditions that limit the permission, stated as text. Conditions taken from a code list
+      go in a coded slot where the authorization defines one, such as driving_condition_codes on a
+      driving entitlement.
     range: string
     multivalued: false
     status: bibo:draft
     annotations:
-      category: administrative
-  code_value:
-    slot_uri: publicschema:code_value
-    title: Code value
-    description: The original code as issued by its scheme, including an unknown or
-      retired code.
-    range: string
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: administrative
-  code_scheme:
-    slot_uri: publicschema:code_scheme
-    title: Code scheme
-    description: The URI identifying the scheme and, where relevant, the edition that
-      gives a code meaning.
-    range: uri
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: administrative
-  code_label:
-    slot_uri: publicschema:code_label
-    title: Code label
-    description: The original or supplied display label; it is not a replacement for
-      scheme and code.
-    range: string
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: administrative
-  code_meaning:
-    slot_uri: publicschema:code_meaning
-    title: Code meaning
-    description: A known semantic meaning URI; leave absent when no verified interpretation
-      exists.
-    range: uri
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: administrative
-  quantity_value:
-    slot_uri: publicschema:quantity_value
-    title: Quantity value
-    description: The numerical magnitude expressed in the accompanying unit; no implicit
-      conversion or rounding is applied.
-    range: decimal
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: administrative
-  unit_code:
-    slot_uri: publicschema:unit_code
-    title: Unit code
-    description: The unit symbol or code interpreted within unit_scheme.
-    range: string
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: administrative
-  unit_scheme:
-    slot_uri: publicschema:unit_scheme
-    title: Unit scheme
-    description: The URI of the unit system used to interpret unit_code, such as UCUM.
-    range: uri
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: administrative
-  geometry_encoding:
-    slot_uri: publicschema:geometry_encoding
-    title: Geometry encoding
-    description: The explicitly named geometry serialization, such as application/geo+json.
-    range: string
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: administrative
-  geometry_literal:
-    slot_uri: publicschema:geometry_literal
-    title: Geometry literal
-    description: The geometry serialized in the declared encoding. Coordinate order
-      is determined by that encoding and reference system.
-    range: string
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: administrative
-  coordinate_reference_system:
-    slot_uri: publicschema:coordinate_reference_system
-    title: Coordinate reference system
-    description: The URI identifying the coordinate reference system used by the geometry.
-    range: uri
-    multivalued: false
-    status: bibo:draft
-    annotations:
+      label_es: Condiciones de la autorización
+      label_fr: Conditions de l'autorisation
+      description_es: Condiciones que limitan el permiso, expresadas en texto. Las condiciones tomadas
+        de una lista de códigos van en un campo codificado donde la autorización defina uno, como driving_condition_codes
+        en un permiso de conducir.
+      description_fr: Les conditions qui limitent la permission, énoncées sous forme de texte. Les conditions
+        tirées d'une liste de codes figurent dans un champ codé lorsque l'autorisation en définit un,
+        tel que driving_condition_codes pour un permis de conduire.
       category: administrative
   assigned_identifier:
     slot_uri: publicschema:assigned_identifier
     title: Assigned identifier
-    description: The identifier value and scheme assigned in this assertion.
+    description: The identifier value and scheme that the assignment gives the subject.
     range: Identifier
     multivalued: false
     status: bibo:draft
     annotations:
-      category: administrative
-  identifier_subject:
-    slot_uri: publicschema:identifier_subject
-    title: Identifier subject
-    description: The identity of the subject to which the identifier was assigned.
-    range: uri
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: administrative
+      label_es: Identificador asignado
+      label_fr: Identifiant attribué
+      description_es: El valor y el esquema del identificador que la asignación otorga al sujeto.
+      description_fr: La valeur et le schéma de l'identifiant que l'attribution donne au sujet.
+      category: identity
   identifier_issuer:
     slot_uri: publicschema:identifier_issuer
     title: Identifier issuer
-    description: The organization assigning the identifier, distinct from an organization
-      merely recording it.
+    description: The organization that assigned the identifier, as distinct from an organization that
+      only records it.
     range: Organization
     multivalued: false
+    close_mappings:
+    - dct:creator
     status: bibo:draft
     annotations:
-      category: administrative
+      label_es: Emisor del identificador
+      label_fr: Émetteur de l'identifiant
+      description_es: La organización que asignó el identificador, a diferencia de una organización
+        que solo lo registra.
+      description_fr: L'organisation qui a attribué l'identifiant, à la différence d'une organisation
+        qui se contente de l'enregistrer.
+      category: identity
+      external_alignments_json: '[{"label": "creator", "match": "close", "note": "The asset description
+        metadata schema recommends this term to link an identifier to the agency that issued it.", "uri":
+        "http://purl.org/dc/terms/creator", "vocabulary": "DCMI Metadata Terms", "vocabulary_id": "dcterms"}]'
+      bibliography_refs: '["dcterms"]'
   assertion_uri:
     slot_uri: publicschema:assertion_uri
-    title: Assertion uri
-    description: The URI of the claim or record for which material is offered as evidence.
+    title: Assertion URI
+    description: The URI of the claim or record that the evidence relates to.
     range: uri
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: URI de la aseveración
+      label_fr: URI de l'assertion
+      description_es: El URI de la afirmación o entrada de registro a la que se refiere la evidencia.
+      description_fr: L'URI de l'affirmation ou de l'entrée de registre à laquelle se rapporte la preuve.
       category: administrative
   evidence_source:
     slot_uri: publicschema:evidence_source
     title: Evidence source
-    description: The URI of source material, including a document or data record;
-      it is not fetched by vocabulary expansion.
+    description: The URI of the document, record or other material offered as evidence.
     range: uri
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Fuente de la evidencia
+      label_fr: Source de la preuve
+      description_es: El URI del documento, entrada de registro u otro material ofrecido como evidencia.
+      description_fr: L'URI du document, de l'entrée de registre ou de tout autre élément fourni comme
+        preuve.
       category: administrative
+      bibliography_refs: '["semic-cccev"]'
   evidence_role:
     slot_uri: publicschema:evidence_role
     title: Evidence role
-    description: The scheme-qualified role of material, such as supporting or contradicting
-      a claim.
-    range: CodedValue
+    description: Whether the source supports or contradicts the claim.
+    range: EvidenceRole
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Función de la evidencia
+      label_fr: Rôle de la preuve
+      description_es: Si la fuente respalda o contradice la afirmación.
+      description_fr: Si la source appuie ou contredit l'affirmation.
       category: administrative
-  evidence_authority:
-    slot_uri: publicschema:evidence_authority
-    title: Evidence authority
-    description: The organization responsible for this evidential assertion.
+      bibliography_refs: '["spar-cito"]'
+  assertion_authority:
+    slot_uri: publicschema:assertion_authority
+    title: Assertion authority
+    description: The organization accountable for this statement, which can differ from the person or
+      software that entered it.
     range: Organization
     multivalued: false
+    close_mappings:
+    - prov:wasAttributedTo
     status: bibo:draft
     annotations:
+      label_es: Autoridad de la aseveración
+      label_fr: Autorité de l'assertion
+      description_es: La organización responsable de esta declaración, que puede ser distinta de la
+        persona o el software que la introdujo.
+      description_fr: L'organisation responsable de cette déclaration, qui peut différer de la personne
+        ou du logiciel qui l'a saisie.
       category: administrative
+      external_alignments_json: '[{"label": "wasAttributedTo", "match": "close", "note": "Attribution is
+        the ascribing of an entity to an agent. Here the agent is always an organization.", "uri": "http://www.w3.org/ns/prov#wasAttributedTo",
+        "vocabulary": "PROV-O", "vocabulary_id": "prov"}]'
+      bibliography_refs: '["w3c-prov-o"]'
   lifecycle_kind:
     slot_uri: publicschema:lifecycle_kind
     title: Lifecycle kind
-    description: The scheme-qualified kind of change reported; no universal registration-status
-      transition is implied.
+    description: The kind of change that the event reports.
     range: CodedValue
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Tipo de ciclo de vida
+      label_fr: Type de cycle de vie
+      description_es: El tipo de cambio que reporta el evento.
+      description_fr: Le type de changement que l'événement rapporte.
       category: administrative
-  effective_at:
-    slot_uri: publicschema:effective_at
-    title: Effective at
-    description: The timestamp when the reported change took effect, which may precede
-      its recording.
-    range: datetime
+  record_change_kind:
+    slot_uri: publicschema:record_change_kind
+    title: Record change kind
+    description: The kind of change to the record's standing, such as invalidation, retirement or supersession.
+    range: RecordChangeKind
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Tipo de cambio de la entrada
+      label_fr: Type de changement de l'entrée
+      description_es: El tipo de cambio en el estado de la entrada de registro, como invalidación, retiro
+        o sustitución.
+      description_fr: Le type de changement dans le statut de l'entrée de registre, tel que l'invalidation,
+        le retrait ou le remplacement.
       category: administrative
-  event_authority:
-    slot_uri: publicschema:event_authority
-    title: Event authority
-    description: The organization accountable for the reported lifecycle change.
-    range: Organization
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: administrative
-  matched_source:
-    slot_uri: publicschema:matched_source
-    title: Matched source
-    description: The qualified source record whose subject is being reconciled.
+      bibliography_refs: '["ec-inspire-registers-2017"]'
+  affected_record:
+    slot_uri: publicschema:affected_record
+    title: Affected record
+    description: The record whose standing the change affects.
     range: RecordReference
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Entrada afectada
+      label_fr: Entrée affectée
+      description_es: La entrada de registro cuyo estado se ve afectado por el cambio.
+      description_fr: L'entrée de registre dont le statut est affecté par le changement.
       category: administrative
-  matched_subject:
-    slot_uri: publicschema:matched_subject
-    title: Matched subject
-    description: The proposed canonical subject URI without asserting an automatic
-      merge.
-    range: uri
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: administrative
-  match_method:
-    slot_uri: publicschema:match_method
-    title: Match method
-    description: The scheme-qualified reconciliation method used to make the assertion.
-    range: CodedValue
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: administrative
-  match_authority:
-    slot_uri: publicschema:match_authority
-    title: Match authority
-    description: The organization accountable for the reconciliation assertion.
+  authority:
+    slot_uri: publicschema:authority
+    title: Authority
+    description: The organization responsible for the act or event a record describes, such as the body
+      that receives an application, decides a case, reviews an appeal, inspects a subject or takes a
+      measure. Each class using it states which of these roles applies. It links to an Organization,
+      whereas issuing_authority names the issuer of a document or credential as text.
     range: Organization
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Autoridad
+      label_fr: Autorité
+      description_es: La organización responsable del acto o del evento que describe un registro,
+        como el organismo que recibe una solicitud, decide un caso, examina un recurso, inspecciona
+        un sujeto o adopta una medida. Cada clase que lo utiliza indica cuál de estas funciones se
+        aplica. Remite a una Organization, mientras que issuing_authority nombra como texto al
+        emisor de un documento o una credencial.
+      description_fr: L'organisation responsable de l'acte ou de l'événement que décrit un enregistrement,
+        par exemple l'organisme qui reçoit une demande, tranche une affaire, examine un recours, inspecte
+        un sujet ou prend une mesure. Chaque classe qui l'utilise précise laquelle de ces fonctions
+        s'applique. Elle renvoie à une Organization, alors que issuing_authority nomme sous forme de
+        texte l'émetteur d'un document ou d'une attestation.
+      category: governance
+  effective_at:
+    slot_uri: publicschema:effective_at
+    title: Effective at
+    description: The date and time at which the change or decision took effect, which can be earlier
+      or later than when it was recorded. For the day from which a ConsentRecord or PrivacyNotice
+      applies, use effective_date.
+    range: datetime
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Efectivo el
+      label_fr: Effectif le
+      description_es: La fecha y hora en que el cambio o la decisión surtió efecto, que puede ser
+        anterior o posterior al momento en que se registró. Para el día a partir del cual se aplica
+        un ConsentRecord o un PrivacyNotice, usar effective_date.
+      description_fr: La date et l'heure auxquelles le changement ou la décision a pris effet, qui
+        peuvent être antérieures ou postérieures au moment de son enregistrement. Pour le jour à
+        partir duquel un ConsentRecord ou un PrivacyNotice s'applique, utiliser effective_date.
       category: administrative
-  named_subject:
-    slot_uri: publicschema:named_subject
-    title: Named subject
-    description: The URI of the subject bearing this name.
+  matched_source:
+    slot_uri: publicschema:matched_source
+    title: Matched source
+    description: The record that the match judgement concerns.
+    range: RecordReference
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fuente de la coincidencia
+      label_fr: Source de la correspondance
+      description_es: La entrada de registro a la que se refiere la evaluación de coincidencia.
+      description_fr: L'entrée de registre que concerne l'évaluation de correspondance.
+      category: administrative
+  matched_subject:
+    slot_uri: publicschema:matched_subject
+    title: Matched subject
+    description: The subject that the record is judged to describe, or judged not to describe.
     range: uri
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Sujeto coincidente
+      label_fr: Sujet correspondant
+      description_es: El sujeto que se juzga que describe la entrada de registro, o que se juzga que
+        no describe.
+      description_fr: Le sujet dont on juge que l'entrée de registre le décrit, ou dont on juge qu'elle
+        ne le décrit pas.
       category: administrative
+      sensitivity: sensitive
+  match_method:
+    slot_uri: publicschema:match_method
+    title: Match method
+    description: The method used to reach the judgement, such as manual review or a deterministic or
+      probabilistic rule.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Método de coincidencia
+      label_fr: Méthode de correspondance
+      description_es: El método utilizado para llegar a la evaluación, como la revisión manual o una
+        regla determinista o probabilística.
+      description_fr: La méthode utilisée pour parvenir à l'évaluation, telle qu'une révision manuelle
+        ou une règle déterministe ou probabiliste.
+      category: administrative
+  match_outcome:
+    slot_uri: publicschema:match_outcome
+    title: Match outcome
+    description: Whether the record was judged to describe the subject, possibly to describe it, or not
+      to describe it.
+    range: MatchOutcome
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Resultado de la coincidencia
+      label_fr: Résultat de la correspondance
+      description_es: Si se juzgó que la entrada de registro describe al sujeto, que posiblemente lo
+        describe, o que no lo describe.
+      description_fr: Si l'on a jugé que l'entrée de registre décrit le sujet, qu'elle le décrit peut-être,
+        ou qu'elle ne le décrit pas.
+      category: administrative
+      bibliography_refs: '["fellegi-sunter-1969", "sssom"]'
   name_language:
     slot_uri: publicschema:name_language
     title: Name language
-    description: The BCP 47 language tag for the name, if known.
+    description: The language of the name, as a language tag such as en or pt-BR, if known.
     range: string
     multivalued: false
     status: bibo:draft
     annotations:
-      category: administrative
+      label_es: Idioma del nombre
+      label_fr: Langue du nom
+      description_es: El idioma del nombre, como una etiqueta de idioma tal como en o pt-BR, si se
+        conoce.
+      description_fr: La langue du nom, sous forme d'une étiquette de langue telle que en ou pt-BR,
+        si elle est connue.
+      category: identity
+      bibliography_refs: '["rfc-5646"]'
   name_use:
     slot_uri: publicschema:name_use
     title: Name use
-    description: The scheme-qualified context of name use, such as registered or trading
-      name.
+    description: The context in which the name is used, such as a legal or trading name. Whether the
+      name is current or former follows from the usage period. Codes from
+      https://publicschema.org/vocab/name-use can be used where the source has no scheme of its own.
     range: CodedValue
     multivalued: false
     status: bibo:draft
     annotations:
-      category: administrative
-  contact_subject:
-    slot_uri: publicschema:contact_subject
-    title: Contact subject
-    description: The subject reachable through this channel.
-    range: uri
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: administrative
+      label_es: Uso del nombre
+      label_fr: Usage du nom
+      description_es: El contexto en que se usa el nombre, como un nombre legal o comercial. Si el
+        nombre es actual o anterior se desprende del período de uso. Pueden usarse los códigos de
+        https://publicschema.org/vocab/name-use cuando la fuente no tenga un esquema propio.
+      description_fr: Le contexte dans lequel le nom est utilisé, tel qu'un nom légal ou commercial. Le
+        caractère actuel ou ancien du nom découle de la période d'usage. Les codes de
+        https://publicschema.org/vocab/name-use peuvent être utilisés lorsque la source n'a pas de
+        référentiel propre.
+      category: identity
   contact_channel:
     slot_uri: publicschema:contact_channel
     title: Contact channel
-    description: The scheme-qualified kind of communication channel.
-    range: CodedValue
+    description: The kind of channel, such as telephone, text message, email or web address.
+    range: ContactChannel
     multivalued: false
     status: bibo:draft
     annotations:
-      category: administrative
+      label_es: Canal de contacto
+      label_fr: Canal de contact
+      description_es: El tipo de canal, como teléfono, mensaje de texto, correo electrónico o dirección
+        web.
+      description_fr: Le type de canal, tel que le téléphone, le message texte, le courrier électronique
+        ou l'adresse web.
+      category: contact
   contact_value:
     slot_uri: publicschema:contact_value
     title: Contact value
-    description: The address or handle appropriate to the channel; format validation
-      belongs to its profile.
+    description: The telephone number, email address, web address or other handle for the channel.
     range: string
     multivalued: false
     status: bibo:draft
     annotations:
-      category: administrative
+      label_es: Valor de contacto
+      label_fr: Valeur de contact
+      description_es: El número de teléfono, la dirección de correo electrónico, la dirección web u
+        otro identificador del canal.
+      description_fr: Le numéro de téléphone, l'adresse électronique, l'adresse web ou tout autre identifiant
+        du canal.
+      category: contact
   contact_purpose:
     slot_uri: publicschema:contact_purpose
     title: Contact purpose
-    description: The purpose for which this communication channel is offered.
+    description: The purpose for which the contact is offered, such as billing, complaints or
+      emergencies, stated as text.
     range: string
     multivalued: false
     status: bibo:draft
     annotations:
-      category: administrative
+      label_es: Finalidad del contacto
+      label_fr: Finalité du contact
+      description_es: La finalidad para la que se ofrece el contacto, como facturación,
+        reclamaciones o emergencias, expresada en texto.
+      description_fr: La finalité pour laquelle le contact est proposé, telle que la facturation,
+        les réclamations ou les urgences, énoncée sous forme de texte.
+      category: contact
+  legal_resources:
+    slot_uri: publicschema:legal_resources
+    title: Legal resources
+    description: Identified legal provisions or policy resources that a service, organization,
+      decision, measure, representation or institutional change relies on. A link does not execute a rule or
+      establish which version is applicable. For the legal basis for processing personal data, use
+      legal_basis.
+    range: uri
+    multivalued: true
+    status: bibo:draft
+    close_mappings:
+    - cpov:hasLegalResource
+    annotations:
+      label_es: Recursos jurídicos
+      label_fr: Ressources juridiques
+      description_es: Disposiciones legales o recursos normativos identificados en los que se basa
+        un servicio, una organización, una decisión, una medida, una representación o un cambio institucional. Un enlace
+        no ejecuta una norma ni establece cuál versión es aplicable. Para la base legal del
+        tratamiento de datos personales, usar legal_basis.
+      description_fr: Les dispositions légales ou ressources réglementaires identifiées sur
+        lesquelles s'appuie un service, une organisation, une décision, une mesure, une représentation ou
+        un changement institutionnel. Un lien n'exécute pas une règle et n'établit pas quelle version est
+        applicable. Pour la base juridique d'un traitement de données personnelles, utiliser
+        legal_basis.
+      category: governance
+      external_alignments_json: '[{"label": "Has legal resource", "match": "close", "note": "CPSV-AP 3.2.0 links a public service to the legal resources it relates to, operates under or has its legal basis in. This slot is also used on organizations, decisions, measures, representations and institutional changes, and holds a URI rather than a described legal resource.", "uri": "http://data.europa.eu/m8g/hasLegalResource", "vocabulary": "CPSV-AP 3.2.0", "vocabulary_id": "semic"}]'
+      bibliography_refs: '["eu-eli-ontology", "semic-cpsv-ap"]'

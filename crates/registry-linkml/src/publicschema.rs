@@ -26,50 +26,6 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../publicschema/schema/publicschema.yaml"),
     ),
     (
-        "schema/agriculture.yaml",
-        include_str!("../publicschema/schema/agriculture.yaml"),
-    ),
-    (
-        "schema/farm_operators.yaml",
-        include_str!("../publicschema/schema/farm_operators.yaml"),
-    ),
-    (
-        "schema/government.yaml",
-        include_str!("../publicschema/schema/government.yaml"),
-    ),
-    (
-        "schema/registry.yaml",
-        include_str!("../publicschema/schema/registry.yaml"),
-    ),
-    (
-        "schema/work.yaml",
-        include_str!("../publicschema/schema/work.yaml"),
-    ),
-    (
-        "schema/agriculture_biology.yaml",
-        include_str!("../publicschema/schema/agriculture_biology.yaml"),
-    ),
-    (
-        "schema/agriculture_operations.yaml",
-        include_str!("../publicschema/schema/agriculture_operations.yaml"),
-    ),
-    (
-        "schema/assets.yaml",
-        include_str!("../publicschema/schema/assets.yaml"),
-    ),
-    (
-        "schema/service_capacity.yaml",
-        include_str!("../publicschema/schema/service_capacity.yaml"),
-    ),
-    (
-        "schema/government_relationships.yaml",
-        include_str!("../publicschema/schema/government_relationships.yaml"),
-    ),
-    (
-        "schema/public_services.yaml",
-        include_str!("../publicschema/schema/public_services.yaml"),
-    ),
-    (
         "schema/assessment.yaml",
         include_str!("../publicschema/schema/assessment.yaml"),
     ),
@@ -124,6 +80,78 @@ const FILES: &[(&str, &str)] = &[
     (
         "schema/vocabularies.yaml",
         include_str!("../publicschema/schema/vocabularies.yaml"),
+    ),
+    (
+        "schema/value_types.yaml",
+        include_str!("../publicschema/schema/value_types.yaml"),
+    ),
+    (
+        "schema/registry.yaml",
+        include_str!("../publicschema/schema/registry.yaml"),
+    ),
+    (
+        "schema/physical_assets.yaml",
+        include_str!("../publicschema/schema/physical_assets.yaml"),
+    ),
+    (
+        "schema/organizations.yaml",
+        include_str!("../publicschema/schema/organizations.yaml"),
+    ),
+    (
+        "schema/ownership.yaml",
+        include_str!("../publicschema/schema/ownership.yaml"),
+    ),
+    (
+        "schema/regulation.yaml",
+        include_str!("../publicschema/schema/regulation.yaml"),
+    ),
+    (
+        "schema/public_services.yaml",
+        include_str!("../publicschema/schema/public_services.yaml"),
+    ),
+    (
+        "schema/education.yaml",
+        include_str!("../publicschema/schema/education.yaml"),
+    ),
+    (
+        "schema/work.yaml",
+        include_str!("../publicschema/schema/work.yaml"),
+    ),
+    (
+        "schema/transport.yaml",
+        include_str!("../publicschema/schema/transport.yaml"),
+    ),
+    (
+        "schema/environment.yaml",
+        include_str!("../publicschema/schema/environment.yaml"),
+    ),
+    (
+        "schema/tax.yaml",
+        include_str!("../publicschema/schema/tax.yaml"),
+    ),
+    (
+        "schema/elections.yaml",
+        include_str!("../publicschema/schema/elections.yaml"),
+    ),
+    (
+        "schema/land.yaml",
+        include_str!("../publicschema/schema/land.yaml"),
+    ),
+    (
+        "schema/agriculture_holdings.yaml",
+        include_str!("../publicschema/schema/agriculture_holdings.yaml"),
+    ),
+    (
+        "schema/animals.yaml",
+        include_str!("../publicschema/schema/animals.yaml"),
+    ),
+    (
+        "schema/plants.yaml",
+        include_str!("../publicschema/schema/plants.yaml"),
+    ),
+    (
+        "schema/agriculture_operations.yaml",
+        include_str!("../publicschema/schema/agriculture_operations.yaml"),
     ),
 ];
 

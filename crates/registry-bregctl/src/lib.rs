@@ -41,6 +41,7 @@ use serde_json::{json, Value};
 mod action_handler_test;
 mod apply_lifecycle;
 mod audit_lifecycle;
+mod consent_module;
 mod data_lifecycle;
 mod dev;
 mod doctor;
@@ -135,6 +136,8 @@ enum Command {
     Check(CheckArgs),
     /// Maintain deterministic authoring project metadata.
     Project(ProjectArgs),
+    /// Add generated modules to an authoring project.
+    Module(ModuleArgs),
     /// Write selected compiler artifacts to a new directory.
     Generate(GenerateArgs),
     /// Start or stop this project's retained local development services.
@@ -299,6 +302,43 @@ struct CheckArgs {
     /// Exit unsuccessfully when any authoring finding needs review, including access warnings.
     #[arg(long)]
     deny_findings: bool,
+}
+
+#[derive(Debug, Args)]
+struct ModuleArgs {
+    #[command(subcommand)]
+    command: ModuleCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ModuleCommand {
+    /// Write a generated module into the project and pin it in registry.yaml.
+    Add(ModuleAddArgs),
+}
+
+#[derive(Debug, Args)]
+struct ModuleAddArgs {
+    #[command(subcommand)]
+    module: ModuleAddCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ModuleAddCommand {
+    /// Add consent for one subject entity: the privacy notice, its clauses,
+    /// the principal link, the create-only consent decision, their self and
+    /// steward actions, and five access profiles. Prints the requireConsent
+    /// line that gates a permission on the decision.
+    Consent(ModuleAddConsentArgs),
+}
+
+#[derive(Debug, Args)]
+struct ModuleAddConsentArgs {
+    /// Entity whose rows consent decisions are about.
+    #[arg(long, value_name = "ENTITY")]
+    subject: String,
+    /// Base Registry Engine project directory.
+    #[arg(value_name = "PROJECT")]
+    project: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -1032,9 +1072,10 @@ struct SuccessReport {
     ok: bool,
     command: &'static str,
     profile: ProfileArg,
-    /// Absent only for `explain lifecycle`, the one report no project
-    /// produces. Every other command compiles a project and names its
-    /// revision here.
+    /// Absent for `explain lifecycle`, the one report no project produces,
+    /// and for a `module add consent` whose project compiles only once a
+    /// profile requires consent. Every other command compiles a project and
+    /// names its revision here.
     #[serde(skip_serializing_if = "Option::is_none")]
     revision: Option<String>,
     #[serde(serialize_with = "serialize_findings")]
@@ -1827,6 +1868,13 @@ where
                 Ok(report)
             }
         }),
+        Command::Module(args) => match args.command {
+            ModuleCommand::Add(args) => match args.module {
+                ModuleAddCommand::Consent(args) => {
+                    consent_module::add_consent_module(&args.project, &args.subject)
+                }
+            },
+        },
         Command::Project(args) => match args.command {
             ProjectCommand::Lock(args) => project_lock(&args.project, args.check),
             ProjectCommand::Migrate(args) => {
@@ -5538,7 +5586,7 @@ fn planner_test_failure(code: &str, path: &str, message: &str) -> FailureReport 
 
 /// `apiVersion` for every `bregctl explain` payload, versioned as a whole: any change
 /// to a pinned object's shape in one of the nine kinds bumps this version.
-const EXPLAIN_API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha2";
+const EXPLAIN_API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha3";
 
 /// Which `explanation` kind a subject (and, for `access`, whether a scenario ran)
 /// produces. Kept beside `explain_envelope` because the two always travel together.
@@ -5695,7 +5743,7 @@ fn explain(
             read_bounded_source_file(path, "access.scenario.unavailable", "scenario", 65_536)
                 .map_err(explain_usage_error)?;
         let source = parse_json_strict(&bytes).map_err(|_| explain_usage_error(diagnostic("access.scenario.invalid", "scenario", "provide a strict JSON access scenario with synthetic claims; duplicate keys and malformed JSON are refused")))?;
-        let scenario = serde_json::from_value(source).map_err(|_| explain_usage_error(diagnostic("access.scenario.invalid", "scenario", "use entity, accessProfile, operation, optional readPath, and claims; claims accepts principalClaim, principal, scopes, purpose, and directClaims")))?;
+        let scenario = serde_json::from_value(source).map_err(|_| explain_usage_error(diagnostic("access.scenario.invalid", "scenario", "use entity, accessProfile, operation, optional readPath, and claims; claims accepts principalClaim, principal, scopes, purpose, directClaims, actorKind, requesterClient")))?;
         Some(
             registry_breg::access_preview::preview_access(&compiled, scenario).map_err(
                 |message| {
@@ -9468,6 +9516,10 @@ fn success_lead(report: &SuccessReport) -> String {
             report::counted(artifacts, "artifact")
         ),
         "generate" => format!("Generated {}.", report::counted(artifacts, "artifact")),
+        consent_module::COMMAND => format!(
+            "Added the consent module. {} written.",
+            report::counted(artifacts, "artifact")
+        ),
         // `explain lifecycle` is the one explain that compiles nothing, and
         // the absent revision is how the report says so.
         "explain" if report.revision.is_none() => {
@@ -9494,15 +9546,17 @@ fn render_success(report: &SuccessReport, stdout: &mut dyn Write) -> io::Result<
 
     lines.findings(&report_findings(&report.findings));
 
-    // An access explanation is part of this report and is folded into it. Any
-    // other explanation is a document this renderer has no shape for, so it
-    // keeps its own JSON rendering below the report.
+    // An access explanation and a consent module explanation are each folded
+    // into the report. Any other explanation is a document this renderer has
+    // no shape for, so it keeps its own JSON rendering below the report.
     let mut document = None;
     if let Some(explanation) = &report.explanation {
         if explanation.get("scopeMatching").is_some()
             || explanation.get("mode").and_then(Value::as_str) == Some("offline_synthetic")
         {
             push_access_explanation(explanation, &mut lines);
+        } else if explanation.get("requireConsent").is_some() {
+            push_consent_module_explanation(explanation, &mut lines);
         } else {
             document = Some(serde_json::to_string_pretty(explanation).map_err(io::Error::other)?);
         }
@@ -9695,13 +9749,20 @@ fn push_access_explanation(explanation: &Value, lines: &mut report::Lines) {
             if admitted { "allowed" } else { "refused" },
             admitted,
         );
-        lines.pairs(&[(
+        let mut pairs = vec![(
             "reason",
             explanation["reason"]
                 .as_str()
                 .unwrap_or("unknown")
                 .to_owned(),
-        )]);
+        )];
+        if let Some(recipients) = explanation["recipients"]
+            .as_array()
+            .filter(|recipients| !recipients.is_empty())
+        {
+            pairs.push(("recipients", joined_strings(recipients)));
+        }
+        lines.pairs(&pairs);
         lines.blank();
         lines.prose(
             1,
@@ -9750,6 +9811,239 @@ fn push_access_explanation(explanation: &Value, lines: &mut report::Lines) {
             }
         }
     }
+    if explanation["consent"].is_object() {
+        lines.blank();
+        push_consent_explanation(&explanation["consent"], lines);
+    }
+}
+
+/// The `module add consent` explanation: what the generated module holds, the
+/// vocabularies it added versus reused, the `requireConsent` line each gated
+/// entity still needs, and whether the project compiles yet.
+fn push_consent_module_explanation(explanation: &Value, lines: &mut report::Lines) {
+    lines.heading("Consent module:");
+    lines.pairs(&[
+        (
+            "subject",
+            explanation["subject"].as_str().unwrap_or("").to_owned(),
+        ),
+        (
+            "module",
+            explanation["module"].as_str().unwrap_or("").to_owned(),
+        ),
+    ]);
+    lines.blank();
+    lines.pairs(&[
+        ("entities", joined_or(&explanation["entities"], "none")),
+        ("actions", joined_or(&explanation["actions"], "none")),
+        (
+            "access profiles",
+            joined_or(&explanation["accessProfiles"], "none"),
+        ),
+    ]);
+    let vocabularies = &explanation["vocabularies"];
+    lines.blank();
+    lines.pairs(&[
+        (
+            "vocabularies added",
+            joined_or(&vocabularies["added"], "none"),
+        ),
+        (
+            "vocabularies reused",
+            joined_or(&vocabularies["reused"], "none"),
+        ),
+    ]);
+    if let Some(requirements) = explanation["requireConsent"]
+        .as_array()
+        .filter(|requirements| !requirements.is_empty())
+    {
+        lines.blank();
+        lines.item("requireConsent lines to add:");
+        for requirement in requirements {
+            lines.pairs_at(
+                2,
+                &[(
+                    requirement["entity"].as_str().unwrap_or(""),
+                    requirement["line"].as_str().unwrap_or("").to_owned(),
+                )],
+            );
+        }
+    }
+    let compiles = explanation["compiles"].as_bool() == Some(true);
+    lines.verdict(
+        "Compiles:",
+        if compiles { "yes" } else { "not yet" },
+        compiles,
+    );
+}
+
+fn joined_strings(values: &[Value]) -> String {
+    values
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn joined_or(values: &Value, empty: &str) -> String {
+    match values.as_array() {
+        Some(values) if !values.is_empty() => joined_strings(values),
+        _ => empty.to_owned(),
+    }
+}
+
+fn consent_issuers(issuers: &Value) -> String {
+    let rendered = issuers
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|issuer| {
+            format!(
+                "{} ({})",
+                issuer["action"].as_str().unwrap_or(""),
+                issuer["issuer"].as_str().unwrap_or("")
+            )
+        })
+        .collect::<Vec<_>>();
+    if rendered.is_empty() {
+        "none".to_owned()
+    } else {
+        rendered.join(", ")
+    }
+}
+
+fn consent_client(client: &Value) -> (String, String) {
+    (
+        format!("client {}", client["client"].as_str().unwrap_or("")),
+        format!(
+            "{}: {}",
+            client["organization"].as_str().unwrap_or("unmapped"),
+            joined_or(&client["recipients"], "none, consent fails closed")
+        ),
+    )
+}
+
+fn push_consent_explanation(consent: &Value, lines: &mut report::Lines) {
+    lines.heading("Consent:");
+    for key in ["condition", "unmappedClients", "trustModel", "ungating"] {
+        let sentence = consent[key].as_str().unwrap_or("");
+        if !sentence.is_empty() {
+            lines.listed(1, sentence);
+        }
+    }
+    for permission in consent["permissions"].as_array().into_iter().flatten() {
+        lines.blank();
+        lines.item_at(
+            1,
+            &format!(
+                "permission {} over {}",
+                permission["profile"].as_str().unwrap_or(""),
+                permission["entity"].as_str().unwrap_or("")
+            ),
+        );
+        lines.prose(2, permission["condition"].as_str().unwrap_or(""));
+        let readable = permission["readableFields"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|field| {
+                format!(
+                    "{} ({})",
+                    field["field"].as_str().unwrap_or(""),
+                    field["classification"].as_str().unwrap_or("unclassified")
+                )
+            })
+            .collect::<Vec<_>>();
+        lines.pairs_at(
+            2,
+            &[
+                (
+                    "record",
+                    permission["record"].as_str().unwrap_or("").to_owned(),
+                ),
+                ("on", permission["on"].as_str().unwrap_or("").to_owned()),
+                (
+                    "scope",
+                    permission["scope"].as_str().unwrap_or("").to_owned(),
+                ),
+                (
+                    "purposes",
+                    joined_or(&permission["purposes"], "unrestricted"),
+                ),
+                (
+                    "max duration",
+                    permission["maxDuration"].as_str().unwrap_or("").to_owned(),
+                ),
+                (
+                    "probe function",
+                    permission["probeFunction"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_owned(),
+                ),
+                ("indexes", joined_or(&permission["indexes"], "none")),
+                (
+                    "readable fields",
+                    if readable.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        readable.join(", ")
+                    },
+                ),
+                (
+                    "issuing actions",
+                    consent_issuers(&permission["issuingActions"]),
+                ),
+            ],
+        );
+        let clients = permission["clients"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(consent_client)
+            .collect::<Vec<_>>();
+        let clients = clients
+            .iter()
+            .map(|(label, value)| (label.as_str(), value.clone()))
+            .collect::<Vec<_>>();
+        lines.pairs_at(2, &clients);
+    }
+    lines.blank();
+    lines.item_at(1, "recipients");
+    let mut pairs = Vec::new();
+    for organization in consent["organizations"].as_array().into_iter().flatten() {
+        let retired = organization["retired"].as_bool() == Some(true);
+        pairs.push((
+            format!("organization {}", organization["id"].as_str().unwrap_or("")),
+            if retired {
+                "retired, no client acts for it".to_owned()
+            } else {
+                joined_or(&organization["clients"], "none")
+            },
+        ));
+    }
+    for group in consent["groups"].as_array().into_iter().flatten() {
+        pairs.push((
+            format!("group {}", group["id"].as_str().unwrap_or("")),
+            format!(
+                "{}: {}",
+                joined_or(&group["members"], "no members"),
+                joined_or(&group["clients"], "no clients")
+            ),
+        ));
+    }
+    for client in consent["clients"].as_array().into_iter().flatten() {
+        pairs.push(consent_client(client));
+    }
+    pairs.push((
+        "consent issuers".to_owned(),
+        consent_issuers(&consent["issuers"]),
+    ));
+    let pairs = pairs
+        .iter()
+        .map(|(label, value)| (label.as_str(), value.clone()))
+        .collect::<Vec<_>>();
+    lines.pairs_at(2, &pairs);
 }
 
 fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines) {
@@ -9795,6 +10089,15 @@ fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines)
         fields.push((
             "membership restrictions (all)",
             profile["membershipBoundaries"].to_string(),
+        ));
+    }
+    if profile["requireConsent"]
+        .as_array()
+        .is_some_and(|requirements| !requirements.is_empty())
+    {
+        fields.push((
+            "consent required (all)",
+            profile["requireConsent"].to_string(),
         ));
     }
     for field in [
@@ -12456,6 +12759,7 @@ mod tests {
                 "init",
                 "check",
                 "project",
+                "module",
                 "generate",
                 "dev",
                 "examples",

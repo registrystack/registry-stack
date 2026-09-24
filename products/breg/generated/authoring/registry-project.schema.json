@@ -541,6 +541,17 @@
     "ActionSource": {
       "additionalProperties": false,
       "properties": {
+        "consentIssuer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConsentIssuerSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Required when the action creates consent-record rows."
+        },
         "effects": {
           "default": [],
           "items": {
@@ -1343,6 +1354,139 @@
         "greater_than_or_equal"
       ],
       "type": "string"
+    },
+    "ConsentDecisionSource": {
+      "additionalProperties": false,
+      "description": "Maps the adopter's decision codes onto the engine's decision sets.",
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "gives": {
+          "description": "Codes that give consent.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "refusals": {
+          "description": "Revoke codes never shown to recipients.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "revokes": {
+          "description": "Codes that supersede every give on the same key ordered no later.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "field",
+        "gives",
+        "revokes"
+      ],
+      "type": "object"
+    },
+    "ConsentIssuerSource": {
+      "description": "Who an action creates consent rows for.",
+      "oneOf": [
+        {
+          "const": "self",
+          "description": "The subject, bound through a principal link entity.",
+          "type": "string"
+        },
+        {
+          "const": "steward",
+          "description": "A reviewed steward act on the subject's behalf.",
+          "type": "string"
+        }
+      ]
+    },
+    "ConsentRecordSource": {
+      "additionalProperties": false,
+      "description": "The fields of a consent-record entity the engine reads. Other fields are\nignored by consent enforcement.",
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/ConsentDecisionSource"
+        },
+        "purpose": {
+          "description": "A vocabulary-code field compared with the verified request purpose.",
+          "type": "string"
+        },
+        "recipient": {
+          "description": "A vocabulary-code field bound to `registry-recipients`.",
+          "type": "string"
+        },
+        "scope": {
+          "description": "A vocabulary-code field bound to `registry-consent-scopes`.",
+          "type": "string"
+        },
+        "subject": {
+          "description": "A reference field naming the protected subject row.",
+          "type": "string"
+        },
+        "validity": {
+          "$ref": "#/$defs/ConsentValiditySource"
+        }
+      },
+      "required": [
+        "subject",
+        "recipient",
+        "purpose",
+        "scope",
+        "decision",
+        "validity"
+      ],
+      "type": "object"
+    },
+    "ConsentRequirementSource": {
+      "additionalProperties": false,
+      "description": "A consent check ANDed into one read permission.",
+      "properties": {
+        "on": {
+          "description": "The permission entity's field the consent subject references; `id` is\nthe row's own identity.",
+          "type": "string"
+        },
+        "record": {
+          "description": "The consent-record entity checked.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "record",
+        "on"
+      ],
+      "type": "object"
+    },
+    "ConsentValiditySource": {
+      "additionalProperties": false,
+      "description": "Validity of a consent decision. Every give expires within `maxDuration`.",
+      "properties": {
+        "from": {
+          "description": "A required timestamp field; a give is active only from this time.",
+          "type": "string"
+        },
+        "maxDuration": {
+          "description": "An ISO 8601 duration such as `P365D`, at most ten years.",
+          "type": "string"
+        },
+        "until": {
+          "description": "An optional timestamp field ending the give earlier than `maxDuration`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "from",
+        "maxDuration"
+      ],
+      "type": "object"
     },
     "ConstraintSource": {
       "oneOf": [
@@ -2156,6 +2300,13 @@
           ],
           "default": null
         },
+        "requireConsent": {
+          "description": "Current subject-issued consent required for each row, ANDed.",
+          "items": {
+            "$ref": "#/$defs/ConsentRequirementSource"
+          },
+          "type": "array"
+        },
         "revisionAccess": {
           "default": false,
           "type": "boolean"
@@ -2263,6 +2414,17 @@
         "classification": {
           "$ref": "#/$defs/Classification",
           "default": "internal"
+        },
+        "consentRecord": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConsentRecordSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Declares this entity's rows as subject-issued consent decisions that\n`requireConsent` permissions check before returning a subject's row."
         },
         "constraints": {
           "default": [],
@@ -3689,6 +3851,78 @@
       ],
       "type": "object"
     },
+    "RecipientGroupSource": {
+      "additionalProperties": false,
+      "description": "A frozen, named list of declared organizations. Groups do not nest.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "members": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "members"
+      ],
+      "type": "object"
+    },
+    "RecipientOrganizationSource": {
+      "additionalProperties": false,
+      "description": "One named organization. Its clients are the verified OAuth clients that act\nfor it; an organization with no clients is retired and keeps its code.",
+      "properties": {
+        "clients": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "contact": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "contact",
+        "clients"
+      ],
+      "type": "object"
+    },
+    "RecipientsSource": {
+      "additionalProperties": false,
+      "description": "Declared consent recipients. Organization and group ids share one\nnamespace and form the append-only `registry-recipients` vocabulary.",
+      "properties": {
+        "groups": {
+          "items": {
+            "$ref": "#/$defs/RecipientGroupSource"
+          },
+          "type": "array"
+        },
+        "organizations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RecipientOrganizationSource"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ReferenceDelete": {
       "enum": [
         "restrict"
@@ -4465,8 +4699,26 @@
       ],
       "default": null
     },
+    "recipients": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RecipientsSource"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Named organizations and frozen groups that consent may be given to."
+    },
     "registry": {
       "$ref": "#/$defs/RegistryIdentitySource"
+    },
+    "retiredConsentScopes": {
+      "description": "Consent scope codes of removed gated profiles, kept so existing consent\nrows still validate. A retired scope matches nothing.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
     "vocabularies": {
       "default": [],

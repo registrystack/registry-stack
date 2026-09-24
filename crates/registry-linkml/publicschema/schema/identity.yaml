@@ -45,6 +45,7 @@ imports:
 - common
 - core
 - misc
+- value_types
 - vocabularies
 - external/dhs
 - external/mics
@@ -277,6 +278,20 @@ classes:
     see_also:
     - https://www.fao.org/4/i4913e/i4913e.pdf
     annotations:
+      label_es: Grupo informal
+      label_fr: Groupe informel
+      description_es: Un conjunto de personas identificadas conjuntamente para una actividad o finalidad
+        compartida, sin afirmar un organismo institucional propio, una residencia común ni un parentesco.
+        El grupo puede identificarse incluso cuando sus miembros individuales no están enumerados.
+        Utilice Household o Family cuando se aplique su significado más específico, y Organization
+        cuando el sujeto sea un organismo institucional. Los cotitulares agropecuarios conjuntos son
+        un ejemplo.
+      description_fr: Un ensemble de personnes identifiées conjointement pour une activité ou une finalité
+        partagée, sans affirmer d'organisme institutionnel propre, de résidence commune ni de lien
+        de parenté. Le groupe peut être identifié même lorsque ses membres individuels ne sont pas
+        énumérés. Utiliser Household ou Family lorsque leur signification plus spécifique s'applique,
+        et Organization lorsque le sujet est un organisme institutionnel. Les cotitulaires agricoles
+        conjoints en sont un exemple.
       bibliography_refs: '["fao-wca-2020-vol1"]'
     is_a: Group
   HealthFacility:
@@ -299,6 +314,8 @@ classes:
     - facility_level
     status: bibo:draft
     close_mappings:
+    - fhir:Location
+    related_mappings:
     - schema:MedicalOrganization
     annotations:
       source_domain: health
@@ -326,12 +343,17 @@ classes:
         opérationnelle des services (SARA) de l''OMS et sur l''Évaluation harmonisée des établissements
         de santé (HHFA).'
       featured: true
-      external_alignments_json: '[{"label": "MedicalOrganization", "match": "close", "note": "schema.org
-        MedicalOrganization conflates the medical organization and the physical place where care is delivered
-        into a single class. PublicSchema separates them: HealthFacility is the physical facility (subtype
-        of ServicePoint), and the operating Organization is referenced via managed_by. The overlap is
-        close on the facility-level concept and partial on the organizational side.", "uri": "https://schema.org/MedicalOrganization",
-        "vocabulary": "schema.org", "vocabulary_id": "schema-org"}]'
+      external_alignments_json: '[{"label": "Location", "match": "close", "note": "A FHIR R5 Location with
+        mode instance and a site or building physical form describes the same physical place where care
+        is delivered. FHIR Location also covers rooms, beds, vehicles and location kinds. managed_by relates
+        to Location.managingOrganization, which is the organization responsible for provisioning and upkeep,
+        but is not an exact mapping; the clinical provider of a service is HealthcareService.providedBy.",
+        "uri": "http://hl7.org/fhir/Location", "vocabulary": "FHIR R5", "vocabulary_id": "fhir-r5"}, {"label":
+        "MedicalOrganization", "match": "related", "note": "schema.org MedicalOrganization is an organization
+        that provides medical services, and is also used for the place where they are delivered. PublicSchema
+        separates them: HealthFacility is the physical facility, and the operating Organization is referenced
+        via managed_by.", "uri": "https://schema.org/MedicalOrganization", "vocabulary": "schema.org", "vocabulary_id":
+        "schema-org"}]'
       convergence_json: '{"notes": "HealthFacility is informed primarily by two WHO-maintained non-PublicSchema
         systems: the Service Availability and Readiness Assessment (SARA) Reference Manual, which defines
         the canonical facility-type taxonomy, and the Harmonized Health Facility Assessment (HHFA), which
@@ -345,7 +367,7 @@ classes:
         "classification", "properties": ["service_point_type", "facility_type", "facility_level", "operational_status"]},
         {"category": "location", "properties": ["located_at"]}, {"category": "governance", "properties":
         ["managed_by"]}]'
-      bibliography_refs: '["schema-org", "who-health-systems", "who-herams", "who-sara"]'
+      bibliography_refs: '["fhir-r5", "schema-org", "who-health-systems", "who-herams", "who-sara"]'
   Household:
     class_uri: publicschema:Household
     title: Household
@@ -454,15 +476,18 @@ classes:
     - name
     - identifiers
     - location
+    - legal_form
+    - formation_date
     status: bibo:status/forthcoming
     exact_mappings:
     - foaf:Organization
     - prov:Organization
     - schema:Organization
     close_mappings:
-    - cpov:PublicOrganisation
     - fhir:Organization
     - legal:LegalEntity
+    narrow_mappings:
+    - cpov:PublicOrganisation
     annotations:
       label_es: Organización
       label_fr: Organisation
@@ -485,13 +510,10 @@ classes:
       external_alignments_json: '[{"label": "Organization", "match": "exact", "note": "foaf:Organization
         is the direct equivalent: a kind of agent corresponding to social institutions such as companies,
         societies, and so on.", "uri": "http://xmlns.com/foaf/0.1/Organization", "vocabulary": "FOAF",
-        "vocabulary_id": "foaf"}, {"label": "Public Organisation", "match": "close", "note": "SEMIC CPOV
-        defines PublicOrganisation as a formally recognised public-sector body with classification, legal
-        status, and spatial jurisdiction slots. Our Organization covers the broader set of institutional
-        actors in public delivery (government agencies and ministries, but also NGOs, UN agencies, health
-        facilities, and standards publishers). The overlap is exact for public bodies and partial for
-        the rest. CPOV''s richer shape (jurisdiction, legal status, purpose, contact point) is a natural
-        target if Organization is later extended.", "uri": "http://data.europa.eu/m8g/PublicOrganisation",
+        "vocabulary_id": "foaf"}, {"label": "Public Organisation", "match": "narrow", "note": "SEMIC CPOV
+        PublicOrganisation is a formally recognised public-sector body. It is narrower than Organization,
+        which also covers NGOs, UN agencies, health facilities and standards publishers. PublicOrganization
+        holds the exact match.", "uri": "http://data.europa.eu/m8g/PublicOrganisation",
         "vocabulary": "CPOV", "vocabulary_id": "semic"}, {"label": "Organization", "match": "exact", "note":
         "schema.org Organization is the direct equivalent, sibling to schema:Person under schema:Thing.
         Richer subtypes (GovernmentOrganization, NGO, MedicalOrganization) are available in schema.org
@@ -517,8 +539,10 @@ classes:
         legal_form, jurisdiction, contact points, multi-site locations) is deferred to a later iteration.\n",
         "system_count": 0, "total_systems": 6}'
       property_groups_json: '[{"category": "identity", "properties": ["name", "identifiers"]}, {"category":
-        "location", "properties": ["location"]}]'
-      bibliography_refs: '["fhir-r4", "foaf", "schema-org", "semic-cpov", "w3c-prov-o"]'
+        "location", "properties": ["location"]}, {"category": "administrative", "properties": ["legal_form",
+        "formation_date"]}]'
+      bibliography_refs: '["fhir-r4", "foaf", "schema-org", "semic-cpov", "uk-companies-house-api", "w3c-prov-o",
+        "w3c-regorg"]'
   RegistrationOffice:
     class_uri: publicschema:RegistrationOffice
     title: Registration Office
@@ -1464,7 +1488,7 @@ slots:
   formation_date:
     slot_uri: publicschema:formation_date
     title: Formation date
-    description: The date on which this group was formed or registered.
+    description: The date on which this group or organization was formed or registered.
     range: date
     multivalued: false
     status: bibo:status/published
@@ -1473,8 +1497,8 @@ slots:
     annotations:
       label_es: Fecha de formación
       label_fr: Date de formation
-      description_es: La fecha en que este grupo fue formado o registrado.
-      description_fr: La date à laquelle ce groupe a été formé ou enregistré.
+      description_es: La fecha de formación o de registro de este grupo u organización.
+      description_fr: La date de formation ou d'enregistrement de ce groupe ou de cette organisation.
       category: administrative
       external_alignments_json: '[{"label": "registration_date", "match": "close", "note": "DCI records
         when the group was registered; PublicSchema distinguishes group formation from registration",
@@ -1483,7 +1507,7 @@ slots:
       convergence_json: '{"notes": "Present in only 1 of 5 mapped systems. Uncommon in practice; most
         systems record the date of first registration rather than group formation.", "system_count": 1,
         "total_systems": 5}'
-      bibliography_refs: '["spdci-common-standards"]'
+      bibliography_refs: '["spdci-common-standards", "uk-companies-house-api"]'
   full_address:
     slot_uri: publicschema:full_address
     title: Full address
@@ -1841,6 +1865,24 @@ slots:
       external_alignments_json: '[{"label": "No v1 equivalent", "match": "none", "note": "OpenCRVS v2
         does not include an industry field.", "vocabulary": "OpenCRVS v2 event service", "vocabulary_id":
         "opencrvs"}]'
+  legal_form:
+    slot_uri: publicschema:legal_form
+    title: Legal form
+    description: The legal form of an organization under the law it was formed under, such as a limited
+      company, cooperative or statutory body.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Forma jurídica
+      label_fr: Forme juridique
+      description_es: La forma jurídica de una organización conforme a la ley bajo la cual se constituyó,
+        como una sociedad limitada, una cooperativa o un organismo estatutario.
+      description_fr: La forme juridique d'une organisation en vertu de la loi sous laquelle elle a
+        été constituée, par exemple une société à responsabilité limitée, une coopérative ou un organisme
+        statutaire.
+      category: classification
+      bibliography_refs: '["w3c-regorg"]'
   literacy:
     slot_uri: publicschema:literacy
     title: Literacy

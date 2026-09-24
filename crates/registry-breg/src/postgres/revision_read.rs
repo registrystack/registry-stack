@@ -522,21 +522,17 @@ fn revision_sql(
             ApiRowBoundaryOperator::Equals => return Err(ReadServiceError::Unavailable),
         }
     }
-    for (index, boundary) in
-        crate::membership::boundaries(entity, request.context.selected_profile())
-            .iter()
-            .enumerate()
-    {
-        parameters.push(Box::new(boundary.field.clone()));
-        predicates.push(format!(
-            "registry_context.{}((convert_from(snapshot, 'UTF8')::jsonb ->> ${}::text)::uuid)",
-            crate::generated_ddl::quote_identifier(&crate::membership::function_name(
-                &entity.id,
-                request.context.selected_profile(),
-                index
-            )),
-            parameters.len()
-        ));
+    for probe in crate::membership::row_probes(entity, request.context.selected_profile()) {
+        let key = if probe.field == entity.canonical_id.id {
+            "record_id".to_owned()
+        } else {
+            parameters.push(Box::new(probe.field.clone()));
+            format!(
+                "(convert_from(snapshot, 'UTF8')::jsonb ->> ${}::text)::uuid",
+                parameters.len()
+            )
+        };
+        predicates.push(probe.sql(&key));
     }
     let limit =
         i64::try_from(request.maximum_records).map_err(|_| ReadServiceError::Unavailable)?;
@@ -818,7 +814,7 @@ async fn revision_from_row(
         .decode_snapshot_for_fields(&compatibility, &snapshot, Some(&record_id.to_string()))
         .map_err(history_schema_error)?;
     if !row_authorized(&decoded, context, entity)?
-        || !membership_authorized(transaction, &decoded, context, entity).await?
+        || !row_probes_authorized(transaction, &decoded, context, entity).await?
     {
         return Ok(None);
     }
@@ -879,36 +875,23 @@ async fn revision_from_row(
     }))
 }
 
-async fn membership_authorized(
+async fn row_probes_authorized(
     transaction: &tokio_postgres::Transaction<'_>,
     decoded: &DecodedHistorySnapshot,
     context: &AuthorizedRequestContext,
     entity: &CompiledEntity,
 ) -> Result<bool, ReadServiceError> {
-    for (index, boundary) in crate::membership::boundaries(entity, context.selected_profile())
-        .iter()
-        .enumerate()
-    {
+    for probe in crate::membership::row_probes(entity, context.selected_profile()) {
         let Some(value) = decoded
             .by_field_id
-            .get(&boundary.field)
+            .get(&probe.field)
             .and_then(Value::as_str)
         else {
             return Ok(false);
         };
         let key = Uuid::parse_str(value).map_err(|_| ReadServiceError::Unavailable)?;
         let row = transaction
-            .query_one(
-                &format!(
-                    "SELECT registry_context.{}($1::uuid)",
-                    crate::generated_ddl::quote_identifier(&crate::membership::function_name(
-                        &entity.id,
-                        context.selected_profile(),
-                        index
-                    ))
-                ),
-                &[&key],
-            )
+            .query_one(&format!("SELECT {}", probe.sql("$1::uuid")), &[&key])
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
         if !row.get::<_, bool>(0) {
@@ -1090,7 +1073,7 @@ async fn commit_context_visible(
             Err(_) => return Ok(false),
         };
         if !row_authorized(&decoded, context, entity)?
-            || !membership_authorized(transaction, &decoded, context, entity).await?
+            || !row_probes_authorized(transaction, &decoded, context, entity).await?
         {
             return Ok(false);
         }
@@ -1307,6 +1290,7 @@ fn strict_claim_context(
         row_boundaries,
     )
     .and_then(|claims| claims.with_api_submitter_targets(registry, context))
+    .and_then(|claims| claims.with_recipients(context.recipients().clone()))
     .map_err(|_| ReadServiceError::Unavailable)
 }
 

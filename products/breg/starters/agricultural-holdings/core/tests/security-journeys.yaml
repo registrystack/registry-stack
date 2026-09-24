@@ -122,7 +122,7 @@ journeys:
           status: 201
         capture: group
       - id: seed-ana-role
-        entity: person-holding-operator-role
+        entity: person-agricultural-holder-role
         accessProfile: editor
         claims:
           principal: synthetic-editor
@@ -132,9 +132,9 @@ journeys:
         request:
           operation: create
           data:
-            operatedHolding:
+            holderFarm:
               recordRef: river
-            holdingOperatorPerson:
+            holderPerson:
               recordRef: ana
             startDate: '2026-01-01'
         expect:
@@ -142,7 +142,7 @@ journeys:
           status: 201
         capture: ana-role
       - id: seed-bo-role
-        entity: person-holding-operator-role
+        entity: person-agricultural-holder-role
         accessProfile: editor
         claims:
           principal: synthetic-editor
@@ -152,9 +152,9 @@ journeys:
         request:
           operation: create
           data:
-            operatedHolding:
+            holderFarm:
               recordRef: river
-            holdingOperatorPerson:
+            holderPerson:
               recordRef: bo
             startDate: '2026-01-01'
         expect:
@@ -162,7 +162,7 @@ journeys:
           status: 201
         capture: bo-role
       - id: seed-cooperative-role
-        entity: organization-holding-operator-role
+        entity: organization-agricultural-holder-role
         accessProfile: editor
         claims:
           principal: synthetic-editor
@@ -172,9 +172,9 @@ journeys:
         request:
           operation: create
           data:
-            operatedHolding:
+            holderFarm:
               recordRef: landless
-            holdingOperatorOrganization:
+            holderOrganization:
               recordRef: cooperative
             startDate: '2026-01-01'
         expect:
@@ -182,7 +182,7 @@ journeys:
           status: 201
         capture: cooperative-role
       - id: seed-group-role
-        entity: group-holding-operator-role
+        entity: group-agricultural-holder-role
         accessProfile: editor
         claims:
           principal: synthetic-editor
@@ -192,9 +192,9 @@ journeys:
         request:
           operation: create
           data:
-            operatedHolding:
+            holderFarm:
               recordRef: collective
-            holdingOperatorGroup:
+            holderGroup:
               recordRef: group
             startDate: '2026-01-01'
         expect:

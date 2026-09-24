@@ -68,6 +68,11 @@ path = "tests/postgres_registry_extensibility.rs"
 required-features = ["postgres-test", "tooling"]
 
 [[test]]
+name = "postgres_consent_access"
+path = "tests/postgres_consent_access.rs"
+required-features = ["postgres-test"]
+
+[[test]]
 name = "postgres_membership_access"
 path = "tests/postgres_membership_access.rs"
 required-features = ["postgres-test"]
@@ -181,6 +186,11 @@ required-features = ["postgres-test"]
 name = "postgres_data_export"
 path = "tests/postgres_data_export.rs"
 required-features = ["postgres-test"]
+
+[[test]]
+name = "consent_tooling"
+path = "tests/consent_tooling.rs"
+required-features = ["runtime", "tooling"]
 
 [[test]]
 name = "fixture_tooling"

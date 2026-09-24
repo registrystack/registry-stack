@@ -13,6 +13,7 @@ apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
 kind: ModelSelection
 model: publicschema
 modelVersion: "0.3.0"
+modelRevision: "bd07bda1fe9cb9eb8582cf7bc1c77367e2455e5b"
 registry:
   id: household-registry
   title: Household Registry

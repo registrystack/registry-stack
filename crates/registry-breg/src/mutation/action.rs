@@ -2366,10 +2366,23 @@ fn action_effect_document(
                     .ok_or(MutationError::InvalidRequest)?;
                 let value = match value {
                     CompiledActionValue::Literal { value } => value.clone(),
-                    CompiledActionValue::FromInput { input } => input_values
-                        .get(input)
-                        .cloned()
-                        .ok_or(MutationError::InvalidRequest)?,
+                    CompiledActionValue::FromInput { input } => match input_values.get(input) {
+                        Some(value) => value.clone(),
+                        // A fixed effect leaves out a field whose optional
+                        // input is absent: a create stores the field's
+                        // ordinary absent value and a patch leaves it
+                        // unchanged. A handler's proposal is taken as written.
+                        None if action.handler.is_none()
+                            && !field_source.required
+                            && action
+                                .inputs
+                                .iter()
+                                .any(|source| source.id == *input && !source.required) =>
+                        {
+                            continue;
+                        }
+                        None => return Err(MutationError::InvalidRequest),
+                    },
                     CompiledActionValue::FromEffect {
                         effect,
                         target_entity_id,
@@ -2461,12 +2474,10 @@ async fn verify_action_requirements(
             .fields
             .get(&requirement.field)
             .ok_or(MutationError::InvalidRequest)?;
-        let expected_value = match (&requirement.equals, &requirement.equals_input) {
-            (Some(value), None) => value,
-            (None, Some(input)) => inputs.get(input).ok_or(MutationError::InvalidRequest)?,
-            _ => return Err(MutationError::InvalidRequest),
-        };
-        let expected = sql_value(expected_value, &field.field_type)?;
+        let expected = sql_value(
+            requirement_expected_value(requirement, inputs)?,
+            &field.field_type,
+        )?;
         // The exact row is already authorized and locked until commit. Use its
         // PostgreSQL type's equality, including decimal and timestamp semantics.
         let sql = format!(
@@ -2484,6 +2495,20 @@ async fn verify_action_requirements(
         }
     }
     Ok(())
+}
+
+/// The value a requirement compares its stored field against. The compiler
+/// admits `equalsInput` only for a required input; should the named input
+/// still be absent, the request is refused rather than the check skipped.
+fn requirement_expected_value<'a>(
+    requirement: &'a crate::model::CompiledActionRequirement,
+    inputs: &'a ActionInputs,
+) -> Result<&'a Value, MutationError> {
+    match (&requirement.equals, &requirement.equals_input) {
+        (Some(value), None) => Ok(value),
+        (None, Some(input)) => inputs.get(input).ok_or(MutationError::InvalidRequest),
+        _ => Err(MutationError::InvalidRequest),
+    }
 }
 
 async fn load_action_row(
@@ -3072,6 +3097,109 @@ mod tests {
         ));
         assert!(matches!(
             validate_action_input(action, null),
+            Err(MutationError::InvalidRequest)
+        ));
+    }
+
+    #[test]
+    fn absent_optional_fixed_inputs_leave_their_fields_out_of_create_and_patch_documents() {
+        let project = crate::contract::parse_project_yaml(include_bytes!(
+            "../../tests/fixtures/absent-optional-action-inputs.yaml"
+        ))
+        .unwrap();
+        let registry = crate::compiler::compile_project(
+            &project,
+            &[],
+            crate::compiler::CompileProfile::Authoring,
+        )
+        .unwrap();
+        let entity = &registry.entities()["entry"];
+        let actions = &registry.actions().actions;
+        let create = actions.iter().find(|a| a.id == "create-entry").unwrap();
+        let update = actions.iter().find(|a| a.id == "update-entry").unwrap();
+
+        let create_input = Map::from_iter([("label".to_owned(), json!("A label"))]);
+        let create_input = validate_action_input(create, create_input).unwrap();
+        assert_eq!(
+            action_effect_document(
+                create,
+                entity,
+                &create.effects[0],
+                &create_input,
+                &BTreeMap::new(),
+                None
+            )
+            .unwrap(),
+            Map::from_iter([("label".to_owned(), json!("A label"))]),
+            "an absent optional input takes the field's ordinary absent value on create"
+        );
+
+        let update_input = Map::from_iter([
+            (
+                "entry".to_owned(),
+                json!("00000000-0000-4000-8000-000000000001"),
+            ),
+            ("status".to_owned(), json!("reviewed")),
+        ]);
+        let update_input = validate_action_input(update, update_input).unwrap();
+        assert_eq!(
+            action_effect_document(
+                update,
+                entity,
+                &update.effects[0],
+                &update_input,
+                &BTreeMap::new(),
+                None
+            )
+            .unwrap(),
+            Map::from_iter([("status".to_owned(), json!("reviewed"))]),
+            "an absent optional input leaves the field unchanged on patch"
+        );
+
+        let missing_required = Map::from_iter([(
+            "entry".to_owned(),
+            json!("00000000-0000-4000-8000-000000000001"),
+        )]);
+        assert!(matches!(
+            validate_action_input(update, missing_required.clone()),
+            Err(MutationError::InvalidRequest)
+        ));
+        assert!(
+            matches!(
+                action_effect_document(
+                    update,
+                    entity,
+                    &update.effects[0],
+                    &missing_required,
+                    &BTreeMap::new(),
+                    None
+                ),
+                Err(MutationError::InvalidRequest)
+            ),
+            "an absent required input still refuses the request"
+        );
+    }
+
+    /// The compiler refuses an `equalsInput` that names an optional input.
+    /// Should one still arrive without that input, the requirement refuses the
+    /// request instead of skipping the check the way an absent effect input
+    /// skips its field.
+    #[test]
+    fn an_absent_equality_input_refuses_instead_of_skipping_the_requirement() {
+        let requirement = crate::model::CompiledActionRequirement {
+            input: "parent".to_owned(),
+            entity_id: "parent".to_owned(),
+            field: "status".to_owned(),
+            equals: None,
+            equals_input: Some("expected-status".to_owned()),
+        };
+        let supplied = Map::from_iter([("expected-status".to_owned(), json!("active"))]);
+        assert_eq!(
+            requirement_expected_value(&requirement, &supplied).unwrap(),
+            &json!("active")
+        );
+        assert!(matches!(
+            requirement_expected_value(&requirement, &Map::new()),
             Err(MutationError::InvalidRequest)
         ));
     }

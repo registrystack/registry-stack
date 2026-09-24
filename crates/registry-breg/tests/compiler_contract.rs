@@ -5533,6 +5533,7 @@ fn public_profile_cannot_process_an_internal_field() {
         required_purposes: Default::default(),
         permissions: vec![AccessPermissionSource {
             membership_boundaries: Vec::new(),
+            require_consent: Vec::new(),
             entity: "asset-item".to_owned(),
             action: None,
             operations: [Operation::Get].into_iter().collect(),

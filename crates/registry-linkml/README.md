@@ -30,18 +30,23 @@ followed. It models classes (`is_a`, `mixins`, `abstract`, `slots`), slots
 prefixes, which it expands to absolute URIs while reading.
 
 Keys whose absence would change a class's shape are refused rather than
-dropped: `attributes`, `slot_usage`, and `union_of` on a class; `any_of`,
-`exactly_one_of`, `all_of`, and `none_of` on a slot; `inherits`, `include`,
-`minus`, and `reachable_from` on an enum. A bundle that relies on them fails
-to read instead of reading wrong. Other LinkML keys are ignored.
+dropped: `attributes` and `union_of` on a class; `any_of`, `exactly_one_of`,
+`all_of`, and `none_of` on a slot; `inherits`, `include`, `minus`, and
+`reachable_from` on an enum. A bundle that relies on them fails to read
+instead of reading wrong. A class's `slot_usage` is read only when it
+documents a slot the class already carries (`description`, `comments`,
+`examples`, `see_also`); the reader ignores those refinements, and refuses a
+refinement with any other key or of a slot the class does not carry. Other
+LinkML keys are ignored.
 
 ## The PublicSchema snapshot
 
 The vendored files are the domain half of the upstream composite: the root
-`publicschema.yaml` and the fourteen files that define PublicSchema's own
+`publicschema.yaml` and the thirty-two files that define PublicSchema's own
 classes, slots, and vocabularies. The `external/*` alignment schemas,
-`bibliography`, `metrics`, and `publicschema-extensions` are not vendored;
-nothing in the domain files depends on them.
+`bibliography`, `metrics`, `publicschema-extensions`, `project.yaml`, and
+`published_class_aliases.json` are not vendored; no class or slot in the
+domain files takes its range from them.
 
 `PIN.yaml` names the upstream commit. Refresh the snapshot with:
 
@@ -54,10 +59,9 @@ The snapshot test in `tests/snapshot.rs` states the pinned model's counts
 (classes, slots, enums, values, abstract and featured classes); a refresh that
 changes them updates the test on purpose, so a review sees what moved.
 
-Provenance caveat: when the snapshot was first taken, the pinned commit was
-ahead of the upstream remote's `main`. Before a release that ships this
-crate, confirm the commit in `PIN.yaml` is reachable from a published
-upstream branch, or re-sync from one that is.
+Sync only from a commit reachable from upstream `main`: a branch commit can
+be squash-merged upstream and stop being reachable, which leaves the pin
+naming bytes no published branch carries.
 
 ## Licence and attribution
 

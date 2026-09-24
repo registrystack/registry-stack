@@ -31,14 +31,16 @@ use registry_breg::migration_plan::{
     ReviewedMigrationFile, ReviewedMigrationRecovery, ReviewedMigrationSource,
 };
 use registry_breg::package::{
-    compiled_registry_change_set, load_package, prepare_package, PackageBuildRequest,
-    PackageIntent, PackageLoadContext, PackageMigrationPlanInput, PackageSignature,
-    PackageSourceFile, PackageTrustAnchor, SignaturePolicy, TrustAnchorKey, VerifiedPackage,
-    FIXTURE_JOURNEYS_PATH, TRUST_ANCHOR_API_VERSION,
+    compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
+    CompiledRegistryChangeCode, PackageBuildRequest, PackageIntent, PackageLoadContext,
+    PackageMigrationPlanInput, PackageSignature, PackageSourceFile, PackageTrustAnchor,
+    SignaturePolicy, TrustAnchorKey, VerifiedPackage, FIXTURE_JOURNEYS_PATH,
+    TRUST_ANCHOR_API_VERSION,
 };
 use registry_breg::postgres::{
-    managed_schema_fingerprint, ExpectedManagedCatalog, ExpectedRegistryIdentity,
-    PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey, SqlIdentifier,
+    managed_schema_fingerprint, reconcile_compiled_runtime_acl_for_test, ExpectedManagedCatalog,
+    ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
+    RegistryLockKey,
 };
 use registry_breg::startup::prepare_startup;
 use registry_breg::CompiledRegistry;
@@ -48,7 +50,6 @@ use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm
 use serde::Serialize;
 use serde_json::{json, Value};
 use tempfile::TempDir;
-use tokio_postgres::GenericClient;
 use tower::Service as _;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -243,6 +244,152 @@ async fn reviewed_activation_updates_immediate_action_policies_and_consumed_keys
     database.cleanup().await;
 }
 
+/// A recipient organization added in a successor widens the recipient input
+/// of every consent-issuing action without review. The activated catalog must
+/// be exactly a fresh install of the successor, the action must accept the new
+/// recipient, and a key consumed under the prior contract must not replay.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn recipient_added_successor_matches_fresh_install_and_refuses_consumed_keys() {
+    let database = TestDatabase::create(8).await;
+    let signer = TestSigner::new();
+
+    let initial_project = consent_project_bytes(1, false);
+    let initial_registry = Arc::new(compile_bytes(&initial_project));
+    let initial_fingerprint = initial_schema_fingerprint(&database, &initial_registry).await;
+    let initial = publish_and_load(
+        &signer,
+        build_request_for_project(
+            initial_project,
+            1,
+            None,
+            &initial_fingerprint,
+            PackageMigrationPlanInput::InitialCompiledDdl,
+        ),
+        package_context(PackageIntent::InitialActivation),
+    );
+    let active_initial = apply_package(
+        &database,
+        &initial.package,
+        ApplyPrecondition::InitialActivation,
+    )
+    .await;
+
+    let initial_app = action_router(&database, initial_registry.clone(), active_initial.clone());
+    let subject = create_consent_subject(&initial_app).await;
+    let before_add =
+        record_consent(&initial_app, "unknown-recipient", &subject, NEW_RECIPIENT).await;
+    assert_eq!(
+        before_add.status,
+        StatusCode::BAD_REQUEST,
+        "the prior package must refuse a recipient it does not declare: {}",
+        before_add.body
+    );
+    let first = record_consent(&initial_app, "consent-stable-key", &subject, "wfp").await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.body);
+    assert_eq!(receipt_count(&database).await, 1);
+
+    let successor_project = consent_project_bytes(2, true);
+    let successor_registry = Arc::new(compile_bytes(&successor_project));
+    let changes = compiled_registry_change_set(
+        &initial_registry,
+        &successor_registry,
+        &active_initial.package_revision,
+    );
+    let action_changes = changes
+        .changes
+        .iter()
+        .filter(|change| change.target.member_id.as_deref() == Some("record-consent"))
+        .map(|change| (change.code, change.class))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        action_changes,
+        vec![(
+            CompiledRegistryChangeCode::ActionVocabularyCodesAdded,
+            CompiledRegistryChangeClass::CompatibleAdditive
+        )],
+        "{:#?}",
+        changes.changes
+    );
+    // A fresh install of the successor measures the catalog the successor
+    // binds, so activation succeeds only if the upgraded catalog is exactly
+    // that fresh install.
+    let fresh = TestDatabase::create(2).await;
+    let fresh_fingerprint = initial_schema_fingerprint(&fresh, &successor_registry).await;
+    fresh.cleanup().await;
+    let successor = publish_and_load(
+        &signer,
+        build_request_for_project(
+            successor_project,
+            2,
+            Some(active_initial.package_revision.as_str()),
+            &fresh_fingerprint,
+            PackageMigrationPlanInput::Successor {
+                prior_registry: Box::new((*initial_registry).clone()),
+            },
+        ),
+        package_context(PackageIntent::Activation {
+            active_revision: &active_initial.package_revision,
+            active_sequence: active_initial.package_sequence as u64,
+        }),
+    );
+    let statements = successor
+        .package
+        .manifest()
+        .migration_plan
+        .statements
+        .iter()
+        .map(|statement| statement.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        statements,
+        vec!["entity.consent-decision.field.recipient.vocabulary"],
+        "a recipient added to its vocabulary replaces only the recipient check"
+    );
+    // The recipient widens the action contract, whose fingerprint the action
+    // policies embed, so the rehearsal must reconcile policies as activation
+    // does to measure the same catalog as the fresh install.
+    assert_eq!(
+        successor_schema_fingerprint(&database, &successor.package).await,
+        fresh_fingerprint
+    );
+    let active_successor = apply_package(
+        &database,
+        &successor.package,
+        ApplyPrecondition::Successor {
+            current: &active_initial,
+        },
+    )
+    .await;
+    assert_eq!(active_successor.schema_fingerprint, fresh_fingerprint);
+    assert_exact_catalog(&database, &successor_registry, &active_successor).await;
+
+    let successor_app = action_router(
+        &database,
+        successor_registry.clone(),
+        active_successor.clone(),
+    );
+    let added = record_consent(&successor_app, "new-recipient", &subject, NEW_RECIPIENT).await;
+    assert_eq!(added.status, StatusCode::OK, "{}", added.body);
+    assert_eq!(receipt_count(&database).await, 2);
+
+    let replay = record_consent(&successor_app, "consent-stable-key", &subject, "wfp").await;
+    assert_eq!(
+        replay.status,
+        StatusCode::CONFLICT,
+        "a key consumed under the prior package must not replay under the successor: {}",
+        replay.body
+    );
+    assert_eq!(receipt_count(&database).await, 2);
+    assert_eq!(
+        entity_count(&database, &successor_registry, "consent-decision").await,
+        2
+    );
+
+    drop(successor);
+    drop(initial);
+    database.cleanup().await;
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Variant {
     NoAction,
@@ -358,6 +505,22 @@ fn build_request(
     schema_fingerprint: &str,
     migration_plan: PackageMigrationPlanInput,
 ) -> PackageBuildRequest {
+    build_request_for_project(
+        project_bytes(variant, sequence),
+        sequence,
+        prior_revision,
+        schema_fingerprint,
+        migration_plan,
+    )
+}
+
+fn build_request_for_project(
+    project: Vec<u8>,
+    sequence: u64,
+    prior_revision: Option<&str>,
+    schema_fingerprint: &str,
+    migration_plan: PackageMigrationPlanInput,
+) -> PackageBuildRequest {
     PackageBuildRequest {
         environment: ENVIRONMENT.to_owned(),
         instance_id: INSTANCE_ID.to_owned(),
@@ -372,7 +535,7 @@ fn build_request(
         },
         project: PackageSourceFile {
             path: "registry.json".to_owned(),
-            bytes: project_bytes(variant, sequence),
+            bytes: project,
         },
         modules: Vec::new(),
         fixture_journeys: PackageSourceFile {
@@ -504,8 +667,13 @@ async fn successor_schema_fingerprint(
             .await
             .expect("successor DDL rehearses");
     }
-    reconcile_runtime_acl_for_fingerprint(&transaction, package.registry(), &database.runtime_role)
-        .await;
+    reconcile_compiled_runtime_acl_for_test(
+        &transaction,
+        package.registry(),
+        &database.runtime_role,
+    )
+    .await
+    .expect("successor fingerprint reconciles the production runtime ACL");
     let fingerprint = managed_schema_fingerprint(
         &transaction,
         &database.runtime_role,
@@ -536,100 +704,6 @@ async fn assert_exact_catalog(
     .expect("activated schema matches the exact candidate catalog");
     assert_eq!(fingerprint, identity.schema_fingerprint);
     task.abort();
-}
-
-async fn reconcile_runtime_acl_for_fingerprint(
-    client: &impl GenericClient,
-    registry: &CompiledRegistry,
-    runtime_role: &SqlIdentifier,
-) {
-    client
-        .batch_execute(&format!(
-            "REVOKE ALL ON SCHEMA registry_data, registry_source, registry_derived, registry_context FROM PUBLIC, {};
-             GRANT USAGE ON SCHEMA registry_data, registry_source, registry_derived, registry_context TO {};",
-            quote(runtime_role.as_str()),
-            quote(runtime_role.as_str()),
-        ))
-        .await
-        .expect("schema privileges rehearse");
-    for table in &registry.ddl().tables {
-        client
-            .batch_execute(&format!(
-                "REVOKE ALL ON TABLE registry_data.{} FROM PUBLIC, {};",
-                quote(&table.physical_name),
-                quote(runtime_role.as_str()),
-            ))
-            .await
-            .expect("table privileges revoke");
-        if !table.runtime_privileges.is_empty() {
-            let privileges = table
-                .runtime_privileges
-                .iter()
-                .map(|privilege| privilege.as_sql())
-                .collect::<Vec<_>>()
-                .join(", ");
-            client
-                .batch_execute(&format!(
-                    "GRANT {privileges} ON TABLE registry_data.{} TO {};",
-                    quote(&table.physical_name),
-                    quote(runtime_role.as_str()),
-                ))
-                .await
-                .expect("table privileges grant");
-        }
-    }
-    for view in &registry.ddl().views {
-        client
-            .batch_execute(&format!(
-                "REVOKE ALL ON TABLE {}.{} FROM PUBLIC, {};",
-                quote(&view.schema),
-                quote(&view.name),
-                quote(runtime_role.as_str()),
-            ))
-            .await
-            .expect("view privileges revoke");
-        if !view.runtime_privileges.is_empty() {
-            let privileges = view
-                .runtime_privileges
-                .iter()
-                .map(|privilege| privilege.as_sql())
-                .collect::<Vec<_>>()
-                .join(", ");
-            client
-                .batch_execute(&format!(
-                    "GRANT {privileges} ON TABLE {}.{} TO {};",
-                    quote(&view.schema),
-                    quote(&view.name),
-                    quote(runtime_role.as_str()),
-                ))
-                .await
-                .expect("view privileges grant");
-        }
-    }
-    for function in &registry.ddl().functions {
-        client
-            .batch_execute(&format!(
-                "REVOKE ALL ON FUNCTION {}.{}({}) FROM PUBLIC, {};",
-                quote(&function.schema),
-                quote(&function.name),
-                function.arguments,
-                quote(runtime_role.as_str()),
-            ))
-            .await
-            .expect("function privileges revoke");
-        if function.runtime_execute {
-            client
-                .batch_execute(&format!(
-                    "GRANT EXECUTE ON FUNCTION {}.{}({}) TO {};",
-                    quote(&function.schema),
-                    quote(&function.name),
-                    function.arguments,
-                    quote(runtime_role.as_str()),
-                ))
-                .await
-                .expect("function privileges grant");
-        }
-    }
 }
 
 fn metadata_only_source(
@@ -1057,6 +1131,109 @@ fn project_bytes(variant: Variant, sequence: u64) -> Vec<u8> {
         }}"#
     )
     .into_bytes()
+}
+
+const CONSENT_PROJECT: &str = include_str!("fixtures/consent-access.yaml");
+const NEW_RECIPIENT: &str = "ngo-gamma";
+
+/// The consent enforcement fixture bound to this test's package identity,
+/// optionally with one more recipient organization.
+fn consent_project_bytes(sequence: u64, with_new_recipient: bool) -> Vec<u8> {
+    let mut project = serde_json::to_value(
+        registry_breg::contract::parse_project_yaml(CONSENT_PROJECT.as_bytes())
+            .expect("consent fixture parses"),
+    )
+    .expect("consent fixture serializes");
+    project["registry"]["id"] = json!(PACKAGE_ID);
+    project["package"] = json!({
+        "environment": ENVIRONMENT,
+        "instanceId": INSTANCE_ID,
+        "sequence": sequence,
+        "sourceRevision": SOURCE_REVISION,
+    });
+    if with_new_recipient {
+        project["recipients"]["organizations"]
+            .as_array_mut()
+            .expect("the fixture declares recipient organizations")
+            .push(json!({
+                "id": NEW_RECIPIENT,
+                "name": "NGO Gamma",
+                "contact": "privacy@ngo-gamma.example.test",
+                "clients": [],
+            }));
+    }
+    serde_json::to_vec(&project).expect("consent project serializes")
+}
+
+fn compile_bytes(project: &[u8]) -> CompiledRegistry {
+    let project = parse_project_json(project).expect("project parses");
+    compile_project(&project, &[], CompileProfile::Production).expect("project compiles")
+}
+
+fn steward_claims() -> VerifiedRequestClaims {
+    VerifiedRequestClaims::authenticated(
+        "principal",
+        "steward",
+        BTreeSet::from(["records:manage".to_owned()]),
+        None,
+        BTreeMap::new(),
+    )
+    .expect("authenticated steward claims are valid")
+}
+
+async fn create_consent_subject(app: &axum::Router) -> String {
+    let response = response_parts(
+        send(
+            app,
+            Method::POST,
+            "/v1/records/persons?accessProfile=steward",
+            Some(steward_claims()),
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", "consent-subject"),
+            ],
+            serde_json::to_vec(&json!({"data": {"givenName": "Alex", "district": "north"}}))
+                .expect("person request serializes"),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::CREATED, "{}", response.body);
+    response.body["data"]["recordIdentifier"]
+        .as_str()
+        .expect("a created record carries its identifier")
+        .to_owned()
+}
+
+async fn record_consent(
+    app: &axum::Router,
+    key: &str,
+    subject: &str,
+    recipient: &str,
+) -> ResponseParts {
+    response_parts(
+        send(
+            app,
+            Method::POST,
+            "/v1/actions/record-consent?accessProfile=steward",
+            Some(steward_claims()),
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", key),
+            ],
+            serde_json::to_vec(&json!({"input": {
+                "subject": subject,
+                "recipient": recipient,
+                "purpose": "food-assistance",
+                "scope": "food-targeting",
+                "decision": "given",
+                "effectiveAt": "2026-01-01T00:00:00Z",
+            }}))
+            .expect("consent request serializes"),
+        )
+        .await,
+    )
+    .await
 }
 
 fn canonical<T: Serialize>(value: &T) -> Vec<u8> {

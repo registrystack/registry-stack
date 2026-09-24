@@ -357,6 +357,13 @@ pub(crate) fn generate_ddl_with_actions(
         for field_id in spatial_projection_fields(entity) {
             statements.push(spatial_projection_statements(entity, &field_id).create_index);
         }
+        for (id, _, sql) in crate::consent::index_statements(entity) {
+            statements.push(DdlStatement {
+                id,
+                kind: DdlStatementKind::Index,
+                sql,
+            });
+        }
     }
 
     let mut tables = Vec::new();
@@ -406,6 +413,39 @@ pub(crate) fn generate_ddl_with_actions(
                     schema: "registry_context".to_owned(),
                     name,
                     arguments: "uuid".to_owned(),
+                    runtime_execute: true,
+                    spatial_bbox_execute: false,
+                });
+            }
+        }
+    }
+    // Consent probes share the membership security shape: an invoker helper
+    // whose own marker opens the consent table's guarded policy for this
+    // probe alone. They take no key and return the consented subjects, so a
+    // read path evaluates each one once per query rather than once per row.
+    for entity in entities.values() {
+        for (profile_id, requirements) in &entity.consent_requirements {
+            for (index, requirement) in requirements.iter().enumerate() {
+                let record_entity = &entities[&requirement.record];
+                let record = record_entity
+                    .consent_record
+                    .as_ref()
+                    .expect("validated consent record");
+                let name = crate::consent::function_name(&entity.id, profile_id, index);
+                let body = crate::consent::probe_body(&name, &record_entity.physical_table, record);
+                statements.push(DdlStatement {
+                    id: format!("registry_context.{name}"),
+                    kind: DdlStatementKind::Function,
+                    sql: format!(
+                        "CREATE FUNCTION registry_context.{}() RETURNS SETOF uuid LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = pg_catalog AS {}",
+                        quote_identifier(&name), quote_literal(&body),
+                    ),
+                });
+                functions.push(DdlFunction {
+                    id: format!("registry_context.{name}"),
+                    schema: "registry_context".to_owned(),
+                    name,
+                    arguments: String::new(),
                     runtime_execute: true,
                     spatial_bbox_execute: false,
                 });
@@ -801,6 +841,71 @@ pub(crate) fn set_column_not_null_statement(
     })
 }
 
+/// The statement that widens a stored vocabulary-code column to the codes
+/// the candidate field declares, or `None` for an encrypted column, which
+/// stores envelopes and carries no code check.
+///
+/// The check was declared inline, so PostgreSQL chose its name. The statement
+/// finds the one `CHECK` over exactly this column and replaces it under that
+/// same name, which keeps the managed catalog identical to a fresh install.
+/// A tombstone-aware requiredness check also reads `record_lifecycle`, so it
+/// never matches. An authored vocabulary constraint on the same field is a
+/// second `CHECK` over exactly this column, so every constraint name the
+/// compiler assigns on the table is excluded; any other match still fails the
+/// `STRICT` lookup instead of replacing the wrong check.
+///
+/// Replacing the check takes an `ACCESS EXCLUSIVE` lock on the table and
+/// validates every row. Splitting it into `ADD CONSTRAINT ... NOT VALID` and
+/// `VALIDATE CONSTRAINT` would not shorten that lock: an additive successor
+/// runs all of its statements in one transaction, so the exclusive lock the
+/// add takes is held through the validation until the migration commits.
+/// `bregctl diff` reports the change as a lock risk instead.
+#[cfg(feature = "runtime")]
+pub(crate) fn replace_vocabulary_check_statement(
+    entity: &CompiledEntity,
+    names: &crate::physical_names::EntityPhysicalNames,
+    field: &crate::model::CompiledField,
+) -> Option<DdlStatement> {
+    if field.encryption.is_some() {
+        return None;
+    }
+    let check = field_check(&quote_identifier(&field.physical_name), &field.field_type)?;
+    let table = quote_literal(&entity.physical_table);
+    let named_constraints = names
+        .constraints
+        .values()
+        .cloned()
+        .chain([temporal_order_constraint_name(&entity.id)])
+        .collect::<BTreeSet<_>>()
+        .iter()
+        .map(|name| quote_literal(name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(DdlStatement {
+        id: format!("entity.{}.field.{}.vocabulary", entity.id, field.id),
+        kind: DdlStatementKind::Constraint,
+        sql: format!(
+            "DO $breg_vocabulary$\n\
+             DECLARE\n\
+             \x20   check_name name;\n\
+             BEGIN\n\
+             \x20   SELECT c.conname INTO STRICT check_name\n\
+             \x20   FROM pg_catalog.pg_constraint c\n\
+             \x20   JOIN pg_catalog.pg_class t ON t.oid = c.conrelid\n\
+             \x20   JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace\n\
+             \x20   JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attname = {column}\n\
+             \x20   WHERE n.nspname = 'registry_data' AND t.relname = {table}\n\
+             \x20     AND c.contype = 'c' AND c.conkey = ARRAY[a.attnum]\n\
+             \x20     AND c.conname <> ALL (ARRAY[{named_constraints}]::name[]);\n\
+             \x20   EXECUTE format('ALTER TABLE registry_data.%I DROP CONSTRAINT %I, ADD CONSTRAINT %I CHECK (%s)', {table}, check_name, check_name, {check});\n\
+             END\n\
+             $breg_vocabulary$",
+            column = quote_literal(&field.physical_name),
+            check = quote_literal(&check),
+        ),
+    })
+}
+
 /// Requiredness expressed as a tombstone-aware `CHECK` stays inline, because
 /// its constraint name is chosen by PostgreSQL from the column definition and
 /// a separately added constraint would not carry the same managed identity.
@@ -944,6 +1049,11 @@ fn runtime_privileges(
                 .values()
                 .flatten()
                 .any(|boundary| boundary.membership_entity == entity.id)
+                || root
+                    .consent_requirements
+                    .values()
+                    .flatten()
+                    .any(|requirement| requirement.record == entity.id)
         })
     {
         privileges.insert(TablePrivilege::Select);
@@ -1134,6 +1244,7 @@ fn policies(
         }
     }
     policies.extend(membership_source_policies(entity, entities));
+    policies.extend(consent_source_policies(entity, entities));
     policies.extend(change_request_action_policies_for_table(entity));
     policies.extend(change_request_presence_policies_for_table(entity, entities));
     policies.extend(read_path_policies_for_table(entity, entities));
@@ -1169,6 +1280,41 @@ fn membership_source_policies(
                             boundary,
                             &quote_identifier(&entity.physical_table)
                         )
+                    )),
+                    check_expression: None,
+                });
+            }
+        }
+    }
+    policies
+}
+
+/// One SELECT policy per consent probe reading this consent table. It has no
+/// decision, validity or boundary filter: the probe's query restricts to the
+/// key, and hiding revokes here would resurrect withdrawn consent.
+fn consent_source_policies(
+    entity: &CompiledEntity,
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> Vec<DdlPolicy> {
+    let mut policies = Vec::new();
+    for root in entities.values() {
+        for (profile, requirements) in &root.consent_requirements {
+            for (index, requirement) in requirements.iter().enumerate() {
+                if requirement.record != entity.id {
+                    continue;
+                }
+                policies.push(DdlPolicy {
+                    name: format!(
+                        "registry_{}",
+                        crate::consent::function_name(&root.id, profile, index)
+                    ),
+                    command: PolicyCommand::Select,
+                    access_profile: profile.clone(),
+                    applies_to: DdlPolicyRole::Runtime,
+                    using_expression: Some(format!(
+                        "({}) AND ({})",
+                        crate::consent::source_guard(&root.id, profile, index),
+                        crate::consent::source_predicate(&quote_identifier(&entity.physical_table))
                     )),
                     check_expression: None,
                 });
@@ -1424,16 +1570,26 @@ fn read_path_source_policy(
     path: &crate::model::CompiledReadPath,
 ) -> DdlPolicy {
     let root_id = "NULLIF(current_setting('registry.read_path_root_id', true), '')::uuid";
+    let authority = policy_authority_expression(source, profile);
+    let setting = read_path_setting_expression(path);
+    // A consent probe scans the consent table once per query that reaches
+    // it, so the path's own setting is tested first, as `IS TRUE` because an
+    // unset path is NULL and AND only stops early on false: a query outside
+    // this path never runs that scan. Without a consent probe the order is
+    // left as it was, so the DDL of registries without consent is unchanged.
+    let using_expression = if crate::consent::requirements(source, &profile.id).is_empty() {
+        format!(
+            "({authority}) AND {setting} AND record_id = {root_id} AND record_lifecycle = 'active'"
+        )
+    } else {
+        format!("({setting}) IS TRUE AND ({authority}) AND record_id = {root_id} AND record_lifecycle = 'active'")
+    };
     DdlPolicy {
         name: read_path_policy_name(&source.id, &source.id, &profile.id, &path.id, "source"),
         command: PolicyCommand::Select,
         access_profile: profile.id.clone(),
         applies_to: DdlPolicyRole::Public,
-        using_expression: Some(format!(
-            "({}) AND {} AND record_id = {root_id} AND record_lifecycle = 'active'",
-            policy_authority_expression(source, profile),
-            read_path_setting_expression(path),
-        )),
+        using_expression: Some(using_expression),
         check_expression: None,
     }
 }
@@ -3460,6 +3616,19 @@ fn policy_authority_expression_for_alias(
         ));
     }
 
+    // A consent probe costs one consent scan per query and then a hash
+    // lookup per row, cheaper than parsing the row-boundary context, so it
+    // precedes those checks. A membership probe runs per row and stays last.
+    let consent = crate::membership::predicate(
+        entity,
+        &profile.id,
+        crate::membership::RowProbeForm::KeySet,
+        |field| field_name_with_alias(entity, field, alias),
+    );
+    if !consent.is_empty() {
+        predicates.push(consent);
+    }
+
     let context = "NULLIF(current_setting('registry.row_boundaries', true), '')::jsonb";
     predicates.push(format!("jsonb_typeof({context}) = 'array'"));
     predicates.push(format!(
@@ -3500,9 +3669,12 @@ fn policy_authority_expression_for_alias(
             }
         }
     }
-    let membership = crate::membership::predicate(entity, &profile.id, |field| {
-        field_name_with_alias(entity, field, alias)
-    });
+    let membership = crate::membership::predicate(
+        entity,
+        &profile.id,
+        crate::membership::RowProbeForm::PerKey,
+        |field| field_name_with_alias(entity, field, alias),
+    );
     if !membership.is_empty() {
         predicates.push(membership);
     }

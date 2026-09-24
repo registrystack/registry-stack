@@ -1,8 +1,8 @@
-id: https://publicschema.org/linkml/public-services
+id: https://publicschema.org/linkml/public_services
 name: publicschema-public-services
 title: Public services and administrative history
-description: Draft shared descriptions of public services, applications, decisions, appeals and material
-  organizational changes. Local profiles own submission rules and legal effects.
+description: Shared descriptions of public services, applications, decisions, appeals, organizational
+  changes and service capacity. Submission rules and legal effects belong to the applicable procedure.
 license: CC-BY-4.0
 default_prefix: publicschema
 prefixes:
@@ -12,21 +12,24 @@ prefixes:
   cpsv: http://purl.org/vocab/cpsv#
   cpov: http://data.europa.eu/m8g/
   org: http://www.w3.org/ns/org#
+  sosa: http://www.w3.org/ns/sosa/
 imports:
 - linkml:types
 - publicschema-extensions
 - common
 - core
 - identity
+- value_types
 - registry
-- government
+- organizations
+- regulation
 classes:
   PublicService:
     class_uri: publicschema:PublicService
     title: Public Service
-    description: A described service provided by or on behalf of a public organization to fulfil a public
-      function. It may serve people, businesses or other organizations and exists independently of any
-      particular application, decision or social protection programme.
+    description: A set of activities that a public organization carries out, or has carried out on its
+      behalf, to meet a public policy purpose. It may serve people, businesses or other organizations,
+      and it exists whether or not anyone is currently using it or applying for it.
     slots:
     - name
     - identifiers
@@ -38,78 +41,138 @@ classes:
     close_mappings:
     - cpsv:PublicService
     annotations:
-      bibliography_refs: '["gov-cpsv-ap-311"]'
-      external_alignments_json: '[{"label": "Public Service", "match": "close", "note": "CPSV-AP 3.1.1 informs the separation of a catalogue service from its use and its audience and competent authority links. This smaller native description does not implement CPSV-AP cardinalities, its full public funding definition or its RDF wire profile.", "uri": "http://purl.org/vocab/cpsv#PublicService", "vocabulary": "CPSV-AP 3.1.1", "vocabulary_id": "cpsv_ap"}]'
+      label_es: Servicio público
+      label_fr: Service public
+      description_es: Un conjunto de actividades que una organización pública lleva a cabo, o hace
+        llevar a cabo en su nombre, para responder a una finalidad de política pública. Puede estar
+        dirigido a personas, empresas u otras organizaciones, y existe independientemente de que alguien
+        lo esté utilizando o solicitando en ese momento.
+      description_fr: Un ensemble d'activités qu'une organisation publique mène, ou fait mener en son
+        nom, pour répondre à une finalité de politique publique. Il peut s'adresser à des personnes,
+        à des entreprises ou à d'autres organisations, et il existe que quelqu'un l'utilise ou en fasse
+        la demande actuellement ou non.
+      bibliography_refs: '["semic-cpsv-ap"]'
+      external_alignments_json: '[{"label": "Public Service", "match": "close", "note": "CPSV-AP 3.2.0 informs the separation of a catalogue service from its use and its audience and competent authority links. This smaller native description does not implement CPSV-AP cardinalities, its public funding criterion or its RDF wire profile.", "uri": "http://purl.org/vocab/cpsv#PublicService", "vocabulary": "CPSV-AP 3.2.0", "vocabulary_id": "semic"}]'
   ServiceApplication:
     class_uri: publicschema:ServiceApplication
     title: Service Application
-    description: A submitted request to use a public service, made by or on behalf of a person or
-      organization. The applicant, submitting actor and requested subject can differ. Submission alone
-      does not establish eligibility, registration, permission or an obligation to grant the request.
+    description: A request submitted to a public organization to use a public service or to obtain a
+      decision under it. Its authority is the organization that received the request, and its subject
+      URI names the person, organization, permission, asset or other subject the request is about. The
+      applicant, the submitter and the subject can differ. Submission alone does not establish eligibility,
+      registration, permission or an obligation to grant the request.
     is_a: Event
     slots:
     - public_service
     - service_applicant
-    - application_subject
+    - subject_uri
     - submitted_by
     - submission_representation
-    - receiving_authority
-    - submitted_at
+    - authority
+    - request_submission_date
     - evidence_assertions
     - recorded_at
     status: bibo:draft
     annotations:
-      bibliography_refs: '["gov-cpsv-ap-311"]'
+      label_es: Solicitud de servicio
+      label_fr: Demande de service
+      description_es: Una solicitud presentada a una organización pública para utilizar un servicio
+        público o para obtener una decisión en su marco. Su autoridad es la organización que recibió
+        la solicitud, y su URI de sujeto designa a la persona, la organización, el permiso, el bien
+        u otro sujeto sobre el que versa la solicitud. El solicitante, quien la presenta y el sujeto
+        pueden ser distintos. La sola presentación no establece la elegibilidad, el registro, un permiso
+        ni una obligación de conceder la solicitud.
+      description_fr: Une demande soumise à une organisation publique pour utiliser un service public
+        ou pour obtenir une décision dans le cadre de celui-ci. Son autorité est l'organisation qui
+        a reçu la demande, et son URI de sujet désigne la personne, l'organisation, l'autorisation,
+        le bien ou l'autre sujet sur lequel porte la demande. Le demandeur, le déposant et le sujet
+        peuvent différer. Le seul dépôt de la demande n'établit ni l'éligibilité, ni l'enregistrement,
+        ni une autorisation, ni une obligation de faire droit à la demande.
+      bibliography_refs: '["eu-reg-2018-1724", "semic-cpsv-ap"]'
   AdministrativeDecision:
     class_uri: publicschema:AdministrativeDecision
     title: Administrative Decision
-    description: A recorded determination made by an authority about an administrative subject. It may
-      decide an application, initiate a regulatory action or resolve an appeal. Its stated outcome,
-      effective time and legal basis must be interpreted in the applicable jurisdiction; recording a
-      determination does not prove finality or current permission.
+    description: A decision made by an authority about a particular person, organization or thing under
+      the rules it applies, such as granting a permit, imposing a measure or upholding an appeal. Its
+      authority is the organization that made the decision, and its subject URI names the subject decided
+      on. Its outcome, effective time and legal resources are interpreted in the applicable jurisdiction;
+      recording a decision does not prove finality or current permission. A decision on eligibility
+      for a program is recorded as EligibilityDecision.
     is_a: Event
     slots:
     - decides_application
-    - decision_subject
-    - decision_authority
+    - subject_uri
+    - authority
     - decision_outcome
-    - decision_made_at
+    - decision_date
     - effective_at
     - legal_resources
-    - decision_authorizations
+    - decision_registrations
     - decision_regulatory_actions
     - resolves_appeal
     - evidence_assertions
     - recorded_at
     status: bibo:draft
     annotations:
-      bibliography_refs: '["gov-cpsv-ap-311"]'
+      label_es: Decisión administrativa
+      label_fr: Décision administrative
+      description_es: Una decisión adoptada por una autoridad respecto de una persona, una organización
+        o una cosa determinada conforme a las reglas que aplica, como la concesión de un permiso, la
+        imposición de una medida o la confirmación de un recurso. Su autoridad es la organización que
+        adoptó la decisión, y su URI de sujeto designa el sujeto sobre el que versa la decisión. Su
+        resultado, su fecha de efecto y sus recursos jurídicos se interpretan en la jurisdicción aplicable;
+        el registro de una decisión no demuestra su carácter definitivo ni un permiso vigente. Una
+        decisión de elegibilidad para un programa se registra como EligibilityDecision.
+      description_fr: Une décision prise par une autorité au sujet d'une personne, d'une organisation
+        ou d'une chose déterminée en application des règles qu'elle met en œuvre, par exemple l'octroi
+        d'un permis, l'imposition d'une mesure ou la confirmation d'un recours. Son autorité est l'organisation
+        qui a pris la décision, et son URI de sujet désigne le sujet sur lequel porte la décision. Son
+        issue, sa date d'effet et ses ressources juridiques s'interprètent dans la juridiction applicable ;
+        l'enregistrement d'une décision ne prouve ni son caractère définitif ni une autorisation
+        actuelle. Une décision d'éligibilité à un programme est enregistrée comme
+        EligibilityDecision.
+      bibliography_refs: '["eu-reg-2018-1724", "semic-cpsv-ap"]'
   AdministrativeAppeal:
     class_uri: publicschema:AdministrativeAppeal
     title: Administrative Appeal
-    description: A submitted request for review of an identified administrative decision. The appellant,
-      submitting actor and reviewing authority are recorded separately. Filing an appeal does not by
-      itself suspend, replace or overturn the challenged decision.
+    description: A formal request to an authority to review a particular administrative decision. Its
+      authority is the organization asked to review the decision; the appellant and the submitter are
+      recorded separately. Filing an appeal does not by itself suspend, replace or overturn the challenged
+      decision. A complaint or appeal raised through a program's grievance mechanism is recorded as
+      Grievance.
     is_a: Event
     slots:
     - challenged_decision
     - appellant
     - submitted_by
     - submission_representation
-    - reviewing_authority
-    - submitted_at
+    - authority
+    - request_submission_date
     - evidence_assertions
     - recorded_at
     status: bibo:draft
     annotations:
-      bibliography_refs: '["gov-cpsv-ap-311"]'
+      label_es: Recurso administrativo
+      label_fr: Recours administratif
+      description_es: Una solicitud formal dirigida a una autoridad para que revise una decisión administrativa
+        determinada. Su autoridad es la organización a la que se pide que revise la decisión; el recurrente
+        y quien presenta el recurso se registran por separado. La sola presentación de un recurso no
+        suspende, sustituye ni anula la decisión impugnada. Una queja o un recurso planteado a
+        través del mecanismo de reclamaciones de un programa se registra como Grievance.
+      description_fr: Une demande formelle adressée à une autorité afin qu'elle réexamine une décision
+        administrative déterminée. Son autorité est l'organisation à laquelle il est demandé de réexaminer
+        la décision ; l'appelant et le déposant sont enregistrés séparément. Le dépôt d'un recours
+        ne suspend, ne remplace ni n'annule à lui seul la décision contestée. Une plainte ou un
+        recours soulevé dans le cadre du mécanisme de recours d'un programme est enregistré comme
+        Grievance.
+      bibliography_refs: '["semic-cpsv-ap"]'
   OrganizationalChangeEvent:
     class_uri: publicschema:OrganizationalChangeEvent
     title: Organizational Change Event
-    description: A reported material reorganization, such as a merger, split or succession, relating
-      organizations before and after a change that establishes at least one distinct organizational
-      identity. Earlier organizations and their historical acts remain identifiable. A name correction
-      that retains identity can use RecordLifecycleEvent without introducing a successor organization.
+    description: A significant reorganization, such as a merger, split or takeover of functions, after
+      which at least one organization has a new identity. Its authority is the organization that decided
+      or reported the change. Earlier organizations and their past acts stay identifiable. A name correction
+      that keeps identity can use RecordLifecycleEvent without introducing a successor organization.
     is_a: Event
     slots:
     - original_organizations
@@ -117,49 +180,99 @@ classes:
     - lifecycle_kind
     - effective_at
     - recorded_at
-    - event_authority
+    - authority
     - evidence_assertions
     - legal_resources
     status: bibo:draft
     close_mappings:
     - org:ChangeEvent
     annotations:
-      bibliography_refs: '["gov-org"]'
-      external_alignments_json: '[{"label": "Change Event", "match": "close", "note": "W3C ORG Recommendation 16 January 2014 supplies the original/resulting organization pattern for a material change with distinct identity. PublicSchema adds registry recording and effective timestamps and does not implement the PROV activity interval or ORG property-chain entailments.", "uri": "http://www.w3.org/ns/org#ChangeEvent", "vocabulary": "W3C ORG 2014", "vocabulary_id": "w3c_org"}]'
+      label_es: Evento de cambio organizacional
+      label_fr: Événement de changement organisationnel
+      description_es: Una reorganización significativa, como una fusión, una escisión o una absorción
+        de funciones, tras la cual al menos una organización adquiere una nueva identidad. Su autoridad
+        es la organización que decidió o notificó el cambio. Las organizaciones anteriores y sus actos
+        pasados siguen siendo identificables. Una corrección de nombre que conserva la identidad puede
+        usar RecordLifecycleEvent sin introducir una organización sucesora.
+      description_fr: Une réorganisation importante, par exemple une fusion, une scission ou une reprise
+        de fonctions, à l'issue de laquelle au moins une organisation acquiert une nouvelle identité.
+        Son autorité est l'organisation qui a décidé ou signalé le changement. Les organisations antérieures
+        et leurs actes passés restent identifiables. Une correction de nom qui préserve l'identité
+        peut utiliser RecordLifecycleEvent sans introduire d'organisation successeure.
+      bibliography_refs: '["w3c-org"]'
+      external_alignments_json: '[{"label": "Change Event", "match": "close", "note": "W3C ORG Recommendation 16 January 2014 supplies the original/resulting organization pattern for a material change with distinct identity. PublicSchema adds registry recording and effective timestamps and does not implement the PROV activity interval or ORG property-chain entailments.", "uri": "http://www.w3.org/ns/org#ChangeEvent", "vocabulary": "W3C ORG 2014", "vocabulary_id": "w3c-org"}]'
+  ServiceCapacityObservation:
+    class_uri: publicschema:ServiceCapacityObservation
+    title: Service Capacity Observation
+    description: A measurement of how much a service or facility can handle, such as staffed beds or school
+      places, at a given time. Its subject URI names the facility or service observed, and the authority
+      is the organization that made or reported the measurement. Capacity is not a promise of current
+      availability or an accreditation.
+    is_a: Event
+    slots:
+    - subject_uri
+    - authority
+    - capacity_measure
+    - capacity_quantity
+    - capacity_observed_at
+    status: bibo:draft
+    close_mappings:
+    - sosa:Observation
+    annotations:
+      label_es: Observación de la capacidad del servicio
+      label_fr: Observation de la capacité de service
+      description_es: Una medición de lo que un servicio o una instalación puede atender, como camas
+        con personal asignado o plazas escolares, en un momento dado. Su URI de sujeto designa la instalación
+        o el servicio observado, y la autoridad es la organización que realizó o comunicó la medición.
+        La capacidad no es una promesa de disponibilidad actual ni una acreditación.
+      description_fr: Une mesure de ce qu'un service ou une installation peut prendre en charge, par
+        exemple des lits dotés en personnel ou des places scolaires, à un moment donné. Son URI de
+        sujet désigne l'installation ou le service observé, et l'autorité est l'organisation qui a effectué
+        ou communiqué la mesure. La capacité n'est ni une promesse de disponibilité actuelle ni une
+        accréditation.
+      bibliography_refs: '["fhir-r5", "regenstrief-ucum", "w3c-ssn-sosa"]'
 slots:
   service_competent_authorities:
     slot_uri: publicschema:service_competent_authorities
     title: Service competent authorities
-    description: Public organizations responsible for this service description. Historical applications
-      and decisions retain their own receiving and deciding authorities when responsibility changes.
+    description: The public organizations ultimately responsible for providing the service, whether or
+      not they deliver it themselves. Past applications and decisions keep their own authorities when
+      responsibility changes.
     range: PublicOrganization
     multivalued: true
     status: bibo:draft
     close_mappings:
     - cpov:hasCompetentAuthority
     annotations:
+      label_es: Autoridades competentes del servicio
+      label_fr: Autorités compétentes du service
+      description_es: Las organizaciones públicas responsables en última instancia de la prestación
+        del servicio, lo presten ellas mismas o no. Las solicitudes y decisiones pasadas conservan
+        sus propias autoridades cuando la responsabilidad cambia.
+      description_fr: Les organisations publiques ultimement responsables de la fourniture du service,
+        qu'elles le fournissent elles-mêmes ou non. Les demandes et décisions passées conservent leurs
+        propres autorités lorsque la responsabilité change.
       category: governance
-      external_alignments_json: '[{"label": "Has competent authority", "match": "close", "note": "CPSV-AP 3.1.1 informs the competent-authority relationship. This native optional field does not implement the upstream minimum cardinality or establish conformance to the full RDF profile.", "uri": "http://data.europa.eu/m8g/hasCompetentAuthority", "vocabulary": "CPSV-AP 3.1.1", "vocabulary_id": "cpsv_ap"}]'
+      external_alignments_json: '[{"label": "Has competent authority", "match": "close", "note": "CPSV-AP 3.2.0 informs the competent-authority relationship. This native optional field does not implement the upstream minimum cardinality or establish conformance to the full RDF profile.", "uri": "http://data.europa.eu/m8g/hasCompetentAuthority", "vocabulary": "CPSV-AP 3.2.0", "vocabulary_id": "semic"}]'
+      bibliography_refs: '["semic-cpsv-ap"]'
   service_audience:
     slot_uri: publicschema:service_audience
     title: Service audience
-    description: Scheme-qualified categories of intended service users, such as individuals or businesses.
-      An audience category is not a determination that a particular applicant is eligible.
+    description: The kinds of people or organizations the service is meant for, such as individuals or
+      businesses. An audience category does not decide that a particular applicant is eligible.
     range: CodedValue
     multivalued: true
     status: bibo:draft
     annotations:
+      label_es: Público destinatario del servicio
+      label_fr: Public visé par le service
+      description_es: Los tipos de personas u organizaciones a los que se dirige el servicio, como
+        particulares o empresas. Una categoría de público no determina que un solicitante concreto
+        sea elegible.
+      description_fr: Les catégories de personnes ou d'organisations auxquelles le service est destiné,
+        par exemple les particuliers ou les entreprises. Une catégorie de public ne détermine pas qu'un
+        demandeur particulier est éligible.
       category: classification
-  legal_resources:
-    slot_uri: publicschema:legal_resources
-    title: Legal resources
-    description: Identified legal provisions or policy resources relied on for the service, determination
-      or institutional change. A link does not execute a rule or establish which version is applicable.
-    range: uri
-    multivalued: true
-    status: bibo:draft
-    annotations:
-      category: governance
   public_service:
     slot_uri: publicschema:public_service
     title: Public service
@@ -168,70 +281,88 @@ slots:
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Servicio público
+      label_fr: Service public
+      description_es: El servicio público descrito al que se presenta esta solicitud.
+      description_fr: Le service public décrit auquel cette demande est soumise.
       category: administrative
+      sensitivity: sensitive
   service_applicant:
     slot_uri: publicschema:service_applicant
     title: Service applicant
-    description: The URI of the person or organization requesting the service, independently of any
-      actor submitting on its behalf. The consuming profile checks the referenced subject kind.
+    description: The URI of the person, group or organization requesting the service, which may differ
+      from whoever submits the request on its behalf. For a program eligibility decision, use
+      applicant.
     range: uri
     multivalued: false
     status: bibo:draft
     annotations:
-      category: administrative
-      sensitivity: sensitive
-  application_subject:
-    slot_uri: publicschema:application_subject
-    title: Application subject
-    description: The URI of the person, organization, permission, asset or other subject about which
-      the request is made. It need not be the applicant or submitting actor.
-    range: uri
-    multivalued: false
-    status: bibo:draft
-    annotations:
+      label_es: Solicitante del servicio
+      label_fr: Demandeur du service
+      description_es: El URI de la persona, el grupo o la organización que solicita el servicio, que
+        puede diferir de quien presenta la solicitud en su nombre. Para una decisión de elegibilidad
+        de un programa, usar applicant.
+      description_fr: L'URI de la personne, du groupe ou de l'organisation qui demande le service,
+        qui peut différer de celui qui soumet la demande en son nom. Pour une décision d'éligibilité
+        à un programme, utiliser applicant.
       category: administrative
       sensitivity: sensitive
   submitted_by:
     slot_uri: publicschema:submitted_by
     title: Submitted by
-    description: The URI of the person or organization that submitted this application or appeal.
-      Identifying a submitter does not establish their authority to represent someone else.
-    range: uri
+    description: The person or organization that actually submitted the application or appeal, which may
+      differ from the applicant or appellant. Identifying a submitter does not establish their authority
+      to represent someone else.
+    range: Agent
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Presentado por
+      label_fr: Soumis par
+      description_es: La persona o la organización que efectivamente presentó la solicitud o el recurso,
+        que puede diferir del solicitante o del recurrente. La identificación de quien presenta la
+        solicitud no establece su facultad de representar a otra persona.
+      description_fr: La personne ou l'organisation qui a effectivement soumis la demande ou le recours,
+        qui peut différer du demandeur ou de l'appelant. L'identification d'un déposant n'établit pas
+        son pouvoir de représenter autrui.
       category: administrative
       sensitivity: sensitive
   submission_representation:
     slot_uri: publicschema:submission_representation
     title: Submission representation
-    description: The representation relationship cited for this submission. The represented subject,
-      actor, period and scope must be checked for this particular application or appeal.
+    description: The representation relationship that the submitter relied on for this application or
+      appeal. Its parties, period and scope still have to match the particular submission.
     range: RepresentationRole
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Representación en la presentación
+      label_fr: Représentation lors du dépôt
+      description_es: La relación de representación en la que se basó quien presentó la solicitud
+        o el recurso. Sus partes, su período y su alcance deben además corresponder a la presentación
+        concreta.
+      description_fr: La relation de représentation sur laquelle s'est appuyé le déposant pour cette
+        demande ou ce recours. Ses parties, sa période et sa portée doivent néanmoins correspondre
+        au dépôt particulier.
       category: governance
       sensitivity: sensitive
-  receiving_authority:
-    slot_uri: publicschema:receiving_authority
-    title: Receiving authority
-    description: The public organization to which this application was submitted, retained independently
-      of later changes to the service's competent authority.
-    range: PublicOrganization
+  request_submission_date:
+    slot_uri: publicschema:request_submission_date
+    title: Request submission date
+    description: The date on which the applicant, the appellant or someone acting for them submitted
+      the application or appeal. It can precede the date on which the receiving authority registered it.
+    range: date
     multivalued: false
     status: bibo:draft
     annotations:
-      category: governance
-  submitted_at:
-    slot_uri: publicschema:submitted_at
-    title: Submitted at
-    description: The timestamp when the application or appeal was submitted, distinct from the time
-      it was recorded or decided.
-    range: datetime
-    multivalued: false
-    status: bibo:draft
-    annotations:
+      label_es: Fecha de presentación de la solicitud
+      label_fr: Date de dépôt de la demande
+      description_es: La fecha en que el solicitante, el recurrente o quien actuó en su nombre presentó
+        la solicitud o el recurso. Puede ser anterior a la fecha en que la autoridad receptora la
+        registró.
+      description_fr: La date à laquelle le demandeur, l'appelant ou la personne agissant pour son
+        compte a déposé la demande ou le recours. Elle peut précéder la date à laquelle l'autorité
+        destinataire l'a enregistré.
       category: administrative
   decides_application:
     slot_uri: publicschema:decides_application
@@ -242,59 +373,53 @@ slots:
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Decide sobre la solicitud
+      label_fr: Décide de la demande
+      description_es: La solicitud de servicio resuelta por esta decisión. Una medida adoptada por
+        iniciativa de la autoridad o una determinación sobre un recurso no necesariamente se originan
+        en una solicitud de servicio.
+      description_fr: La demande de service tranchée par cette décision. Une mesure prise à l'initiative
+        de l'autorité ou une détermination sur recours n'ont pas nécessairement pour origine une demande
+        de service.
       category: administrative
       sensitivity: sensitive
-  decision_subject:
-    slot_uri: publicschema:decision_subject
-    title: Decision subject
-    description: The URI of the person, organization, permission, asset or other subject determined by
-      this decision. The decision itself and any resulting authorization retain separate identities.
-    range: uri
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: administrative
-      sensitivity: sensitive
-  decision_authority:
-    slot_uri: publicschema:decision_authority
-    title: Decision authority
-    description: The public organization that made this determination. Its historical identity is
-      preserved even if its functions later pass to another organization.
-    range: PublicOrganization
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: governance
   decision_outcome:
     slot_uri: publicschema:decision_outcome
     title: Decision outcome
-    description: A scheme-qualified determination, such as granting a request or upholding an appealed
-      decision. The code's legal meaning and effect depend on its scheme and applicable jurisdiction.
+    description: The result of the decision, such as granted, refused, upheld or overturned. The legal
+      meaning and effect of the code depend on its scheme and the applicable jurisdiction.
     range: CodedValue
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Resultado de la decisión
+      label_fr: Issue de la décision
+      description_es: El resultado de la decisión, como concedida, denegada, confirmada o revocada.
+        El significado y el efecto jurídicos del código dependen de su esquema y de la jurisdicción
+        aplicable.
+      description_fr: Le résultat de la décision, par exemple accordée, refusée, confirmée ou infirmée.
+        La signification et l'effet juridiques du code dépendent de son référentiel et de la juridiction
+        applicable.
       category: classification
       sensitivity: sensitive
-  decision_made_at:
-    slot_uri: publicschema:decision_made_at
-    title: Decision made at
-    description: The timestamp when the authority made the determination. It is separate from its
-      effective time and the time the record was entered.
-    range: datetime
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: administrative
-  decision_authorizations:
-    slot_uri: publicschema:decision_authorizations
-    title: Decision authorizations
-    description: Permissions established by this decision. A later suspension or appeal is represented
-      separately and does not rewrite the original grant or its issuing authority.
-    range: Authorization
+  decision_registrations:
+    slot_uri: publicschema:decision_registrations
+    title: Decision registrations
+    description: Registrations established by this decision, such as a permit, a voter registration
+      or a tax registration. A later suspension or appeal is represented separately and does not
+      rewrite the original grant or its issuing authority.
+    range: Registration
     multivalued: true
     status: bibo:draft
     annotations:
+      label_es: Registros de la decisión
+      label_fr: Enregistrements de la décision
+      description_es: Los registros establecidos por esta decisión, como una autorización, una inscripción
+        electoral o un registro fiscal. Una suspensión o un recurso posteriores se representan
+        por separado y no reescriben la concesión original ni su autoridad emisora.
+      description_fr: Les enregistrements établis par cette décision, par exemple une autorisation,
+        une inscription électorale ou un enregistrement fiscal. Une suspension ou un recours ultérieurs
+        sont représentés séparément et ne réécrivent pas l'octroi initial ni son autorité émettrice.
       category: governance
       sensitivity: sensitive
   decision_regulatory_actions:
@@ -306,6 +431,14 @@ slots:
     multivalued: true
     status: bibo:draft
     annotations:
+      label_es: Medidas reglamentarias de la decisión
+      label_fr: Mesures réglementaires de la décision
+      description_es: Las medidas reglamentarias resultantes de esta determinación, con sus propios
+        sujetos, alcances y condiciones. Una medida vinculada no implica que se vea afectada cada autorización
+        de su titular.
+      description_fr: Les mesures réglementaires résultant de cette détermination, avec leurs propres
+        sujets, périmètres et conditions. Une mesure liée n'implique pas que chaque autorisation de
+        son titulaire soit affectée.
       category: governance
       sensitivity: sensitive
   resolves_appeal:
@@ -317,6 +450,12 @@ slots:
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Resuelve el recurso
+      label_fr: Résout le recours
+      description_es: El recurso resuelto por esta decisión. La resolución constituye una determinación
+        distinta y conserva el vínculo con la decisión impugnada original.
+      description_fr: Le recours tranché par cette décision. La résolution constitue une détermination
+        distincte et conserve le lien avec la décision contestée d'origine.
       category: administrative
       sensitivity: sensitive
   challenged_decision:
@@ -328,29 +467,33 @@ slots:
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Decisión impugnada
+      label_fr: Décision contestée
+      description_es: La decisión administrativa cuya revisión se solicita. Este solo vínculo no confiere
+        al recurso ningún efecto suspensivo, de sustitución ni de anulación.
+      description_fr: La décision administrative dont le réexamen est demandé. Ce seul lien ne confère
+        au recours aucun effet suspensif, de remplacement ou d'annulation.
       category: administrative
       sensitivity: sensitive
   appellant:
     slot_uri: publicschema:appellant
     title: Appellant
-    description: The URI of the person or organization requesting review, independently of its
-      representative. A reference does not establish standing or a right of appeal under a law.
+    description: The URI of the person, group or organization asking for the review, independently of
+      any representative. A reference does not establish standing or a right of appeal under a law.
     range: uri
     multivalued: false
     status: bibo:draft
     annotations:
+      label_es: Recurrente
+      label_fr: Appelant
+      description_es: El URI de la persona, el grupo o la organización que solicita la revisión, independientemente
+        de cualquier representante. Una referencia no establece legitimación ni derecho de recurso
+        conforme a una ley.
+      description_fr: L'URI de la personne, du groupe ou de l'organisation qui demande le réexamen,
+        indépendamment de tout représentant. Une référence n'établit ni qualité pour agir ni droit
+        de recours au regard d'une loi.
       category: administrative
       sensitivity: sensitive
-  reviewing_authority:
-    slot_uri: publicschema:reviewing_authority
-    title: Reviewing authority
-    description: The public organization asked to review the challenged decision. Recording it does
-      not establish jurisdiction, independence or admissibility of the appeal.
-    range: PublicOrganization
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      category: governance
   original_organizations:
     slot_uri: publicschema:original_organizations
     title: Original organizations
@@ -362,8 +505,17 @@ slots:
     close_mappings:
     - org:originalOrganization
     annotations:
+      label_es: Organizaciones de origen
+      label_fr: Organisations d'origine
+      description_es: Las organizaciones que existían antes de este cambio organizacional relevante.
+        La participación en un cambio no afirma por sí misma que cada organización haya dejado de
+        existir.
+      description_fr: Les organisations qui existaient avant ce changement organisationnel important.
+        La participation à un changement n'affirme pas en elle-même que chaque organisation a cessé
+        d'exister.
       category: governance
-      external_alignments_json: '[{"label": "Original organization", "match": "close", "note": "W3C ORG Recommendation 16 January 2014 informs the original-organization link. This native field uses PublicSchema Organization references and does not implement ORG inverse properties or PROV property entailments.", "uri": "http://www.w3.org/ns/org#originalOrganization", "vocabulary": "W3C ORG 2014", "vocabulary_id": "w3c_org"}]'
+      external_alignments_json: '[{"label": "Original organization", "match": "close", "note": "W3C ORG Recommendation 16 January 2014 informs the original-organization link. This native field uses PublicSchema Organization references and does not implement ORG inverse properties or PROV property entailments.", "uri": "http://www.w3.org/ns/org#originalOrganization", "vocabulary": "W3C ORG 2014", "vocabulary_id": "w3c-org"}]'
+      bibliography_refs: '["w3c-org"]'
   resulting_organizations:
     slot_uri: publicschema:resulting_organizations
     title: Resulting organizations
@@ -375,5 +527,57 @@ slots:
     close_mappings:
     - org:resultingOrganization
     annotations:
+      label_es: Organizaciones resultantes
+      label_fr: Organisations résultantes
+      description_es: Las organizaciones creadas o modificadas sustancialmente por este evento. Una
+        nueva identidad organizacional no debe reemplazar la identidad del emisor en los actos históricos
+        de su predecesora.
+      description_fr: Les organisations créées ou substantiellement modifiées par cet événement. Une
+        nouvelle identité organisationnelle ne doit pas remplacer l'identité de l'émetteur sur les
+        actes historiques de son prédécesseur.
       category: governance
-      external_alignments_json: '[{"label": "Resulting organization", "match": "close", "note": "W3C ORG Recommendation 16 January 2014 informs the resulting-organization link. This native field uses PublicSchema Organization references and does not implement ORG inverse properties or PROV property-chain entailments.", "uri": "http://www.w3.org/ns/org#resultingOrganization", "vocabulary": "W3C ORG 2014", "vocabulary_id": "w3c_org"}]'
+      external_alignments_json: '[{"label": "Resulting organization", "match": "close", "note": "W3C ORG Recommendation 16 January 2014 informs the resulting-organization link. This native field uses PublicSchema Organization references and does not implement ORG inverse properties or PROV property-chain entailments.", "uri": "http://www.w3.org/ns/org#resultingOrganization", "vocabulary": "W3C ORG 2014", "vocabulary_id": "w3c-org"}]'
+      bibliography_refs: '["w3c-org"]'
+  capacity_measure:
+    slot_uri: publicschema:capacity_measure
+    title: Capacity measure
+    description: The kind of capacity measured, such as staffed beds rather than building beds.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Medida de capacidad
+      label_fr: Mesure de capacité
+      description_es: El tipo de capacidad medido, como camas con personal asignado en lugar de camas
+        instaladas.
+      description_fr: Le type de capacité mesuré, par exemple les lits dotés en personnel plutôt que
+        les lits installés.
+      category: administrative
+  capacity_quantity:
+    slot_uri: publicschema:capacity_quantity
+    title: Capacity quantity
+    description: The amount measured for the stated capacity kind.
+    range: QuantityValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Cantidad de capacidad
+      label_fr: Quantité de capacité
+      description_es: La cantidad medida para el tipo de capacidad indicado.
+      description_fr: La quantité mesurée pour le type de capacité indiqué.
+      category: administrative
+  capacity_observed_at:
+    slot_uri: publicschema:capacity_observed_at
+    title: Capacity observed at
+    description: The timestamp to which the capacity observation applies, not the time a record was entered.
+    range: datetime
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Marca temporal de la observación de capacidad
+      label_fr: Horodatage de l'observation de capacité
+      description_es: La marca temporal a la que se aplica la observación de capacidad, y no el momento
+        en que fue registrada.
+      description_fr: L'horodatage auquel s'applique l'observation de capacité, et non le moment où
+        elle a été enregistrée.
+      category: administrative

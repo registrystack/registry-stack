@@ -61,6 +61,16 @@ API reference, with journey `BREG-J21` and invariants `BREG-SEC-75` through
 `BREG-SEC-82` carrying the same threats, proven by the real-PostgreSQL
 journeys and negative tests in `crates/registry-breg/tests/postgres_ingestion_runs.rs`.
 
+`BREG-V1-CONSENT` records consent-gated reads as `enforced`: the surface is
+contracted in `consent.md`, with journeys `BREG-J22` and `BREG-J23` generated
+by `bregctl module add consent`, and invariants `BREG-SEC-86` through
+`BREG-SEC-101` carrying its threats. The real-PostgreSQL suites in
+`crates/registry-breg/tests/postgres_consent_access.rs` and
+`crates/registry-breg/tests/postgres_consent_examples.rs` prove every gated
+read operation, decision ordering and expiry, recipient matching, probe
+isolation, and successor migrations; the compiler refusals are proven in
+`crates/registry-breg/tests/consent_access.rs`.
+
 The HTTP record contract is also explicit: caller-filtered and generated
 OpenAPI artifacts assign every record-related route to the shared single or
 collection Registry Record profile, or to a named BReg-specific shape.

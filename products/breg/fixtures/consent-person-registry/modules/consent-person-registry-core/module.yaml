@@ -1,0 +1,14 @@
+id: consent-person-registry-core
+version: 0.1.0
+entities:
+  - id: person
+    primaryDataset: consent-person-registry
+    route: persons
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: person-code, apiName: personCode, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: legal-name, apiName: legalName, type: string, required: true, maxLength: 160, classification: restricted}
+      - {id: district, type: string, required: true, maxLength: 80, classification: internal}
+    constraints:
+      - {kind: unique, fields: [person-code]}
