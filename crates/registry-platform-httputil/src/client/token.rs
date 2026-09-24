@@ -57,8 +57,6 @@ impl BearerToken {
     }
 
     /// The credential text for provider internals and same-crate tests only.
-    #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn expose(&self) -> &str {
         &self.0
     }

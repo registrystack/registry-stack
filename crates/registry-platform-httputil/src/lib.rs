@@ -14,11 +14,12 @@ pub use client::{
     exchange_authorization_from_json, valid_resource_uri, valid_scope_token, BearerToken,
     ExchangeAssertionSource, ExchangeAuthorization, ExchangeContext, FirstPartyAssertionSource,
     OAuthErrorCode, PrivateKeyJwt, PrivateKeyJwtConfig, RemoteAssertionSource, ServiceBaseUrl,
-    ServiceBaseUrlError, ServiceBaseUrlJoinError, SignedExchangeAssertion, StaticToken, TokenError,
-    TokenProvider, TransportKind, DEFAULT_ASSERTION_LIFETIME_SECONDS,
-    DEFAULT_REFRESH_MARGIN_SECONDS, MAXIMUM_ASSERTION_LIFETIME_SECONDS,
-    MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS, MAXIMUM_REQUESTED_SCOPES, MAXIMUM_REQUESTED_SCOPE_BYTES,
-    MAXIMUM_SCOPE_PARAMETER_BYTES, MAXIMUM_TOKEN_RESPONSE_BYTES,
+    ServiceBaseUrlError, ServiceBaseUrlJoinError, SignedExchangeAssertion, StaticToken,
+    SubjectTokenType, TokenError, TokenProvider, TransportKind, UpstreamSubjectToken,
+    DEFAULT_ASSERTION_LIFETIME_SECONDS, DEFAULT_REFRESH_MARGIN_SECONDS,
+    MAXIMUM_ASSERTION_LIFETIME_SECONDS, MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS,
+    MAXIMUM_REQUESTED_SCOPES, MAXIMUM_REQUESTED_SCOPE_BYTES, MAXIMUM_SCOPE_PARAMETER_BYTES,
+    MAXIMUM_TOKEN_RESPONSE_BYTES,
 };
 
 /// Maximum number of response header field lines accepted by shared transports.

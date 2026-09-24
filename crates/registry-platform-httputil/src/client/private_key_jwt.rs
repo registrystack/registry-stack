@@ -97,6 +97,39 @@ const TOKEN_EXCHANGE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:token-
 const JWT_SUBJECT_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:jwt";
 const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_token";
 
+/// The RFC 8693 section 3 type of the token presented as `subject_token`.
+///
+/// The set is closed: a signed assertion, or an access token some other
+/// authorization server issued and the host has already verified.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SubjectTokenType {
+    /// `urn:ietf:params:oauth:token-type:jwt`
+    Jwt,
+    /// `urn:ietf:params:oauth:token-type:access_token`
+    AccessToken,
+}
+
+impl SubjectTokenType {
+    /// The registered token type identifier sent as `subject_token_type`.
+    #[must_use]
+    pub fn as_urn(&self) -> &'static str {
+        match self {
+            Self::Jwt => JWT_SUBJECT_TOKEN_TYPE,
+            Self::AccessToken => ACCESS_TOKEN_TYPE,
+        }
+    }
+}
+
+/// The token-exchange members of one token request.
+struct ExchangeGrant<'a> {
+    subject_token: &'a str,
+    subject_token_type: SubjectTokenType,
+    /// The client's own access token, sent as `actor_token` with the
+    /// access-token type.
+    actor_token: Option<&'a BearerToken>,
+}
+
 /// The client authentication method of RFC 7523 section 2.2.
 const CLIENT_ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 
@@ -509,14 +542,18 @@ impl PrivateKeyJwt {
     /// cache, including when two tasks use the same client concurrently.
     /// The consuming resource server must verify the returned token's bounds.
     pub async fn exchange(&self, subject_token: &str) -> Result<BearerToken, TokenError> {
-        self.exchange_acquired(subject_token)
+        self.exchange_acquired(subject_token, SubjectTokenType::Jwt, None)
             .await
             .map(|acquired| acquired.token)
     }
 
+    /// Exchange `subject_token` of the stated type, optionally presenting
+    /// `actor_token` as the access token of the party acting for the subject.
     pub(super) async fn exchange_acquired(
         &self,
         subject_token: &str,
+        subject_token_type: SubjectTokenType,
+        actor_token: Option<&BearerToken>,
     ) -> Result<AcquiredToken, TokenError> {
         if self.resource.is_none() || self.scope.is_none() {
             return Err(TokenError::Configuration {
@@ -534,9 +571,19 @@ impl PrivateKeyJwt {
         self.acquire_for_grant(
             self.clock.unix_seconds(),
             self.clock.monotonic(),
-            Some(subject_token),
+            Some(ExchangeGrant {
+                subject_token,
+                subject_token_type,
+                actor_token,
+            }),
         )
         .await
+    }
+
+    /// Whether `other` authenticates as the same client at the same token
+    /// endpoint, so a credential it acquires is this client's own.
+    pub(super) fn is_same_client(&self, other: &Self) -> bool {
+        self.client_id == other.client_id && self.token_endpoint == other.token_endpoint
     }
 
     pub(super) fn exchange_binding(&self) -> Result<(&str, &str, &[String]), TokenError> {
@@ -784,7 +831,7 @@ impl PrivateKeyJwt {
         &self,
         now: i64,
         monotonic_now: Instant,
-        subject_token: Option<&str>,
+        exchange: Option<ExchangeGrant<'_>>,
     ) -> Result<AcquiredToken, TokenError> {
         let assertion = self.sign_assertion(now)?;
         // The assertion is a credential, so it lives in a scrubbed buffer here.
@@ -801,7 +848,7 @@ impl PrivateKeyJwt {
             let mut form = url::form_urlencoded::Serializer::new(String::new());
             form.append_pair(
                 "grant_type",
-                if subject_token.is_some() {
+                if exchange.is_some() {
                     TOKEN_EXCHANGE_GRANT_TYPE
                 } else {
                     GRANT_TYPE
@@ -810,10 +857,16 @@ impl PrivateKeyJwt {
             form.append_pair("client_id", &self.client_id);
             form.append_pair("client_assertion_type", CLIENT_ASSERTION_TYPE);
             form.append_pair("client_assertion", &assertion);
-            if let Some(subject_token) = subject_token {
-                form.append_pair("subject_token", subject_token);
-                form.append_pair("subject_token_type", JWT_SUBJECT_TOKEN_TYPE);
+            if let Some(exchange) = &exchange {
+                form.append_pair("subject_token", exchange.subject_token);
+                form.append_pair("subject_token_type", exchange.subject_token_type.as_urn());
                 form.append_pair("requested_token_type", ACCESS_TOKEN_TYPE);
+                // RFC 8693 section 2.1 requires `actor_token_type` exactly
+                // when `actor_token` is present.
+                if let Some(actor) = exchange.actor_token {
+                    form.append_pair("actor_token", actor.expose());
+                    form.append_pair("actor_token_type", ACCESS_TOKEN_TYPE);
+                }
             }
             if let Some(scope) = &self.scope {
                 form.append_pair("scope", scope);
@@ -890,8 +943,7 @@ impl PrivateKeyJwt {
         if !issued.token_type.eq_ignore_ascii_case(BEARER_TOKEN_TYPE) {
             return Err(TokenError::Protocol { status });
         }
-        if subject_token.is_some() && issued.issued_token_type.as_deref() != Some(ACCESS_TOKEN_TYPE)
-        {
+        if exchange.is_some() && issued.issued_token_type.as_deref() != Some(ACCESS_TOKEN_TYPE) {
             return Err(TokenError::Protocol { status });
         }
         // A stated response scope is a claim about what the credential may do,
@@ -922,6 +974,11 @@ impl PrivateKeyJwt {
             // on. The outer `Option` is member presence, so an issuer that
             // states `null` has spoken.
             lifetime_stated: issued.expires_in.is_some(),
+            // Checked above against the request when present. An absent scope
+            // means "as requested" under RFC 6749 and RFC 8693, which a caller
+            // exchanging a token whose scope an issuer may silently narrow can
+            // decline to believe.
+            scope_stated: issued.scope.is_some(),
             // A stated lifetime is what makes caching possible. Without one, or
             // with one already elapsed, the credential is used once and dropped.
             // A lifetime longer than this provider will trust is clamped before
@@ -1032,6 +1089,8 @@ pub(super) struct AcquiredToken {
     /// An absent `expires_at` beside `true` is an issuer saying the credential
     /// is already spent; beside `false` it is an issuer saying nothing.
     pub(super) lifetime_stated: bool,
+    /// Whether the response stated the issued scope.
+    pub(super) scope_stated: bool,
     pub(super) expires_at: Option<Instant>,
 }
 

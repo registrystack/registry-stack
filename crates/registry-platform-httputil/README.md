@@ -28,6 +28,15 @@ Outbound HTTP utilities for registry services.
   first-party context can exchange once; renewed person authority requires
   fresh host source verification and a new provider. The shared closed JSON
   parser `exchange_authorization_from_json` is used by Node and Python bindings.
+  `ExchangeAuthorization::upstream` instead presents, once, an access token
+  another authorization server issued and the host has already verified,
+  including its audience (`UpstreamSubjectToken`, with a closed
+  `SubjectTokenType`). It may add the service's own client-credentials token
+  as the RFC 8693 actor token, acquired from a shared `PrivateKeyJwt` for the
+  same client and token endpoint and never returned to the caller. The context
+  deadline may not pass the subject token's expiry, so the exchanged token is
+  never handed out after the subject token ends, whatever lifetime the issuer
+  states. The response must state a scope holding every requested scope.
 - Shared strict response-header bounds and exact-one delta-seconds
   `Retry-After` parsing.
 - `ProxyHeaderPolicy` plus request and response header filters for proxy-safe

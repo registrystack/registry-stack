@@ -2,8 +2,11 @@
 //!
 //! The host supplies one immutable, already verified context. A first-party
 //! source signs that context once; a remote source may obtain a fresh assertion
-//! from its owning authority on every refresh. Neither source can extend the
-//! context deadline. A new person or grant requires a new provider instance.
+//! from its owning authority on every refresh; an upstream source presents,
+//! once, an access token the host has already verified, optionally beside the
+//! service's own client-credentials token as the actor. No source can extend
+//! the context deadline. A new person or grant requires a new provider
+//! instance.
 
 use std::{
     fmt,
@@ -24,7 +27,7 @@ use zeroize::Zeroizing;
 
 use super::{
     outbound::{build_client, read_failure_kind, send_failure_kind, OutboundOptions},
-    private_key_jwt::PrivateKeyJwt,
+    private_key_jwt::{PrivateKeyJwt, SubjectTokenType},
     token::{BearerToken, TokenError, TokenProvider},
     ServiceBaseUrl,
 };
@@ -172,6 +175,71 @@ impl SignedExchangeAssertion {
         }
         Ok(Self { jwt, expires_at })
     }
+}
+
+/// A subject token another authorization server issued, which the host has
+/// already verified, together with the expiry the host read from it.
+///
+/// The token text is held in a buffer wiped on drop and never rendered.
+/// `expires_at` must be the verified token's own `exp`: an upstream exchange
+/// refuses a context that would outlive it.
+pub struct UpstreamSubjectToken {
+    token: Zeroizing<String>,
+    token_type: SubjectTokenType,
+    expires_at: i64,
+}
+
+impl UpstreamSubjectToken {
+    pub fn new(
+        token: impl Into<String>,
+        token_type: SubjectTokenType,
+        expires_at: i64,
+    ) -> Result<Self, TokenError> {
+        let token = Zeroizing::new(token.into());
+        if token.is_empty()
+            || token.len() > MAX_ASSERTION_BYTES
+            || !token.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(TokenError::Invalid {
+                reason: "the upstream subject token must be bounded non-empty visible ASCII",
+            });
+        }
+        if expires_at <= now_seconds()? {
+            return Err(TokenError::Invalid {
+                reason: "the upstream subject token has expired",
+            });
+        }
+        Ok(Self {
+            token,
+            token_type,
+            expires_at,
+        })
+    }
+
+    pub fn expires_at(&self) -> i64 {
+        self.expires_at
+    }
+}
+
+impl fmt::Debug for UpstreamSubjectToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UpstreamSubjectToken")
+            .field("token_type", &self.token_type)
+            .field("expires_at", &self.expires_at)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Where the subject token of one exchange comes from.
+enum SubjectSource {
+    /// An assertion from a trusted source, checked against the context.
+    Assertion(Arc<dyn ExchangeAssertionSource>),
+    /// An access token the host verified, and the service's own provider for
+    /// the actor token, if the exchange presents one.
+    Upstream {
+        subject: UpstreamSubjectToken,
+        actor: Option<Arc<PrivateKeyJwt>>,
+    },
 }
 
 /// A trusted authority that obtains a new assertion from its owning source.
@@ -419,13 +487,14 @@ struct CachedExchange {
 
 /// One client, resource, scope set and immutable verified context.
 ///
-/// First-party instances exchange once and must be reconstructed after the
-/// issued token expires. Remote sources may renew only by obtaining a new
-/// assertion from their owning authority, which can refuse a revoked grant.
+/// First-party and upstream instances exchange once and must be reconstructed
+/// after the issued token expires. Remote sources may renew only by obtaining
+/// a new assertion from their owning authority, which can refuse a revoked
+/// grant.
 pub struct ExchangeAuthorization {
     exchange: PrivateKeyJwt,
     context: ExchangeContext,
-    source: Arc<dyn ExchangeAssertionSource>,
+    source: SubjectSource,
     renewable: bool,
     cached: RwLock<Option<CachedExchange>>,
     refresh_lock: Mutex<bool>,
@@ -485,7 +554,71 @@ impl ExchangeAuthorization {
                 reason: "the first-party assertion scopes must match the exchange scopes",
             });
         }
-        Self::build(exchange, context, Arc::new(source), false)
+        Self::build(
+            exchange,
+            context,
+            SubjectSource::Assertion(Arc::new(source)),
+            false,
+        )
+    }
+
+    /// Exchange an access token the host has already verified, once, for a
+    /// token bound to this provider's resource and scopes.
+    ///
+    /// `context` is a first-party context whose subject is the verified
+    /// token's subject and whose deadline is no later than that token's
+    /// `exp`, so nothing this provider hands out outlives the subject token.
+    /// The upstream token is not parsed here. The host must already have
+    /// verified its signature, issuer, expiry and, above all, its audience:
+    /// an authorization server re-validates the subject token on exchange but
+    /// need not check whom it was issued for, so a token minted for another
+    /// service would otherwise be exchanged as readily as one minted for this
+    /// host.
+    ///
+    /// The issued token is handed out until the earlier of its stated expiry
+    /// and the context deadline, whatever lifetime the issuer gives it, and the
+    /// token response must state a scope that includes every requested scope.
+    ///
+    /// `actor` is the service's own client-credentials provider. Its token is
+    /// acquired and presented as `actor_token` inside the exchange and never
+    /// reaches the caller. It must authenticate as the same client at the same
+    /// token endpoint as `exchange`, and is shared across contexts so its
+    /// cached credential serves every exchange. Configure it without a
+    /// resource or scopes, so that credential is not itself a standing token
+    /// for the downstream service; its outbound policy is set when it is
+    /// constructed, because [`Self::with_fetch_url_policy`] applies to the
+    /// exchange provider only.
+    pub fn upstream(
+        exchange: PrivateKeyJwt,
+        context: ExchangeContext,
+        subject: UpstreamSubjectToken,
+        actor: Option<Arc<PrivateKeyJwt>>,
+    ) -> Result<Self, TokenError> {
+        if context.grant_id.is_some() {
+            return Err(TokenError::Configuration {
+                reason: "an upstream subject token cannot carry a grant context",
+            });
+        }
+        if context.deadline > subject.expires_at {
+            return Err(TokenError::Invalid {
+                reason: "the verified exchange context outlives the upstream subject token",
+            });
+        }
+        if actor
+            .as_deref()
+            .is_some_and(|actor| !exchange.is_same_client(actor))
+        {
+            return Err(TokenError::Configuration {
+                reason:
+                    "the actor token provider must be the exchanging client at its token endpoint",
+            });
+        }
+        Self::build(
+            exchange,
+            context,
+            SubjectSource::Upstream { subject, actor },
+            false,
+        )
     }
 
     pub fn from_authority(
@@ -498,13 +631,13 @@ impl ExchangeAuthorization {
                 reason: "an authority source requires a grant context",
             });
         }
-        Self::build(exchange, context, source, true)
+        Self::build(exchange, context, SubjectSource::Assertion(source), true)
     }
 
     fn build(
         exchange: PrivateKeyJwt,
         context: ExchangeContext,
-        source: Arc<dyn ExchangeAssertionSource>,
+        source: SubjectSource,
         renewable: bool,
     ) -> Result<Self, TokenError> {
         let _ = exchange.exchange_binding()?;
@@ -699,12 +832,42 @@ impl TokenProvider for ExchangeAuthorization {
                 context_remaining.min(MAX_EXCHANGE_CACHE_SECONDS),
             ))
             .ok_or(TokenError::Unavailable)?;
-        let assertion = self.source.assertion(&self.context).await?;
-        // The authority may issue this assertion after waiting on HTTP or its
-        // current grant check. Compare iat to the time of receipt, not the time
-        // before acquisition began.
-        self.validate_assertion(&assertion, now_seconds()?)?;
-        let acquired = self.exchange.exchange_acquired(&assertion.jwt).await?;
+        let acquired = match &self.source {
+            SubjectSource::Assertion(source) => {
+                let assertion = source.assertion(&self.context).await?;
+                // The authority may issue this assertion after waiting on HTTP
+                // or its current grant check. Compare iat to the time of
+                // receipt, not the time before acquisition began.
+                self.validate_assertion(&assertion, now_seconds()?)?;
+                self.exchange
+                    .exchange_acquired(&assertion.jwt, SubjectTokenType::Jwt, None)
+                    .await?
+            }
+            SubjectSource::Upstream { subject, actor } => {
+                // The actor's own credential comes from its cache, or from one
+                // client-credentials request, before the subject token is sent
+                // anywhere. The context deadline is re-read after that wait.
+                let actor_token = match actor {
+                    Some(actor) => Some(actor.bearer_token().await?),
+                    None => None,
+                };
+                if now_seconds()? >= self.context.deadline {
+                    return Err(TokenError::Unavailable);
+                }
+                let acquired = self
+                    .exchange
+                    .exchange_acquired(&subject.token, subject.token_type, actor_token.as_ref())
+                    .await?;
+                // An issuer may narrow an exchange to the scopes the upstream
+                // token carried without refusing it. Only a stated scope, which
+                // the exchange provider has already held to every requested
+                // scope, shows that it did not.
+                if !acquired.scope_stated {
+                    return Err(TokenError::ScopeNarrowed);
+                }
+                acquired
+            }
+        };
         if now_seconds()? >= self.context.deadline {
             return Err(TokenError::Unavailable);
         }
@@ -735,6 +898,10 @@ impl fmt::Debug for ExchangeAuthorization {
             .field("exchange", &self.exchange)
             .field("context", &self.context)
             .field("renewable", &self.renewable)
+            .field(
+                "upstream_actor_present",
+                &matches!(&self.source, SubjectSource::Upstream { actor: Some(_), .. }),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -744,7 +911,7 @@ mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
     use wiremock::{
-        matchers::{method, path},
+        matchers::{body_string_contains, method, path},
         Mock, MockServer, ResponseTemplate,
     };
 
@@ -1216,9 +1383,13 @@ mod tests {
         endpoint(&server, Some(300)).await;
         wait_for_second_boundary().await;
         let deadline_set_at = Instant::now();
+        // Read the deadline before building the exchange client: that build
+        // loads trust roots and can take most of a second under a parallel
+        // test run, which would move the deadline a whole second later.
+        let deadline = now_seconds().unwrap() + 2;
         let provider = ExchangeAuthorization::first_party(
             exchange(&server, "urn:records", &["records:read"]),
-            context("person-1", now_seconds().unwrap() + 2),
+            context("person-1", deadline),
             source(&["records:read"]),
         )
         .unwrap();
@@ -1434,5 +1605,411 @@ mod tests {
             Err(TokenError::Invalid { .. })
         ));
         assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    const SUBJECT_CANARY: &str = "citizen-subject-canary-token";
+    const ACTOR_CANARY: &str = "service-actor-canary-token";
+    const ACCESS_TOKEN_URN: &str = "urn:ietf:params:oauth:token-type:access_token";
+
+    fn form(request: &wiremock::Request) -> std::collections::BTreeMap<String, String> {
+        url::form_urlencoded::parse(&request.body)
+            .into_owned()
+            .collect()
+    }
+
+    /// The service's own client-credentials provider: the same client at the
+    /// same token endpoint as the exchange, with no resource or scope of its
+    /// own, so the credential it caches is not a standing downstream token.
+    fn actor(server: &MockServer, client_id: &str) -> Arc<PrivateKeyJwt> {
+        Arc::new(unscoped(server, client_id))
+    }
+
+    fn unscoped(server: &MockServer, client_id: &str) -> PrivateKeyJwt {
+        let endpoint = format!("{}/token", server.uri()).parse().unwrap();
+        PrivateKeyJwt::new(super::super::private_key_jwt::PrivateKeyJwtConfig::new(
+            endpoint,
+            client_id,
+            key(),
+        ))
+        .unwrap()
+    }
+
+    fn upstream_subject(token_type: SubjectTokenType, expires_at: i64) -> UpstreamSubjectToken {
+        UpstreamSubjectToken::new(SUBJECT_CANARY, token_type, expires_at).unwrap()
+    }
+
+    /// Mount the service's client-credentials grant and the token exchange on
+    /// one endpoint, as one authorization server serves both.
+    async fn upstream_endpoints(server: &MockServer, exchange_expires_in: i64) {
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("grant_type=client_credentials"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": ACTOR_CANARY, "token_type": "Bearer", "expires_in": 300
+            })))
+            .mount(server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("token-exchange"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "issued-credential", "token_type": "Bearer",
+                "issued_token_type": ACCESS_TOKEN_URN, "scope": "records:read",
+                "expires_in": exchange_expires_in
+            })))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn upstream_exchange_presents_the_access_token_subject_and_the_service_actor() {
+        let server = MockServer::start().await;
+        upstream_endpoints(&server, 300).await;
+        let deadline = now_seconds().unwrap() + 120;
+        let provider = ExchangeAuthorization::upstream(
+            exchange(&server, "urn:records", &["records:read"]),
+            context("person-1", deadline),
+            upstream_subject(SubjectTokenType::AccessToken, deadline),
+            Some(actor(&server, "portal-client")),
+        )
+        .unwrap();
+        provider.bearer_token().await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        let service = form(&requests[0]);
+        assert_eq!(service["grant_type"], "client_credentials");
+        assert_eq!(service["client_id"], "portal-client");
+        for absent in ["subject_token", "actor_token", "resource", "scope"] {
+            assert!(!service.contains_key(absent), "{absent} on the actor grant");
+        }
+        let exchanged = form(&requests[1]);
+        assert_eq!(
+            exchanged["grant_type"],
+            "urn:ietf:params:oauth:grant-type:token-exchange"
+        );
+        assert_eq!(exchanged["client_id"], "portal-client");
+        assert_eq!(exchanged["subject_token"], SUBJECT_CANARY);
+        assert_eq!(exchanged["subject_token_type"], ACCESS_TOKEN_URN);
+        assert_eq!(exchanged["requested_token_type"], ACCESS_TOKEN_URN);
+        assert_eq!(exchanged["actor_token"], ACTOR_CANARY);
+        assert_eq!(exchanged["actor_token_type"], ACCESS_TOKEN_URN);
+        assert_eq!(exchanged["resource"], "urn:records");
+        assert_eq!(exchanged["scope"], "records:read");
+        assert!(exchanged.contains_key("client_assertion"));
+    }
+
+    #[tokio::test]
+    async fn upstream_exchange_without_an_actor_sends_no_actor_parameters() {
+        let server = MockServer::start().await;
+        upstream_endpoints(&server, 300).await;
+        let deadline = now_seconds().unwrap() + 120;
+        let provider = ExchangeAuthorization::upstream(
+            exchange(&server, "urn:records", &["records:read"]),
+            context("person-1", deadline),
+            upstream_subject(SubjectTokenType::AccessToken, deadline),
+            None,
+        )
+        .unwrap();
+        provider.bearer_token().await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let exchanged = form(&requests[0]);
+        assert_eq!(exchanged["subject_token_type"], ACCESS_TOKEN_URN);
+        assert!(!exchanged.contains_key("actor_token"));
+        assert!(!exchanged.contains_key("actor_token_type"));
+    }
+
+    #[tokio::test]
+    async fn upstream_subject_token_type_is_the_callers_closed_choice() {
+        let server = MockServer::start().await;
+        upstream_endpoints(&server, 300).await;
+        let deadline = now_seconds().unwrap() + 120;
+        let provider = ExchangeAuthorization::upstream(
+            exchange(&server, "urn:records", &["records:read"]),
+            context("person-1", deadline),
+            upstream_subject(SubjectTokenType::Jwt, deadline),
+            None,
+        )
+        .unwrap();
+        provider.bearer_token().await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(
+            form(&requests[0])["subject_token_type"],
+            "urn:ietf:params:oauth:token-type:jwt"
+        );
+        assert_eq!(
+            SubjectTokenType::Jwt.as_urn(),
+            "urn:ietf:params:oauth:token-type:jwt"
+        );
+        assert_eq!(SubjectTokenType::AccessToken.as_urn(), ACCESS_TOKEN_URN);
+    }
+
+    #[tokio::test]
+    async fn one_service_actor_token_serves_many_upstream_contexts() {
+        let server = MockServer::start().await;
+        upstream_endpoints(&server, 300).await;
+        let deadline = now_seconds().unwrap() + 120;
+        let service = actor(&server, "portal-client");
+        for person in ["person-1", "person-2"] {
+            ExchangeAuthorization::upstream(
+                exchange(&server, "urn:records", &["records:read"]),
+                context(person, deadline),
+                upstream_subject(SubjectTokenType::AccessToken, deadline),
+                Some(Arc::clone(&service)),
+            )
+            .unwrap()
+            .bearer_token()
+            .await
+            .unwrap();
+        }
+
+        let grants: Vec<String> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| form(request)["grant_type"].clone())
+            .collect();
+        assert_eq!(
+            grants,
+            [
+                "client_credentials",
+                "urn:ietf:params:oauth:grant-type:token-exchange",
+                "urn:ietf:params:oauth:grant-type:token-exchange",
+            ]
+        );
+    }
+
+    #[test]
+    fn upstream_subject_token_must_be_bounded_visible_ascii_and_unexpired() {
+        let live = now_seconds().unwrap() + 120;
+        let oversized = format!("{SUBJECT_CANARY}{}", "a".repeat(32 * 1024));
+        for candidate in [
+            String::new(),
+            oversized,
+            format!("{SUBJECT_CANARY} space"),
+            format!("{SUBJECT_CANARY}\nnewline"),
+            format!("{SUBJECT_CANARY}\u{00e9}"),
+        ] {
+            let error = UpstreamSubjectToken::new(candidate, SubjectTokenType::AccessToken, live)
+                .expect_err("an unusable subject token is refused");
+            assert!(matches!(error, TokenError::Invalid { .. }));
+            assert!(!error.to_string().contains(SUBJECT_CANARY));
+            assert!(!format!("{error:?}").contains(SUBJECT_CANARY));
+        }
+        let expired = UpstreamSubjectToken::new(
+            SUBJECT_CANARY,
+            SubjectTokenType::AccessToken,
+            now_seconds().unwrap(),
+        )
+        .expect_err("an expired subject token is refused");
+        assert!(matches!(expired, TokenError::Invalid { .. }));
+        let accepted = upstream_subject(SubjectTokenType::AccessToken, live);
+        assert_eq!(accepted.expires_at(), live);
+        assert!(!format!("{accepted:?}").contains(SUBJECT_CANARY));
+    }
+
+    #[tokio::test]
+    async fn an_upstream_context_cannot_outlive_its_subject_or_carry_a_grant() {
+        let server = MockServer::start().await;
+        let now = now_seconds().unwrap();
+        let outlives = ExchangeAuthorization::upstream(
+            exchange(&server, "urn:records", &["records:read"]),
+            context("person-1", now + 120),
+            upstream_subject(SubjectTokenType::AccessToken, now + 60),
+            None,
+        );
+        assert!(matches!(outlives, Err(TokenError::Invalid { .. })));
+
+        let grant = ExchangeContext::grant(
+            "https://casework.example",
+            "agent-1",
+            "https://issuer.example",
+            "grant-generation-1",
+            now + 60,
+            "grant-1",
+        )
+        .unwrap();
+        let granted = ExchangeAuthorization::upstream(
+            exchange(&server, "urn:records", &["records:read"]),
+            grant,
+            upstream_subject(SubjectTokenType::AccessToken, now + 60),
+            None,
+        );
+        assert!(matches!(granted, Err(TokenError::Configuration { .. })));
+
+        let unscoped = ExchangeAuthorization::upstream(
+            unscoped(&server, "portal-client"),
+            context("person-1", now + 60),
+            upstream_subject(SubjectTokenType::AccessToken, now + 60),
+            None,
+        );
+        assert!(matches!(unscoped, Err(TokenError::Configuration { .. })));
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_actor_of_another_client_or_endpoint_is_refused() {
+        let server = MockServer::start().await;
+        let elsewhere = MockServer::start().await;
+        let deadline = now_seconds().unwrap() + 120;
+        for foreign in [
+            actor(&server, "other-client"),
+            actor(&elsewhere, "portal-client"),
+        ] {
+            let result = ExchangeAuthorization::upstream(
+                exchange(&server, "urn:records", &["records:read"]),
+                context("person-1", deadline),
+                upstream_subject(SubjectTokenType::AccessToken, deadline),
+                Some(foreign),
+            );
+            assert!(matches!(result, Err(TokenError::Configuration { .. })));
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+        assert!(elsewhere.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_upstream_token_is_not_held_past_the_subject_token_expiry() {
+        // The issuer states five minutes, but the subject token the host
+        // verified ends in two seconds. The context deadline is that expiry,
+        // and the exchanged token is never handed out beyond it.
+        let server = MockServer::start().await;
+        upstream_endpoints(&server, 300).await;
+        wait_for_second_boundary().await;
+        let deadline_set_at = Instant::now();
+        let subject_expiry = now_seconds().unwrap() + 2;
+        let provider = ExchangeAuthorization::upstream(
+            exchange(&server, "urn:records", &["records:read"]),
+            context("person-1", subject_expiry),
+            upstream_subject(SubjectTokenType::AccessToken, subject_expiry),
+            None,
+        )
+        .unwrap();
+        let held = provider.bearer_token().await.unwrap();
+        let again = provider.bearer_token().await.unwrap();
+        assert_eq!(
+            held.authorization_header_value(),
+            again.authorization_header_value()
+        );
+        let past_deadline = Duration::from_millis(2250).saturating_sub(deadline_set_at.elapsed());
+        tokio::time::sleep(past_deadline).await;
+        assert!(matches!(
+            provider.bearer_token().await,
+            Err(TokenError::Unavailable)
+        ));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn upstream_failures_never_echo_token_material_and_exchange_once() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("grant_type=client_credentials"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": ACTOR_CANARY, "token_type": "Bearer", "expires_in": 300
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("token-exchange"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "error": "invalid_grant",
+                "error_description": format!("rejected {SUBJECT_CANARY} acting as {ACTOR_CANARY}")
+            })))
+            .mount(&server)
+            .await;
+        let deadline = now_seconds().unwrap() + 120;
+        let provider = ExchangeAuthorization::upstream(
+            exchange(&server, "urn:records", &["records:read"]),
+            context("person-1", deadline),
+            upstream_subject(SubjectTokenType::AccessToken, deadline),
+            Some(actor(&server, "portal-client")),
+        )
+        .unwrap();
+        let error = provider.bearer_token().await.unwrap_err();
+        assert!(matches!(error, TokenError::Refused { .. }));
+        for rendered in [
+            error.to_string(),
+            format!("{error:?}"),
+            format!("{provider:?}"),
+        ] {
+            assert!(!rendered.contains(SUBJECT_CANARY), "{rendered}");
+            assert!(!rendered.contains(ACTOR_CANARY), "{rendered}");
+        }
+        // A refused exchange spends the context: the verified subject token
+        // is not presented a second time.
+        assert!(matches!(
+            provider.bearer_token().await,
+            Err(TokenError::Unavailable)
+        ));
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn an_upstream_exchange_whose_scope_is_unstated_or_narrowed_is_refused() {
+        // An issuer may drop requested scopes the subject token did not carry
+        // and still answer 200. The exchange is refused unless the response
+        // states a scope holding every requested one.
+        for stated in [None, Some("other:read")] {
+            let server = MockServer::start().await;
+            let mut body = json!({"access_token": "issued-credential", "token_type": "Bearer",
+                "issued_token_type": ACCESS_TOKEN_URN, "expires_in": 300});
+            if let Some(scope) = stated {
+                body["scope"] = json!(scope);
+            }
+            Mock::given(method("POST"))
+                .and(path("/token"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&server)
+                .await;
+            let deadline = now_seconds().unwrap() + 120;
+            let provider = ExchangeAuthorization::upstream(
+                exchange(&server, "urn:records", &["records:read"]),
+                context("person-1", deadline),
+                upstream_subject(SubjectTokenType::AccessToken, deadline),
+                None,
+            )
+            .unwrap();
+            assert!(
+                matches!(
+                    provider.bearer_token().await,
+                    Err(TokenError::ScopeNarrowed)
+                ),
+                "stated scope {stated:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_actor_grant_stops_before_the_subject_token_is_sent() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(
+                ResponseTemplate::new(401).set_body_json(json!({"error": "invalid_client"})),
+            )
+            .mount(&server)
+            .await;
+        let deadline = now_seconds().unwrap() + 120;
+        let provider = ExchangeAuthorization::upstream(
+            exchange(&server, "urn:records", &["records:read"]),
+            context("person-1", deadline),
+            upstream_subject(SubjectTokenType::AccessToken, deadline),
+            Some(actor(&server, "portal-client")),
+        )
+        .unwrap();
+        assert!(matches!(
+            provider.bearer_token().await,
+            Err(TokenError::Refused { .. })
+        ));
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(!form(&requests[0]).contains_key("subject_token"));
     }
 }
