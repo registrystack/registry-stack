@@ -599,8 +599,10 @@ python3 products/casework/scripts/generate_openapi.py --check
 ```
 
 The local product wrapper runs that OpenAPI drift check, the dependency guard,
-every product script test, and both maintained offline authoring journeys.
-Build `caseworkctl` first or set `CASEWORKCTL_BIN`:
+every product script test, both maintained offline authoring journeys, and a
+two-entity `source add --apply` pairing that `bregctl check` must accept.
+Build `caseworkctl` and `bregctl` first, or set `CASEWORKCTL_BIN` and
+`BREGCTL_BIN`:
 
 ```sh
 products/casework/scripts/check-checkpoint.sh
