@@ -42,9 +42,11 @@ and `iss`, when present, must be a string equal to the verified token issuer;
 any other member, a different issuer, or a nested `act` refuses the token. A
 token carrying a verified trusted actor is an agent token whatever its
 `registry_actor_kind` claim says: a token exchange copies that claim from the
-subject token, so it describes the citizen, not the caller. Such a token never
-satisfies a profile that declares `actorKind: human`. A profile that declares no
-`actorKind` accepts every kind, including this one. Custom contextual claim
+subject token, so it describes the citizen, not the caller. Such a token is
+admitted only by an access profile, or an immediate-action permission, that
+declares `actorKind: agent`; a profile that declares another kind or no
+`actorKind` at all refuses it. A token without `act` is unaffected: a profile
+without `actorKind` still accepts every kind of direct token. Custom contextual claim
 names, when needed for an existing issuer, are configured together in the
 closed `contextual` object.
 

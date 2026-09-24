@@ -131,7 +131,8 @@ token. The value must be exactly `human`, `agent`, or `service`; a missing or ma
 authentication to fail before BReg selects an access profile. An `actorKind` on an access profile
 further restricts that profile to the matching token kind and must be paired with
 `requesterClients`. Omit `actorKind` only when the profile deliberately accepts all three declared
-actor kinds.
+actor kinds. A token that acts for someone else, carrying a trusted `act` claim, is the exception:
+only a profile that declares `actorKind: agent` admits it.
 
 {/* Evidence: crates/registry-breg/src/auth.rs, RegistryAuthenticator::authenticate();
     crates/registry-breg/src/api/mod.rs, authorize_profile_claims();

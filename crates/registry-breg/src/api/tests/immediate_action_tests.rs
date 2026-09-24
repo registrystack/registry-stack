@@ -589,6 +589,65 @@ async fn standing_agent_action_requires_a_trusted_actor_subject() {
 }
 
 #[tokio::test]
+async fn delegated_token_invokes_an_action_only_through_an_agent_profile() {
+    let registry = compiled();
+    let idp = MockIdp::start().await;
+    let audience = "urn:example:breg";
+    let actor = "00000000-0000-4000-8000-0000000000aa";
+    let mut verifier = oidc_verifier_config(idp.issuer(), vec![audience.to_owned()]);
+    verifier.allowed_clients = vec!["agent-client".to_owned()];
+    let auth = RegistryAuthenticator::new(
+        &registry,
+        verifier,
+        Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            idp.jwks_uri(),
+            JwksFetcherConfig::defaults(),
+            FetchUrlPolicy::dev(),
+        )),
+        AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".to_owned()))
+            .with_contextual_claims(
+                ClaimNames::default(),
+                BTreeMap::from([("agent-client".to_owned(), actor.to_owned())]),
+            ),
+    )
+    .expect("delegated verifier config is valid");
+    let service = service_for(registry.clone(), true);
+    let route = registry
+        .actions()
+        .routes
+        .iter()
+        .find(|route| route.kind == ActionRouteKind::Invoke)
+        .unwrap();
+    // `registrar` declares no actorKind and admits every kind of direct token.
+    let registrar = QueryOptions::parse(Some("accessProfile=registrar"), false).unwrap();
+    let standing = QueryOptions::parse(Some("accessProfile=standing-agent"), false).unwrap();
+    let claims = json!({
+        "aud": audience,
+        "sub": "citizen-sub",
+        "azp": "agent-client",
+        "registry_principal": "citizen-sub",
+        "registry_actor_kind": "agent",
+        "registry_purpose": "case-management",
+        "regions": ["north"],
+        "scope": "case.rename"
+    });
+    let direct = auth
+        .authenticate(&idp.mint_token(claims.clone()))
+        .await
+        .expect("token without act authenticates");
+    assert!(authorize_action(&service, route, &direct, &registrar).is_some());
+
+    let mut delegated_claims = claims;
+    delegated_claims["act"] = json!({"sub": actor, "iss": idp.issuer()});
+    let delegated = auth
+        .authenticate(&idp.mint_token(delegated_claims))
+        .await
+        .expect("registered client and actor pair authenticates");
+    assert!(authorize_action(&service, route, &delegated, &registrar).is_none());
+    assert!(authorize_action(&service, route, &delegated, &standing).is_some());
+}
+
+#[tokio::test]
 async fn action_only_discovery_is_profile_filtered_without_entity_read_access() {
     let registry = compiled();
     let service = Arc::new(service_for(registry, true));
