@@ -512,6 +512,25 @@ async fn health_and_ready_answer() {
 }
 
 #[tokio::test]
+async fn readiness_reports_not_ready_when_the_audit_journal_is_not_writable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let harness = Harness::start().await;
+    let audit_path = &harness.environment.audit_path;
+    let original = std::fs::metadata(audit_path)
+        .expect("audit file metadata")
+        .permissions();
+    std::fs::set_permissions(audit_path, std::fs::Permissions::from_mode(0o644))
+        .expect("audit file permissions widen");
+
+    let ready = harness.get("/ready", None).await;
+    assert_eq!(ready.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(ready.body, "{\"status\":\"not-ready\"}");
+
+    std::fs::set_permissions(audit_path, original).expect("audit file permissions restore");
+}
+
+#[tokio::test]
 async fn the_session_ends_with_the_access_token() {
     let harness = Harness::start_with(Options {
         token_lifetime: Duration::from_secs(10),

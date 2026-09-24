@@ -454,6 +454,30 @@ async fn health_readiness_and_unknown_routes() {
 }
 
 #[tokio::test]
+async fn readiness_reports_not_ready_when_the_audit_journal_is_not_writable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let harness = Harness::start(Limits::default()).await;
+    let audit_file = harness.directory.path().join("audit").join("audit.jsonl");
+    let original = std::fs::metadata(&audit_file)
+        .expect("audit file metadata")
+        .permissions();
+    std::fs::set_permissions(&audit_file, std::fs::Permissions::from_mode(0o644))
+        .expect("audit file permissions widen");
+
+    let ready = reqwest::get(format!("{}/ready", harness.origin))
+        .await
+        .expect("ready answers");
+    assert_eq!(ready.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        ready.json::<Value>().await.expect("ready body"),
+        json!({"status": "not-ready"})
+    );
+
+    std::fs::set_permissions(&audit_file, original).expect("audit file permissions restore");
+}
+
+#[tokio::test]
 async fn a_foreign_host_or_any_origin_is_refused() {
     let harness = Harness::start(Limits::default()).await;
     let token = harness.token(CITIZEN_A);

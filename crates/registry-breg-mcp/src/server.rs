@@ -181,7 +181,7 @@ async fn ready(State(gateway): State<Arc<Gateway>>) -> Response {
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            json!({"status": "unavailable"}),
+            json!({"status": "not-ready"}),
         )
     };
     no_store((status, Json(body)).into_response())
