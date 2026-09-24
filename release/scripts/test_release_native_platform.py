@@ -68,6 +68,28 @@ BREGCTL_ARGS = [
     "--target",
     TARGET,
 ]
+BREG_MCP_ARGS = [
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "registry-breg-mcp",
+    "--bin",
+    "breg-mcp",
+    "--target",
+    TARGET,
+]
+BREG_REVIEW_ARGS = [
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "registry-breg-review",
+    "--bin",
+    "breg-review",
+    "--target",
+    TARGET,
+]
 CASEWORK_RUNTIME_ARGS = [
     "build",
     "--release",
@@ -145,6 +167,8 @@ binaries = {
     "registry-evidence-oid4vci": "evidence-oid4vci",
     "registry-breg": "breg",
     "registry-bregctl": "bregctl",
+    "registry-breg-mcp": "breg-mcp",
+    "registry-breg-review": "breg-review",
     "registry-casework": "casework",
     "registry-caseworkctl": "caseworkctl",
 }
@@ -531,6 +555,75 @@ if path.suffix != ".dylib":
         )
         for name in expected:
             self.assertEqual(0o644, stat.S_IMODE((merged / "platform" / name).stat().st_mode))
+
+    def test_breg_services_join_the_bregctl_shard_from_v0_35_0(self) -> None:
+        before, before_output, before_calls = self.build(
+            "bregctl", version="0.34.0", name="services-before"
+        )
+        self.assertEqual(0, before.returncode, before.stderr)
+        self.assertEqual([BREGCTL_ARGS], before_calls)
+        self.assertEqual(
+            ["bregctl-v0.34.0-macos-arm64.tar.gz"],
+            sorted(path.name for path in (before_output / "platform").iterdir()),
+        )
+
+        version = "0.35.0"
+        expected = [
+            "bregctl-v0.35.0-macos-arm64.tar.gz",
+            "breg-mcp-v0.35.0-macos-arm64.tar.gz",
+            "breg-review-v0.35.0-macos-arm64.tar.gz",
+        ]
+        self.assertEqual(expected, MODULE.rosters(version)["bregctl"])
+        self.assertEqual(
+            ["breg-v0.35.0-macos-arm64.tar.gz"], MODULE.rosters(version)["breg"]
+        )
+        shards = {}
+        for group in ("core", "breg", "bregctl", "casework"):
+            result, shard, calls = self.build(
+                group, version=version, name=f"services-{group}"
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            shards[group] = shard
+            if group == "bregctl":
+                self.assertEqual(
+                    [BREGCTL_ARGS, BREG_MCP_ARGS, BREG_REVIEW_ARGS], calls
+                )
+                self.assertEqual(
+                    expected,
+                    [
+                        line.split("  ", 1)[1]
+                        for line in (shard / "SHA256SUMS").read_text().splitlines()
+                    ],
+                )
+                self.assertEqual(
+                    ["bregctl", "breg-mcp", "breg-review"],
+                    (self.root / "services-bregctl-smoke.log")
+                    .read_text()
+                    .splitlines(),
+                )
+        merged = self.root / "services-merged"
+        MODULE.merge(
+            version=version,
+            source_sha=SOURCE_SHA,
+            purpose="review_only",
+            core=shards["core"],
+            breg=shards["breg"],
+            bregctl=shards["bregctl"],
+            casework=shards["casework"],
+            output=merged,
+        )
+        merged_names = {path.name for path in (merged / "platform").iterdir()}
+        self.assertTrue(set(expected) <= merged_names)
+
+        failed, failed_output, failed_calls = self.build(
+            "bregctl",
+            version=version,
+            name="services-wrong-version",
+            binary_version="0.0.0",
+        )
+        self.assertNotEqual(0, failed.returncode)
+        self.assertEqual([BREGCTL_ARGS], failed_calls)
+        self.assertFalse(failed_output.exists())
 
     def test_merge_rejects_invalid_inputs_before_exposing_output(self) -> None:
         mutations = {

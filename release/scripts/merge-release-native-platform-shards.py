@@ -22,6 +22,7 @@ RUST_TOOLCHAIN = "1.95.0"
 PURPOSES = {"candidate_input", "review_only"}
 MINT_RETIREMENT_VERSION = (0, 31, 0)
 MACOS_FIPS_ARCHIVE_MINIMUM_VERSION = (0, 33, 0)
+BREG_SERVICES_RELEASE_MINIMUM_VERSION = (0, 35, 0)
 
 
 class ShardError(ValueError):
@@ -48,6 +49,12 @@ def rosters(version: str) -> dict[str, list[str]]:
     if parsed >= (0, 26, 0):
         breg = [f"breg-{tag}-{ASSET}"]
         bregctl = [f"bregctl-{tag}-{ASSET}"]
+    if parsed >= BREG_SERVICES_RELEASE_MINIMUM_VERSION:
+        # The citizen MCP gateway and its review page are clients of BReg, so
+        # they build beside bregctl rather than beside the runtime.
+        bregctl.extend(
+            [f"breg-mcp-{tag}-{ASSET}", f"breg-review-{tag}-{ASSET}"]
+        )
     casework = []
     if parsed >= (0, 30, 0):
         casework = [

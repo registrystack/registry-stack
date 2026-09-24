@@ -82,6 +82,8 @@ DOCKERFILES = (
     Path("release/docker/Dockerfile.discovery"),
     Path("release/docker/Dockerfile.evidence"),
     Path("release/docker/Dockerfile.breg"),
+    Path("release/docker/Dockerfile.breg-mcp"),
+    Path("release/docker/Dockerfile.breg-review"),
     Path("release/docker/Dockerfile.casework"),
     Path("release/docker/Dockerfile.relay"),
     Path("release/docker/Dockerfile.scheduling"),
@@ -170,6 +172,16 @@ HTTP_PROBE_DOCKERFILES = {
         "binary": "breg",
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/breg"]',
         "command": 'CMD ["--config", "/etc/breg/runtime.yaml"]',
+    },
+    Path("release/docker/Dockerfile.breg-mcp"): {
+        "binary": "breg-mcp",
+        "entrypoint": 'ENTRYPOINT ["/usr/local/bin/breg-mcp"]',
+        "command": 'CMD ["--runtime-config", "/etc/breg-mcp/runtime.yaml", "serve"]',
+    },
+    Path("release/docker/Dockerfile.breg-review"): {
+        "binary": "breg-review",
+        "entrypoint": 'ENTRYPOINT ["/usr/local/bin/breg-review"]',
+        "command": 'CMD ["--runtime-config", "/etc/breg-review/runtime.yaml", "serve"]',
     },
     Path("release/docker/Dockerfile.casework"): {
         "binary": "casework",

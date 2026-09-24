@@ -37,6 +37,8 @@ PUBLIC_PACKAGES = (
     "evidence",
     "mint",
     "breg",
+    "breg-mcp",
+    "breg-review",
     "casework",
     "scheduling",
     "relay",

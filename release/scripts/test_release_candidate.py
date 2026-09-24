@@ -48,6 +48,8 @@ def security_evidence_members(
         "evidence",
         "casework",
         "breg",
+        "breg-mcp",
+        "breg-review",
         "relay",
         "scheduling",
     ),
@@ -380,6 +382,8 @@ class ReleaseCandidateTest(TestCase):
             "discovery",
             "evidence",
             "breg",
+            "breg-mcp",
+            "breg-review",
             "casework",
             "relay",
             "scheduling",
@@ -893,6 +897,41 @@ class ReleaseCandidateTest(TestCase):
             self.module._relay_v2_payload_inventory("0.33.0"),
         )
 
+    def test_breg_services_join_only_the_v0_35_roster(self) -> None:
+        for version in ("0.33.0", "0.34.0"):
+            with self.subTest(version=version):
+                names = self.module._candidate_image_names(version)
+                self.assertNotIn("breg-mcp", names)
+                self.assertNotIn("breg-review", names)
+                inventory = self.module._relay_v2_payload_inventory(version)
+                self.assertFalse(
+                    any(name.startswith(("breg-mcp-", "breg-review-")) for name in inventory)
+                )
+        self.assertEqual(
+            {
+                "breg",
+                "breg-mcp",
+                "breg-review",
+                "casework",
+                "discovery",
+                "evidence",
+                "relay",
+                "scheduling",
+            },
+            self.module._candidate_image_names("0.35.0"),
+        )
+        inventory = self.module._relay_v2_payload_inventory("0.35.0")
+        for service in ("breg-mcp", "breg-review"):
+            for asset in (
+                f"{service}-v0.35.0-linux-amd64",
+                f"{service}-v0.35.0-linux-arm64",
+                f"{service}-v0.35.0-macos-arm64.tar.gz",
+            ):
+                with self.subTest(asset=asset):
+                    self.assertEqual("binary", inventory[asset])
+            self.assertNotIn(f"{service}-v0.35.0-install.sh", inventory)
+            self.assertNotIn(f"{service}-v0.35.0-macos-arm64", inventory)
+
     def test_retirement_preserves_every_v0_30_release(self) -> None:
         for version, expected in (
             ("0.30.0", True),
@@ -916,6 +955,12 @@ class ReleaseCandidateTest(TestCase):
             ("0.31.0", "breg casework discovery evidence relay\n"),
             ("0.32.0", "breg casework discovery evidence relay\n"),
             ("0.33.0", "breg casework discovery evidence relay scheduling\n"),
+            ("0.34.0", "breg casework discovery evidence relay scheduling\n"),
+            (
+                "0.35.0",
+                "breg breg-mcp breg-review casework discovery evidence relay "
+                "scheduling\n",
+            ),
         )
         for version, expected in cases:
             with self.subTest(version=version):
@@ -989,6 +1034,47 @@ class ReleaseCandidateTest(TestCase):
                 root, "0.33.0", allow_missing_baseline=True
             )
 
+    def test_v0_35_breg_services_onboarding_stays_closed_until_external_setup(
+        self,
+    ) -> None:
+        root = self.onboarding_repository()
+        for relative_path in (
+            "release/docker/Dockerfile.scheduling",
+            "release/security/scheduling-advisory-baseline.json",
+            "release/docker/Dockerfile.breg-mcp",
+            "release/docker/Dockerfile.breg-review",
+        ):
+            shutil.copy2(ROOT / relative_path, root / relative_path)
+        for service in ("breg-mcp", "breg-review"):
+            with self.subTest(service=service):
+                self.assertFalse(
+                    (
+                        ROOT / f"release/security/{service}-advisory-baseline.json"
+                    ).exists()
+                )
+                self.assertNotIn(
+                    f'"{service}-candidate"',
+                    (
+                        ROOT / "release/scripts/cleanup-release-candidates.py"
+                    ).read_text(encoding="utf-8"),
+                )
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "breg-mcp advisory baseline is missing",
+        ):
+            self.module.check_image_onboarding(root, "0.35.0")
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "CANDIDATE_PACKAGES must contain breg-mcp-candidate",
+        ):
+            self.module.check_image_onboarding(
+                root, "0.35.0", allow_missing_baseline=True
+            )
+        self.assertEqual(
+            self.module._candidate_image_names("0.34.0"),
+            self.module.check_image_onboarding(root, "0.34.0"),
+        )
+
     def test_image_onboarding_rejects_a_noncanonical_version(self) -> None:
         with self.assertRaisesRegex(
             self.module.CandidateError,
@@ -1038,7 +1124,7 @@ class ReleaseCandidateTest(TestCase):
         recipe = root / "release/scripts/build-release-image.sh"
         recipe.write_text(
             recipe.read_text(encoding="utf-8").replace(
-                "discovery|evidence|breg|casework|scheduling|relay",
+                "discovery|evidence|breg|breg-mcp|breg-review|casework|scheduling|relay",
                 "discovery|evidence|mint|relay",
             ),
             encoding="utf-8",
@@ -1363,7 +1449,7 @@ class ReleaseCandidateTest(TestCase):
         candidate, _, bundle_root, _ = self.make_v2_candidate()
         members = security_evidence_members()
         required = self.module._security_evidence_required_files(
-            self.module.SCHEDULING_RUNTIME_IMAGE_NAMES
+            self.module.BREG_SERVICES_RUNTIME_IMAGE_NAMES
         )
         for missing in sorted(required):
             with self.subTest(missing=missing):

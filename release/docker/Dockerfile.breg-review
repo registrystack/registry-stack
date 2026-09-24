@@ -1,0 +1,47 @@
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+
+ARG SOURCE_DATE_EPOCH=0
+
+FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS runtime-root
+ARG SOURCE_DATE_EPOCH
+
+ADD --checksum=sha256:967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9 https://snapshot.debian.org/archive/debian/20260913T000000Z/pool/main/g/glibc/libc6_2.41-12+deb13u4_amd64.deb /workspace/runtime-packages/libc6_2.41-12+deb13u4_amd64.deb
+ADD --checksum=sha256:8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8aa688cc https://snapshot.debian.org/archive/debian/20260913T000000Z/pool/main/g/glibc/libc6_2.41-12+deb13u4_arm64.deb /workspace/runtime-packages/libc6_2.41-12+deb13u4_arm64.deb
+
+# The page configuration, the sign-in client key, and the audit hash key are
+# deployment inputs. The image carries only the runtime binary and its licenses.
+# Sessions live in memory; only the append-only audit journal needs a writable
+# persistent directory, which the audit sink refuses unless the runtime user
+# owns it and no one else may write to it.
+RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
+    --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \
+    --mount=type=bind,source=THIRD_PARTY_NOTICES,target=/workspace/THIRD_PARTY_NOTICES,readonly \
+    --mount=type=bind,source=release/scripts/install-runtime-libc6.sh,target=/workspace/install-runtime-libc6.sh,readonly \
+    /workspace/install-runtime-libc6.sh /workspace/runtime-root /workspace/runtime-packages \
+    && mkdir -p \
+        /workspace/runtime-root/etc/breg-review \
+        /workspace/runtime-root/licenses/breg-review \
+        /workspace/runtime-root/usr/local/bin \
+        /workspace/runtime-root/var/lib/breg-review \
+    && install -m 0755 /workspace/image-bin/breg-review /workspace/runtime-root/usr/local/bin/breg-review \
+    && install -m 0644 /workspace/LICENSE /workspace/runtime-root/licenses/breg-review/LICENSE \
+    && install -m 0644 /workspace/THIRD_PARTY_NOTICES /workspace/runtime-root/licenses/breg-review/THIRD_PARTY_NOTICES \
+    && chown -R 65532:65532 /workspace/runtime-root/var/lib/breg-review \
+    && chmod 0700 /workspace/runtime-root/var/lib/breg-review \
+    && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
+
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c AS runtime
+
+LABEL org.registrystack.runtime.uid="65532" \
+      org.registrystack.runtime.gid="65532"
+
+COPY --from=runtime-root /workspace/runtime-root/ /
+
+WORKDIR /var/lib/breg-review
+
+EXPOSE 8115
+
+# The review page serves GET /health and GET /ready. Distroless has no shell or
+# HTTP client, so the deployment platform owns the probe.
+ENTRYPOINT ["/usr/local/bin/breg-review"]
+CMD ["--runtime-config", "/etc/breg-review/runtime.yaml", "serve"]

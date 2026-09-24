@@ -2392,12 +2392,14 @@ class RegistryReleaseTest(TestCase):
         for current in (
             "_relay_v2_payload_inventory",
             "payloads: $payloads[0]",
-            "image_names=(relay evidence discovery breg casework scheduling)",
+            "image_names=(relay evidence discovery breg breg-mcp breg-review casework scheduling)",
             "images: $images[0]",
             "scans: $scans[0]",
             '"discovery-image"',
             '"evidence-image"',
             '"breg-image"',
+            '"breg-mcp-image"',
+            '"breg-review-image"',
             '"casework-image"',
             '"scheduling-image"',
             '"relay-image"',
@@ -2471,6 +2473,8 @@ class RegistryReleaseTest(TestCase):
                 "discovery",
                 "evidence",
                 "breg",
+                "breg-mcp",
+                "breg-review",
                 "casework",
                 "scheduling",
                 "relay",
@@ -2496,6 +2500,8 @@ class RegistryReleaseTest(TestCase):
             "discovery",
             "evidence",
             "breg",
+            "breg-mcp",
+            "breg-review",
             "casework",
             "scheduling",
             "relay",
@@ -2509,7 +2515,15 @@ class RegistryReleaseTest(TestCase):
                 f"/workspace/runtime-root/usr/local/bin/{name}",
                 release_dockerfiles[name],
             )
-        for name in ("evidence", "breg", "casework", "scheduling", "relay"):
+        for name in (
+            "evidence",
+            "breg",
+            "breg-mcp",
+            "breg-review",
+            "casework",
+            "scheduling",
+            "relay",
+        ):
             self.assertIn(
                 "--mount=type=bind,source=THIRD_PARTY_NOTICES,"
                 "target=/workspace/THIRD_PARTY_NOTICES,readonly",
@@ -2522,7 +2536,8 @@ class RegistryReleaseTest(TestCase):
             )
         self.assertNotIn("THIRD_PARTY_NOTICES", release_dockerfiles["discovery"])
         self.assertIn(
-            "discovery|evidence|breg|casework|scheduling|relay)", image_recipe
+            "discovery|evidence|breg|breg-mcp|breg-review|casework|scheduling|relay)",
+            image_recipe,
         )
         self.assertNotIn("registry-relay)", image_recipe)
 
@@ -2824,6 +2839,90 @@ class RegistryReleaseTest(TestCase):
         self.assertIn("-p registry-scheduling --bin scheduling", recipe)
         self.assertIn('"scheduling-${tag}-linux-amd64"', recipe)
         self.assertIn("image_bin_binaries+=(scheduling)", recipe)
+
+    def test_breg_services_release_surface_begins_after_v0_34(self) -> None:
+        module = load_registry_release()
+        published = {
+            name: "0.34.0"
+            for name in (
+                module.RELAY_V2_ARTIFACT_INVENTORY
+                | {
+                    "relay-installer",
+                    "registry-docs",
+                    "discovery",
+                    "breg",
+                    "bregctl",
+                    "breg-installer",
+                    "casework",
+                    "caseworkctl",
+                    "casework-installer",
+                    "scheduling",
+                    "registry-client-node",
+                    "registry-client-python",
+                }
+            )
+            if name != "mint"
+            and name
+            not in {
+                "evidence-client-node",
+                "evidence-client-python",
+            }
+        }
+        self.assertEqual([], module.artifact_inventory_errors("0.34.0", published))
+        future = {name: "0.35.0" for name in published}
+        future["breg-mcp"] = "0.35.0"
+        future["breg-review"] = "0.35.0"
+        self.assertEqual([], module.artifact_inventory_errors("0.35.0", future))
+        for service in ("breg-mcp", "breg-review"):
+            with self.subTest(service=service):
+                self.assertNotEqual(
+                    [],
+                    module.artifact_inventory_errors(
+                        "0.34.0", published | {service: "0.34.0"}
+                    ),
+                )
+                missing = dict(future)
+                del missing[service]
+                self.assertNotEqual(
+                    [], module.artifact_inventory_errors("0.35.0", missing)
+                )
+
+        recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("-p registry-breg-mcp --bin breg-mcp", recipe)
+        self.assertIn("-p registry-breg-review --bin breg-review", recipe)
+        self.assertIn('"breg-mcp-${tag}-linux-amd64"', recipe)
+        self.assertIn('"breg-review-${tag}-linux-amd64"', recipe)
+        self.assertIn("image_bin_binaries+=(breg-mcp breg-review)", recipe)
+
+    def test_breg_service_images_run_serve_over_an_owner_controlled_data_directory(
+        self,
+    ) -> None:
+        for name in ("breg-mcp", "breg-review"):
+            with self.subTest(name=name):
+                dockerfile = (ROOT / f"release/docker/Dockerfile.{name}").read_text(
+                    encoding="utf-8"
+                )
+                self.assertIn(
+                    f"chown -R 65532:65532 /workspace/runtime-root/var/lib/{name} ",
+                    dockerfile,
+                )
+                self.assertIn(
+                    f"chmod 0700 /workspace/runtime-root/var/lib/{name} ",
+                    dockerfile,
+                )
+                self.assertIn(f"WORKDIR /var/lib/{name}\n", dockerfile)
+                self.assertIn(
+                    f'ENTRYPOINT ["/usr/local/bin/{name}"]\n'
+                    f'CMD ["--runtime-config", "/etc/{name}/runtime.yaml", "serve"]\n',
+                    dockerfile,
+                )
+                self.assertIn(
+                    "FROM gcr.io/distroless/cc-debian13:nonroot@sha256:", dockerfile
+                )
+                self.assertNotIn("USER ", dockerfile)
+                self.assertNotIn("bregctl", dockerfile)
 
     def test_unified_client_manifest_surface_replaces_individual_clients(self) -> None:
         module = load_registry_release()
@@ -4158,6 +4257,9 @@ def write_manifest(
         artifacts.pop("mint")
     if version_tuple >= (0, 33, 0):
         artifacts["scheduling"] = version
+    if version_tuple >= (0, 35, 0):
+        artifacts["breg-mcp"] = version
+        artifacts["breg-review"] = version
     manifest = {
         "stack": {
             "release": "beta-6",
