@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha1/RetentionEraseReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha2/RetentionEraseReport.schema.json",
   "title": "RetentionEraseReport",
   "description": "Versioned JSON report emitted by caseworkctl for retention erase.",
   "oneOf": [
@@ -18,7 +18,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
           "const": "RetentionEraseReport"
@@ -51,7 +51,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
           "const": "RetentionEraseReport"

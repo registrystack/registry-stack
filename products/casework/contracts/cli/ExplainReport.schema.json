@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha1/ExplainReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha2/ExplainReport.schema.json",
   "title": "ExplainReport",
   "description": "Versioned JSON report emitted by caseworkctl for explain.",
   "oneOf": [
@@ -25,7 +25,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
           "const": "ExplainReport"
@@ -97,7 +97,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
           "const": "ExplainReport"

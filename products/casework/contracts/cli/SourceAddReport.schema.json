@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha1/SourceAddReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha2/SourceAddReport.schema.json",
   "title": "SourceAddReport",
   "description": "Versioned JSON report emitted by caseworkctl for source add.",
   "oneOf": [
@@ -27,7 +27,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
           "const": "SourceAddReport"
@@ -96,7 +96,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
           "const": "SourceAddReport"

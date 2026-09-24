@@ -1343,7 +1343,7 @@ async fn migration_refuses_to_drop_unpublished_audit_and_drops_a_drained_outbox(
             "CREATE TABLE casework_audit_outbox (event_id uuid PRIMARY KEY, audit_record jsonb NOT NULL, published_at timestamptz); \
              INSERT INTO casework_audit_outbox(event_id,audit_record) \
                  VALUES('00000000-0000-4000-8000-0000000000c1','{}'); \
-             DELETE FROM casework_schema_migrations WHERE version=17;",
+             DELETE FROM casework_schema_migrations WHERE version>=17;",
         )
         .await
         .expect("simulate the schema before migration 17");
@@ -1525,8 +1525,18 @@ async fn readiness_rejects_an_unmigrated_schema() {
     let (store, _client, _schema) = isolated_schema("ready_unmigrated").await;
 
     assert!(
-        matches!(store.ready().await, Err(StoreError::Postgres(_))),
+        matches!(
+            store.ready().await,
+            Err(StoreError::SchemaNotCurrent {
+                applied: None,
+                required: 18
+            })
+        ),
         "a schema without the migration ledger must fail readiness"
+    );
+    assert_eq!(
+        store.ready().await.unwrap_err().to_string(),
+        "the Casework database schema is not current: no migration has been applied, and this binary requires version 18; apply the migrations with `casework migrate` or `caseworkctl db migrate`"
     );
 }
 
@@ -1546,7 +1556,13 @@ async fn readiness_rejects_a_partial_schema_missing_review_tables() {
         .expect("simulate a partial schema without the unified review migration");
 
     assert!(
-        matches!(store.ready().await, Err(StoreError::Corrupt)),
+        matches!(
+            store.ready().await,
+            Err(StoreError::SchemaNotCurrent {
+                applied: Some(17),
+                required: 17
+            })
+        ),
         "a partial migration ledger must fail readiness"
     );
 }

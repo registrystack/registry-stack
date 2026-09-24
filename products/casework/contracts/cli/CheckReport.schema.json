@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha1/CheckReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha2/CheckReport.schema.json",
   "title": "CheckReport",
   "description": "Versioned JSON report emitted by caseworkctl for check.",
   "oneOf": [
@@ -22,7 +22,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
           "const": "CheckReport"
@@ -73,7 +73,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
           "const": "CheckReport"

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha1/DoctorReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha2/DoctorReport.schema.json",
   "title": "DoctorReport",
   "description": "Versioned JSON report emitted by caseworkctl for doctor.",
   "oneOf": [
@@ -15,13 +15,14 @@
         "runtimeConfig",
         "packageRoot",
         "checks",
+        "packageDigest",
         "secretFileChecks",
         "sourceChecks",
         "eventWiringGuidance"
       ],
       "properties": {
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
           "const": "DoctorReport"
@@ -37,6 +38,12 @@
         },
         "packageRoot": {
           "type": "string"
+        },
+        "packageDigest": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "checks": {
           "$ref": "#/$defs/doctorChecks"
@@ -69,7 +76,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
           "const": "DoctorReport"
@@ -143,7 +150,8 @@
         "audit",
         "database",
         "oidcIssuer",
-        "directory"
+        "directory",
+        "reconciliation"
       ],
       "properties": {
         "configuration": {
@@ -168,6 +176,9 @@
           "const": "ready"
         },
         "directory": {
+          "const": "ready"
+        },
+        "reconciliation": {
           "const": "ready"
         }
       }

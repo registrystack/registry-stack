@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha1/LifecycleReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha2/LifecycleReport.schema.json",
   "title": "LifecycleReport",
   "description": "Versioned JSON report emitted by caseworkctl for lifecycle.",
   "oneOf": [
@@ -16,7 +16,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
           "const": "LifecycleReport"
@@ -48,7 +48,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
           "const": "LifecycleReport"

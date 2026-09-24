@@ -5,7 +5,7 @@ carries this top-level envelope:
 
 ```json
 {
-  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha1",
+  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha2",
   "kind": "CheckReport",
   "ok": true,
   "command": "check"
