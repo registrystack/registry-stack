@@ -147,12 +147,7 @@ impl RenderAudit {
 }
 
 /// `registry-render audit-verify`: prove a retained ledger end to end.
-pub fn verify_chain(
-    runtime_path: &Path,
-    directory: &Path,
-    key_ref: &str,
-) -> Result<i32, RenderProblem> {
-    let key = crate::runtime::resolve_secret(runtime_path, key_ref)?;
+pub fn verify_chain(directory: &Path, key: Vec<u8>) -> Result<i32, RenderProblem> {
     let hasher = AuditChainProfile::production_from_secret_bytes(Zeroizing::new(key))
         .map_err(|err| {
             RenderProblem::new(ProblemKind::AuditFailed, format!("integrity key: {err}"))

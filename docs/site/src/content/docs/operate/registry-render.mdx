@@ -70,16 +70,24 @@ this binary plus the bundle hash.
 
 ## Write the runtime configuration
 
-Serve mode reads one YAML file. Every field is a contract, and unknown fields are refused:
+Serve mode reads one YAML file, selected with `--runtime-config`. Every field is a contract, and
+unknown fields are refused:
 
 ```yaml
-apiVersion: render.registrystack.org/v1alpha1
-kind: RenderRuntime
-server:
+apiVersion: registry.registrystack.org/render-runtime/v1alpha1
+kind: RenderRuntimeConfig
+listener:
   bind: 127.0.0.1:8080
   shutdownGraceSeconds: 30
-bundle:
-  path: /var/lib/registry-render/bundle
+package:
+  # The sealed bundle directory.
+  root: /var/lib/registry-render/bundle
+  # Optional: refuse to start on any other bundle.
+  # expectedDigest: sha256:<bundle hash>
+secretProviders:
+  file:
+    root: /run/secrets/registry-render
+  # environment: {}
 auth:
   apiKeyRef: secret:file/render-api-key
 limits:
@@ -89,13 +97,19 @@ limits:
   maxConcurrency: 4
 audit:
   directory: /var/lib/registry-render/audit
-  integrityKeyRef: secret:file/render-audit-key
+  hashKeyRef: secret:file/render-audit-key
   maxSegmentBytes: 67108864
 ```
 
-Secret references resolve against files beside the runtime file or named environment variables.
-Relative `bundle.path` and `audit.directory` values anchor to the runtime file's directory too, so
-the same file behaves identically wherever the process is launched from.
+The runtime file path, `package.root`, `audit.directory`, and `secretProviders.file.root` are
+absolute, and the runtime file path must not pass through a symbolic link, so the same file behaves
+identically wherever the process is launched from. `listener.bind` is required. A `secret:file/name`
+reference resolves under `secretProviders.file.root`, and a `secret:env/NAME` reference only when
+`secretProviders.environment: {}` is declared; a reference to an undeclared provider refuses
+startup. String values may take a deployment value from the environment with `${VAR}`,
+`${VAR:-default}`, or `${VAR:?message}`, except in a `*Ref` field, which must be written as a
+literal secret reference. `package.expectedDigest`, when set, is compared with
+`sha256:` followed by the bundle hash `GET /health` reports.
 The limits carry hard ceilings the runtime refuses to exceed: the output cap cannot exceed 8 MiB
 and the request body cap 64 MiB, so a configuration mistake cannot unbound the process. On
 shutdown the process drains in-flight renders for one grace period, gives open connections a
@@ -111,7 +125,7 @@ drop the renders it exists to protect, and startup refuses both ends.
 Start the process with the runtime file, and check both endpoints before sending traffic:
 
 ```sh
-target/release/registry-render serve --runtime /etc/registry-render/runtime.yaml &
+target/release/registry-render serve --runtime-config /etc/registry-render/runtime.yaml &
 curl -s http://127.0.0.1:8080/health
 curl -s http://127.0.0.1:8080/ready
 ```
@@ -119,7 +133,7 @@ curl -s http://127.0.0.1:8080/ready
 `GET /health` answers with the bundle version and hash and the renderer version, so you can
 reconcile the running service against what you deployed. `GET /ready` includes the audit ledger:
 if the sink cannot answer, readiness fails. Both are value-free.
-`registry-render healthcheck --runtime <file>` performs the same probe for a supervisor script.
+`registry-render healthcheck --runtime-config <file>` performs the same probe for a supervisor script.
 
 {/* Evidence: crates/registry-render/src/server.rs, health and healthcheck;
     crates/registry-render/src/openapi.rs, OPENAPI_JSON. */}
@@ -166,7 +180,7 @@ The ledger is a keyed hash chain in sealed segments. Stop the process first: the
 active segment; once no writer holds it, the newest segment is verified too. Then:
 
 ```sh
-target/release/registry-render audit-verify --runtime /etc/registry-render/runtime.yaml
+target/release/registry-render audit-verify --runtime-config /etc/registry-render/runtime.yaml
 ```
 
 The command prints the record and segment counts. If it reports zero records against a non-empty

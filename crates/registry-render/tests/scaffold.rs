@@ -541,7 +541,11 @@ fn tampered_ledger_fails_audit_verify() {
         bytes[position] = b'X';
     }
     std::fs::write(&ledger, bytes).unwrap();
-    let out = run(&["audit-verify", "--runtime", runtime.to_str().unwrap()]);
+    let out = run(&[
+        "audit-verify",
+        "--runtime-config",
+        runtime.to_str().unwrap(),
+    ]);
     assert_ne!(
         out.status.code(),
         Some(0),
@@ -600,8 +604,9 @@ fn serve_deployment() -> (PathBuf, PathBuf, u16) {
         .unwrap()
         .port();
     let runtime = format!(
-        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nserver:\n  bind: 127.0.0.1:{port}\nbundle:\n  path: {}\nauth:\n  apiKeyRef: secret:file/api.key\nlimits:\n  renderTimeoutSeconds: 20\naudit:\n  directory: {}\n  integrityKeyRef: secret:file/audit.key\n",
+        "apiVersion: registry.registrystack.org/render-runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{port}\npackage:\n  root: {}\nsecretProviders:\n  file:\n    root: {}\nauth:\n  apiKeyRef: secret:file/api.key\nlimits:\n  renderTimeoutSeconds: 20\naudit:\n  directory: {}\n  hashKeyRef: secret:file/audit.key\n",
         bundle.display(),
+        home.display(),
         home.join("audit").display()
     );
     let runtime_path = home.join("runtime.yaml");
@@ -623,7 +628,7 @@ impl Drop for Server {
 
 fn start_server(runtime_path: &Path) -> Server {
     let mut child = render_bin()
-        .args(["serve", "--runtime", runtime_path.to_str().unwrap()])
+        .args(["serve", "--runtime-config", runtime_path.to_str().unwrap()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

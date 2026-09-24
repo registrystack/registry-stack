@@ -54,22 +54,19 @@ struct RenderHttpRequest {
     assets: Option<BTreeMap<String, String>>,
 }
 
-pub fn serve(runtime_path: Option<&Path>) -> Result<i32, RenderProblem> {
-    let runtime_path = runtime_path
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("/etc/registry-render/runtime.yaml"));
+pub fn serve(runtime_path: &Path) -> Result<i32, RenderProblem> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|err| RenderProblem::new(ProblemKind::Internal, format!("runtime: {err}")))?;
-    runtime.block_on(serve_async(&runtime_path))
+    runtime.block_on(serve_async(runtime_path))
 }
 
 async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     init_tracing();
     let (runtime, config_id) = runtime::load(runtime_path)?;
     let api_key = normalize_api_key(runtime::resolve_secret(
-        runtime_path,
+        &runtime,
         &runtime.auth.api_key_ref,
     )?)?;
     if api_key.len() < MIN_API_KEY_ENTROPY_BYTES {
@@ -84,21 +81,14 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
             format!("API key rejected: {err}"),
         )
     })?;
-    let integrity_key = runtime::resolve_secret(runtime_path, &runtime.audit.integrity_key_ref)?;
+    let integrity_key = runtime::resolve_secret(&runtime, &runtime.audit.hash_key_ref)?;
     // The address is settled before the steps with side effects (opening
     // the audit directory creates it), so a refused bind leaves nothing
     // half-made behind.
-    let bind: SocketAddr = runtime.server.bind.parse().map_err(|err| {
-        RenderProblem::new(
-            ProblemKind::RuntimeInvalid,
-            format!(
-                "server.bind {:?} is not an address: {err}",
-                runtime.server.bind
-            ),
-        )
-    })?;
+    let bind: SocketAddr = runtime.listener.bind.socket_addr();
     runtime::validate_bind(bind)?;
-    let bundle = Bundle::load_sealed(&runtime.bundle.path)?;
+    let bundle = Bundle::load_sealed(&runtime.package.root)?;
+    runtime::verify_package(&runtime, &bundle.bundle_hash)?;
     crate::check::check_script_coverage(&bundle)?;
     crate::check::check_label_key_sets(&bundle)?;
     let audit = RenderAudit::open(
@@ -115,7 +105,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         audit,
         api_key,
         limits: runtime.limits.clone(),
-        bundle_path: runtime.bundle.path.clone(),
+        bundle_path: runtime.package.root.clone(),
         concurrency: Arc::new(tokio::sync::Semaphore::new(runtime.limits.max_concurrency)),
         max_concurrency: runtime.limits.max_concurrency,
     });
@@ -129,7 +119,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         RenderProblem::new(ProblemKind::RuntimeInvalid, format!("bind {bind}: {err}"))
     })?;
     let app = router(Arc::clone(&service)).layer(axum::middleware::from_fn(lifecycle_log));
-    let grace = Duration::from_secs(runtime.server.shutdown_grace_seconds);
+    let grace = Duration::from_secs(runtime.listener.shutdown_grace_seconds);
     let drain_service = Arc::clone(&service);
     // The stop signal is observed once and broadcast, so the drain and the
     // hard bound below race the same event.
@@ -828,12 +818,9 @@ fn insert_header(map: &mut header::HeaderMap, name: &str, value: &str) {
 }
 
 /// `registry-render healthcheck`: one plain HTTP GET against /health.
-pub fn healthcheck(runtime_path: Option<&Path>) -> Result<i32, RenderProblem> {
-    let runtime_path = runtime_path
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("/etc/registry-render/runtime.yaml"));
-    let (runtime, _) = runtime::load(&runtime_path)?;
-    let address = runtime.server.bind.clone();
+pub fn healthcheck(runtime_path: &Path) -> Result<i32, RenderProblem> {
+    let (runtime, _) = runtime::load(runtime_path)?;
+    let address = runtime.listener.bind.socket_addr().to_string();
     let stream = std::net::TcpStream::connect(&address).map_err(|err| {
         RenderProblem::new(
             ProblemKind::RuntimeInvalid,

@@ -57,9 +57,10 @@ pub enum Command {
         seal: bool,
         /// Runtime file whose audit directory is proven to resolve under
         /// the given root (the container preflight proof).
-        #[arg(long)]
+        #[arg(long = "runtime-config", value_name = "FILE")]
         runtime: Option<PathBuf>,
-        /// Root the audit directory must resolve under (with --runtime).
+        /// Root the audit directory must resolve under (with
+        /// --runtime-config).
         #[arg(long)]
         require_audit_under: Option<PathBuf>,
     },
@@ -142,22 +143,24 @@ pub enum Command {
     },
     /// Serve the HTTP rendering API (see the runtime YAML).
     Serve {
-        /// Runtime file naming the bundle, bind address, secrets, and limits.
-        #[arg(long, env = "REGISTRY_RENDER_RUNTIME")]
-        runtime: Option<PathBuf>,
+        /// Absolute path of the runtime file naming the package, listener,
+        /// secrets, and limits.
+        #[arg(long = "runtime-config", value_name = "FILE")]
+        runtime: PathBuf,
     },
     /// Probe a running server's /health.
     Healthcheck {
-        /// Runtime file naming the server to probe.
-        #[arg(long, env = "REGISTRY_RENDER_RUNTIME")]
-        runtime: Option<PathBuf>,
+        /// Absolute path of the runtime file naming the server to probe.
+        #[arg(long = "runtime-config", value_name = "FILE")]
+        runtime: PathBuf,
     },
     /// Verify a sealed audit chain end to end.
     AuditVerify {
-        /// Runtime file naming the ledger directory and integrity key.
-        #[arg(long, env = "REGISTRY_RENDER_RUNTIME")]
+        /// Absolute path of the runtime file naming the ledger directory and
+        /// hash key.
+        #[arg(long = "runtime-config", value_name = "FILE")]
         runtime: Option<PathBuf>,
-        /// Ledger directory (alternative to --runtime).
+        /// Ledger directory (alternative to --runtime-config).
         #[arg(long)]
         dir: Option<PathBuf>,
         /// Integrity key reference, for use with --dir.
@@ -351,25 +354,27 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             Ok(0)
         }
         Command::Serve { runtime } => {
-            let code = crate::server::serve(runtime.as_deref())?;
+            let code = crate::server::serve(&runtime)?;
             Ok(code)
         }
         Command::Healthcheck { runtime } => {
-            let code = crate::server::healthcheck(runtime.as_deref())?;
+            let code = crate::server::healthcheck(&runtime)?;
             Ok(code)
         }
         Command::AuditVerify { runtime, dir, key_ref } => {
             match (runtime, dir, key_ref) {
                 (Some(runtime), _, _) => {
                     let (config, _) = crate::runtime::load(&runtime)?;
-                    crate::audit::verify_chain(&runtime, &config.audit.directory, &config.audit.integrity_key_ref)
+                    let key = crate::runtime::resolve_secret(&config, &config.audit.hash_key_ref)?;
+                    crate::audit::verify_chain(&config.audit.directory, key)
                 }
                 (None, Some(dir), Some(key_ref)) => {
-                    crate::audit::verify_chain(&dir, &dir, &key_ref)
+                    let key = crate::runtime::resolve_offline_secret(&dir, &key_ref)?;
+                    crate::audit::verify_chain(&dir, key)
                 }
                 _ => Err(RenderProblem::new(
                     crate::problem::ProblemKind::InvalidArgument,
-                    "audit-verify needs --runtime <file>, or --dir <dir> together with --key <secret-ref>",
+                    "audit-verify needs --runtime-config <file>, or --dir <dir> together with --key <secret-ref>",
                 )),
             }
         }

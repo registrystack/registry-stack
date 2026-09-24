@@ -83,8 +83,9 @@ fn deployment(limits: &str, bundle_source: &Path) -> (PathBuf, PathBuf, u16) {
     std::fs::create_dir(home.join("audit")).unwrap();
     let port = free_port();
     let runtime = format!(
-        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nserver:\n  bind: 127.0.0.1:{port}\n  shutdownGraceSeconds: 5\nbundle:\n  path: {}\nauth:\n  apiKeyRef: secret:file/api.key\n{limits}audit:\n  directory: {}\n  integrityKeyRef: secret:file/audit.key\n",
+        "apiVersion: registry.registrystack.org/render-runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{port}\n  shutdownGraceSeconds: 5\npackage:\n  root: {}\nsecretProviders:\n  file:\n    root: {}\nauth:\n  apiKeyRef: secret:file/api.key\n{limits}audit:\n  directory: {}\n  hashKeyRef: secret:file/audit.key\n",
         bundle.display(),
+        home.display(),
         home.join("audit").display()
     );
     let runtime_path = home.join("runtime.yaml");
@@ -101,7 +102,7 @@ fn start_server_at(runtime_path: &Path, current_dir: Option<&Path>) -> Server {
     let mut command = Command::new(env!("CARGO_BIN_EXE_registry-render"));
     command
         .arg("serve")
-        .arg("--runtime")
+        .arg("--runtime-config")
         .arg(runtime_path)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -270,12 +271,11 @@ fn serve_health_and_ready() {
 }
 
 #[test]
-fn relative_runtime_paths_anchor_to_the_runtime_files_directory() {
+fn the_runtime_file_serves_the_same_from_any_working_directory() {
     // The natural deployment layout: runtime file and key files together in
     // deploy/, bundle and audit as siblings one level up. Every path in the
-    // runtime file is relative to it, so the file works from any working
-    // directory — before anchoring, a relative audit directory killed serve
-    // at startup and a relative bundle path silently depended on the CWD.
+    // runtime file is absolute and the key files resolve under the declared
+    // secretProviders.file.root, so the working directory never matters.
     let (_home_guard, home) = physical_tempdir();
     let bundle = home.join("bundle");
     copy_dir(
@@ -291,7 +291,10 @@ fn relative_runtime_paths_anchor_to_the_runtime_files_directory() {
     std::fs::write(
         deploy.join("runtime.yaml"),
         format!(
-            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nserver:\n  bind: 127.0.0.1:{port}\nbundle:\n  path: ../bundle\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  directory: ../audit\n  integrityKeyRef: secret:file/audit.key\n"
+            "apiVersion: registry.registrystack.org/render-runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{port}\npackage:\n  root: {bundle}\nsecretProviders:\n  file:\n    root: {deploy}\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  directory: {audit}\n  hashKeyRef: secret:file/audit.key\n",
+            bundle = bundle.display(),
+            deploy = deploy.display(),
+            audit = home.join("audit").display(),
         ),
     )
     .unwrap();
@@ -319,7 +322,7 @@ fn relative_runtime_paths_anchor_to_the_runtime_files_directory() {
     let lines = audit_lines(&home);
     assert!(
         lines.iter().any(|l| l.contains("\"outcome\":\"rendered\"")),
-        "the render was audited into the anchored audit directory: {lines:?}"
+        "the render was audited into the configured audit directory: {lines:?}"
     );
 }
 
@@ -364,7 +367,7 @@ fn api_key_with_stray_whitespace_is_refused_at_startup() {
     // startup error, not a silent permanent 401 with /health green.
     write_secret(&home.join("api.key"), &format!(" {API_KEY}"));
     let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
-        .args(["serve", "--runtime", runtime.to_str().unwrap()])
+        .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -436,7 +439,7 @@ fn a_refused_bind_is_caught_before_startup_touches_the_filesystem() {
     );
     std::fs::write(&runtime, text).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
-        .args(["serve", "--runtime", runtime.to_str().unwrap()])
+        .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -450,6 +453,41 @@ fn a_refused_bind_is_caught_before_startup_touches_the_filesystem() {
     assert!(
         !audit.exists(),
         "startup must not create the audit directory before the bind is accepted"
+    );
+}
+
+#[test]
+fn a_package_pin_naming_another_bundle_refuses_startup() {
+    let (home, runtime, _) = deployment(
+        DEFAULT_LIMITS,
+        &repo_root().join("products/render/bundles/receipt"),
+    );
+    let audit = home.join("audit-elsewhere");
+    let text = std::fs::read_to_string(&runtime).unwrap();
+    let text = text
+        .replace(
+            "package:\n",
+            &format!("package:\n  expectedDigest: sha256:{}\n", "0".repeat(64)),
+        )
+        .replace(
+            &format!("directory: {}", home.join("audit").display()),
+            &format!("directory: {}", audit.display()),
+        );
+    std::fs::write(&runtime, text).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(registry_render::ProblemKind::RuntimeInvalid.exit_code()),
+        "a pinned digest naming another bundle must refuse startup"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("package.expectedDigest"), "{stderr}");
+    assert!(
+        !audit.exists(),
+        "the refusal lands before the audit directory opens"
     );
 }
 
@@ -649,7 +687,11 @@ fn audit_chain_verifies_from_the_cli() {
     assert_eq!(reply.status, 200);
     drop(server);
     let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
-        .args(["audit-verify", "--runtime", runtime.to_str().unwrap()])
+        .args([
+            "audit-verify",
+            "--runtime-config",
+            runtime.to_str().unwrap(),
+        ])
         .output()
         .expect("run audit-verify");
     assert!(
@@ -715,7 +757,7 @@ fn tampered_bundle_refuses_to_serve() {
     text.push_str("extra: tampered\n");
     std::fs::write(&labels, text).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
-        .args(["serve", "--runtime", runtime.to_str().unwrap()])
+        .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -1108,7 +1150,7 @@ fn shutdown_is_bounded_by_grace_even_with_renders_in_flight() {
     )
     .unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
-        .args(["serve", "--runtime", runtime.to_str().unwrap()])
+        .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
