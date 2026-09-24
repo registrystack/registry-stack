@@ -2593,7 +2593,12 @@ fn disagreeing_environment_identity_keys_refuse_the_package_and_name_both_values
     let error = registry_breg::package::inspect_package_with_context(&package, &disagreeing)
         .err()
         .expect("disagreeing environment keys cannot bind any package");
-    assert_eq!(error, registry_breg::package::PackageError::Binding);
+    assert_eq!(
+        error,
+        registry_breg::package::PackageError::BindingMismatch(
+            registry_breg::package::PackageBindingField::DatabaseInitializationEnvironment
+        )
+    );
 
     assert_eq!(
         registry_breg::package::environment_identity_conflict("local", "local"),

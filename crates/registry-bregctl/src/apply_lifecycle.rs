@@ -5,15 +5,16 @@ use std::path::{Path, PathBuf};
 
 use registry_breg::field_encryption::FieldEncryptionProvider;
 use registry_breg::migration::{
-    apply_verified_package, AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles,
-    ApplyTimeouts, ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
+    apply_verified_package, confirm_active_package, AppliedFieldEncryptionKeySource,
+    ApplyPrecondition, ApplyRoles, ApplyTimeouts, ApplyVerifiedPackageRequest,
+    DestructiveBackupEvidence, MigrationError,
 };
 use registry_breg::package::{
     load_package, load_predecessor_package, PackageError, PackageIntent, PackageLoadContext,
     PredecessorPackageContext, VerifiedPredecessorPackage,
 };
 use registry_breg::postgres::ExpectedRegistryIdentity;
-use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
+use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 
 #[derive(Debug)]
 pub(crate) enum ApplyLifecycleError {
@@ -39,12 +40,19 @@ pub(crate) struct ApplyLifecycleRequest<'a> {
     pub backups: &'a [String],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ApplyLifecycleActivation {
+    Initial,
+    Successor,
+    AlreadyActive,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ApplyLifecycleOutcome {
     pub package_revision: String,
     pub schema_fingerprint: String,
     pub package_sequence: i64,
-    pub initial: bool,
+    pub activation: ApplyLifecycleActivation,
 }
 
 pub(crate) fn run(
@@ -96,21 +104,12 @@ pub(crate) fn run(
         },
         None => PackageIntent::InitialActivation,
     };
-    let target = load_package(
-        request.package,
-        &PackageLoadContext {
-            environment: config.identity().environment(),
-            instance_id: config.identity().instance_id(),
-            database_id: config.identity().database_id(),
-            database_initialization_environment: config
-                .identity()
-                .database_initialization_environment(),
-            compiler_source_revision: config.package().compiler_source_revision(),
-            trust_anchor: config.package_trust_anchor(),
-            intent: target_intent,
-        },
-    )
-    .map_err(ApplyLifecycleError::TargetPackage)?;
+    let target = match load_package(request.package, &target_context(&config, target_intent)) {
+        Err(PackageError::AlreadyActive) => {
+            return confirm_already_active(&config, request.package)
+        }
+        loaded => loaded.map_err(ApplyLifecycleError::TargetPackage)?,
+    };
     if request.initial
         && (target.manifest().package_revision != config.package().active_revision()
             || target.manifest().sequence != config.package().active_sequence()
@@ -201,7 +200,76 @@ pub(crate) fn run(
         package_revision: activated.package_revision,
         schema_fingerprint: activated.schema_fingerprint,
         package_sequence: activated.package_sequence,
-        initial: request.initial,
+        activation: if request.initial {
+            ApplyLifecycleActivation::Initial
+        } else {
+            ApplyLifecycleActivation::Successor
+        },
+    })
+}
+
+fn target_context<'a>(
+    config: &'a RuntimeConfig,
+    intent: PackageIntent<'a>,
+) -> PackageLoadContext<'a> {
+    PackageLoadContext {
+        environment: config.identity().environment(),
+        instance_id: config.identity().instance_id(),
+        database_id: config.identity().database_id(),
+        database_initialization_environment: config
+            .identity()
+            .database_initialization_environment(),
+        compiler_source_revision: config.package().compiler_source_revision(),
+        trust_anchor: config.package_trust_anchor(),
+        intent,
+    }
+}
+
+/// Re-presenting the active package is a no-op, so repeated deploys stay
+/// idempotent. The activation load only routed here from an unverified
+/// manifest claim; the target is then verified in full as the configured
+/// active package, and the database must record that exact identity as active
+/// and ready. Nothing is written.
+fn confirm_already_active(
+    config: &RuntimeConfig,
+    package: &Path,
+) -> Result<ApplyLifecycleOutcome, ApplyLifecycleError> {
+    let target = load_package(
+        package,
+        &target_context(
+            config,
+            PackageIntent::Startup {
+                active_revision: config.package().active_revision(),
+                active_sequence: config.package().active_sequence(),
+            },
+        ),
+    )
+    .map_err(ApplyLifecycleError::TargetPackage)?;
+    let connection = config
+        .migration_database_connection_config()
+        .map_err(|_| ApplyLifecycleError::DatabaseConfiguration)?;
+    let timeouts = ApplyTimeouts::new(
+        config.operational_timeouts().migration_lock,
+        config.operational_timeouts().migration_statement,
+    )
+    .map_err(|_| ApplyLifecycleError::TimeoutConfiguration)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| ApplyLifecycleError::Runtime)?;
+    let confirmed = runtime
+        .block_on(confirm_active_package(
+            &connection,
+            &target,
+            config.database().roles().migration(),
+            timeouts,
+        ))
+        .map_err(ApplyLifecycleError::Apply)?;
+    Ok(ApplyLifecycleOutcome {
+        package_revision: confirmed.package_revision,
+        schema_fingerprint: confirmed.schema_fingerprint,
+        package_sequence: confirmed.package_sequence,
+        activation: ApplyLifecycleActivation::AlreadyActive,
     })
 }
 

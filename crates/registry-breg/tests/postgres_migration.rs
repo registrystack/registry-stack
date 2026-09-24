@@ -16,9 +16,9 @@ use registry_breg::field_encryption_backfill::{
     FieldEncryptionBackfillTimeouts,
 };
 use registry_breg::migration::{
-    apply_verified_package, AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles,
-    ApplyTimeouts, ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
-    ReviewedMigrationFaultPoint,
+    apply_verified_package, confirm_active_package, AppliedFieldEncryptionKeySource,
+    ApplyPrecondition, ApplyRoles, ApplyTimeouts, ApplyVerifiedPackageRequest,
+    DestructiveBackupEvidence, MigrationError, ReviewedMigrationFaultPoint,
 };
 use registry_breg::migration_plan::{
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
@@ -508,6 +508,141 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
     false_assertion_refusals_are_closed().await;
     row_count_mismatch_is_closed().await;
     lock_timeout_is_bounded().await;
+}
+
+/// Re-presenting the active package is a no-op only when the database, read
+/// under the exclusive apply lock, records that exact package identity as
+/// active and ready. A different package at the same sequence, a package not
+/// verified for startup, and a registry in maintenance all refuse, and the
+/// confirmation writes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_confirms_only_the_exact_active_ready_package() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs extension");
+    let base = compile_variant(Variant::Base, 1);
+    let fingerprint = initial_fingerprint(&database, &base).await;
+    let root = tempfile::Builder::new()
+        .prefix("registry-active-package-")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("canonical temporary root"),
+        )
+        .expect("package temporary directory creates");
+    let package_root = root.path().join("package");
+    prepare_package(build_request(
+        Variant::Base,
+        1,
+        None,
+        &fingerprint,
+        PackageMigrationPlanInput::InitialCompiledDdl,
+        DATABASE,
+    ))
+    .expect("initial package prepares")
+    .publish_to_directory(&package_root, Vec::new())
+    .expect("initial package publishes");
+    let initial = load_package(
+        &package_root,
+        &local_context(DATABASE, PackageIntent::InitialActivation),
+    )
+    .expect("initial package loads for activation");
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("initial package activates");
+    let startup = load_package(
+        &package_root,
+        &local_context(
+            DATABASE,
+            PackageIntent::Startup {
+                active_revision: &active.package_revision,
+                active_sequence: 1,
+            },
+        ),
+    )
+    .expect("the active package loads for startup");
+
+    let before = durable_snapshot(&database).await;
+    let confirmed = confirm(&database, &startup)
+        .await
+        .expect("the exact active ready package is confirmed");
+    assert_eq!(confirmed, active);
+    assert_eq!(durable_snapshot(&database).await, before);
+
+    // Only a package verified against the active revision for startup can be
+    // confirmed; the activation-verified copy of the same bytes cannot.
+    assert_value_free(
+        confirm(&database, &initial).await.err(),
+        MigrationError::PackageBinding,
+    );
+
+    // Another package at the active sequence is not the active package.
+    let other_root = root.path().join("other-package");
+    let other = prepare_package(build_request(
+        Variant::Base,
+        1,
+        None,
+        &digest(b"another schema at the active sequence"),
+        PackageMigrationPlanInput::InitialCompiledDdl,
+        DATABASE,
+    ))
+    .expect("another package prepares");
+    let other_revision = other.package_revision().to_owned();
+    other
+        .publish_to_directory(&other_root, Vec::new())
+        .expect("another package publishes");
+    let other = load_package(
+        &other_root,
+        &local_context(
+            DATABASE,
+            PackageIntent::Startup {
+                active_revision: &other_revision,
+                active_sequence: 1,
+            },
+        ),
+    )
+    .expect("another package loads for its own startup");
+    assert_value_free(
+        confirm(&database, &other).await.err(),
+        MigrationError::ActivePackageMismatch,
+    );
+
+    // A registry held in maintenance is not ready, even for its own active
+    // identity.
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_state
+             SET maintenance_status = 'failed', maintenance_target_revision = $1
+             WHERE singleton",
+            &[&other_revision],
+        )
+        .await
+        .expect("administrator pins a failed maintenance target");
+    let before = durable_snapshot(&database).await;
+    assert_value_free(
+        confirm(&database, &startup).await.err(),
+        MigrationError::ActivePackageMismatch,
+    );
+    assert_eq!(durable_snapshot(&database).await, before);
+    database.cleanup().await;
+}
+
+async fn confirm(
+    database: &TestDatabase,
+    package: &VerifiedPackage,
+) -> registry_breg::migration::Result<ExpectedRegistryIdentity> {
+    confirm_active_package(
+        &database.migration_config,
+        package,
+        &database.migration_role,
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+            .expect("test timeouts are bounded"),
+    )
+    .await
 }
 
 /// A failed activation pins its target, and fixing forward is not always

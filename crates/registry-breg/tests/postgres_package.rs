@@ -32,11 +32,11 @@ use registry_breg::migration_plan::{
 use registry_breg::package::{
     change_set_to_applicable_migration_plan, compiled_registry_change_set, derive_package_revision,
     load_package, load_predecessor_package, prepare_package, CompiledRegistryChangeClass,
-    CompiledRegistryChangeCode, PackageBuildRequest, PackageEnvelope, PackageError, PackageFile,
-    PackageFileRole, PackageIntent, PackageLoadContext, PackageManifest, PackageMigrationPlanInput,
-    PackageModuleSource, PackageSignature, PackageSourceFile, PackageTrustAnchor,
-    PredecessorPackageContext, SignaturePolicy, TrustAnchorKey, MAX_PACKAGE_SOURCE_FILE_BYTES,
-    TRUST_ANCHOR_API_VERSION,
+    CompiledRegistryChangeCode, PackageBindingField, PackageBuildRequest, PackageEnvelope,
+    PackageError, PackageFile, PackageFileRole, PackageIntent, PackageLoadContext, PackageManifest,
+    PackageMigrationPlanInput, PackageModuleSource, PackageSignature, PackageSourceFile,
+    PackageTrustAnchor, PredecessorPackageContext, SignaturePolicy, TrustAnchorKey,
+    MAX_PACKAGE_SOURCE_FILE_BYTES, TRUST_ANCHOR_API_VERSION,
 };
 use registry_breg::postgres::{
     begin_record_transaction, install_compiled_schema, managed_schema_fingerprint, ClaimContext,
@@ -1025,7 +1025,7 @@ fn package_binding_refuses_wrong_environment_instance_database_sequence_and_prio
     };
     assert_eq!(
         load_error(fixture.root.path(), &wrong_environment),
-        PackageError::Binding
+        PackageError::BindingMismatch(PackageBindingField::Environment)
     );
     let wrong_instance = PackageLoadContext {
         instance_id: "another-instance",
@@ -1033,7 +1033,7 @@ fn package_binding_refuses_wrong_environment_instance_database_sequence_and_prio
     };
     assert_eq!(
         load_error(fixture.root.path(), &wrong_instance),
-        PackageError::Binding
+        PackageError::BindingMismatch(PackageBindingField::InstanceId)
     );
     let wrong_database = PackageLoadContext {
         database_id: "another-database",
@@ -1041,7 +1041,7 @@ fn package_binding_refuses_wrong_environment_instance_database_sequence_and_prio
     };
     assert_eq!(
         load_error(fixture.root.path(), &wrong_database),
-        PackageError::Binding
+        PackageError::BindingMismatch(PackageBindingField::DatabaseId)
     );
 
     let sequence =
@@ -1071,7 +1071,7 @@ fn package_binding_refuses_wrong_environment_instance_database_sequence_and_prio
     });
     assert_eq!(
         load_error(successor.root.path(), &wrong_prior),
-        PackageError::Binding
+        PackageError::BindingMismatch(PackageBindingField::ActiveRevision)
     );
     let stale = local_context(PackageIntent::Activation {
         active_revision: "expected-prior",
@@ -1079,7 +1079,59 @@ fn package_binding_refuses_wrong_environment_instance_database_sequence_and_prio
     });
     assert_eq!(
         load_error(successor.root.path(), &stale),
-        PackageError::Binding
+        PackageError::BindingMismatch(PackageBindingField::ActiveSequence)
+    );
+}
+
+#[test]
+fn activation_names_the_active_package_itself_and_nothing_else() {
+    let active = PackageFixture::build(
+        "local",
+        2,
+        Some("expected-prior"),
+        fingerprint(1),
+        PlanChoice::Schema,
+        None,
+    );
+    let revision = read_envelope(active.root.path()).signed.package_revision;
+    let itself = local_context(PackageIntent::Activation {
+        active_revision: &revision,
+        active_sequence: 2,
+    });
+    assert_eq!(
+        load_error(active.root.path(), &itself),
+        PackageError::AlreadyActive
+    );
+
+    // The same sequence under another revision is a different package, and a
+    // matching revision under another sequence is not the active package
+    // either: both still refuse.
+    let same_sequence = local_context(PackageIntent::Activation {
+        active_revision: "expected-prior",
+        active_sequence: 2,
+    });
+    assert_eq!(
+        load_error(active.root.path(), &same_sequence),
+        PackageError::BindingMismatch(PackageBindingField::ActiveSequence)
+    );
+    let stale_sequence = local_context(PackageIntent::Activation {
+        active_revision: &revision,
+        active_sequence: 1,
+    });
+    assert_eq!(
+        load_error(active.root.path(), &stale_sequence),
+        PackageError::BindingMismatch(PackageBindingField::ActiveRevision)
+    );
+
+    // Another deployment's copy of the active package is a binding mismatch
+    // first, never an already-active outcome.
+    let other_database = PackageLoadContext {
+        database_id: "another-database",
+        ..itself
+    };
+    assert_eq!(
+        load_error(active.root.path(), &other_database),
+        PackageError::BindingMismatch(PackageBindingField::DatabaseId)
     );
 }
 
@@ -1110,7 +1162,7 @@ fn activation_refuses_an_older_package_as_a_rollback() {
     };
     assert_eq!(
         load_error(older.root.path(), &other_database),
-        PackageError::Binding
+        PackageError::BindingMismatch(PackageBindingField::DatabaseId)
     );
 }
 
@@ -1141,7 +1193,7 @@ fn predecessor_package_binds_to_exact_active_database_identity() {
     };
     assert_eq!(
         predecessor_load_error(fixture.root.path(), &wrong_revision),
-        PackageError::Binding
+        PackageError::BindingMismatch(PackageBindingField::ActiveRevision)
     );
 
     let wrong_sequence = PredecessorPackageContext {
@@ -1150,7 +1202,7 @@ fn predecessor_package_binds_to_exact_active_database_identity() {
     };
     assert_eq!(
         predecessor_load_error(fixture.root.path(), &wrong_sequence),
-        PackageError::Binding
+        PackageError::BindingMismatch(PackageBindingField::ActiveSequence)
     );
 
     let wrong_database = PredecessorPackageContext {
@@ -1159,7 +1211,7 @@ fn predecessor_package_binds_to_exact_active_database_identity() {
     };
     assert_eq!(
         predecessor_load_error(fixture.root.path(), &wrong_database),
-        PackageError::Binding
+        PackageError::BindingMismatch(PackageBindingField::DatabaseId)
     );
 }
 
@@ -1228,7 +1280,7 @@ fn predecessor_package_refuses_altered_or_forged_closure_bytes() {
             forged.root.path(),
             &local_predecessor_context(&active_revision, 1),
         ),
-        PackageError::Binding
+        PackageError::BindingMismatch(PackageBindingField::ActiveRevision)
     );
 }
 
@@ -1252,7 +1304,7 @@ fn predecessor_verification_does_not_authorize_runtime_or_weaken_successor() {
     };
     assert_eq!(
         load_error(legacy.root.path(), &startup_context),
-        PackageError::Binding
+        PackageError::BindingMismatch(PackageBindingField::CompilerSourceRevision)
     );
 
     let successor = PackageFixture::build(
@@ -1885,7 +1937,7 @@ fn production_package_requires_exact_trust_anchor_threshold_and_signature() {
     };
     assert_eq!(
         load_error(untrusted.root.path(), &local_runtime),
-        PackageError::Binding
+        PackageError::BindingMismatch(PackageBindingField::Environment)
     );
 }
 
