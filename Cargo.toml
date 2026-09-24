@@ -153,7 +153,7 @@ async-trait = { version = "0.1" }
 aws-lc-rs = { version = "1", features = ["fips"] }
 axum = { version = "0.8" }
 axum-test = { version = "20" }
-base64 = { version = "0.22" }
+base64 = { version = "0.23" }
 bytes = { version = "1" }
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc"] }
 chrono = { version = "0.4" }
