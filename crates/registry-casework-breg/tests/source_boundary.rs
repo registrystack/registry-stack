@@ -454,6 +454,44 @@ async fn reader_diagnostic_names_the_route_and_reason_for_malformed_registry_met
 }
 
 #[tokio::test]
+async fn source_reader_logs_a_changed_metadata_failure_kind_behind_the_same_message() {
+    let server = MockServer::start().await;
+    let adapter = adapter(&server.uri());
+    let mut shape = diagnostic_metadata(&["get", "list"], &[("record", "record")]);
+    shape["entities"] = json!("not-an-array");
+    let mut version = diagnostic_metadata(&["get", "list"], &[("record", "record")]);
+    version["metadataVersion"] = json!("2");
+    let logs = captured_logs(async {
+        for metadata in [shape, version] {
+            let _contract = Mock::given(method("GET"))
+                .and(path("/v1/registry"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("traceparent", TRACE)
+                        .set_body_json(metadata),
+                )
+                .expect(1)
+                .mount_as_scoped(&server)
+                .await;
+            assert_eq!(
+                adapter.discover_active(None, 100).await.unwrap_err(),
+                SourceAdapterError::Unavailable
+            );
+        }
+    })
+    .await;
+
+    let kinds = logs
+        .lines()
+        .map(|line| {
+            let entry: Value = serde_json::from_str(line).expect("structured tracing entry");
+            entry["fields"]["metadata_error_kind"].clone()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(kinds, [json!("Shape"), json!("Version")], "{logs}");
+}
+
+#[tokio::test]
 async fn authoritative_read_retains_representation_etag_at_unchanged_record_revision() {
     let mut observations = Vec::new();
     for (verification, etag) in [

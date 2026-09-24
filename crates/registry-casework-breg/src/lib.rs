@@ -282,7 +282,13 @@ impl BregAdapter {
             }
             Err(error) => {
                 let cause = error.to_string();
-                if reported.as_deref() != Some(cause.as_str()) {
+                // Metadata decode failures of different kinds render the same
+                // message, so the kind is part of what counts as a change.
+                let key = match error.metadata_error_kind() {
+                    Some(kind) => format!("{cause} ({kind:?})"),
+                    None => cause.clone(),
+                };
+                if reported.as_deref() != Some(key.as_str()) {
                     // A runtime metadata decode failure only ever comes from
                     // the GET /v1/registry contract read, so the route is
                     // named here rather than threaded through every caller.
@@ -300,7 +306,7 @@ impl BregAdapter {
                             "Casework source reader request to BReg failed"
                         ),
                     }
-                    *reported = Some(cause);
+                    *reported = Some(key);
                 }
                 Err(read_error(error))
             }
