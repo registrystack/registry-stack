@@ -44,6 +44,13 @@
 - The BReg source adapter refuses a source request reported as `superseded`,
   a state BReg no longer defines. A BReg draft still projects as a superseded
   application occurrence.
+- Add `package.expectedPolicyDigest` to the Casework runtime configuration.
+  When set, `casework` refuses to start unless the package under
+  `package.root` is a package with exactly that policy digest. The refusal
+  names the expected digest and the digest it found, or that it found no
+  package. Set it to the digest `caseworkctl
+  package` reported for the reviewed package. The field is optional; a runtime
+  configuration without it starts as before.
 - Add `caseworkctl attempt mark-uncertain` for a pending source attempt the
   actor who started it can no longer recover. Only that actor may call the
   recover route, so such an attempt used to stay pending and hold its work item
