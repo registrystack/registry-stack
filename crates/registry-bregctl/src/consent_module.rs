@@ -645,12 +645,11 @@ fn append_manifest_projection_dataset(source: &str, item: &str) -> Option<String
         .skip(projection_start + 1)
         .find(|(_, line)| crate::top_level_key(line).is_some())
         .map_or(lines.len(), |(index, _)| index);
-    let (datasets_start, datasets_indent) = (projection_start + 1..projection_end).find_map(
-        |index| {
+    let (datasets_start, datasets_indent) =
+        (projection_start + 1..projection_end).find_map(|index| {
             let (indent, key) = indented_key(lines[index])?;
             (key == "datasets").then_some((index, indent))
-        },
-    )?;
+        })?;
     let value = lines[datasets_start]
         .trim_end()
         .split_once(':')
@@ -955,7 +954,8 @@ mod tests {
         assert!(append_top_level_items("list: &shared\n- id: x\n", "list", ITEMS).is_none());
     }
 
-    const DATASET_ITEM: &str = "- id: consent\n  title: Consent records\n  accessProfile: person-consent-steward\n";
+    const DATASET_ITEM: &str =
+        "- id: consent\n  title: Consent records\n  accessProfile: person-consent-steward\n";
 
     #[test]
     fn a_dataset_is_appended_before_the_projections_next_sibling_key() {
