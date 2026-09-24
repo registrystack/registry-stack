@@ -16,10 +16,12 @@
 //! another product's runtime or protocol types.
 
 mod access;
+mod callback;
 mod content;
 mod naming;
 mod package;
 mod problem;
+mod receipt;
 mod render;
 mod sms;
 mod template;
@@ -27,10 +29,12 @@ mod visibility;
 mod wire;
 
 pub use access::*;
+pub use callback::*;
 pub use content::*;
 pub use naming::*;
 pub use package::*;
 pub use problem::*;
+pub use receipt::*;
 pub use render::*;
 pub use sms::*;
 pub use template::*;

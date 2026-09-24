@@ -5708,10 +5708,14 @@ dependencies = [
 name = "registry-messaging-core"
 version = "0.34.0"
 dependencies = [
+ "aws-lc-rs",
+ "base64 0.22.1",
+ "hex",
  "jsonschema",
  "minijinja",
  "serde",
  "serde_json",
+ "subtle",
  "thiserror 2.0.20",
  "url",
 ]
