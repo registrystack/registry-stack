@@ -88,7 +88,8 @@ async fn main() -> ExitCode {
         "breg-review",
         Command::new(breg_review)
             .arg("--runtime-config")
-            .arg(&page_config),
+            .arg(&page_config)
+            .arg("serve"),
         &work.join("breg-review.log"),
     );
     let mut processes = [gateway_process, page_process];

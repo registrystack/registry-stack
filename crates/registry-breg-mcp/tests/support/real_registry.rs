@@ -749,7 +749,9 @@ impl ReviewPage {
             .await
             .expect("review page starts");
         let task = tokio::spawn(async move {
-            registry_breg_review::serve(listener, router)
+            // Stopped by aborting the task, so the test process keeps its
+            // own signal handling.
+            registry_breg_review::serve_until(listener, router, std::future::pending())
                 .await
                 .expect("review page serves");
         });
