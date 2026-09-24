@@ -1962,6 +1962,10 @@ impl PostgresStore {
                            result_erased_at IS NULL OR EXISTS(
                                SELECT 1 FROM casework_review_tasks t
                                WHERE t.request_id=r.request_id
+                           ) OR EXISTS(
+                               SELECT 1 FROM casework_review_clock_occurrences c
+                               WHERE c.request_id=r.request_id
+                                 AND (c.scope='activity' OR c.state IN ('completed','cancelled'))
                            )
                        ))
                     OR (lifecycle<>'reviewing' AND accountability_retained_until<=$1)
@@ -2108,9 +2112,23 @@ impl PostgresStore {
                 &[&now, &selected],
             )
             .await?;
+        // A clock occurrence carries the subject identifiers, the pinned clock policy, and its
+        // evaluated effects, so it expires with the request context at terminalDays. An activity
+        // clock is bound to one task and never continues, and a settled subject clock restarts
+        // from a fresh anchor, so neither is needed past result expiry.
+        transaction
+            .execute(
+                "DELETE FROM casework_review_clock_occurrences c USING casework_review_requests r
+                 WHERE c.request_id=r.request_id AND r.request_id=ANY($2)
+                   AND r.result_available_until<=$1
+                   AND (c.scope='activity' OR c.state IN ('completed','cancelled'))",
+                &[&now, &selected],
+            )
+            .await?;
         // Subject clocks intentionally span review rounds by moving their request binding to the
-        // latest round. Delete only occurrences still bound to an expired accountability record;
-        // a continued subject clock is therefore retained with its active round.
+        // latest round. A paused or running subject clock still bound to this request is kept until
+        // the accountability deadline so a later round can continue it; a continued subject clock
+        // is therefore retained with its active round.
         transaction
             .execute(
                 "DELETE FROM casework_review_clock_occurrences c USING casework_review_requests r

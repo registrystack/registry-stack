@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- The review retention pass deletes a review's clock occurrences at
+  `terminalDays` instead of at `accountabilityDays`. Each occurrence carries
+  the subject source, type, and identifier, the pinned clock policy, and its
+  evaluated effects, so a review kind with `terminalDays` shorter than
+  `accountabilityDays` kept that source-linked data long after the request
+  context it came from was erased. Every activity clock and every subject
+  clock the settlement completed or cancelled now expires with the request
+  context. A subject clock a changes-requested round paused, or a superseded
+  round left running, is still kept so a later round of the same review kind
+  continues it, and is deleted at the accountability deadline otherwise. A
+  request whose result an earlier pass already erased is picked up again
+  while such an occurrence remains, so existing rows are removed too.
 - The BReg source adapter projects a request whose approval expired before it
   was applied (BReg application state `expired`) as a waiting application
   occurrence instead of refusing the source read. The professional-review

@@ -29,6 +29,8 @@ erases it for one exact source request.
 | State | Kept for | What removes it |
 | --- | --- | --- |
 | Review request context, result and constraints, notes, drafts, tasks, and minimized history | `terminalDays` from terminal settlement | The runtime retention pass |
+| Review clock occurrences: every activity clock, and every subject clock the settlement completed or cancelled | The same `terminalDays` from terminal settlement | The runtime retention pass |
+| A subject clock paused by a changes-requested settlement, or left running by a superseded one | Until a later round of the same review kind continues it, otherwise until the accountability deadline | The runtime retention pass |
 | Producer result-feed events | The same `terminalDays` from terminal settlement | The runtime retention pass |
 | Protected accountability record: the raw issuer-qualified deciding identity, the staff reason, and only a sha256 digest of a recorded result | `accountabilityDays` from the same terminal time, never shorter than `terminalDays` | The runtime retention pass |
 | The request's producer and initiator identities | Raw until `terminalDays`, then a request-bound sha256 tombstone (not keyed with a secret) until the accountability deadline, so the same producer or initiator still learns the result expired | The runtime retention pass |
@@ -50,7 +52,8 @@ The retention pass runs inside `casework serve`, on every thirtieth tick of the 
 maintenance loop, so about once a minute. It works in bounded batches of at most 100 rows per
 table per pass, skipping locked rows, which keeps it from competing with live traffic and means a
 large backlog drains over several passes rather than in one. It deletes expired result-feed events,
-request context, results, notes, drafts, tasks, history, and replay responses, then deletes the
+request context, results, notes, drafts, tasks, history, clock occurrences no later round
+continues, and replay responses, then deletes the
 protected accountability record and payload-free replay tombstones at their later expiry. A failed
 pass logs a warning and the next tick retries.
 

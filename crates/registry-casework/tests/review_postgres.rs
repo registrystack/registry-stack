@@ -2219,6 +2219,269 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
     assert_eq!(owned_idempotency, 0);
 }
 
+async fn settle_clock_retention_round(
+    fixture: &Fixture,
+    service: &CaseworkService,
+    subject: &str,
+    outcome: &str,
+) -> Uuid {
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            request(subject, &format!("producer-ref-{subject}")),
+            &format!("create-{subject}"),
+        )
+        .await
+        .expect("create clock retention review");
+    let request_id = created.accepted.request_id;
+    let task = task_id(fixture, request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            &format!("claim-{subject}"),
+        )
+        .await
+        .expect("claim clock retention task");
+    let decision = if outcome == "needs-correction" {
+        ReviewerDecisionKind::ChangesRequested {
+            outcome: outcome.to_owned(),
+            reason: Some("private clock retention reason".to_owned()),
+            result: Some(json!({"correction": "bounded correction"})),
+        }
+    } else {
+        ReviewerDecisionKind::Reject {
+            outcome: outcome.to_owned(),
+            reason: Some("private clock retention reason".to_owned()),
+            result: Some(json!({"correction": "bounded correction"})),
+        }
+    };
+    service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            task,
+            ReviewTaskDecisionRequest { decision },
+            None,
+            "",
+            2,
+            &format!("decide-{subject}"),
+        )
+        .await
+        .expect("settle clock retention review");
+    request_id
+}
+
+async fn clock_occurrences_for_request(
+    fixture: &Fixture,
+    request_id: Uuid,
+) -> Vec<(String, String)> {
+    fixture
+        .database
+        .query(
+            "SELECT scope,state FROM casework_review_clock_occurrences
+             WHERE request_id=$1 ORDER BY scope,state",
+            &[&request_id],
+        )
+        .await
+        .expect("read review clock occurrences")
+        .into_iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect()
+}
+
+#[tokio::test]
+async fn terminal_retention_erases_clock_occurrences_that_cannot_continue() {
+    let fixture = fixture().await;
+    let mut project = activity_clock_project();
+    project.review_kinds[0].clocks =
+        vec!["review-deadline".to_owned(), "subject-deadline".to_owned()];
+    project.clocks.push(ClockPolicy::Subject {
+        id: "subject-deadline".to_owned(),
+        anchor: SubjectClockAnchor::FirstSubmittedAt,
+        complete_on: SubjectClockCompletion::ReviewCompleted,
+        after: ElapsedDuration {
+            elapsed: "PT1H".to_owned(),
+        },
+        pause_while: vec![SubjectClockPause::AwaitingApplicant],
+    });
+    project.review_producers[0].completion = None;
+    let retention = &project.review_kinds[0].retention;
+    assert!(
+        retention.terminal_days < retention.accountability_days,
+        "the clock rows must be erased at terminalDays, before accountabilityDays"
+    );
+    project.check().expect("clock retention project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("clock retention service");
+
+    // A rejected round completes both clocks; a changes-requested round
+    // completes its activity clock and pauses the subject clock the next
+    // round continues. The third round is left in the state an earlier
+    // retention pass produced: result erased and tasks gone, clocks kept.
+    let rejected =
+        settle_clock_retention_round(&fixture, &service, "clock-retention-rejected", "incorrect")
+            .await;
+    let changes = settle_clock_retention_round(
+        &fixture,
+        &service,
+        "clock-retention-changes",
+        "needs-correction",
+    )
+    .await;
+    let already_erased =
+        settle_clock_retention_round(&fixture, &service, "clock-retention-erased", "incorrect")
+            .await;
+    let settled = vec![
+        ("activity".to_owned(), "completed".to_owned()),
+        ("subject".to_owned(), "completed".to_owned()),
+    ];
+    assert_eq!(
+        clock_occurrences_for_request(&fixture, rejected).await,
+        settled
+    );
+    assert_eq!(
+        clock_occurrences_for_request(&fixture, already_erased).await,
+        settled
+    );
+    assert_eq!(
+        clock_occurrences_for_request(&fixture, changes).await,
+        vec![
+            ("activity".to_owned(), "completed".to_owned()),
+            ("subject".to_owned(), "paused".to_owned()),
+        ]
+    );
+    let paused_subject_clock: Uuid = fixture
+        .database
+        .query_one(
+            "SELECT clock_occurrence_id FROM casework_review_clock_occurrences
+             WHERE request_id=$1 AND scope='subject'",
+            &[&changes],
+        )
+        .await
+        .expect("read paused subject clock")
+        .get(0);
+
+    let now = Utc::now();
+    let expired = vec![rejected, changes, already_erased];
+    for statement in [
+        "UPDATE casework_review_results SET completed_at=$2,available_until=$3
+         WHERE request_id=ANY($1)",
+        "UPDATE casework_review_terminal_events SET completed_at=$2,retained_until=$3
+         WHERE request_id=ANY($1)",
+        "UPDATE casework_review_requests SET terminal_at=$2,result_available_until=$3
+         WHERE request_id=ANY($1)",
+    ] {
+        fixture
+            .database
+            .execute(
+                statement,
+                &[
+                    &expired,
+                    &(now - TimeDelta::days(2)),
+                    &(now - TimeDelta::days(1)),
+                ],
+            )
+            .await
+            .expect("expire terminal results before cleanup runs");
+    }
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_review_tasks WHERE request_id=$1",
+            &[&already_erased],
+        )
+        .await
+        .expect("remove tasks as an earlier retention pass did");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests SET result_erased_at=$2 WHERE request_id=$1",
+            &[&already_erased, &(now - TimeDelta::hours(1))],
+        )
+        .await
+        .expect("mark the result erased by an earlier retention pass");
+
+    fixture
+        .service_v1
+        .erase_expired_reviews()
+        .await
+        .expect("scrub terminal review payloads");
+
+    for request_id in [rejected, already_erased] {
+        assert_eq!(
+            clock_occurrences_for_request(&fixture, request_id).await,
+            Vec::new(),
+            "a settled clock carries the subject identifiers past terminalDays"
+        );
+    }
+    assert_eq!(
+        clock_occurrences_for_request(&fixture, changes).await,
+        vec![("subject".to_owned(), "paused".to_owned())],
+        "only the subject clock a later round continues outlives terminalDays"
+    );
+    let orphaned_effects: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_clock_effects e
+             WHERE NOT EXISTS(SELECT 1 FROM casework_review_clock_occurrences o
+                              WHERE o.clock_occurrence_id=e.clock_occurrence_id)",
+            &[],
+        )
+        .await
+        .expect("count clock effects")
+        .get(0);
+    assert_eq!(orphaned_effects, 0);
+    for request_id in [rejected, changes, already_erased] {
+        assert_eq!(
+            count_for_request(&fixture, "casework_review_requests", request_id).await,
+            1,
+            "the request is kept for its accountability period"
+        );
+        assert_eq!(
+            count_for_request(&fixture, "casework_review_accountability", request_id).await,
+            1,
+            "clock erasure leaves minimized accountability in place"
+        );
+    }
+
+    let mut next_request = request(
+        "clock-retention-changes",
+        "producer-ref-clock-retention-next",
+    );
+    next_request.subject.version = "2".to_owned();
+    next_request.subject.digest = ContentDigest::for_bytes(b"clock-retention-changes-v2");
+    let next = service
+        .create_review_request(
+            &fixture.producer,
+            next_request,
+            "create-clock-retention-next",
+        )
+        .await
+        .expect("create the round that continues the paused subject clock");
+    let continued = service
+        .review_clocks(
+            &fixture.producer,
+            next.accepted.request_id,
+            None,
+            "producer-token",
+        )
+        .await
+        .expect("read continued clocks");
+    let subject_clock = continued
+        .iter()
+        .find(|clock| clock.clock_id == "subject-deadline")
+        .expect("continued subject clock");
+    assert_eq!(subject_clock.clock_occurrence_id, paused_subject_clock);
+    assert_eq!(subject_clock.state, ReviewClockState::Running);
+}
+
 #[tokio::test]
 async fn canonical_json_bounds_allow_safe_postgresql_expansion_for_context_and_drafts() {
     let fixture = fixture().await;
