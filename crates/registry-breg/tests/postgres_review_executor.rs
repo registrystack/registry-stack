@@ -874,6 +874,11 @@ async fn reject_exhausted_application(
     StatusCode::PRECONDITION_FAILED
 }
 
+async fn read_transiently_unavailable(State(gets): State<Arc<AtomicUsize>>) -> impl IntoResponse {
+    gets.fetch_add(1, Ordering::SeqCst);
+    StatusCode::SERVICE_UNAVAILABLE
+}
+
 fn executor(endpoint: reqwest::Url) -> ReviewExecutorClient {
     executor_with_timeout(endpoint, Duration::from_secs(2))
 }
@@ -1476,6 +1481,115 @@ async fn real_postgres_automatic_application_exhausts_transient_and_stale_retry_
             expected_posts,
             "{name}"
         );
+
+        server.abort();
+        database.cleanup().await;
+    }
+}
+
+#[tokio::test]
+async fn expired_automatic_approval_is_not_claimed_by_the_application_worker() {
+    // "expired": the job has never been applied and its cached approval is
+    // past `available_until`; the worker must leave it queued and untouched.
+    // "unexpired" is the control: an ordinary due, queued job is still
+    // claimed exactly as before.
+    for (name, expired, expect_claimed) in [("expired", true, false), ("unexpired", false, true)] {
+        let mut database = TestDatabase::create(2).await;
+        database
+            .admin
+            .batch_execute(
+                "CREATE TABLE registry_internal.registry_request_proposals (
+                    request_entity_id text NOT NULL,
+                    request_id uuid NOT NULL,
+                    proposal_version bigint NOT NULL,
+                    PRIMARY KEY (request_entity_id,request_id,proposal_version)
+                );",
+            )
+            .await
+            .expect("proposal parent table");
+        install_review_storage_for_test(&database.admin, &database.runtime_role)
+            .await
+            .expect("review storage");
+        let request_id = Uuid::new_v4();
+        let job_id = Uuid::new_v4();
+        seed_application_job(&database.admin, request_id, Uuid::new_v4(), job_id).await;
+        if expired {
+            database
+                .admin
+                .execute(
+                    "UPDATE registry_internal.registry_request_review_results
+                        SET completed_at=transaction_timestamp() - interval '2 days',
+                            available_until=transaction_timestamp() - interval '1 day'
+                      WHERE request_id=$1",
+                    &[&request_id],
+                )
+                .await
+                .expect("expire the cached approval");
+        }
+
+        let gets = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route(
+                "/v1/records/requests/{request_id}",
+                get(read_transiently_unavailable),
+            )
+            .with_state(Arc::clone(&gets));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let endpoint: reqwest::Url = format!("http://{}/", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let executor = executor(endpoint);
+
+        let claimed = run_review_application_once_for_test(&mut database.admin, &executor)
+            .await
+            .expect("worker pass completes");
+        assert_eq!(claimed, expect_claimed, "{name}");
+
+        let row = database
+            .admin
+            .query_one(
+                "SELECT state,attempt_count,claim_token
+                   FROM registry_internal.registry_request_application_jobs WHERE job_id=$1",
+                &[&job_id],
+            )
+            .await
+            .expect("job row");
+        if expect_claimed {
+            assert_eq!(row.get::<_, String>(0), "applying", "{name}");
+            assert_eq!(row.get::<_, i32>(1), 1, "{name}");
+        } else {
+            assert_eq!(row.get::<_, String>(0), "queued", "{name}");
+            assert_eq!(row.get::<_, i32>(1), 0, "{name}");
+            assert_eq!(row.get::<_, Option<Uuid>>(2), None, "{name}");
+        }
+        assert_eq!(
+            gets.load(Ordering::SeqCst),
+            usize::from(expect_claimed),
+            "the executor endpoint must not be called for an unclaimed job: {name}"
+        );
+
+        // Mirrors the request-read projection's own predicate for the
+        // `expired` application state (review_store::read_projection): a
+        // queued job whose cached result is approved and past its
+        // availability. It must hold only for the expired case, and the
+        // worker pass above must not have disturbed it either way.
+        let projects_expired: bool = database
+            .admin
+            .query_one(
+                "SELECT j.state='queued' AND r.status='approved'
+                        AND r.available_until <= transaction_timestamp()
+                   FROM registry_internal.registry_request_application_jobs j
+                   JOIN registry_internal.registry_request_review_results r
+                     ON (r.request_entity_id,r.request_id,r.proposal_version)
+                       =(j.request_entity_id,j.request_id,j.proposal_version)
+                  WHERE j.job_id=$1",
+                &[&job_id],
+            )
+            .await
+            .expect("projection predicate")
+            .get(0);
+        assert_eq!(projects_expired, expired, "{name}");
 
         server.abort();
         database.cleanup().await;

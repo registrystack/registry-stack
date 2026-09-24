@@ -40,6 +40,23 @@ const MAX_APPLICATION_RESPONSE_BYTES: u64 = 256 * 1024;
 pub(crate) const MAXIMUM_COMPLETION_RECIPIENT_BYTES: usize = 256;
 pub(crate) const MAXIMUM_REVIEW_RECOVERY_DAYS: u32 = 3_650;
 
+/// A `queued` job has never been applied, so claiming one whose cached
+/// approval already passed `available_until` only spends an attempt on a
+/// request that no longer advertises `apply_request`: discovery ends in
+/// `block_application_job(..., "source-action-unavailable")`, or a cached
+/// action draws a 412 that requeues the same job, up to
+/// `MAX_APPLICATION_ATTEMPTS`. Leaving it `queued` costs nothing, since the
+/// read projection already reports that combination as application state
+/// `expired`. An `applying` job stays claimable regardless: the earlier claim
+/// may still be in flight, or its receipt may need recovery, and a 412 there
+/// returns the job to `queued`, where this predicate then applies on its next
+/// pass. `q` names the candidate job row in both queries this is spliced into.
+const APPLICATION_JOB_CLAIMABLE: &str = "(q.state <> 'queued' OR NOT EXISTS (
+        SELECT 1 FROM registry_internal.registry_request_review_results r
+         WHERE (r.request_entity_id,r.request_id,r.proposal_version)
+               =(q.request_entity_id,q.request_id,q.proposal_version)
+           AND r.status='approved' AND r.available_until <= transaction_timestamp()))";
+
 fn outbound_lease_seconds(request_timeout: Duration) -> i64 {
     // The claim lease must outlive the outbound call it guards: an expiry
     // inside the request timeout lets another instance treat the job as
@@ -180,12 +197,15 @@ impl ReviewExecutorRegistry {
         }
         let Some(row) = client
             .query_opt(
-                "SELECT executor,job_id
-                   FROM registry_internal.registry_request_application_jobs
-                  WHERE state IN ('queued','applying')
-                    AND attempt_count < $1
-                    AND next_attempt_at <= transaction_timestamp()
-                  ORDER BY next_attempt_at,created_at LIMIT 1",
+                &format!(
+                    "SELECT q.executor,q.job_id
+                       FROM registry_internal.registry_request_application_jobs q
+                      WHERE q.state IN ('queued','applying')
+                        AND q.attempt_count < $1
+                        AND q.next_attempt_at <= transaction_timestamp()
+                        AND {APPLICATION_JOB_CLAIMABLE}
+                      ORDER BY q.next_attempt_at,q.created_at LIMIT 1"
+                ),
                 &[&MAX_APPLICATION_ATTEMPTS],
             )
             .await
@@ -2201,19 +2221,22 @@ async fn run_one_application(
     let claim_token = Uuid::new_v4();
     let Some(row) = client
         .query_opt(
-            "UPDATE registry_internal.registry_request_application_jobs j
-                SET state='applying',attempt_count=attempt_count+1,
-                    next_attempt_at=transaction_timestamp()+($4::bigint * interval '1 second'),
-                    claim_token=$2,last_error_code=NULL,updated_at=transaction_timestamp()
-              WHERE (request_entity_id,request_id,proposal_version)=(
-                    SELECT q.request_entity_id,q.request_id,q.proposal_version
-                      FROM registry_internal.registry_request_application_jobs q
-                     WHERE q.executor=$1 AND q.state IN ('queued','applying')
-                       AND q.attempt_count < $3
-                       AND q.next_attempt_at <= transaction_timestamp()
-                     ORDER BY q.next_attempt_at,q.created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
-          RETURNING request_entity_id,request_id,proposal_version,job_id,proposal_digest,
-                    action_href,action_if_match,attempt_count",
+            &format!(
+                "UPDATE registry_internal.registry_request_application_jobs j
+                    SET state='applying',attempt_count=attempt_count+1,
+                        next_attempt_at=transaction_timestamp()+($4::bigint * interval '1 second'),
+                        claim_token=$2,last_error_code=NULL,updated_at=transaction_timestamp()
+                  WHERE (request_entity_id,request_id,proposal_version)=(
+                        SELECT q.request_entity_id,q.request_id,q.proposal_version
+                          FROM registry_internal.registry_request_application_jobs q
+                         WHERE q.executor=$1 AND q.state IN ('queued','applying')
+                           AND q.attempt_count < $3
+                           AND q.next_attempt_at <= transaction_timestamp()
+                           AND {APPLICATION_JOB_CLAIMABLE}
+                         ORDER BY q.next_attempt_at,q.created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
+              RETURNING request_entity_id,request_id,proposal_version,job_id,proposal_digest,
+                        action_href,action_if_match,attempt_count"
+            ),
             &[
                 &executor.executor,
                 &claim_token,
