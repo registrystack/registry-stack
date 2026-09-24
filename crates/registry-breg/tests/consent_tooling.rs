@@ -434,3 +434,62 @@ fn a_preview_fills_the_recipient_feed_boundary_from_the_requester_client() {
         );
     }
 }
+
+/// A column that gains a code migrates without review, but the migration
+/// replaces its check under a table lock and scans every row to validate it,
+/// so the diff says so.
+#[test]
+fn a_column_that_gains_a_code_rewrites_its_check_under_a_lock() {
+    let mut added = source();
+    added["recipients"]["organizations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "ngo-gamma", "name": "NGO Gamma",
+            "contact": "privacy@ngo-gamma.example.test", "clients": []
+        }));
+    let diff = classify(&source(), &added);
+    let column = change(&diff, Code::FieldVocabularyCodesAdded, Some("recipient"));
+    assert_eq!(
+        column.change.class,
+        registry_breg::package::CompiledRegistryChangeClass::CompatibleAdditive
+    );
+    assert_eq!(column.classification, DiffClassification::LockOrRewriteRisk);
+}
+
+/// A changed revoke set rebuilds both consent indexes with a plain
+/// `CREATE INDEX`, which holds writes off the table for the build.
+#[test]
+fn a_changed_revoke_set_says_it_rebuilds_the_consent_indexes() {
+    let mut changed = source();
+    changed["vocabularies"][1]["values"] =
+        json!(["given", "refused", "withdrawn", "invalidated", "lapsed"]);
+    changed["entities"][CONSENT_RECORD]["consentRecord"]["decision"]["revokes"] =
+        json!(["refused", "withdrawn", "invalidated", "lapsed"]);
+    let diff = classify(&source(), &changed);
+    let record = change(&diff, Code::ConsentRecordChanged, None);
+    assert_eq!(record.classification, DiffClassification::AccessChange);
+    let indexes = detail(record, "consentIndexes");
+    assert_guard(indexes, "blocks writes to the consent table");
+    assert_eq!(
+        indexes.before,
+        json!(["entity.consent-decision.consent.revoke-index"])
+    );
+    assert_eq!(
+        indexes.after,
+        json!(["entity.consent-decision.consent.revoke-index"])
+    );
+
+    // A longer validity leaves both indexes as they were.
+    let mut raised = source();
+    raised["entities"][CONSENT_RECORD]["consentRecord"]["validity"]["maxDuration"] = json!("P2Y");
+    let diff = classify(&source(), &raised);
+    let record = change(&diff, Code::ConsentRecordChanged, None);
+    assert!(
+        record
+            .access_details
+            .iter()
+            .all(|detail| detail.field != "consentIndexes"),
+        "{record:#?}"
+    );
+}

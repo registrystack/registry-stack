@@ -98,6 +98,24 @@ fn classify_change(
 
     match change.code {
         Code::ConstraintAdded | Code::IndexAdded => DiffClassification::LockOrRewriteRisk,
+        // The migration stays additive, but it replaces the column check under
+        // an exclusive table lock and validates every row against it. An
+        // encrypted column stores envelopes and carries no check to replace.
+        Code::FieldVocabularyCodesAdded => {
+            let encrypted = change
+                .target
+                .entity_id
+                .as_deref()
+                .and_then(|entity| candidate.entities().get(entity))
+                .zip(change.target.member_id.as_deref())
+                .and_then(|(entity, field)| entity.fields.get(field))
+                .is_some_and(|field| field.encryption.is_some());
+            if encrypted {
+                DiffClassification::CompatibleAdditive
+            } else {
+                DiffClassification::LockOrRewriteRisk
+            }
+        }
         Code::DerivedRelationChanged if change.class == BaseClass::CompatibleAdditive => {
             DiffClassification::CompatibleAdditive
         }
@@ -207,10 +225,12 @@ fn access_change_details(
             (summarize(before_entity), summarize(after_entity))
         }
         Code::ConsentRecordChanged => {
-            return consent_record_details(
+            let mut details = consent_record_details(
                 before_entity.and_then(|e| e.consent_record.as_ref()),
                 after_entity.and_then(|e| e.consent_record.as_ref()),
-            )
+            );
+            details.extend(consent_index_details(before_entity, after_entity));
+            return details;
         }
         Code::FieldTypeChanged => {
             return consent_vocabulary_details(
@@ -262,7 +282,8 @@ const MAX_DURATION_RAISED: &str =
     "raising maxDuration makes existing gives last longer than the notice said";
 const CODE_REMOVED: &str = "consent vocabulary codes are append-only; retire the code instead (an organization with no clients, or an id in retiredConsentScopes), since the migration also fails against existing rows that carry it";
 const STEWARD_ISSUER: &str = "steward actions create consent without the subject's principal";
-const ACTION_CODES_ADDED: &str = "the action accepts the added codes without review; check that each is one this action may write, such as a recipient or scope its notice names";
+const ACTION_CODES_ADDED: &str = "the action accepts codes new to their vocabulary without review; check that each is one this action may write, such as a recipient or scope its notice names";
+const CONSENT_INDEXES_REBUILT: &str = "the migration builds these consent indexes with a plain CREATE INDEX inside its transaction, which blocks writes to the consent table until it commits, and dropping a prior index blocks reads as well; apply it when the table can wait";
 
 /// Whether `after` holds an item `before` lacks, reading an omitted list as empty.
 fn adds_items(before: &serde_json::Value, after: &serde_json::Value) -> bool {
@@ -386,6 +407,37 @@ fn consent_record_details(
         "maxDuration" if raised => (ReviewRequired, Some(MAX_DURATION_RAISED)),
         "maxDuration" => (Narrowing, None),
         _ => (ReviewRequired, None),
+    })
+}
+
+/// The consent indexes a migration drops (`before`) and builds (`after`),
+/// named by statement id, when a changed consent record changes their SQL.
+///
+/// A successor's statements run in one transaction, so the build cannot use
+/// `CREATE INDEX CONCURRENTLY`: its lock is held until the migration commits.
+fn consent_index_details(
+    before: Option<&crate::model::CompiledEntity>,
+    after: Option<&crate::model::CompiledEntity>,
+) -> Option<AccessChangeDetail> {
+    let statements = |entity: Option<&crate::model::CompiledEntity>| {
+        entity
+            .map(crate::consent::index_statements)
+            .unwrap_or_default()
+    };
+    let (before, after) = (statements(before), statements(after));
+    let only_in = |side: &[(String, String, String)], other: &[(String, String, String)]| {
+        side.iter()
+            .filter(|(_, _, sql)| !other.iter().any(|(_, _, other)| other == sql))
+            .map(|(id, _, _)| id.clone())
+            .collect::<Vec<_>>()
+    };
+    let (dropped, built) = (only_in(&before, &after), only_in(&after, &before));
+    (!built.is_empty() || !dropped.is_empty()).then(|| AccessChangeDetail {
+        field: "consentIndexes".into(),
+        direction: AccessChangeDirection::ReviewRequired,
+        before: serde_json::json!(dropped),
+        after: serde_json::json!(built),
+        reason: Some(CONSENT_INDEXES_REBUILT.to_owned()),
     })
 }
 

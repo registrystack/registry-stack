@@ -850,6 +850,13 @@ pub(crate) fn set_column_not_null_statement(
 /// same name, which keeps the managed catalog identical to a fresh install.
 /// A tombstone-aware requiredness check also reads `record_lifecycle`, so it
 /// never matches.
+///
+/// Replacing the check takes an `ACCESS EXCLUSIVE` lock on the table and
+/// validates every row. Splitting it into `ADD CONSTRAINT ... NOT VALID` and
+/// `VALIDATE CONSTRAINT` would not shorten that lock: an additive successor
+/// runs all of its statements in one transaction, so the exclusive lock the
+/// add takes is held through the validation until the migration commits.
+/// `bregctl diff` reports the change as a lock risk instead.
 #[cfg(feature = "runtime")]
 pub(crate) fn replace_vocabulary_check_statement(
     entity: &CompiledEntity,
