@@ -9,7 +9,7 @@ mod consent_fixture;
 
 use std::collections::BTreeSet;
 
-use consent_fixture::{compile, refusal_codes, source};
+use consent_fixture::{compile, refusal_codes, self_issued_project, source};
 use registry_breg::contract::FieldTypeSource;
 use registry_breg::evidence_source::{export_evidence_source, EvidenceSourceOptions};
 use serde_json::{json, Value};
@@ -287,64 +287,6 @@ fn consent_actions_declare_an_issuer() {
         .unwrap()
         .remove("consentIssuer");
     assert_refused(&value, "consent.issuer.declared");
-}
-
-/// A self-issued action in the 5.5 principal-link pattern. An action
-/// requirement must name a reference input its effects use, so the consent
-/// row also records the link that authorized it.
-fn self_issued_project() -> Value {
-    let mut value = source();
-    value["entities"][CONSENT]["fields"].as_array_mut().unwrap().push(json!(
-        {"id": "link", "type": "reference", "target": "consent-subject-link", "classification": "internal"}
-    ));
-    value["entities"].as_array_mut().unwrap().push(json!({
-        "id": "consent-subject-link", "primaryDataset": "consent-dataset", "route": "consent-subject-links",
-        "mutationMode": "mutable", "classification": "restricted",
-        "fields": [
-            {"id": "subject", "type": "reference", "target": "person", "required": true, "classification": "restricted"},
-            {"id": "principal", "type": "string", "maxLength": 255, "required": true, "classification": "restricted"},
-            {"id": "active", "type": "boolean", "required": true, "classification": "internal"}
-        ]
-    }));
-    value["actions"].as_array_mut().unwrap().push(json!({
-        "id": "withdraw-consent",
-        "consentIssuer": "self",
-        "inputs": [
-            {"id": "link", "type": "reference", "target": "consent-subject-link", "required": true, "classification": "internal"},
-            {"id": "subject", "type": "reference", "target": "person", "required": true, "classification": "restricted"},
-            {"id": "recipient", "type": "vocabulary-code", "vocabulary": "registry-recipients", "required": true, "classification": "internal"},
-            {"id": "purpose", "type": "vocabulary-code", "vocabulary": "data-use-purpose", "required": true, "classification": "internal"},
-            {"id": "scope", "type": "vocabulary-code", "vocabulary": "registry-consent-scopes", "required": true, "classification": "internal"},
-            {"id": "decision", "type": "vocabulary-code", "vocabulary": "consent-decision", "values": ["withdrawn"], "required": true, "classification": "internal"},
-            {"id": "effective-at", "type": "timestamp", "required": true, "classification": "internal"}
-        ],
-        "requires": [
-            {"input": "link", "field": "subject", "equalsInput": "subject"},
-            {"input": "link", "field": "active", "equals": true}
-        ],
-        "effects": [{
-            "id": "decision", "target": {"entity": "consent-decision"}, "operation": "create",
-            "set": {
-                "subject": {"fromField": "subject"}, "recipient": {"fromField": "recipient"},
-                "purpose": {"fromField": "purpose"}, "scope": {"fromField": "scope"},
-                "decision": {"fromField": "decision"}, "effective-at": {"fromField": "effective-at"},
-                "link": {"fromField": "link"}
-            }
-        }]
-    }));
-    value["accessProfiles"].as_array_mut().unwrap().push(json!({
-        "id": "consent-self", "principalClaim": "principal", "requiredScopes": ["consent:self"],
-        "permissions": [{
-            "action": "withdraw-consent", "operations": ["invoke"],
-            "targets": [
-                {"entity": "consent-subject-link", "rowBoundaries": [{"field": "principal", "claim": "principal", "operator": "equals"}]},
-                {"entity": "person", "rowBoundaries": []},
-                {"entity": "consent-decision", "rowBoundaries": []}
-            ],
-            "results": ["decision"]
-        }]
-    }));
-    value
 }
 
 #[test]

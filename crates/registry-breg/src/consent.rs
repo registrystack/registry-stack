@@ -956,7 +956,14 @@ pub(crate) fn parse_duration(text: &str) -> Option<CompiledConsentDuration> {
         minutes: value(&time[1]),
         seconds: value(&time[2]),
     };
-    let seconds = [
+    let seconds = duration_seconds(&duration)?;
+    (seconds > 0 && seconds <= MAX_DURATION_SECONDS).then_some(duration)
+}
+
+/// A duration's length in seconds, counting a year as 365.25 days and a month
+/// as a twelfth of that. None when it overflows.
+pub(crate) fn duration_seconds(duration: &CompiledConsentDuration) -> Option<u64> {
+    [
         (duration.years, SECONDS_PER_YEAR),
         (duration.months, SECONDS_PER_MONTH),
         (duration.weeks, 604_800),
@@ -968,8 +975,7 @@ pub(crate) fn parse_duration(text: &str) -> Option<CompiledConsentDuration> {
     .into_iter()
     .try_fold(0u64, |total, (count, unit)| {
         total.checked_add(u64::from(count).checked_mul(unit)?)
-    })?;
-    (seconds > 0 && seconds <= MAX_DURATION_SECONDS).then_some(duration)
+    })
 }
 
 /// Split `1Y2D` into one optional integer per unit, units in order and at

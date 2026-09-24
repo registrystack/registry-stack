@@ -188,6 +188,11 @@ path = "tests/postgres_data_export.rs"
 required-features = ["postgres-test"]
 
 [[test]]
+name = "consent_tooling"
+path = "tests/consent_tooling.rs"
+required-features = ["runtime", "tooling"]
+
+[[test]]
 name = "fixture_tooling"
 path = "tests/fixture_tooling.rs"
 required-features = ["runtime", "tooling"]
