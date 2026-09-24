@@ -250,6 +250,8 @@
               "message.terminal",
               "operation.not-authorized",
               "profile.not-authorized",
+              "quota.exceeded",
+              "rate-limit.exceeded",
               "request.body-too-large",
               "request.invalid",
               "request.method-not-allowed",
@@ -291,6 +293,8 @@
               "https://id.registrystack.org/problems/registry-messaging/message/terminal",
               "https://id.registrystack.org/problems/registry-messaging/operation/not-authorized",
               "https://id.registrystack.org/problems/registry-messaging/profile/not-authorized",
+              "https://id.registrystack.org/problems/registry-messaging/quota/exceeded",
+              "https://id.registrystack.org/problems/registry-messaging/rate-limit/exceeded",
               "https://id.registrystack.org/problems/registry-messaging/request/body-too-large",
               "https://id.registrystack.org/problems/registry-messaging/request/invalid",
               "https://id.registrystack.org/problems/registry-messaging/request/method-not-allowed",
@@ -916,6 +920,30 @@
               }
             },
             "description": "A problem: request.unprocessable, content.invalid, content.too-large, content.too-many-segments, template.data-invalid, template.locale-unavailable, template.render-refused."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "rate-limit.exceeded",
+                            "quota.exceeded"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: rate-limit.exceeded, quota.exceeded."
           },
           "503": {
             "content": {
