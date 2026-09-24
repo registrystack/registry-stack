@@ -580,7 +580,7 @@ caseworkctl source add ./tutorial-work/project \
 ```
 
 :::caution[Apply edits your BReg project on disk]
-`--apply` stages a candidate copy of the register, re-checks it with `bregctl`, then writes the patched `registry.yaml` back over your authored file, adding a lifecycle event and a `casework-reader` access profile scoped to the request's target-record fields and the projected fields. A request that only creates records has no target-record field, so it needs at least one projected field for the lifecycle event to carry. Commit or back up the register before you run it, because the command replaces the file rather than offering a diff to accept.
+`--apply` stages a candidate copy of the register, re-checks it with `bregctl`, then writes the patched `registry.yaml` back over your authored file, adding a lifecycle event and a `casework-reader` access profile scoped to the request's target-record fields and the projected fields. A request that only creates records has no target-record field, so it needs at least one projected field for the lifecycle event to carry. When another Casework pairing already added `casework-reader`, the command adds this request entity's permission to that profile instead, so every Casework reader on the register can read each paired entity's projected fields. Commit or back up the register before you run it, because the command replaces the file rather than offering a diff to accept.
 :::
 
 Applying writes two owner-only files into the Casework project's `sources/` directory:
