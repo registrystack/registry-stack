@@ -10,28 +10,82 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
+use registry_platform_config::{ListenerConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope};
+use serde::Deserialize;
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::model::{
-    parse_index, DiscoveryIndex, RuntimeConfig, MAXIMUM_HTTP_BODY_BYTES,
-    MAXIMUM_IDENTIFIER_CHARACTERS, MAXIMUM_INDEX_BYTES, MAXIMUM_LISTENER_ADDRESS_CHARACTERS,
-    MAXIMUM_RESULT_ALTERNATIVES, MAXIMUM_RESULT_RECORDS, MINIMUM_HTTP_RESPONSE_BYTES,
-    RUNTIME_SCHEMA,
+    parse_index, DiscoveryIndex, MAXIMUM_HTTP_BODY_BYTES, MAXIMUM_IDENTIFIER_CHARACTERS,
+    MAXIMUM_INDEX_BYTES, MAXIMUM_RESULT_ALTERNATIVES, MAXIMUM_RESULT_RECORDS,
+    MINIMUM_HTTP_RESPONSE_BYTES,
 };
 use crate::query::Directory;
 use crate::server::{router, DiscoveryService};
 
-const MAXIMUM_RUNTIME_BYTES: u64 = 1024 * 1024;
+pub use registry_platform_config::MAX_LISTENER_BIND_CHARACTERS as MAXIMUM_LISTENER_BIND_CHARACTERS;
+
+pub const RUNTIME_API_VERSION: &str = "registry.registrystack.org/discovery-runtime/v1alpha1";
+pub const RUNTIME_KIND: &str = "DiscoveryRuntimeConfig";
+
+const RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
+    api_version: RUNTIME_API_VERSION,
+    kind: RUNTIME_KIND,
+};
+
+const REMOVED_RUNTIME_KEYS: &[RemovedKey] = &[
+    RemovedKey {
+        path: "schemaVersion",
+        replacement: "declare apiVersion registry.registrystack.org/discovery-runtime/v1alpha1 \
+                      and kind DiscoveryRuntimeConfig instead",
+    },
+    RemovedKey {
+        path: "listener.address",
+        replacement: "declare listener.bind instead",
+    },
+];
+
 const MAXIMUM_REQUEST_TIMEOUT_SECONDS: u64 = 300;
 const MAXIMUM_SHUTDOWN_TIMEOUT_SECONDS: u64 = 300;
 
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RuntimeLimits {
+    pub maximum_request_bytes: usize,
+    pub maximum_response_bytes: usize,
+    pub maximum_result_records: usize,
+    pub maximum_result_alternatives: usize,
+    pub request_timeout_seconds: u64,
+    pub shutdown_timeout_seconds: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RuntimeConfig {
+    pub api_version: String,
+    pub kind: String,
+    pub listener: ListenerConfig,
+    pub index_path: String,
+    pub limits: RuntimeLimits,
+    pub log_level: LogLevel,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Error,
+    Warn,
+    Info,
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum StartupError {
-    #[error("the Discovery runtime configuration could not be loaded")]
-    RuntimeLoad,
+    /// The shared loader refused the runtime file; the message names the
+    /// file and the field and never carries a configured value.
+    #[error("the Discovery runtime configuration was refused: {0}")]
+    RuntimeRefused(String),
     #[error("the Discovery runtime configuration is invalid")]
     RuntimeInvalid,
     #[error("the Discovery index could not be loaded")]
@@ -81,13 +135,8 @@ pub fn prepare(runtime_path: &Path) -> Result<PreparedDiscovery, StartupError> {
         Duration::from_secs(runtime.limits.request_timeout_seconds),
     )
     .map_err(|_| StartupError::RuntimeInvalid)?;
-    let bind = runtime
-        .listener
-        .address
-        .parse()
-        .map_err(|_| StartupError::RuntimeInvalid)?;
     Ok(PreparedDiscovery {
-        bind,
+        bind: runtime.listener.bind.socket_addr(),
         app,
         shutdown_timeout: Duration::from_secs(runtime.limits.shutdown_timeout_seconds),
     })
@@ -167,44 +216,38 @@ fn map_server_result(
     }
 }
 
+/// Load the runtime file through the shared runtime configuration loader.
+/// Returns the directory holding the file, which `indexPath` is resolved
+/// against, and the validated configuration.
 pub fn load_runtime(path: &Path) -> Result<(PathBuf, RuntimeConfig), StartupError> {
-    let bytes = bounded_regular_file(path, MAXIMUM_RUNTIME_BYTES, StartupError::RuntimeLoad)?;
-    let runtime: RuntimeConfig =
-        serde_yaml_ng::from_slice(&bytes).map_err(|_| StartupError::RuntimeInvalid)?;
+    let runtime = RuntimeConfigLoader::new(RUNTIME_ENVELOPE)
+        .removed_keys(REMOVED_RUNTIME_KEYS)
+        .load::<RuntimeConfig>(path)
+        .map_err(|error| StartupError::RuntimeRefused(error.to_string()))?
+        .config;
     validate_runtime(&runtime)?;
-    let root = effective_parent(path)
-        .canonicalize()
-        .map_err(|_| StartupError::RuntimeLoad)?;
+    let root = path
+        .parent()
+        .ok_or(StartupError::RuntimeInvalid)?
+        .to_path_buf();
     Ok((root, runtime))
 }
 
-fn effective_parent(path: &Path) -> &Path {
-    path.parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."))
-}
-
 pub fn load_index(path: &Path) -> Result<DiscoveryIndex, StartupError> {
-    let bytes = bounded_regular_file(path, MAXIMUM_INDEX_BYTES, StartupError::IndexLoad)?;
+    let bytes = bounded_regular_file(path, MAXIMUM_INDEX_BYTES)?;
     parse_index(&bytes).map_err(|_| StartupError::IndexInvalid)
 }
 
-fn bounded_regular_file(
-    path: &Path,
-    maximum: u64,
-    load_error: StartupError,
-) -> Result<Vec<u8>, StartupError> {
-    let metadata = fs::symlink_metadata(path).map_err(|_| load_error)?;
+fn bounded_regular_file(path: &Path, maximum: u64) -> Result<Vec<u8>, StartupError> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| StartupError::IndexLoad)?;
     if !metadata.file_type().is_file() || metadata.len() == 0 || metadata.len() > maximum {
-        return Err(load_error);
+        return Err(StartupError::IndexLoad);
     }
-    fs::read(path).map_err(|_| load_error)
+    fs::read(path).map_err(|_| StartupError::IndexLoad)
 }
 
 fn validate_runtime(runtime: &RuntimeConfig) -> Result<(), StartupError> {
-    if runtime.schema_version != RUNTIME_SCHEMA
-        || runtime.listener.address.chars().count() > MAXIMUM_LISTENER_ADDRESS_CHARACTERS
-        || runtime.index_path.is_empty()
+    if runtime.index_path.is_empty()
         || runtime.index_path.chars().count() > MAXIMUM_IDENTIFIER_CHARACTERS
         || runtime.limits.maximum_request_bytes == 0
         || runtime.limits.maximum_request_bytes > MAXIMUM_HTTP_BODY_BYTES
@@ -221,11 +264,6 @@ fn validate_runtime(runtime: &RuntimeConfig) -> Result<(), StartupError> {
     {
         return Err(StartupError::RuntimeInvalid);
     }
-    runtime
-        .listener
-        .address
-        .parse::<SocketAddr>()
-        .map_err(|_| StartupError::RuntimeInvalid)?;
     Ok(())
 }
 
@@ -284,11 +322,10 @@ mod tests {
         assert_eq!(load_index(&index_path), Err(StartupError::IndexInvalid));
     }
 
-    #[test]
-    fn runtime_is_closed_and_contains_no_origin_mapping_trust_or_fetch_configuration() {
-        let raw = br#"
-schemaVersion: registry-discovery/runtime/v1alpha1
-listener: { address: 127.0.0.1:8080 }
+    const RUNTIME: &str = "\
+apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
+kind: DiscoveryRuntimeConfig
+listener: { bind: 127.0.0.1:8080 }
 indexPath: discovery-index.json
 limits:
   maximumRequestBytes: 65536
@@ -298,17 +335,109 @@ limits:
   requestTimeoutSeconds: 10
   shutdownTimeoutSeconds: 10
 logLevel: info
-origins: [{ catalogUrl: https://attacker.invalid/catalog.jsonld }]
-"#;
-        assert!(serde_yaml_ng::from_slice::<RuntimeConfig>(raw).is_err());
+";
+
+    fn canonical_tempdir() -> tempfile::TempDir {
+        tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap()
+    }
+
+    fn write_runtime(directory: &Path, text: &str) -> PathBuf {
+        let path = directory.join("runtime.yaml");
+        fs::write(&path, text).unwrap();
+        path
+    }
+
+    fn refusal(text: &str) -> String {
+        let temporary = canonical_tempdir();
+        match load_runtime(&write_runtime(temporary.path(), text)) {
+            Err(StartupError::RuntimeRefused(message)) => message,
+            other => panic!("expected a loader refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn runtime_is_closed_and_contains_no_origin_mapping_trust_or_fetch_configuration() {
+        let message = refusal(&format!(
+            "{RUNTIME}origins: [{{ catalogUrl: https://attacker.invalid/catalog.jsonld }}]\n"
+        ));
+        assert!(message.contains("origins"), "{message}");
+    }
+
+    #[test]
+    fn the_runtime_file_is_read_through_the_shared_loader() {
+        let temporary = canonical_tempdir();
+        let path = write_runtime(temporary.path(), RUNTIME);
+        let (root, runtime) = load_runtime(&path).expect("runtime loads");
+        assert_eq!(root, temporary.path());
+        assert_eq!(runtime.listener.bind.socket_addr().port(), 8080);
+
+        let message = refusal(&RUNTIME.replace("kind: DiscoveryRuntimeConfig", "kind: Other"));
+        assert!(
+            message.contains("kind must be exactly DiscoveryRuntimeConfig"),
+            "{message}"
+        );
+
+        let relative = Path::new("runtime.yaml");
+        assert!(matches!(
+            load_runtime(relative),
+            Err(StartupError::RuntimeRefused(_))
+        ));
+
+        #[cfg(unix)]
+        {
+            let linked = temporary.path().join("linked.yaml");
+            std::os::unix::fs::symlink(&path, &linked).unwrap();
+            assert!(matches!(
+                load_runtime(&linked),
+                Err(StartupError::RuntimeRefused(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn removed_runtime_keys_name_their_replacements() {
+        let message = refusal(&RUNTIME.replace(
+            "apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1\nkind: DiscoveryRuntimeConfig",
+            "schemaVersion: registry-discovery/runtime/v1alpha1",
+        ));
+        assert!(
+            message.contains("schemaVersion is no longer accepted; declare apiVersion"),
+            "{message}"
+        );
+        let message = refusal(&RUNTIME.replace("bind:", "address:"));
+        assert!(
+            message
+                .contains("listener.address is no longer accepted; declare listener.bind instead"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn the_listener_bind_is_required_and_substitutes_from_the_environment() {
+        let message = refusal(&RUNTIME.replace("listener: { bind: 127.0.0.1:8080 }\n", ""));
+        assert!(message.contains("listener"), "{message}");
+
+        let temporary = canonical_tempdir();
+        let path = write_runtime(
+            temporary.path(),
+            &RUNTIME.replace(
+                "127.0.0.1:8080",
+                "\"${DISCOVERY_TEST_BIND:-127.0.0.1:9090}\"",
+            ),
+        );
+        let (_, runtime) = load_runtime(&path).expect("default substitutes");
+        assert_eq!(runtime.listener.bind.socket_addr().port(), 9090);
     }
 
     #[test]
     fn shipped_runtime_fixture_matches_the_closed_runtime_contract() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/discovery/fixtures/project/runtime.yaml");
+            .join("../../products/discovery/fixtures/project/runtime.yaml")
+            .canonicalize()
+            .unwrap();
         let (_, runtime) = load_runtime(&path).expect("shipped runtime fixture validates");
-        assert_eq!(runtime.schema_version, RUNTIME_SCHEMA);
+        assert_eq!(runtime.api_version, RUNTIME_API_VERSION);
+        assert_eq!(runtime.kind, RUNTIME_KIND);
         assert_eq!(runtime.index_path, "discovery-index.json");
     }
 
@@ -331,15 +460,6 @@ origins: [{ catalogUrl: https://attacker.invalid/catalog.jsonld }]
             symlink(root.join("index.json"), root.join("linked.json")).unwrap();
             assert!(safe_existing_file(root, "linked.json").is_err());
         }
-    }
-
-    #[test]
-    fn a_bare_runtime_filename_uses_the_current_directory() {
-        assert_eq!(effective_parent(Path::new("runtime.yaml")), Path::new("."));
-        assert_eq!(
-            effective_parent(Path::new("config/runtime.yaml")),
-            Path::new("config")
-        );
     }
 
     #[cfg(unix)]

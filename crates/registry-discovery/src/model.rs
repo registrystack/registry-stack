@@ -13,7 +13,6 @@ use url::Url;
 pub use registry_discovery_profile::ServiceKind;
 
 pub const INDEX_SCHEMA: &str = "registry-discovery/index/v1alpha1";
-pub const RUNTIME_SCHEMA: &str = "registry-discovery/runtime/v1alpha1";
 pub const MAXIMUM_INDEX_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAXIMUM_ORIGINS: usize = 1_024;
 pub const MAXIMUM_SERVICES: usize = 100_000;
@@ -23,7 +22,6 @@ pub const MAXIMUM_EVIDENCE_TYPES_PER_ALTERNATIVE: usize = 128;
 pub const MAXIMUM_VALUES_PER_FIELD: usize = 256;
 pub const MAXIMUM_IDENTIFIER_CHARACTERS: usize = 4_096;
 pub const MAXIMUM_TEXT_CHARACTERS: usize = 16 * 1024;
-pub const MAXIMUM_LISTENER_ADDRESS_CHARACTERS: usize = 128;
 pub const MAXIMUM_FILTER_VALUES: usize = 100;
 pub const MAXIMUM_QUERY_BYTES: usize = 64 * 1024;
 const MAXIMUM_QUERY_PARAMETERS: usize = (7 * MAXIMUM_FILTER_VALUES) + 2;
@@ -165,41 +163,6 @@ pub struct ServiceFilters {
 pub struct ServiceSearchResponse {
     pub catalog_revision: String,
     pub items: Vec<ServiceRecord>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ListenerConfig {
-    pub address: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RuntimeLimits {
-    pub maximum_request_bytes: usize,
-    pub maximum_response_bytes: usize,
-    pub maximum_result_records: usize,
-    pub maximum_result_alternatives: usize,
-    pub request_timeout_seconds: u64,
-    pub shutdown_timeout_seconds: u64,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RuntimeConfig {
-    pub schema_version: String,
-    pub listener: ListenerConfig,
-    pub index_path: String,
-    pub limits: RuntimeLimits,
-    pub log_level: LogLevel,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum LogLevel {
-    Error,
-    Warn,
-    Info,
 }
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]

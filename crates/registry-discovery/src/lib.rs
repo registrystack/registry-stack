@@ -16,4 +16,8 @@ pub use query::{parse_service_filters, Directory, QueryError};
 #[cfg(feature = "server")]
 pub use server::{router, DiscoveryService, ServiceConfigError};
 #[cfg(feature = "server")]
-pub use startup::{load_index, load_runtime, prepare, serve, PreparedDiscovery, StartupError};
+pub use startup::{
+    load_index, load_runtime, prepare, serve, LogLevel, PreparedDiscovery, RuntimeConfig,
+    RuntimeLimits, StartupError, MAXIMUM_LISTENER_BIND_CHARACTERS, RUNTIME_API_VERSION,
+    RUNTIME_KIND,
+};

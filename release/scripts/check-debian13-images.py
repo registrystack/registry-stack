@@ -158,7 +158,7 @@ HTTP_PROBE_DOCKERFILES = {
     Path("release/docker/Dockerfile.discovery"): {
         "binary": "discovery",
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/discovery"]',
-        "command": 'CMD ["--runtime", "/etc/registry-discovery/runtime.yaml"]',
+        "command": 'CMD ["--runtime-config", "/etc/registry-discovery/runtime.yaml"]',
     },
     Path("release/docker/Dockerfile.evidence"): {
         "binary": "evidence",

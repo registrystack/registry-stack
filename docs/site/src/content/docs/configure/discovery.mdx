@@ -151,9 +151,10 @@ deployment directory. Run the build again only when you intend to publish a new 
 Place this `runtime.yaml` beside `discovery-index.json` in the deployment directory.
 
 ```yaml
-schemaVersion: registry-discovery/runtime/v1alpha1
+apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
+kind: DiscoveryRuntimeConfig
 listener:
-  address: 127.0.0.1:8080
+  bind: 127.0.0.1:8080
 indexPath: discovery-index.json
 limits:
   maximumRequestBytes: 65536
@@ -168,8 +169,14 @@ logLevel: info
 Start the new revision after replacing the runtime directory contents.
 
 ```sh
-discovery --runtime "<deployment-directory>/runtime.yaml"
+discovery --runtime-config "<absolute-deployment-directory>/runtime.yaml"
 ```
+
+The runtime file is read through the shared runtime configuration loader, as the other Registry
+Stack runtimes read theirs. Its path must be absolute and free of symbolic links, `listener.bind` is
+required and takes an IP address host, and a string value may name an environment variable as
+`${NAME}`, `${NAME:-default}`, or `${NAME:?message}`. A key from the earlier grammar, such as
+`schemaVersion` or `listener.address`, is refused with the name of its replacement.
 
 The process remains running and serves the index named by the relative `indexPath`. Verify readiness
 from a network location that can reach the listener.
@@ -189,7 +196,10 @@ through request handling. It also rejects malformed percent escapes, invalid UTF
 duplicate media-type headers, and request media parameters other than UTF-8 JSON.
 
 {/* Evidence: `crates/registry-discovery/src/startup.rs`, `RuntimeConfig`, `load_runtime()`, and
-    test `runtime_is_closed_and_contains_no_origin_mapping_trust_or_fetch_configuration`;
+    tests `runtime_is_closed_and_contains_no_origin_mapping_trust_or_fetch_configuration`,
+    `the_runtime_file_is_read_through_the_shared_loader`,
+    `removed_runtime_keys_name_their_replacements`, and
+    `the_listener_bind_is_required_and_substitutes_from_the_environment`;
     `crates/registry-discovery/src/server.rs`, tests
     `request_body_capacity_is_acquired_before_buffering_and_recovers` and
     `request_media_type_accepts_only_bare_or_utf8_json`; `crates/registry-discovery/src/query.rs`,

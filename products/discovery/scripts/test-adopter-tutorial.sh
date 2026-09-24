@@ -5,7 +5,7 @@ repository=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 . "$repository/scripts/cargo-runtime-library-path.sh"
 target_dir="${DISCOVERY_TUTORIAL_TARGET_DIR:-$repository/target/discovery-tutorial-source}"
 profile="${DISCOVERY_TUTORIAL_CARGO_PROFILE:-ci}"
-work_root=$(mktemp -d "${TMPDIR:-/tmp}/discovery-adopter-tutorial.XXXXXX")
+work_root=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/discovery-adopter-tutorial.XXXXXX")" && pwd -P)
 publication_pid=""
 discovery_pid=""
 
@@ -124,7 +124,7 @@ if [[ ! "$build_output" =~ ^built\ catalogRevision=sha256:[0-9a-f]{64}\ mappingR
 fi
 printf '[operator] explicit build: %s\n' "$build_output"
 
-"$DISCOVERY_BIN" --runtime "$work_root/runtime.yaml" \
+"$DISCOVERY_BIN" --runtime-config "$work_root/runtime.yaml" \
 	>"$work_root/discovery.log" 2>&1 &
 discovery_pid=$!
 

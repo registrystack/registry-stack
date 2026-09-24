@@ -15,14 +15,15 @@ use tracing_subscriber::prelude::*;
     version = registry_platform_buildinfo::DISPLAY_VERSION
 )]
 struct Arguments {
-    #[arg(long, value_name = "FILE")]
-    runtime: PathBuf,
+    /// Absolute path of the runtime file naming the listener, index, and limits
+    #[arg(long = "runtime-config", value_name = "FILE")]
+    runtime_config: PathBuf,
 }
 
 #[tokio::main]
 async fn main() {
     let arguments = Arguments::parse();
-    let level = load_runtime(&arguments.runtime)
+    let level = load_runtime(&arguments.runtime_config)
         .map(|(_, runtime)| match runtime.log_level {
             LogLevel::Error => LevelFilter::ERROR,
             LogLevel::Warn => LevelFilter::WARN,
@@ -40,7 +41,7 @@ async fn main() {
                 .with_span_list(false),
         )
         .init();
-    if let Err(error) = serve(&arguments.runtime).await {
+    if let Err(error) = serve(&arguments.runtime_config).await {
         tracing::error!(target: "registry_discovery::startup", error = %error, "Discovery stopped");
         std::process::exit(1);
     }

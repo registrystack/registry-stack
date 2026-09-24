@@ -4,15 +4,16 @@
   "title": "Registry Discovery runtime configuration",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "listener", "indexPath", "limits", "logLevel"],
+  "required": ["apiVersion", "kind", "listener", "indexPath", "limits", "logLevel"],
   "properties": {
-    "schemaVersion": {"const": "registry-discovery/runtime/v1alpha1"},
+    "apiVersion": {"const": "registry.registrystack.org/discovery-runtime/v1alpha1"},
+    "kind": {"const": "DiscoveryRuntimeConfig"},
     "listener": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["address"],
+      "required": ["bind"],
       "properties": {
-        "address": {
+        "bind": {
           "type": "string",
           "minLength": 1,
           "maxLength": 128,
