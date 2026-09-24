@@ -25,8 +25,8 @@ use crate::access::{
     SubmissionScope,
 };
 use crate::package::{
-    valid_package_digest, Channel, CheckedManifest, MessagingPackage, PackageError, SenderProfile,
-    TemplateReference,
+    valid_package_digest, Channel, CheckedManifest, MessagingPackage, PackageError,
+    ProviderDeclaration, SenderProfile, TemplateReference,
 };
 use crate::problem::ProblemCode;
 use crate::render::{finish_part, PartKind, RenderFailure};
@@ -107,6 +107,21 @@ impl Package {
     #[must_use]
     pub fn sender_profile(&self, id: &str) -> Option<&SenderProfile> {
         self.manifest.sender_profiles.get(id)
+    }
+
+    /// Every sender profile, by id.
+    pub fn sender_profiles(&self) -> impl Iterator<Item = &SenderProfile> {
+        self.manifest.sender_profiles.values()
+    }
+
+    #[must_use]
+    pub fn provider(&self, id: &str) -> Option<&ProviderDeclaration> {
+        self.manifest.providers.get(id)
+    }
+
+    /// Every declared provider, by id.
+    pub fn providers(&self) -> impl Iterator<Item = &ProviderDeclaration> {
+        self.manifest.providers.values()
     }
 
     #[must_use]

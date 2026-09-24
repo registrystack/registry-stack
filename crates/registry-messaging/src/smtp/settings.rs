@@ -33,6 +33,14 @@ pub const SMTP_SUBMISSION_PORT: u16 = 587;
 /// The implicit-TLS submission port.
 pub const SMTP_IMPLICIT_TLS_PORT: u16 = 465;
 
+/// Whether this build accepts `tls: development-loopback`. Like
+/// `database.testOnlyPlaintext`, plaintext SMTP is a test-build affordance:
+/// only a build carrying the `postgres-test` or `smtp-test` feature, or a unit
+/// test build, accepts it, so a release binary refuses it at startup and in
+/// `messagingctl check`.
+const DEVELOPMENT_LOOPBACK_PERMITTED: bool =
+    cfg!(any(test, feature = "postgres-test", feature = "smtp-test"));
+
 /// The longest host name a provider may configure (RFC 1035).
 const MAXIMUM_HOST_BYTES: usize = 253;
 
@@ -48,7 +56,8 @@ pub enum SmtpTlsMode {
     Implicit,
     /// Plaintext to a loopback relay, for a local development server only.
     /// The host must be a loopback literal or `localhost`, every resolved
-    /// address must be loopback, and the port must be explicit.
+    /// address must be loopback, and the port must be explicit. Only a test
+    /// build accepts it.
     DevelopmentLoopback,
 }
 
@@ -135,6 +144,8 @@ pub enum SmtpSettingsError {
     SubmissionPortRequiresStarttls,
     #[error("port 465 requires tls implicit")]
     ImplicitPortRequiresImplicitTls,
+    #[error("tls development-loopback is accepted only by a test build")]
+    DevelopmentNotPermitted,
     #[error("tls development-loopback requires a loopback IP literal or localhost as host")]
     DevelopmentRequiresLoopbackHost,
     #[error("tls development-loopback requires an explicit port other than 465 and 587")]
@@ -257,6 +268,10 @@ impl SmtpProviderSettings {
     }
 
     fn checked(&self) -> Result<Checked, SmtpSettingsError> {
+        self.checked_with(DEVELOPMENT_LOOPBACK_PERMITTED)
+    }
+
+    fn checked_with(&self, development_permitted: bool) -> Result<Checked, SmtpSettingsError> {
         let host_literal = check_host(&self.host)?;
         if !(1..=MAXIMUM_SMTP_ATTEMPT_TIMEOUT_SECONDS).contains(&self.attempt_timeout_seconds) {
             return Err(SmtpSettingsError::AttemptTimeoutOutOfRange);
@@ -270,6 +285,9 @@ impl SmtpProviderSettings {
         }
         let port = match self.tls {
             SmtpTlsMode::DevelopmentLoopback => {
+                if !development_permitted {
+                    return Err(SmtpSettingsError::DevelopmentNotPermitted);
+                }
                 let loopback = match host_literal {
                     Some(ip) => ip.to_canonical().is_loopback(),
                     None => self.host.eq_ignore_ascii_case("localhost"),
@@ -482,6 +500,22 @@ pub(super) mod tests {
         ] {
             assert!(development(host).check().is_ok(), "{host}");
         }
+    }
+
+    #[test]
+    fn plaintext_is_refused_by_a_build_without_a_test_feature() {
+        assert_eq!(
+            development("127.0.0.1").checked_with(false).map(|_| ()),
+            Err(SmtpSettingsError::DevelopmentNotPermitted)
+        );
+        assert!(development("127.0.0.1").checked_with(true).is_ok());
+        let production = SmtpProviderSettings {
+            host: "smtp.example.org".to_owned(),
+            port: None,
+            tls: SmtpTlsMode::Starttls,
+            ..development("127.0.0.1")
+        };
+        assert!(production.checked_with(false).is_ok());
     }
 
     #[test]

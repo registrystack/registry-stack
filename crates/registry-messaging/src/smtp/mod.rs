@@ -26,7 +26,7 @@
 
 mod settings;
 #[cfg(test)]
-mod stub;
+pub(crate) mod stub;
 #[cfg(test)]
 mod tests;
 

@@ -88,3 +88,45 @@ retention:
   payloadDays: 7
   recordDays: 90
   submissionReceiptDays: 7
+# The runtime half of each provider messaging.yaml declares, by provider id,
+# with the same kind. Credentials, trust bundles, and callback verifier
+# secrets are secret references resolved once at startup; a provider that
+# cannot be activated stops the runtime, naming the provider and the member.
+# A declared provider given no connection here is not activated, and its
+# messages fail with provider-unconfigured.
+providers:
+  mail-relay:
+    kind: smtp
+    host: smtp.example.org
+    # `starttls` (port 587) or `implicit` (port 465). `development-loopback`
+    # is plaintext to a loopback relay, and only a test build accepts it.
+    tls: starttls
+    authentication:
+      usernameRef: secret:file/smtp-username
+      passwordRef: secret:file/smtp-password
+    # attemptTimeoutSeconds: 30
+    # trustedRootCertificateRef: secret:file/smtp-ca.pem
+    # allowedPrivateCidrs: [10.20.0.0/16]
+  sms-gateway:
+    kind: http
+    baseUrl: https://sms-gateway.example.org/v1/
+    timeoutMilliseconds: 5000
+    maximumResponseBytes: 65536
+    # At most the package's capabilities.concurrencyLimit.
+    concurrencyLimit: 4
+    redirects: deny
+    authentication:
+      kind: static-authorization
+      tokenRef: secret:file/sms-gateway-token
+    # Required exactly when the package declares `receipts: callback`.
+    callbackVerifier:
+      kind: hmac-sha256-body
+      header: x-signature
+      encoding: hex
+      secretRef: secret:file/sms-gateway-callback-key
+    # Trust a private certificate authority instead of the public web roots.
+    # tlsTrustProfile: gateway-ca
+# Named PEM trust bundles an http provider's tlsTrustProfile selects.
+# tlsTrustProfiles:
+#   gateway-ca:
+#     bundleRef: secret:file/gateway-ca.pem

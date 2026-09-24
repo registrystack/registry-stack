@@ -234,6 +234,7 @@ impl Harness {
             package: Arc::clone(&package),
             audit: Arc::clone(&audit),
             messages: Some(Arc::clone(&service)),
+            callbacks: Arc::default(),
         });
         Self {
             root,

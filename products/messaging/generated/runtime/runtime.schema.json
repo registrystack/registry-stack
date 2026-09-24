@@ -30,6 +30,14 @@
       ],
       "type": "object"
     },
+    "CredentialPlacement": {
+      "description": "Where an OAuth client secret travels in the token request.",
+      "enum": [
+        "basic-header",
+        "form-body"
+      ],
+      "type": "string"
+    },
     "DatabaseConfig": {
       "additionalProperties": false,
       "properties": {
@@ -76,6 +84,185 @@
         "root"
       ],
       "type": "object"
+    },
+    "HttpProviderAuthentication": {
+      "description": "How a send authenticates to the provider. The credential is added by\nRust after the prepare script returns; no script ever sees it.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "No credential. Only for a loopback development provider.",
+          "properties": {
+            "kind": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`Authorization: Basic` over the two resolved values.",
+          "properties": {
+            "kind": {
+              "const": "basic",
+              "type": "string"
+            },
+            "passwordRef": {
+              "type": "string"
+            },
+            "usernameRef": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "usernameRef",
+            "passwordRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`Authorization: <scheme> <token>`. Absent, the scheme is `Bearer`,\nthe only one the destination substrate presents today.",
+          "properties": {
+            "kind": {
+              "const": "static-authorization",
+              "type": "string"
+            },
+            "scheme": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tokenRef": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tokenRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The resolved value in the named request header.",
+          "properties": {
+            "headerName": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "static-api-key",
+              "type": "string"
+            },
+            "valueRef": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "headerName",
+            "valueRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The resolved value in the named query parameter, appended after the\nscript's own target.",
+          "properties": {
+            "kind": {
+              "const": "static-api-key-query",
+              "type": "string"
+            },
+            "parameterName": {
+              "type": "string"
+            },
+            "valueRef": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "parameterName",
+            "valueRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An OAuth 2.0 client-credentials bearer token, fetched from\n`tokenEndpoint` and cached.",
+          "properties": {
+            "assumedLifetimeSeconds": {
+              "description": "The lifetime assumed when the token response carries no\n`expires_in`. Absent, `expires_in` is required.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "audience": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "clientIdRef": {
+              "type": "string"
+            },
+            "clientSecretRef": {
+              "type": "string"
+            },
+            "credentialPlacement": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CredentialPlacement"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Where the client secret travels. The token request carries it in\nthe form body; `basic-header` is refused until the substrate can\nplace it there."
+            },
+            "kind": {
+              "const": "oauth2-client-credentials",
+              "type": "string"
+            },
+            "maximumCacheSeconds": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "resource": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "scope": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tokenEndpoint": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tokenEndpoint",
+            "clientIdRef",
+            "clientSecretRef",
+            "maximumCacheSeconds"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "ListenerConfig": {
       "additionalProperties": false,
@@ -213,6 +400,156 @@
         }
       ]
     },
+    "ProviderConnection": {
+      "description": "One provider's runtime half. The package declares the provider's kind,\nand for an `http` provider its scripts; the two halves must name the same\nkind.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "One SMTP provider's runtime settings, as the operator writes them.",
+          "properties": {
+            "allowedPrivateCidrs": {
+              "description": "Exact RFC 1918, CGNAT, or unique-local networks the relay may resolve\ninto. Every other non-public address is refused.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "attemptTimeoutSeconds": {
+              "default": 30,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "authentication": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SmtpAuthentication"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "host": {
+              "description": "The relay's DNS name or IP literal. It is resolved once per attempt and\nis the name TLS verifies the relay's certificate against.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "smtp",
+              "type": "string"
+            },
+            "port": {
+              "description": "Defaults to 587 for `starttls` and 465 for `implicit`; required for\n`development-loopback`.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "tls": {
+              "$ref": "#/$defs/SmtpTlsMode"
+            },
+            "trustedRootCertificateRef": {
+              "description": "A PEM root certificate trusted in addition to the public web roots,\nfor a relay behind a private certificate authority.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "host",
+            "tls"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Runtime settings for one HTTP provider.",
+          "properties": {
+            "acknowledgeQueryStringContent": {
+              "description": "Required, and only allowed, when the package sends with `get`: the\nmessage content travels in the query string, where provider access\nlogs keep it.",
+              "type": "boolean"
+            },
+            "allowedPrivateCidrs": {
+              "description": "Exact RFC 1918, CGNAT, or unique-local networks an `https` provider may\nresolve into, for an in-country gateway on a private network. Every\nother non-public address is refused.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "authentication": {
+              "$ref": "#/$defs/HttpProviderAuthentication"
+            },
+            "baseUrl": {
+              "description": "The provider's origin and path prefix, ending in `/`. Every request\ntarget a script returns is relative to it and stays under it.\n`https` in production; `http` only to a loopback host.",
+              "type": "string"
+            },
+            "callbackVerifier": {
+              "additionalProperties": true,
+              "description": "How the provider's delivery callbacks are authenticated. Required\nexactly when the package declares `receipts: callback`.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "concurrencyLimit": {
+              "description": "The most sends this deployment has in flight to the provider, at most\nthe package's declared `capabilities.concurrencyLimit`.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "http",
+              "type": "string"
+            },
+            "maximumResponseBytes": {
+              "description": "The largest response body read, at most 1 MiB.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "redirects": {
+              "$ref": "#/$defs/RedirectPolicy"
+            },
+            "timeoutMilliseconds": {
+              "description": "One send's whole budget: resolution, connection, request, and\nresponse, at most 10000.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tlsTrustProfile": {
+              "description": "The operator-declared trust bundle the provider's certificate chains\nto, instead of the public web roots. The runtime resolves the name to\nPEM and passes it to [`HttpProviderSettings::activate`].",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "baseUrl",
+            "timeoutMilliseconds",
+            "maximumResponseBytes",
+            "concurrencyLimit",
+            "redirects",
+            "authentication"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RedirectPolicy": {
+      "description": "Redirect handling. A provider redirect is never followed.",
+      "enum": [
+        "deny"
+      ],
+      "type": "string"
+    },
     "RetentionConfig": {
       "additionalProperties": false,
       "description": "Retention periods the retention sweep enforces. Every value is deployment\nconfiguration: a jurisdiction's retention schedule approves the deployed\nnumbers, and the audit journal records them at startup.",
@@ -314,6 +651,43 @@
       },
       "type": "object"
     },
+    "SmtpAuthentication": {
+      "additionalProperties": false,
+      "description": "The credential pair the relay authenticates, as `secret:` references.",
+      "properties": {
+        "passwordRef": {
+          "type": "string"
+        },
+        "usernameRef": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "usernameRef",
+        "passwordRef"
+      ],
+      "type": "object"
+    },
+    "SmtpTlsMode": {
+      "description": "How the connection to the relay is protected.",
+      "oneOf": [
+        {
+          "const": "starttls",
+          "description": "Connect in plaintext and upgrade with `STARTTLS` before anything else\nis sent. The relay must offer it. Defaults to port 587.",
+          "type": "string"
+        },
+        {
+          "const": "implicit",
+          "description": "TLS from the first byte. Defaults to port 465.",
+          "type": "string"
+        },
+        {
+          "const": "development-loopback",
+          "description": "Plaintext to a loopback relay, for a local development server only.\nThe host must be a loopback literal or `localhost`, every resolved\naddress must be loopback, and the port must be explicit. Only a test\nbuild accepts it.",
+          "type": "string"
+        }
+      ]
+    },
     "TlsTermination": {
       "description": "Declares the trusted transport boundary for the plaintext HTTP listener.\nProduction listeners require operator-controlled upstream TLS termination;\ndirect plaintext is limited to the explicit loopback-only development mode.",
       "enum": [
@@ -321,6 +695,19 @@
         "development-loopback"
       ],
       "type": "string"
+    },
+    "TlsTrustProfileConfig": {
+      "additionalProperties": false,
+      "description": "A PEM bundle of one or more certificate authorities, held in the secret\nprovider so it is read under the same file checks as every credential.",
+      "properties": {
+        "bundleRef": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundleRef"
+      ],
+      "type": "object"
     }
   },
   "$id": "https://id.registrystack.org/schemas/messaging/runtime/runtime.v1alpha1.schema.json",
@@ -361,6 +748,13 @@
     "package": {
       "$ref": "#/$defs/RuntimePackageConfig"
     },
+    "providers": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ProviderConnection"
+      },
+      "description": "The runtime half of each package provider, by provider id: where the\nprovider is and how the runtime authenticates to it. A package\nprovider with no entry has no transport, and its messages fail with\n`provider-unconfigured`.",
+      "type": "object"
+    },
     "retention": {
       "$ref": "#/$defs/RetentionConfig",
       "default": {
@@ -371,6 +765,13 @@
     },
     "secretProviders": {
       "$ref": "#/$defs/SecretProvidersConfig"
+    },
+    "tlsTrustProfiles": {
+      "additionalProperties": {
+        "$ref": "#/$defs/TlsTrustProfileConfig"
+      },
+      "description": "Named PEM bundles an `http` provider's `tlsTrustProfile` trusts\ninstead of the public web roots.",
+      "type": "object"
     }
   },
   "required": [

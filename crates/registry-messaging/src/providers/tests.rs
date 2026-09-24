@@ -1,0 +1,376 @@
+// SPDX-License-Identifier: Apache-2.0
+
+use std::os::unix::fs::PermissionsExt as _;
+use std::path::Path;
+
+use registry_messaging_core::{verify_callback, CallbackRequest, Channel, RenderedParts};
+use registry_platform_testing::MockHttpUpstream;
+use serde_json::{json, Value};
+use tempfile::TempDir;
+use uuid::Uuid;
+
+use super::*;
+use crate::config::tests::{package_value, runtime_value, write_project};
+use crate::smtp::stub::{Script, Stub};
+
+const MESSAGE_ID: &str = "0192f1d6-7c1a-7b4e-9a51-3f0c2e8d4b10";
+const RECIPIENT_EMAIL: &str = "resident.4471@citizen.example";
+const RECIPIENT_PHONE: &str = "+15550104471";
+const IDEMPOTENCY_KEY: &str = "idempotency-7c1a";
+const CALLBACK_TOKEN: &[u8] = b"callback-token-9d2e61";
+
+struct Project {
+    _root: TempDir,
+    config: RuntimeConfig,
+    loaded: LoadedPackage,
+    secrets: SecretResolver,
+}
+
+fn project(
+    providers: Value,
+    adjust_package: impl FnOnce(&mut Value),
+    secrets: &[(&str, &[u8])],
+) -> Project {
+    let root = tempfile::tempdir().expect("project root");
+    let path = root.path().canonicalize().expect("canonical project root");
+    let secret_root = path.join("secrets");
+    std::fs::create_dir(&secret_root).expect("secret root");
+    for (name, value) in secrets {
+        write_secret(&secret_root, name, value);
+    }
+    let mut runtime = runtime_value(&path);
+    runtime["providers"] = providers;
+    let mut package = package_value();
+    adjust_package(&mut package);
+    let file = write_project(&path, &runtime, &package);
+    let config = RuntimeConfig::load_with_environment(&file, &|_| None).expect("runtime config");
+    let loaded = config.load_package().expect("package");
+    let secrets = config.secret_resolver().expect("secret resolver");
+    Project {
+        _root: root,
+        config,
+        loaded,
+        secrets,
+    }
+}
+
+fn write_secret(root: &Path, name: &str, value: &[u8]) {
+    let path = root.join(name);
+    std::fs::write(&path, value).expect("write secret");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("secret mode");
+}
+
+fn smtp_connection(stub: &Stub) -> Value {
+    json!({
+        "kind": "smtp",
+        "host": "127.0.0.1",
+        "port": stub.address.port(),
+        "tls": "development-loopback"
+    })
+}
+
+fn http_connection(upstream: &MockHttpUpstream, authentication: Value) -> Value {
+    json!({
+        "kind": "http",
+        "baseUrl": format!("{}/v1/", upstream.url().trim_end_matches('/')),
+        "timeoutMilliseconds": 3000,
+        "maximumResponseBytes": 65536,
+        "concurrencyLimit": 4,
+        "redirects": "deny",
+        "authentication": authentication,
+        "callbackVerifier": {"kind": "path-token", "tokenRef": "secret:file/callback-token"}
+    })
+}
+
+fn outbound(
+    channel: Channel,
+    provider: &str,
+    profile: &str,
+    sender: &str,
+    to: &str,
+) -> OutboundMessage {
+    OutboundMessage {
+        message_id: Uuid::parse_str(MESSAGE_ID).expect("message id"),
+        generation: 1,
+        attempt: 1,
+        channel,
+        provider: provider.to_owned(),
+        sender_profile: profile.to_owned(),
+        sender: sender.to_owned(),
+        recipient: to.to_owned(),
+        parts: RenderedParts {
+            subject: (channel == Channel::Email).then(|| "Your appointment".to_owned()),
+            text: "Bring form 12-B to the Riverside office.".to_owned(),
+            html: None,
+        },
+        idempotency_key: IDEMPOTENCY_KEY.to_owned(),
+        budget: Duration::from_secs(5),
+    }
+}
+
+fn email() -> OutboundMessage {
+    outbound(
+        Channel::Email,
+        "mail-relay",
+        "transactional",
+        "notices@example.org",
+        RECIPIENT_EMAIL,
+    )
+}
+
+fn sms() -> OutboundMessage {
+    outbound(
+        Channel::Sms,
+        "sms-gateway",
+        "reminders-sms",
+        "Registry",
+        RECIPIENT_PHONE,
+    )
+}
+
+async fn received(upstream: &MockHttpUpstream) -> Vec<wiremock::Request> {
+    upstream
+        .wiremock_server()
+        .received_requests()
+        .await
+        .expect("request recording is on")
+}
+
+#[tokio::test]
+async fn configured_providers_become_transports_that_send_what_was_accepted() {
+    let stub = Stub::start(Script::default()).await;
+    let upstream = MockHttpUpstream::start().await;
+    upstream
+        .expect("POST", "/v1/messages")
+        .respond_json(200, json!({"id": "gw-7731"}))
+        .await;
+    let project = project(
+        json!({
+            "mail-relay": smtp_connection(&stub),
+            "sms-gateway": http_connection(&upstream, json!({"kind": "none"}))
+        }),
+        |_| {},
+        &[("callback-token", CALLBACK_TOKEN)],
+    );
+    let mut transports = Transports::new();
+    let receivers = activate_providers(
+        &project.config,
+        &project.loaded,
+        &project.secrets,
+        &mut transports,
+    )
+    .expect("providers activate");
+
+    let relay = transports.get("mail-relay").expect("smtp transport");
+    assert_eq!(relay.attempt_timeout(), Duration::from_secs(30));
+    assert!(matches!(
+        relay.send(&email()).await,
+        SendOutcome::Accepted { .. }
+    ));
+    let recorded = stub.recorded();
+    assert!(recorded
+        .commands
+        .contains(&"MAIL FROM:<notices@example.org>".to_owned()));
+    assert!(recorded
+        .commands
+        .contains(&format!("RCPT TO:<{RECIPIENT_EMAIL}>")));
+    assert!(recorded
+        .content
+        .expect("content")
+        .contains(&format!("Message-ID: <{MESSAGE_ID}@example.org>")));
+
+    let gateway = transports.get("sms-gateway").expect("http transport");
+    // The provider's three-second timeout rounds up to the seam's minimum
+    // of one second only when shorter.
+    assert_eq!(gateway.attempt_timeout(), Duration::from_secs(3));
+    let outcome = gateway.send(&sms()).await;
+    assert!(
+        matches!(&outcome, SendOutcome::Accepted { provider_reference: Some(reference) } if reference.as_str() == "gw-7731"),
+        "{outcome:?}"
+    );
+    let requests = received(&upstream).await;
+    assert_eq!(requests.len(), 1);
+    let body: Value = serde_json::from_slice(&requests[0].body).expect("json body");
+    assert_eq!(body["to"], RECIPIENT_PHONE);
+    assert_eq!(body["from"], "Registry");
+    assert_eq!(body["channel"], "sms");
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("idempotency-key")
+            .and_then(|value| value.to_str().ok()),
+        Some(IDEMPOTENCY_KEY)
+    );
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok()),
+        Some(MESSAGE_ID)
+    );
+
+    let receiver = receivers.get("sms-gateway").expect("callback receiver");
+    assert_eq!(receivers.len(), 1);
+    let token = std::str::from_utf8(CALLBACK_TOKEN).expect("ascii token");
+    let request = CallbackRequest {
+        method: "POST",
+        url: "https://messaging.example.org/v1/provider-callbacks/sms-gateway",
+        form_parameters: &[],
+        body: b"",
+        headers: &[],
+        path_token: Some(token),
+    };
+    assert_eq!(verify_callback(&receiver.verifier(), &request), Ok(()));
+    let rendered = format!("{receiver:?}");
+    assert!(!rendered.contains(token), "{rendered}");
+}
+
+#[tokio::test]
+async fn the_idempotency_key_is_sent_only_when_the_package_declares_idempotent_submission() {
+    let upstream = MockHttpUpstream::start().await;
+    upstream
+        .expect("POST", "/v1/messages")
+        .respond_json(200, json!({"id": "gw-7732"}))
+        .await;
+    let project = project(
+        json!({"sms-gateway": http_connection(&upstream, json!({"kind": "none"}))}),
+        |package| {
+            package["providers"][1]
+                .as_object_mut()
+                .expect("provider")
+                .remove("idempotentSubmit");
+        },
+        &[("callback-token", CALLBACK_TOKEN)],
+    );
+    let mut transports = Transports::new();
+    activate_providers(
+        &project.config,
+        &project.loaded,
+        &project.secrets,
+        &mut transports,
+    )
+    .expect("providers activate");
+    let gateway = transports.get("sms-gateway").expect("http transport");
+    gateway.send(&sms()).await;
+    let requests = received(&upstream).await;
+    assert!(requests[0].headers.get("idempotency-key").is_none());
+}
+
+#[tokio::test]
+async fn an_unconfigured_package_provider_gets_no_transport() {
+    let upstream = MockHttpUpstream::start().await;
+    let project = project(
+        json!({"sms-gateway": http_connection(&upstream, json!({"kind": "none"}))}),
+        |_| {},
+        &[("callback-token", CALLBACK_TOKEN)],
+    );
+    let mut transports = Transports::new();
+    activate_providers(
+        &project.config,
+        &project.loaded,
+        &project.secrets,
+        &mut transports,
+    )
+    .expect("providers activate");
+    assert!(transports.get("mail-relay").is_none());
+}
+
+#[tokio::test]
+async fn a_provider_that_cannot_be_activated_names_itself_and_never_a_secret() {
+    let upstream = MockHttpUpstream::start().await;
+
+    // The callback verifier's secret is resolved at startup.
+    let missing = project(
+        json!({"sms-gateway": http_connection(&upstream, json!({"kind": "none"}))}),
+        |_| {},
+        &[],
+    );
+    let error = activate_providers(
+        &missing.config,
+        &missing.loaded,
+        &missing.secrets,
+        &mut Transports::new(),
+    )
+    .expect_err("missing callback token");
+    assert_eq!(error.provider, "sms-gateway");
+    assert!(error.to_string().contains("sms-gateway"), "{error}");
+    assert!(error.to_string().contains("callbackVerifier"), "{error}");
+
+    // A resolved credential that cannot be used is refused without its value.
+    let mut connection = http_connection(
+        &upstream,
+        json!({
+            "kind": "basic",
+            "usernameRef": "secret:file/gateway-user",
+            "passwordRef": "secret:file/gateway-password"
+        }),
+    );
+    connection["baseUrl"] = json!("https://gateway.example.org/v1/");
+    let unusable = project(
+        json!({"sms-gateway": connection}),
+        |_| {},
+        &[
+            ("callback-token", CALLBACK_TOKEN),
+            ("gateway-user", b"account:with-colon-4417"),
+            ("gateway-password", b"password-value-51be"),
+        ],
+    );
+    let error = activate_providers(
+        &unusable.config,
+        &unusable.loaded,
+        &unusable.secrets,
+        &mut Transports::new(),
+    )
+    .expect_err("unusable username");
+    assert_eq!(error.provider, "sms-gateway");
+    let text = error.to_string();
+    assert!(text.contains("authentication.usernameRef"), "{text}");
+    for value in [
+        "with-colon-4417",
+        "password-value-51be",
+        "callback-token-9d2e61",
+    ] {
+        assert!(!text.contains(value), "{text}");
+    }
+
+    // An SMTP credential that does not resolve names the provider.
+    let stub = Stub::start(Script::default()).await;
+    let mut connection = smtp_connection(&stub);
+    connection["authentication"] = json!({
+        "usernameRef": "secret:file/smtp-user",
+        "passwordRef": "secret:file/smtp-password"
+    });
+    let smtp = project(json!({"mail-relay": connection}), |_| {}, &[]);
+    let error = activate_providers(
+        &smtp.config,
+        &smtp.loaded,
+        &smtp.secrets,
+        &mut Transports::new(),
+    )
+    .expect_err("missing smtp credential");
+    assert_eq!(error.provider, "mail-relay");
+    assert!(error.to_string().contains("smtp-user"), "{error}");
+}
+
+#[tokio::test]
+async fn a_provider_with_a_registered_transport_is_refused() {
+    let stub = Stub::start(Script::default()).await;
+    let project = project(json!({"mail-relay": smtp_connection(&stub)}), |_| {}, &[]);
+    let mut transports = Transports::new();
+    activate_providers(
+        &project.config,
+        &project.loaded,
+        &project.secrets,
+        &mut transports,
+    )
+    .expect("first activation");
+    let error = activate_providers(
+        &project.config,
+        &project.loaded,
+        &project.secrets,
+        &mut transports,
+    )
+    .expect_err("second activation");
+    assert_eq!(error.provider, "mail-relay");
+    assert!(error.to_string().contains("already registered"), "{error}");
+}

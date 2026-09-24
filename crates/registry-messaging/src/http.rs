@@ -57,6 +57,7 @@ use crate::messages::{
     MESSAGE_REFUSED_EVENT, MESSAGE_REPLAYED_EVENT,
 };
 use crate::metrics::{count_requests, serve_metrics, Metrics};
+use crate::providers::CallbackReceivers;
 use crate::store::PostgresStore;
 
 tokio::task_local! {
@@ -100,6 +101,9 @@ pub struct HttpState {
     /// The message store, absent only in tests of the HTTP surface without
     /// a database, where every route that needs it answers unavailable.
     pub messages: Option<Arc<MessageService>>,
+    /// The callback receiver of each activated provider that declares
+    /// `receipts: callback`, by provider id.
+    pub callbacks: Arc<CallbackReceivers>,
 }
 
 /// The audited event for every preview an authenticated caller asked for.
@@ -799,6 +803,7 @@ mod tests {
             package: Arc::new(starter_package()),
             audit: Arc::new(audit),
             messages: None,
+            callbacks: Arc::default(),
         }
     }
 

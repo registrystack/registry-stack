@@ -40,6 +40,7 @@ use crate::http::{metrics_router, router, HttpState, Readiness};
 use crate::messages::{MessageService, MessageStore};
 use crate::metrics::Metrics;
 use crate::outbox::Publisher;
+use crate::providers::{activate_providers, ProviderActivationError};
 use crate::store::{PostgresStore, StoreError};
 
 /// The event the journal records when a runtime starts serving.
@@ -86,7 +87,8 @@ pub fn operational_log_level(value: Option<&str>) -> Result<LevelFilter, Runtime
 }
 
 /// Run the parsed command. `serve` sends through `transports`, the
-/// transport registered for each provider id.
+/// transport registered for each provider id, beside the transport it
+/// activates for each provider the runtime configuration connects.
 pub async fn run(matches: &clap::ArgMatches, transports: Transports) -> Result<(), RuntimeError> {
     let path = matches
         .get_one::<String>("runtime-config")
@@ -230,8 +232,9 @@ pub struct Assembled {
 }
 
 /// Build everything `serve` needs from a checked configuration: the
-/// package the ledger names active, the store, the authenticator, the
-/// keyed audit journal, the dispatcher over `transports`, and the audit
+/// package the ledger names active, the store, every configured provider
+/// activated into `transports` with its callback receiver, the
+/// authenticator, the keyed audit journal, the dispatcher, and the audit
 /// publisher, then record the start.
 pub async fn assemble(
     config: &RuntimeConfig,
@@ -250,6 +253,14 @@ pub async fn assemble(
         .await
         .map_err(database_step("package ledger read"))?;
     check_active_package(active.as_deref(), loaded.package.digest())?;
+
+    let mut transports = transports;
+    let callbacks = Arc::new(activate_providers(
+        config,
+        &loaded,
+        &secrets,
+        &mut transports,
+    )?);
 
     let keys = config.jwks_fetcher(&secrets).await?;
     let authenticator = Arc::new(MessagingAuthenticator::new(
@@ -313,6 +324,7 @@ pub async fn assemble(
             package: Arc::new(loaded.package),
             audit,
             messages: Some(Arc::new(messages)),
+            callbacks,
         }),
         metrics: metrics_router(metrics),
         worker,
@@ -488,6 +500,8 @@ pub enum RuntimeError {
     },
     #[error("the Messaging dispatcher could not be configured: {0}")]
     Dispatch(String),
+    #[error("the Messaging {0}")]
+    Provider(#[from] ProviderActivationError),
     #[error("the Messaging {task} stopped")]
     Stopped { task: &'static str },
 }

@@ -462,6 +462,48 @@ pub(crate) struct ResolvedOAuth2 {
 }
 
 impl HttpProviderSettings {
+    /// Every secret reference these settings name, with the member naming
+    /// it, so a runtime can check its providers are enabled.
+    #[must_use]
+    pub fn secret_references(&self) -> Vec<(&'static str, &str)> {
+        let mut references = match &self.authentication {
+            HttpProviderAuthentication::None {} => Vec::new(),
+            HttpProviderAuthentication::Basic {
+                username_ref,
+                password_ref,
+            } => vec![
+                ("authentication.usernameRef", username_ref.as_str()),
+                ("authentication.passwordRef", password_ref.as_str()),
+            ],
+            HttpProviderAuthentication::StaticAuthorization { token_ref, .. } => {
+                vec![("authentication.tokenRef", token_ref.as_str())]
+            }
+            HttpProviderAuthentication::StaticApiKey { value_ref, .. }
+            | HttpProviderAuthentication::StaticApiKeyQuery { value_ref, .. } => {
+                vec![("authentication.valueRef", value_ref.as_str())]
+            }
+            HttpProviderAuthentication::Oauth2ClientCredentials {
+                client_id_ref,
+                client_secret_ref,
+                ..
+            } => vec![
+                ("authentication.clientIdRef", client_id_ref.as_str()),
+                ("authentication.clientSecretRef", client_secret_ref.as_str()),
+            ],
+        };
+        match &self.callback_verifier {
+            None => {}
+            Some(
+                CallbackVerifierConfig::HmacSha1UrlForm { secret_ref, .. }
+                | CallbackVerifierConfig::HmacSha256Body { secret_ref, .. },
+            ) => references.push(("callbackVerifier.secretRef", secret_ref.as_str())),
+            Some(CallbackVerifierConfig::PathToken { token_ref }) => {
+                references.push(("callbackVerifier.tokenRef", token_ref.as_str()));
+            }
+        }
+        references
+    }
+
     pub(crate) fn check_connection(
         &self,
         package: &HttpProviderPackage,

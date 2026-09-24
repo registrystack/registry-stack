@@ -15,6 +15,7 @@ pub mod messages;
 pub mod metrics;
 pub mod outbox;
 pub mod package;
+pub mod providers;
 pub mod runtime;
 #[cfg(feature = "schema")]
 pub mod schema;

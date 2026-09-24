@@ -10,7 +10,7 @@ use std::time::Duration;
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
 use jsonwebtoken::Algorithm;
 use registry_messaging_core::{
-    MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND, PACKAGE_FILE,
+    ProviderKind, MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND, PACKAGE_FILE,
 };
 use registry_platform_config::{
     SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
@@ -23,7 +23,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::environment::{substitute, SubstitutionError};
+use crate::http_provider::HttpProviderSettings;
 use crate::package::{load_package, LoadedPackage, PackageLoadError};
+use crate::smtp::SmtpProviderSettings;
 
 /// Explain one refused secret reference without disclosing what it protects.
 ///
@@ -64,6 +66,14 @@ pub(crate) fn describe_secret_failure(
     }
 }
 
+/// The configuration name of a provider kind.
+pub(crate) const fn provider_kind_name(kind: ProviderKind) -> &'static str {
+    match kind {
+        ProviderKind::Smtp => "smtp",
+        ProviderKind::Http => "http",
+    }
+}
+
 /// The largest runtime document or package document the runtime reads.
 const MAXIMUM_DOCUMENT_BYTES: u64 = 1024 * 1024;
 
@@ -93,6 +103,9 @@ pub const DEFAULT_RECORD_DAYS: u16 = 90;
 pub const MAXIMUM_RECORD_DAYS: u16 = 3650;
 pub const DEFAULT_SUBMISSION_RECEIPT_DAYS: u16 = 7;
 
+/// The most trust profiles one runtime document declares.
+pub const MAXIMUM_TLS_TRUST_PROFILES: usize = 64;
+
 /// The operator runtime configuration document.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
@@ -110,6 +123,66 @@ pub struct RuntimeConfig {
     pub audit: AuditConfig,
     #[serde(default)]
     pub retention: RetentionConfig,
+    /// The runtime half of each package provider, by provider id: where the
+    /// provider is and how the runtime authenticates to it. A package
+    /// provider with no entry has no transport, and its messages fail with
+    /// `provider-unconfigured`.
+    #[serde(default)]
+    pub providers: BTreeMap<String, ProviderConnection>,
+    /// Named PEM bundles an `http` provider's `tlsTrustProfile` trusts
+    /// instead of the public web roots.
+    #[serde(default)]
+    pub tls_trust_profiles: BTreeMap<String, TlsTrustProfileConfig>,
+}
+
+/// One provider's runtime half. The package declares the provider's kind,
+/// and for an `http` provider its scripts; the two halves must name the same
+/// kind.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum ProviderConnection {
+    Smtp(SmtpProviderSettings),
+    Http(HttpProviderSettings),
+}
+
+impl ProviderConnection {
+    /// The provider kind this connection is for.
+    #[must_use]
+    pub const fn kind(&self) -> ProviderKind {
+        match self {
+            Self::Smtp(_) => ProviderKind::Smtp,
+            Self::Http(_) => ProviderKind::Http,
+        }
+    }
+
+    /// Every secret reference the connection names, with the member naming
+    /// it.
+    #[must_use]
+    pub fn secret_references(&self) -> Vec<(&'static str, &str)> {
+        match self {
+            Self::Smtp(settings) => settings.secret_references(),
+            Self::Http(settings) => settings.secret_references(),
+        }
+    }
+}
+
+/// A PEM bundle of one or more certificate authorities, held in the secret
+/// provider so it is read under the same file checks as every credential.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TlsTrustProfileConfig {
+    pub bundle_ref: String,
+}
+
+impl std::fmt::Debug for TlsTrustProfileConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TlsTrustProfileConfig")
+            .field("bundle_ref", &"<redacted>")
+            .finish()
+    }
 }
 
 /// The root of an authored Messaging package, holding `messaging.yaml` and
@@ -487,8 +560,93 @@ impl RuntimeConfig {
         if self.database.test_only_plaintext {
             return Err(RuntimeConfigError::PlaintextDatabase);
         }
-        self.load_package()?;
+        let loaded = self.load_package()?;
+        self.check_providers(&loaded)?;
         Ok(())
+    }
+
+    /// Hold every trust profile and provider connection to its checks
+    /// without resolving a secret: each connection must be for a provider
+    /// the package declares, of the declared kind, and every reference it
+    /// names must parse and use an enabled secret provider.
+    fn check_providers(&self, loaded: &LoadedPackage) -> Result<(), RuntimeConfigError> {
+        if self.tls_trust_profiles.len() > MAXIMUM_TLS_TRUST_PROFILES {
+            return Err(RuntimeConfigError::Connection {
+                path: "tlsTrustProfiles".to_owned(),
+                reason: format!("declares more than {MAXIMUM_TLS_TRUST_PROFILES} profiles"),
+            });
+        }
+        for (name, profile) in &self.tls_trust_profiles {
+            self.check_reference("bundleRef", &profile.bundle_ref)
+                .map_err(|reason| RuntimeConfigError::Connection {
+                    path: format!("tlsTrustProfiles.{name}"),
+                    reason,
+                })?;
+        }
+        for (id, connection) in &self.providers {
+            let refused = |reason: String| RuntimeConfigError::Connection {
+                path: format!("providers.{id}"),
+                reason,
+            };
+            let declared = loaded
+                .package
+                .provider(id)
+                .ok_or_else(|| refused("the package does not declare this provider".to_owned()))?;
+            if declared.kind != connection.kind() {
+                return Err(refused(format!(
+                    "the package declares it with kind {}",
+                    provider_kind_name(declared.kind)
+                )));
+            }
+            for (field, reference) in connection.secret_references() {
+                self.check_reference(field, reference).map_err(refused)?;
+            }
+            match connection {
+                ProviderConnection::Smtp(settings) => {
+                    settings
+                        .check()
+                        .map_err(|error| refused(error.to_string()))?;
+                }
+                ProviderConnection::Http(settings) => {
+                    let source = loaded.providers.get(id).ok_or_else(|| {
+                        refused("the package ships no providers/<id>/provider.yaml".to_owned())
+                    })?;
+                    let trust = match &settings.tls_trust_profile {
+                        None => None,
+                        Some(name) if self.tls_trust_profiles.contains_key(name) => Some(&[][..]),
+                        Some(_) => {
+                            return Err(refused(
+                                "tlsTrustProfile names a profile tlsTrustProfiles does not \
+                                 declare"
+                                    .to_owned(),
+                            ))
+                        }
+                    };
+                    settings
+                        .check_connection(&source.package, trust)
+                        .map_err(|error| refused(error.to_string()))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Check one secret reference parses and uses an enabled provider,
+    /// naming only its member when it does not.
+    fn check_reference(&self, field: &str, raw: &str) -> Result<(), String> {
+        let reference = SecretReference::parse(raw)
+            .map_err(|_| format!("{field} is not a valid secret reference"))?;
+        let enabled = match reference.provider() {
+            SecretProvider::File => self.secret_providers.file.is_some(),
+            SecretProvider::Environment => self.secret_providers.environment.is_some(),
+        };
+        if enabled {
+            Ok(())
+        } else {
+            Err(format!(
+                "{field} uses a secret provider that is not explicitly enabled"
+            ))
+        }
     }
 
     /// Refuse an assertion-issuer map with too many clients, an oversized
@@ -855,6 +1013,8 @@ pub enum RuntimeConfigError {
     Oidc,
     #[error("the static OIDC signing keys could not be loaded: {0}")]
     OidcJwksSecret(String),
+    #[error("{path} is refused: {reason}")]
+    Connection { path: String, reason: String },
 }
 
 impl RuntimeConfigError {
@@ -882,6 +1042,7 @@ impl RuntimeConfigError {
             Self::InvalidRetention => "retention",
             Self::Package(error) => error.path(),
             Self::ProfileClientNotAllowed { .. } => "authentication.oidc.allowedClients",
+            Self::Connection { path, .. } => path,
         }
     }
 }
@@ -1308,6 +1469,192 @@ pub(crate) mod tests {
         let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
         assert!(error.to_string().contains("endpointRef"), "{error}");
         assert!(!error.to_string().contains("RELAY_URL"), "{error}");
+    }
+
+    /// Runtime connections for both starter providers.
+    pub(crate) fn provider_connections() -> Value {
+        json!({
+            "mail-relay": {
+                "kind": "smtp",
+                "host": "smtp.example.org",
+                "tls": "starttls",
+                "authentication": {
+                    "usernameRef": "secret:file/smtp-username",
+                    "passwordRef": "secret:env/SMTP_PASSWORD"
+                }
+            },
+            "sms-gateway": {
+                "kind": "http",
+                "baseUrl": "https://gateway.example.org/v1/",
+                "timeoutMilliseconds": 5000,
+                "maximumResponseBytes": 65536,
+                "concurrencyLimit": 4,
+                "redirects": "deny",
+                "authentication": {
+                    "kind": "static-authorization",
+                    "tokenRef": "secret:file/gateway-token"
+                },
+                "callbackVerifier": {
+                    "kind": "hmac-sha256-body",
+                    "header": "x-signature",
+                    "encoding": "hex",
+                    "secretRef": "secret:file/gateway-callback-key"
+                }
+            }
+        })
+    }
+
+    /// Enable only the file secret provider, moving the database
+    /// references onto it.
+    fn file_secrets_only(value: &mut Value) {
+        value["secretProviders"] = json!({"file": {"root": "/placeholder/secrets"}});
+        value["database"]["runtimeUrlRef"] = json!("secret:file/runtime-url");
+        value["database"]["migrationUrlRef"] = json!("secret:file/migration-url");
+    }
+
+    #[test]
+    fn provider_connections_load_against_the_package_declarations() {
+        let mut value = base();
+        value["providers"] = provider_connections();
+        value["providers"]["sms-gateway"]["tlsTrustProfile"] = json!("gateway-ca");
+        value["tlsTrustProfiles"] = json!({"gateway-ca": {"bundleRef": "secret:file/gateway-ca"}});
+        let config = load(value).unwrap();
+        assert_eq!(config.providers.len(), 2);
+        assert!(matches!(
+            config.providers["mail-relay"],
+            ProviderConnection::Smtp(_)
+        ));
+        assert!(matches!(
+            config.providers["sms-gateway"],
+            ProviderConnection::Http(_)
+        ));
+        let rendered = format!("{config:?}");
+        for reference in ["SMTP_PASSWORD", "gateway-token", "secret:file/gateway-ca"] {
+            assert!(!rendered.contains(reference), "{rendered}");
+        }
+
+        // A package provider without a connection is not a configuration
+        // error: its messages fail with provider-unconfigured.
+        load(base()).unwrap();
+    }
+
+    #[test]
+    fn a_connection_the_package_does_not_declare_or_of_another_kind_is_refused() {
+        let mut value = base();
+        value["providers"] = json!({"relay-two": provider_connections()["mail-relay"].clone()});
+        let error = load(value).unwrap_err();
+        assert_eq!(error.path(), "providers.relay-two");
+        assert!(error.to_string().contains("does not declare"), "{error}");
+
+        let mut value = base();
+        value["providers"] = json!({"mail-relay": provider_connections()["sms-gateway"].clone()});
+        let error = load(value).unwrap_err();
+        assert_eq!(error.path(), "providers.mail-relay");
+        assert!(error.to_string().contains("kind smtp"), "{error}");
+    }
+
+    #[test]
+    fn a_connection_that_fails_its_checks_names_the_provider_and_the_member() {
+        let mut value = base();
+        value["providers"] = provider_connections();
+        value["providers"]["mail-relay"]["port"] = json!(0);
+        let error = load(value).unwrap_err();
+        assert_eq!(error.path(), "providers.mail-relay");
+        assert!(error.to_string().contains("port"), "{error}");
+
+        let mut value = base();
+        value["providers"] = provider_connections();
+        value["providers"]["sms-gateway"]["concurrencyLimit"] = json!(9);
+        let error = load(value).unwrap_err();
+        assert_eq!(error.path(), "providers.sms-gateway");
+        assert!(error.to_string().contains("concurrencyLimit"), "{error}");
+
+        let mut value = base();
+        value["providers"] = provider_connections();
+        value["providers"]["sms-gateway"]
+            .as_object_mut()
+            .unwrap()
+            .remove("callbackVerifier");
+        let error = load(value).unwrap_err();
+        assert_eq!(error.path(), "providers.sms-gateway");
+        assert!(error.to_string().contains("callbackVerifier"), "{error}");
+
+        let mut value = base();
+        value["providers"] = provider_connections();
+        value["providers"]["sms-gateway"]["region"] = json!("eu");
+        assert!(matches!(
+            load(value).unwrap_err(),
+            RuntimeConfigError::Parse { .. }
+        ));
+    }
+
+    #[test]
+    fn a_provider_secret_reference_must_parse_and_name_an_enabled_secret_provider() {
+        let mut value = base();
+        value["providers"] = provider_connections();
+        value["providers"]["mail-relay"]["authentication"]["passwordRef"] = json!("hunter2");
+        let error = load(value).unwrap_err();
+        assert_eq!(error.path(), "providers.mail-relay");
+        assert!(
+            error.to_string().contains("authentication.passwordRef"),
+            "{error}"
+        );
+        assert!(!error.to_string().contains("hunter2"), "{error}");
+
+        let mut value = base();
+        value["providers"] = provider_connections();
+        value["providers"]["sms-gateway"]["authentication"]["tokenRef"] = json!("hunter2");
+        let error = load(value).unwrap_err();
+        assert_eq!(error.path(), "providers.sms-gateway");
+        assert!(
+            error.to_string().contains("authentication.tokenRef"),
+            "{error}"
+        );
+        assert!(!error.to_string().contains("hunter2"), "{error}");
+
+        let mut value = base();
+        file_secrets_only(&mut value);
+        value["providers"] = provider_connections();
+        let error = load(value).unwrap_err();
+        assert_eq!(error.path(), "providers.mail-relay");
+        assert!(
+            error.to_string().contains("not explicitly enabled"),
+            "{error}"
+        );
+
+        let mut value = base();
+        file_secrets_only(&mut value);
+        value["providers"] = json!({"sms-gateway": provider_connections()["sms-gateway"].clone()});
+        value["providers"]["sms-gateway"]["callbackVerifier"]["secretRef"] =
+            json!("secret:env/CALLBACK_KEY");
+        let error = load(value).unwrap_err();
+        assert_eq!(error.path(), "providers.sms-gateway");
+        assert!(
+            error.to_string().contains("callbackVerifier.secretRef"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_trust_profile_must_be_declared_and_its_bundle_a_secret_reference() {
+        let mut value = base();
+        value["providers"] = provider_connections();
+        value["providers"]["sms-gateway"]["tlsTrustProfile"] = json!("gateway-ca");
+        let error = load(value).unwrap_err();
+        assert_eq!(error.path(), "providers.sms-gateway");
+        assert!(error.to_string().contains("tlsTrustProfile"), "{error}");
+
+        let mut value = base();
+        value["tlsTrustProfiles"] = json!({"gateway-ca": {"bundleRef": "/etc/ca.pem"}});
+        let error = load(value).unwrap_err();
+        assert_eq!(error.path(), "tlsTrustProfiles.gateway-ca");
+        assert!(error.to_string().contains("bundleRef"), "{error}");
+
+        let mut value = base();
+        file_secrets_only(&mut value);
+        value["tlsTrustProfiles"] = json!({"gateway-ca": {"bundleRef": "secret:env/CA"}});
+        let error = load(value).unwrap_err();
+        assert_eq!(error.path(), "tlsTrustProfiles.gateway-ca");
     }
 
     #[test]
