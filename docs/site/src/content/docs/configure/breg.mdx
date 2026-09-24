@@ -132,7 +132,12 @@ authentication to fail before BReg selects an access profile. An `actorKind` on 
 further restricts that profile to the matching token kind and must be paired with
 `requesterClients`. Omit `actorKind` only when the profile deliberately accepts all three declared
 actor kinds. A token that acts for someone else, carrying a trusted `act` claim, is the exception:
-only a profile that declares `actorKind: agent` admits it.
+only a profile that declares `actorKind: agent` admits it. Such a profile without a `taskGrant` is a
+standing agent: it may read and author change-request drafts, and `check` refuses it any lifecycle
+operation with `access_profile.standing_agent.operation_forbidden`, any direct write with
+`access_profile.standing_agent.direct_mutation_forbidden`, and any immediate action with
+`access_profile.standing_agent.action_forbidden`. The person submits each draft through a profile
+they use directly.
 
 {/* Evidence: crates/registry-breg/src/auth.rs, RegistryAuthenticator::authenticate();
     crates/registry-breg/src/api/mod.rs, authorize_profile_claims();

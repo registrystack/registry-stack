@@ -195,8 +195,7 @@ relevant product pages on this site rather than duplicating release notes.
     products/breg/TASK_GRANTS.md. */}
 
 - BREAKING: BReg admits a token carrying a trusted `act` only on an access
-  profile, or through an immediate-action permission, that declares
-  `actorKind: agent`. A profile that declares no `actorKind` refuses such a
+  profile that declares `actorKind: agent`. A profile that declares no `actorKind` refuses such a
   token, so a delegated caller cannot borrow the operations of a profile
   written for people using BReg directly. Tokens without `act` are admitted
   as before.
@@ -218,15 +217,12 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/tests/postgres_task_grants.rs;
     products/breg/TASK_GRANTS.md. */}
 
-- BReg's audit journal records delegated authority on reads and immediate
-  actions. A read's terminal record, for records, lists, lookups, revisions,
-  history, and snapshots, now carries the `authorization` object for a
-  task-grant or delegated token, and an immediate action's terminal record
-  carries it for a delegated token. Direct tokens record no such object, as
-  before.
+- BReg's audit journal records delegated authority on reads. A read's
+  terminal record, for records, lists, lookups, revisions, history, and
+  snapshots, now carries the `authorization` object for a task-grant or
+  delegated token. Direct tokens record no such object, as before.
 
 {/* Evidence: crates/registry-breg/src/postgres/read.rs;
-    crates/registry-breg/src/mutation/action.rs;
     crates/registry-breg/tests/postgres_task_grants.rs;
     products/breg/TASK_GRANTS.md. */}
 
