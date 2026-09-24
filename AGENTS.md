@@ -417,7 +417,7 @@ cmp ../../LICENSE LICENSE
 Registry Casework product and language bindings:
 
 ```bash
-cargo build --locked -p registry-caseworkctl
+cargo build --locked -p registry-caseworkctl -p registry-bregctl
 products/casework/scripts/check-checkpoint.sh
 cd crates/registry-casework-client-node
 npm ci
