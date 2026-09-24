@@ -581,6 +581,29 @@ pub async fn rehearse_schema_fingerprint(
     rehearse_schema_fingerprint_with_connection_config(config, registry, &migration).await
 }
 
+/// Rehearse a successor candidate's migration over an empty reproduction of
+/// its verified predecessor schema, using the configured migration role
+/// against the clean schema-test database. The outer error is a deployment
+/// binding or configuration refusal; the inner one is the rehearsal's own
+/// value-free refusal. The rehearsal always rolls back.
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+pub async fn rehearse_successor_migration(
+    config: &RuntimeConfig,
+    rehearsal: crate::postgres::SuccessorMigrationRehearsal<'_>,
+) -> Result<std::result::Result<(), crate::postgres::MigrationRehearsalError>> {
+    validate_schema_test_candidate_binding(config, rehearsal.candidate)?;
+    let migration = config
+        .migration_database_connection_config()
+        .map_err(map_runtime_config_error)?;
+    Ok(crate::postgres::rehearse_successor_migration(
+        &migration,
+        config.database().roles().migration(),
+        config.database().roles().runtime(),
+        rehearsal,
+    )
+    .await)
+}
+
 #[cfg(all(feature = "runtime", feature = "tooling", feature = "postgres-test"))]
 #[doc(hidden)]
 pub async fn rehearse_schema_fingerprint_with_connection_config_for_test(
