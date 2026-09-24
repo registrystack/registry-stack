@@ -327,6 +327,54 @@ fn self_issued_consent_binds_the_subject_through_the_principal_link() {
 }
 
 #[test]
+fn a_self_issued_actions_link_bound_targets_are_not_registry_wide_findings() {
+    let unrestricted = |value: &Value| {
+        compile(value)
+            .unwrap()
+            .findings()
+            .iter()
+            .filter(|finding| finding.code == "access.target.unrestricted_rows")
+            .map(|finding| finding.path.clone())
+            .collect::<BTreeSet<_>>()
+    };
+    let steward = [
+        "actions[id=record-consent].permissions[profile=steward].targets[entity=consent-decision].rowBoundaries",
+        "actions[id=record-consent].permissions[profile=steward].targets[entity=person].rowBoundaries",
+    ];
+    // The compiler proved the subject is the caller's linked subject and the
+    // created row carries it, so neither target reaches every row.
+    assert_eq!(
+        unrestricted(&self_issued_project()),
+        steward
+            .iter()
+            .map(|path| path.to_string())
+            .collect::<BTreeSet<_>>()
+    );
+
+    // A second reference to the subject entity is not bound by the link.
+    let mut value = self_issued_project();
+    let inputs = value["actions"][1]["inputs"].as_array_mut().unwrap();
+    inputs.push(json!({"id": "other", "type": "reference", "target": "person", "required": true, "classification": "restricted"}));
+    inputs.push(json!({"id": "district", "type": "string", "maxLength": 80, "required": true, "classification": "internal"}));
+    value["actions"][1]["effects"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "touch", "target": {"fromField": "other"}, "operation": "patch",
+            "set": {"district": {"fromField": "district"}}
+        }));
+    let reached = unrestricted(&value);
+    assert!(
+        reached.contains("actions[id=withdraw-consent].permissions[profile=consent-self].targets[entity=person].rowBoundaries"),
+        "{reached:?}"
+    );
+    assert!(
+        !reached.contains("actions[id=withdraw-consent].permissions[profile=consent-self].targets[entity=consent-decision].rowBoundaries"),
+        "{reached:?}"
+    );
+}
+
+#[test]
 fn gated_permissions_are_read_only() {
     for operation in ["patch", "create", "tombstone"] {
         let mut value = source();

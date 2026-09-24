@@ -275,12 +275,26 @@ pub(crate) fn compiled_access_findings(
     actions: &CompiledActionInventory,
 ) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
+    let mut link_bound = BTreeSet::new();
+    for action in &actions.actions {
+        for entity in crate::consent::self_bound_targets(action, entities) {
+            for grant in &action.permissions {
+                link_bound.insert(format!(
+                    "actions[id={}].permissions[profile={}].targets[entity={entity}].rowBoundaries",
+                    action.id, grant.profile_id
+                ));
+            }
+        }
+    }
     for reach in row_reach(entities, actions) {
         // Ordinary permissions retain their existing finding codes above.
         if reach.surface == "entity" {
             continue;
         }
+        // A `self` consent issuer's subject and record targets are bound
+        // through the caller's principal link, not by a row boundary.
         if reach.rows == "all"
+            && !link_bound.contains(&reach.source_path)
             && entities
                 .get(&reach.entity)
                 .is_some_and(|entity| entity.classification != Classification::Public)

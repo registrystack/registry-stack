@@ -19,6 +19,7 @@ use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::{quote_identifier, quote_literal};
 use crate::membership::{RowProbe, RowProbeForm};
 use crate::model::{
+    CompiledAction, CompiledActionInput, CompiledActionMutation, CompiledActionValue,
     CompiledConsentDuration, CompiledConsentRecord, CompiledConsentRequirement, CompiledEntity,
     CompiledRecipients,
 };
@@ -829,6 +830,69 @@ pub(crate) fn validate_action(
             "a self issuer uses fixed effects, sets the subject from an input S, requires {input: L, field: <link subject>, equalsInput: S} and {input: L, field: <link active>, equals: true}, and every permission bounds L's target to the caller's principal",
         ));
     }
+}
+
+/// The target entities a compiled `self` issuer reaches only through the
+/// caller's principal link: each consent record it creates, and the entity of
+/// each subject input unless another reference input can name a row of that
+/// entity. The compiler refuses a `self` issuer whose subject is not bound
+/// through the link, so these targets never reach every row.
+pub(crate) fn self_bound_targets(
+    action: &CompiledAction,
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> BTreeSet<String> {
+    let mut bound = BTreeSet::new();
+    if action.consent_issuer != Some(ConsentIssuerSource::Subject) {
+        return bound;
+    }
+    let mut subject_inputs = BTreeSet::new();
+    for effect in &action.effects {
+        let Some(entity) = entities.get(&effect.target.entity_id) else {
+            continue;
+        };
+        let Some(record) = entity.consent_record.as_ref() else {
+            continue;
+        };
+        if effect.operation != Operation::Create {
+            continue;
+        }
+        bound.insert(entity.id.clone());
+        let subject_field = entity
+            .fields
+            .iter()
+            .find(|(_, field)| field.physical_name == record.subject_column)
+            .map(|(id, _)| id.as_str());
+        for mutation in &effect.mutations {
+            if let CompiledActionMutation::Set {
+                field,
+                value: CompiledActionValue::FromInput { input },
+            } = mutation
+            {
+                if Some(field.as_str()) == subject_field {
+                    subject_inputs.insert(input.as_str());
+                }
+            }
+        }
+    }
+    fn reference_target(input: &CompiledActionInput) -> Option<&str> {
+        match &input.field_type {
+            FieldTypeSource::Reference { target, .. } => Some(target.as_str()),
+            _ => None,
+        }
+    }
+    for input in &action.inputs {
+        let Some(target) =
+            reference_target(input).filter(|_| subject_inputs.contains(input.id.as_str()))
+        else {
+            continue;
+        };
+        if action.inputs.iter().all(|other| {
+            reference_target(other) != Some(target) || subject_inputs.contains(other.id.as_str())
+        }) {
+            bound.insert(target.to_owned());
+        }
+    }
+    bound
 }
 
 /// Whether `subject_input` is tied by `requires` to a link input whose target
