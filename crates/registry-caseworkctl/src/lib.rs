@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod dev;
+mod display_schema;
 mod lifecycle;
 mod policy;
 mod project;

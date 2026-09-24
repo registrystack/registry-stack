@@ -552,7 +552,13 @@ Until the description exists, `caseworkctl check` reports `"sourceDescription": 
 The template's `scope-correction` review kind uses `contextStrategy: source`, so its `displaySchema` must admit exactly what the source discloses to a reviewer.
 It restates each projected field's schema under its API name, as `bregctl explain change-requests` reports it: `record` is a UUID string, not an object.
 Casework checks each reviewer's source read against the schema before it shows or acts on a task, and a task whose disclosed fields the schema refuses stays out of that reviewer's inbox, and the runtime logs a `display_schema_rejected` warning naming the review kind.
+The template's properties, including the `licensedActivities` enum, are the professional-licences starter's vocabulary: when you pair your own register, replace them with your register's schemas.
 When you change a projected field in the register, change its schema here to match.
+
+`source add` and `check` refuse a `displaySchema` the imported source description proves would hide tasks, and the refusal names the review kind and the property.
+They catch three mismatches. The first is a projected field the closed schema does not declare. The second is a property whose `type` shares no JSON type with the source field. The third is a value the source schema names that the property rejects: an `enum` or `const` member, `null` for a nullable field, or a Boolean, alone or as an array item. That last case covers the starter enum left in place over a register with other activities.
+Both commands work from the two schemas alone, so a constraint that only a made-up value could break is left to the runtime check. That covers lengths, patterns, formats, and numeric bounds, as well as properties written with `$ref`.
+Projected fields are checked whether or not a reviewer profile can see them, because the source may later disclose any of them.
 The kind also declares a `changes-requested` outcome, labelled "Request changes", which settles as `changes_requested` and requires a reason; BReg then offers the submitter a revision (`revise_request` with `rebase: false`) or a cancellation, never an apply, and the revised, resubmitted request opens a fresh review.
 
 Continue from the register you built in [Create and query your first registry](../../tutorials/first-breg/), which leaves its project at `tutorial-work/project`.
