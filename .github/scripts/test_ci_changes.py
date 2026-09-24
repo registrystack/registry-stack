@@ -1588,6 +1588,33 @@ class CiChangesTest(unittest.TestCase):
             )["evidence_tutorial"]
         )
 
+    def test_messaging_bindings_run_the_native_client_job(self) -> None:
+        # The Messaging bindings are covered only by the shared native-client
+        # job, and the Python one also ships in the assembled package the
+        # application tutorial imports.
+        for path in (
+            "crates/registry-messaging-client-node/src/lib.rs",
+            "crates/registry-messaging-client-py/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["client_bindings"])
+                self.assertTrue(outputs["messaging_contracts"])
+        self.assertTrue(
+            classify(
+                self.workspace, ("crates/registry-messaging-client-py/src/lib.rs",)
+            )["evidence_tutorial"]
+        )
+
+    def test_messaging_node_sources_run_the_linux_release_addon_proof(self) -> None:
+        for path in (
+            "crates/registry-messaging-client/src/client.rs",
+            "crates/registry-messaging-client-node/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["release_linux_node_clients"])
+
     def test_casework_node_sources_run_the_linux_release_addon_proof(self) -> None:
         for path in (
             "crates/registry-casework-client/src/client.rs",

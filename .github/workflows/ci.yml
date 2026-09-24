@@ -1493,7 +1493,7 @@ jobs:
           # The tutorial installs the maintained client package, so the replay
           # imports that same package, assembled from this commit. maturin gets
           # the pinned release build environment. The CI profile exercises the
-          # same four-binding assembly and installed facade without release LTO.
+          # same six-binding assembly and installed facade without release LTO.
           # Production optimization remains covered by release recipe checks.
           python3 -m venv "${RUNNER_TEMP}/maturin"
           "${RUNNER_TEMP}/maturin/bin/pip" install --quiet \
@@ -1505,6 +1505,7 @@ jobs:
           python3 release/scripts/assemble-registry-client-packages.py \
             --artifacts python \
             --include-casework \
+            --include-messaging \
             --python-profile ci \
             --output-dir "${out_dir}" \
             --work-dir "${RUNNER_TEMP}/client-assembly" \
@@ -2021,6 +2022,7 @@ jobs:
             crates/registry-relay-client-node/package-lock.json
             crates/registry-breg-client-node/package-lock.json
             crates/registry-casework-client-node/package-lock.json
+            crates/registry-messaging-client-node/package-lock.json
             crates/registry-stack-client-node/package-lock.json
 
       - name: Cache Cargo registry
@@ -2034,7 +2036,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-discovery-client-node registry-evidence-client-node registry-relay-client-node registry-breg-client-node registry-casework-client-node; do
+          for client in registry-discovery-client-node registry-evidence-client-node registry-relay-client-node registry-breg-client-node registry-casework-client-node registry-messaging-client-node; do
             (
               cd "crates/${client}"
               npm ci
@@ -2056,7 +2058,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-discovery-client-py registry-evidence-client-py registry-relay-client-py registry-breg-client-py registry-casework-client-py; do
+          for client in registry-discovery-client-py registry-evidence-client-py registry-relay-client-py registry-breg-client-py registry-casework-client-py registry-messaging-client-py; do
             cargo build --locked -p "${client}" --lib --features "${client}/extension-module"
             (
               cd "crates/${client}"
@@ -2111,6 +2113,7 @@ jobs:
             crates/registry-relay-client-node/package-lock.json
             crates/registry-breg-client-node/package-lock.json
             crates/registry-casework-client-node/package-lock.json
+            crates/registry-messaging-client-node/package-lock.json
             crates/registry-stack-client-node/package-lock.json
 
       - name: Install pinned Linux client build tools
@@ -2127,7 +2130,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in discovery evidence relay breg casework; do
+          for client in discovery evidence relay breg casework messaging; do
             client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
             (cd "${client_dir}" && npm ci)
             release/scripts/build-linux-node-client \
@@ -2135,12 +2138,15 @@ jobs:
               --target "${{ matrix.target }}" \
               --napi-platform "${{ matrix.napi_platform }}" \
               --zig-python "${RUNNER_TEMP}/maturin/bin/python"
-            if [[ "${client}" == breg || "${client}" == casework ]]; then
+            if [[ "${client}" == breg || "${client}" == casework || "${client}" == messaging ]]; then
               class_name=BaseRegistryClient
               base_url=https://registry.invalid
               if [[ "${client}" == casework ]]; then
                 class_name=CaseworkClient
                 base_url=https://casework.invalid
+              elif [[ "${client}" == messaging ]]; then
+                class_name=MessagingClient
+                base_url=https://messaging.invalid
               fi
               node -e "const Client = require('${client_dir}/client')['${class_name}']; new Client({ baseUrl: '${base_url}' })"
               continue
@@ -2155,7 +2161,7 @@ jobs:
           done
           client_dir="${GITHUB_WORKSPACE}/crates/registry-stack-client-node"
           platform_dir="${client_dir}/npm/${{ matrix.napi_platform }}"
-          for client in discovery evidence relay breg casework; do
+          for client in discovery evidence relay breg casework messaging; do
             cp "${GITHUB_WORKSPACE}/crates/registry-${client}-client-node/${client}-client.${{ matrix.napi_platform }}.node" \
               "${platform_dir}/"
           done
