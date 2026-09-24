@@ -89,6 +89,11 @@ pub fn command() -> Command {
                 .required(true)
                 .value_parser(value_parser!(PathBuf)),
         )
+        .subcommand_required(true)
+        .subcommand(Command::new("check").about(
+            "Validate the runtime configuration and resolve its secrets without opening a socket",
+        ))
+        .subcommand(Command::new("serve").about("Serve the review page until it is terminated"))
 }
 
 #[derive(Debug, Error)]
@@ -441,17 +446,23 @@ fn discovered_endpoint(
         })
 }
 
-/// Build the page from a validated runtime configuration. Startup reads the
-/// secrets, fetches the provider's discovery document, opens the audit
-/// journal, and compiles the templates, and fails on the first fault.
-pub async fn router(config: RuntimeConfig) -> Result<Router, RuntimeError> {
+/// Everything startup derives from the configuration without a network call
+/// or a write.
+struct Offline {
+    client_key: PrivateJwk,
+    audit_profile: AuditProfile,
+    redirect_uri: Url,
+    registry: BaseRegistryClient,
+    templates: Templates,
+    per_citizen: TokenBucketLimiter,
+    global_sign_in: TokenBucketLimiter,
+}
+
+/// Validate the configuration, read and parse its secrets, and compile the
+/// templates, failing on the first fault. It neither calls the provider nor
+/// opens the audit journal.
+fn offline(config: &RuntimeConfig) -> Result<Offline, RuntimeError> {
     config.check()?;
-    let development = config.development();
-    let policy = if development {
-        FetchUrlPolicy::dev()
-    } else {
-        FetchUrlPolicy::strict()
-    };
     let secrets = config.secret_resolver()?;
     let client_key = resolve_secret(
         &secrets,
@@ -468,6 +479,51 @@ pub async fn router(config: RuntimeConfig) -> Result<Router, RuntimeError> {
     ))
     .map_err(|error| RuntimeError::Audit(error.to_string()))?;
     drop(audit_key);
+
+    let base_url = Url::parse(&config.registry.base_url)
+        .map_err(|_| RuntimeError::Config(RuntimeConfigError::InvalidRegistry))?;
+    let registry = BaseRegistryClient::new(BaseRegistryClientConfig::new(base_url))
+        .map_err(|error| RuntimeError::Registry(error.to_string()))?;
+    let templates =
+        Templates::load().map_err(|error| RuntimeError::Templates(error.to_string()))?;
+    Ok(Offline {
+        client_key,
+        audit_profile,
+        redirect_uri: config.redirect_uri()?,
+        registry,
+        templates,
+        per_citizen: limiter(config.limits.per_citizen)?,
+        global_sign_in: limiter(config.limits.global_sign_in)?,
+    })
+}
+
+/// Validate a runtime configuration the way startup does, without serving:
+/// check the document, read and parse its secrets, and compile the templates.
+/// It neither fetches the provider's discovery document nor opens the audit
+/// journal, so it needs no network and writes nothing.
+pub fn check(config: &RuntimeConfig) -> Result<(), RuntimeError> {
+    offline(config).map(|_| ())
+}
+
+/// Build the page from a validated runtime configuration. Startup reads the
+/// secrets, fetches the provider's discovery document, opens the audit
+/// journal, and compiles the templates, and fails on the first fault.
+pub async fn router(config: RuntimeConfig) -> Result<Router, RuntimeError> {
+    let Offline {
+        client_key,
+        audit_profile,
+        redirect_uri,
+        registry,
+        templates,
+        per_citizen,
+        global_sign_in,
+    } = offline(&config)?;
+    let development = config.development();
+    let policy = if development {
+        FetchUrlPolicy::dev()
+    } else {
+        FetchUrlPolicy::strict()
+    };
 
     let issuer = config.sign_in.issuer.clone();
     let discovery = fetch_discovery_with_policy(
@@ -516,11 +572,6 @@ pub async fn router(config: RuntimeConfig) -> Result<Router, RuntimeError> {
     )
     .map_err(|error| RuntimeError::SignInClient(error.to_string()))?;
 
-    let base_url = Url::parse(&config.registry.base_url)
-        .map_err(|_| RuntimeError::Config(RuntimeConfigError::InvalidRegistry))?;
-    let registry = BaseRegistryClient::new(BaseRegistryClientConfig::new(base_url))
-        .map_err(|error| RuntimeError::Registry(error.to_string()))?;
-
     let log = DurableSegmentedAuditLog::initialize(
         config.audit.path.clone(),
         journal::MAXIMUM_SEGMENT_BYTES,
@@ -536,8 +587,6 @@ pub async fn router(config: RuntimeConfig) -> Result<Router, RuntimeError> {
     )
     .map_err(|_| RuntimeError::Audit("the client pseudonym could not be derived".to_owned()))?;
 
-    let templates =
-        Templates::load().map_err(|error| RuntimeError::Templates(error.to_string()))?;
     let app = Arc::new(App {
         issuer,
         client_id: config.sign_in.client_id.clone(),
@@ -548,7 +597,7 @@ pub async fn router(config: RuntimeConfig) -> Result<Router, RuntimeError> {
         access_profile: config.registry.access_profile.clone(),
         authorization_endpoint,
         requires_iss,
-        redirect_uri: config.redirect_uri()?,
+        redirect_uri,
         sign_in_client,
         verifier,
         registry,
@@ -558,8 +607,8 @@ pub async fn router(config: RuntimeConfig) -> Result<Router, RuntimeError> {
             config.session.maximum_pending_sign_ins,
         ),
         journal,
-        per_citizen: limiter(config.limits.per_citizen)?,
-        global_sign_in: limiter(config.limits.global_sign_in)?,
+        per_citizen,
+        global_sign_in,
         cookies: Cookies::for_mode(development),
         maximum_session: Duration::from_secs(config.session.maximum_lifetime_seconds),
         sign_in_lifetime: Duration::from_secs(config.session.sign_in_lifetime_seconds),
@@ -657,9 +706,53 @@ async fn stylesheet() -> Response {
         .into_response()
 }
 
-/// Serve `router` on `listener`.
+/// Serve `router` on `listener` until SIGINT or SIGTERM, then stop accepting
+/// connections and return once the requests in flight have been answered.
+///
+/// A signal that cannot be observed is an error: installing the SIGTERM
+/// handler fails before serving, and a failure to observe SIGINT stops the
+/// page and is returned.
 pub async fn serve(listener: tokio::net::TcpListener, router: Router) -> std::io::Result<()> {
-    axum::serve(listener, router).await
+    #[cfg(unix)]
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let (fault_sender, mut fault) = tokio::sync::oneshot::channel::<std::io::Error>();
+    let shutdown = async move {
+        #[cfg(unix)]
+        let terminated = terminate.recv();
+        #[cfg(not(unix))]
+        let terminated = std::future::pending::<Option<()>>();
+        tokio::select! {
+            interrupted = tokio::signal::ctrl_c() => {
+                if let Err(error) = interrupted {
+                    tracing::error!(%error, "the interrupt signal cannot be observed");
+                    // The receiver lives until `serve` returns, after this
+                    // future completes.
+                    let _ = fault_sender.send(error);
+                    return;
+                }
+            }
+            _ = terminated => {}
+        }
+        tracing::info!("the review page is shutting down");
+    };
+    serve_until(listener, router, shutdown).await?;
+    match fault.try_recv() {
+        Ok(error) => Err(error),
+        Err(_) => Ok(()),
+    }
+}
+
+/// Serve `router` on `listener` until `shutdown` completes, then stop
+/// accepting connections and return once the requests in flight have been
+/// answered.
+pub async fn serve_until(
+    listener: tokio::net::TcpListener,
+    router: Router,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown)
+        .await
 }
 
 #[cfg(test)]

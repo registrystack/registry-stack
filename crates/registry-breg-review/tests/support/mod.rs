@@ -873,7 +873,7 @@ impl Harness {
             .await
             .expect("review page starts");
         tokio::spawn(async move {
-            registry_breg_review::serve(listener, router)
+            registry_breg_review::serve_until(listener, router, std::future::pending())
                 .await
                 .expect("review page serves");
         });

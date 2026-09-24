@@ -358,7 +358,7 @@ impl Fixture {
             .await
             .expect("the review page starts");
         let page_task = tokio::spawn(async move {
-            registry_breg_review::serve(page_listener, router)
+            registry_breg_review::serve_until(page_listener, router, std::future::pending())
                 .await
                 .expect("the review page serves");
         });

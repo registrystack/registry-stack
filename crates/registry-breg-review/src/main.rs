@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use registry_breg_review::{command, router, serve, RuntimeConfig};
+use registry_breg_review::{check, command, router, serve, RuntimeConfig};
 use tracing::Level;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
@@ -44,8 +44,7 @@ async fn main() {
                 .json()
                 .with_target(false)
                 .with_current_span(false)
-                .with_span_list(false)
-                .with_writer(std::io::stderr),
+                .with_span_list(false),
         )
         .with(
             Targets::new()
@@ -57,15 +56,32 @@ async fn main() {
     let path = matches
         .get_one::<PathBuf>("runtime-config")
         .expect("clap requires --runtime-config");
-    if let Err(error) = run(path).await {
+    let outcome = match matches.subcommand_name() {
+        Some("check") => run_check(path),
+        Some("serve") => run_serve(path).await,
+        _ => unreachable!("clap requires the check or serve subcommand"),
+    };
+    // Startup refusals go to standard error, apart from the JSON operational
+    // log on standard output, and name the failing field without its value.
+    if let Err(error) = outcome {
         eprintln!("breg-review: {error}");
         std::process::exit(1);
     }
 }
 
-async fn run(path: &std::path::Path) -> Result<(), String> {
-    let config =
-        RuntimeConfig::load(path).map_err(|error| format!("{error} (at {})", error.path()))?;
+fn load(path: &std::path::Path) -> Result<RuntimeConfig, String> {
+    RuntimeConfig::load(path).map_err(|error| format!("{error} (at {})", error.path()))
+}
+
+fn run_check(path: &std::path::Path) -> Result<(), String> {
+    let config = load(path)?;
+    check(&config).map_err(|error| error.to_string())?;
+    tracing::info!("the runtime configuration is valid");
+    Ok(())
+}
+
+async fn run_serve(path: &std::path::Path) -> Result<(), String> {
+    let config = load(path)?;
     let bind = config.listener.bind;
     let router = router(config).await.map_err(|error| error.to_string())?;
     let listener = tokio::net::TcpListener::bind(bind)
@@ -74,7 +90,9 @@ async fn run(path: &std::path::Path) -> Result<(), String> {
     tracing::info!(%bind, "the review page is listening");
     serve(listener, router)
         .await
-        .map_err(|error| format!("the review page stopped: {error}"))
+        .map_err(|error| format!("the review page stopped: {error}"))?;
+    tracing::info!("the review page stopped");
+    Ok(())
 }
 
 #[cfg(test)]
