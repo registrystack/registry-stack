@@ -464,12 +464,16 @@ fn select_requests<'a>(
     if requests.is_empty() || requests.len() > MAXIMUM_REQUEST_ENTITIES {
         bail!("source must declare between 1 and {MAXIMUM_REQUEST_ENTITIES} request entities");
     }
+    let mut declared_entities = BTreeSet::new();
     requests
         .iter()
         .map(|declared| {
             let entity = declared["entity"]
                 .as_str()
                 .context("source request entity is missing")?;
+            if !declared_entities.insert(entity) {
+                bail!("source declares request entity {entity} more than once");
+            }
             select_request(&policy, registry_id, entity, report)
                 .with_context(|| format!("pairing request entity {entity}"))
         })
@@ -3691,6 +3695,31 @@ mod tests {
             .err()
             .expect("every declared entity must be compiled by BReg");
         assert!(format!("{error:#}").contains("renewal"));
+    }
+
+    #[test]
+    fn source_import_refuses_a_request_entity_declared_twice() {
+        let project = tempfile::tempdir().unwrap();
+        two_entity_policy(project.path());
+        let mut policy: Value =
+            serde_json::from_slice(&fs::read(project.path().join("casework.yaml")).unwrap())
+                .unwrap();
+        policy["sources"][0]["requests"][1]["entity"] = json!("correction");
+        fs::write(
+            project.path().join("casework.yaml"),
+            serde_json::to_vec(&policy).unwrap(),
+        )
+        .unwrap();
+
+        let error = select_requests(
+            project.path(),
+            "farmers",
+            "farmers",
+            &two_entity_explanation(),
+        )
+        .err()
+        .expect("each request entity is named once");
+        assert!(format!("{error:#}").contains("correction"));
     }
 
     #[test]
