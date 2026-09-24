@@ -22,7 +22,7 @@ extension-module = ["pyo3/extension-module"]
 pyo3.workspace = true
 # Keep the Rust SDK name distinct from this extension's Python module name.
 # Cargo passes both crates to Rustdoc, so sharing a name makes doctests ambiguous.
-breg-client-sdk = { package = "registry-breg-client", path = "../registry-breg-client", version = "0.33.0" }
+breg-client-sdk = { package = "registry-breg-client", path = "../registry-breg-client", version = "0.34.0" }
 registry-platform-crypto.workspace = true
 registry-platform-httputil.workspace = true
 serde.workspace = true
