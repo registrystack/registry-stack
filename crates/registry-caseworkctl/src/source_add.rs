@@ -555,9 +555,10 @@ fn select_request<'a>(
 /// one entity before another entity's review kind exists is ordinary
 /// incremental authoring, and more than one Casework project can legitimately
 /// share a review authority id, so an unresolved policyId here may simply
-/// belong to a different Casework project. A sibling whose policyId is not a
-/// string is reported the same way, since it cannot be checked against
-/// casework.yaml's reviewKinds either.
+/// belong to a different Casework project. A sibling whose policyId is
+/// missing or not a string never reaches this check: `bregctl check` refuses
+/// it first. Only root registry.yaml entities are scanned; entities a locked
+/// module contributes are not.
 fn check_unpaired_review_policies(
     project: &Path,
     authored: &Value,
