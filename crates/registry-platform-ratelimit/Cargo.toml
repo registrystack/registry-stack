@@ -1,0 +1,16 @@
+[package]
+name = "registry-platform-ratelimit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Generic in-memory keyed rate limiting: a token bucket and a fixed window counter."
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tokio.workspace = true

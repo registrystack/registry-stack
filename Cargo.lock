@@ -5361,6 +5361,7 @@ dependencies = [
  "registry-platform-httpsec",
  "registry-platform-httputil",
  "registry-platform-oidc",
+ "registry-platform-ratelimit",
  "registry-platform-sdjwt",
  "registry-platform-sqlite",
  "reqwest",
@@ -5816,6 +5817,14 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
+name = "registry-platform-ratelimit"
+version = "0.34.0"
+dependencies = [
  "thiserror 2.0.20",
  "tokio",
 ]
