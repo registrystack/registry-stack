@@ -489,6 +489,7 @@ classes:
     narrow_mappings:
     - cpov:PublicOrganisation
     annotations:
+      featured: true
       label_es: Organización
       label_fr: Organisation
       description_es: 'Un organismo identificable jurídica o administrativamente capaz de actuar en un

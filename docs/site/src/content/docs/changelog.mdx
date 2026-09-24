@@ -107,7 +107,7 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/src/tooling.rs, ACTION_CODES_ADDED. */}
 
 - BREAKING: `bregctl init --from publicschema` and the four BReg starters
-  follow PublicSchema `main` at commit `bd07bda`, version 0.3.0. The
+  follow PublicSchema `main` at commit `e5cfbbc`, version 0.3.0. The
   `agricultural-holdings` starter takes PublicSchema's agricultural holder
   names: its `*-holding-operator-role` entities and routes become
   `*-agricultural-holder-role`, and the `operatedHolding` and
@@ -118,7 +118,8 @@ relevant product pages on this site rather than duplicating release notes.
   to renamed PublicSchema concepts. PublicSchema retired `public_mandate`, so
   the `public-organizations` starter aligns its free-text `description`
   field to PublicSchema's `description` instead. Neither starter changes a
-  field, route, or record. See
+  field, route, or record. PublicSchema defines `end_date` as the last day
+  a period applies, so a period includes its end date. See
   [derive a registry from PublicSchema](../tutorials/derive-a-registry-from-publicschema/).
 
 {/* Evidence: crates/registry-linkml/publicschema/PIN.yaml;

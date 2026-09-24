@@ -100,6 +100,6 @@ regressions prove typed-reference refusals and independently authorized review.
 Presence of these artifacts is not an execution receipt for an edited project.
 
 The vocabulary is pinned to PublicSchema draft commit
-`bd07bda1fe9cb9eb8582cf7bc1c77367e2455e5b`. See `ATTRIBUTION.md` and
+`e5cfbbc0161e4d2c802d1acd752ec193253f7820`. See `ATTRIBUTION.md` and
 `PUBLICSCHEMA-LICENSE.txt`. These cardinalities, permissions, local numbering and
 unit decisions are starter policy, not universal PublicSchema requirements.

@@ -114,6 +114,7 @@ classes:
     - evidence_assertions
     status: bibo:draft
     annotations:
+      featured: true
       label_es: Inscripción registral
       label_fr: Enregistrement
       description_es: El reconocimiento formal que una autoridad otorga a un sujeto para un fin administrativo

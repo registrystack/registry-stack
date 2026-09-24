@@ -8,7 +8,7 @@
   "firstRecordEntity": "professional-license",
   "publicSchema": {
     "repository": "https://github.com/PublicSchema/publicschema.org",
-    "commit": "bd07bda1fe9cb9eb8582cf7bc1c77367e2455e5b",
+    "commit": "e5cfbbc0161e4d2c802d1acd752ec193253f7820",
     "status": "draft",
     "license": "CC-BY-4.0"
   },
