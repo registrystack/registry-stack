@@ -10,6 +10,7 @@ const generatedIndex = new URL('../content/docs/reference/cli/index.mdx', import
 const binaries = [
   'breg',
   'bregctl',
+  'breg-mcp',
   'casework',
   'caseworkctl',
   'scheduling',

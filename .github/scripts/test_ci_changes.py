@@ -1477,6 +1477,22 @@ class CiChangesTest(unittest.TestCase):
             {"developer-tools", "evidence"},
         )
 
+    def test_mcp_gateway_change_runs_in_the_breg_shard(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-breg-mcp/src/gateway.rs",),
+        )
+        self.assertIn("registry-breg-mcp", outputs["rust_packages"])
+        breg = next(
+            entry
+            for entry in outputs["rust_matrix"]["include"]
+            if entry["name"] == "breg"
+        )
+        self.assertIn("registry-breg-mcp", breg["packages"])
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-breg-mcp/src/cli.rs",))["docs"]
+        )
+
     def test_the_python_binding_and_its_sdk_replay_the_tutorial_that_imports_them(
         self,
     ) -> None:
