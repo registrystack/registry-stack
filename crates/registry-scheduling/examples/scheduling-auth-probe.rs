@@ -14,7 +14,7 @@ use std::sync::Arc;
 use jsonwebtoken::{jwk::JwkSet, Algorithm};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
 use registry_scheduling::auth::SchedulingAuthenticator;
-use registry_scheduling::config::{OidcConfig, OidcJwksSource};
+use registry_scheduling::config::{JwksSource, OidcConfig};
 use serde::Deserialize;
 
 const MAXIMUM_INPUT_BYTES: u64 = 1024 * 1024;
@@ -90,8 +90,7 @@ async fn authenticate(input: ProbeInput) -> Result<bool, ()> {
         assertion_issuers: assertion_issuers.clone(),
         issuer: input.issuer.clone(),
         audience: input.audience.clone(),
-        jwks_uri: None,
-        jwks_source: OidcJwksSource::Discovery,
+        jwks_source: JwksSource::Discovery,
         scope_claim: "scope".to_owned(),
         reads_scope: "scheduling-read".to_owned(),
         explain_scope: "scheduling-explain".to_owned(),

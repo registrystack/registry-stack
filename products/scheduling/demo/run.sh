@@ -11,7 +11,7 @@ set -euo pipefail
 # AT-05 (hold expiry), AT-06 (lost-confirmation idempotent replay), and
 # AT-19 (the daylight-saving fold grid). See README.md beside this script.
 
-demo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+demo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 root=$(cd -- "$demo_dir/../../.." && pwd)
 run_dir="$demo_dir/.run"
 support="$demo_dir/support/demo.py"

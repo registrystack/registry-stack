@@ -150,7 +150,7 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
         .await
         .expect("a disposable schema is created");
 
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let project = root.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(project.join("scheduling.yaml"), POLICY).unwrap();

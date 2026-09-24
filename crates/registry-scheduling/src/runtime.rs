@@ -28,7 +28,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use clap::{Arg, Command};
 use registry_platform_audit::{AuditProfile, AuditWriter};
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_config::{ProtectedSecret, SecretProvider, SecretResolver};
+use registry_platform_config::{ProtectedSecret, SecretResolver};
 use registry_platform_httputil::destination::{
     DataDestinationPolicy, DataDestinationRequestTemplate, DestinationAuthorizationTemplate,
     DestinationAuthorizationValue, DestinationBodyTemplate, DestinationMethod, DestinationProfile,
@@ -372,7 +372,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         authenticator,
         store,
     });
-    let listener = tokio::net::TcpListener::bind(config.listener.bind).await?;
+    let listener = tokio::net::TcpListener::bind(config.listener.bind.socket_addr()).await?;
     let served = serve_until_worker_stops(listener, app, worker_stops).await;
     for worker in workers {
         worker.abort();
@@ -532,22 +532,10 @@ fn resolve_audit_secret(
 }
 
 pub fn secret_resolver(config: &RuntimeConfig) -> Result<SecretResolver, RuntimeError> {
-    let mut providers = Vec::new();
-    if config.secret_providers.file.is_some() {
-        providers.push(SecretProvider::File);
-    }
-    if config.secret_providers.environment.is_some() {
-        providers.push(SecretProvider::Environment);
-    }
-    SecretResolver::new(
-        providers,
-        config
-            .secret_providers
-            .file
-            .as_ref()
-            .map_or_else(|| Path::new(""), |file| file.root.as_path()),
-    )
-    .map_err(|_| RuntimeError::SecretConfiguration)
+    config
+        .secret_providers
+        .resolver()
+        .map_err(|_| RuntimeError::SecretConfiguration)
 }
 
 /// The pool anchors the policy's exact-time offerings name.

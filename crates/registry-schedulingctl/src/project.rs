@@ -394,12 +394,21 @@ fn load_fixture(path: &Path) -> Result<SchedulingFixture> {
     parse_fixture_yaml(&bytes).with_context(|| format!("parsing fixture {}", path.display()))
 }
 
+/// Read one authored input. Authored files are package content, so an
+/// environment expression in one is refused rather than left for a reader to
+/// mistake for substitution, which applies to `runtime.yaml` only.
 pub(super) fn read_authoring_input(path: &Path) -> Result<String> {
     let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     if bytes.len() > MAXIMUM_INPUT_BYTES {
         bail!("{} exceeds the one MiB authoring limit", path.display());
     }
-    String::from_utf8(bytes).with_context(|| format!("reading {}", path.display()))
+    let text = String::from_utf8(bytes).with_context(|| format!("reading {}", path.display()))?;
+    if let Err(error) =
+        registry_platform_config::reject_environment_expressions_in_authored_yaml(&text)
+    {
+        bail!("{}: {}", path.display(), error.message());
+    }
+    Ok(text)
 }
 
 /// Every check finding as its path and closed reason, ready for a report.
@@ -505,7 +514,10 @@ mod tests {
         assert_eq!(examples[0], examples[1]);
 
         let root = tempfile::tempdir().unwrap();
-        let project = root.path().join("project");
+        // The loader refuses a path through a symbolic link, and the system
+        // temporary directory is one on some hosts.
+        let base = root.path().canonicalize().unwrap();
+        let project = base.join("project");
         init(&project, "standalone-exact-time").unwrap();
         let text = fs::read_to_string(project.join("runtime.example.yaml"))
             .unwrap()
@@ -513,11 +525,8 @@ mod tests {
                 EXAMPLE_PACKAGE_ROOT,
                 project.to_str().expect("utf-8 project path"),
             )
-            .replace(
-                EXAMPLE_STATE_ROOT,
-                root.path().to_str().expect("utf-8 root path"),
-            );
-        let runtime = root.path().join("runtime.yaml");
+            .replace(EXAMPLE_STATE_ROOT, base.to_str().expect("utf-8 root path"));
+        let runtime = base.join("runtime.yaml");
         fs::write(&runtime, &text).unwrap();
         let config = RuntimeConfig::load(&runtime).expect("the emitted example loads");
         assert_eq!(
