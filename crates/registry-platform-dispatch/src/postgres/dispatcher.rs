@@ -582,11 +582,17 @@ impl<S: DispatchStore> Dispatcher<S> {
         Ok(next_generation)
     }
 
-    /// Withdraw one job that has not been claimed.
+    /// Withdraw one pending job.
     ///
     /// The cancel locks the row and waits for a concurrent claim, and a
     /// claim skips a row the cancel holds, so exactly one of the two wins: a
-    /// cancelled job is never sent, and a claimed job is never cancelled.
+    /// cancelled job is never sent again, and a leased job is never
+    /// cancelled.
+    ///
+    /// A pending job may already have been attempted: a scheduled retry,
+    /// including one after a maybe-sent answer, is pending and cancellable.
+    /// A cancelled job with an attempt above zero may therefore have
+    /// reached its receiver; `cancelled` does not mean never sent.
     ///
     /// # Errors
     ///

@@ -130,6 +130,10 @@ fn render_schema(fragment: &str, table: &JobTable) -> String {
 
 /// Whether a fragment stays inside the statement it is placed in: no
 /// statement terminator and no comment opener.
+///
+/// Fragments are the consumer's own `&'static str` source text, so this is a
+/// guard against authoring mistakes, not a sanitizer: it does not parse SQL
+/// and must never be relied on to make runtime input safe to interpolate.
 fn fragment_is_contained(fragment: &str) -> bool {
     !fragment.contains(';') && !fragment.contains("--") && !fragment.contains("/*")
 }
