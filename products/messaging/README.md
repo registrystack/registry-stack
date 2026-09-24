@@ -35,14 +35,18 @@ Pre-1.0 and under construction. This version is the product skeleton:
   configuration gives the package's providers, and verified provider
   delivery callbacks whose receipts move a message's delivery report only
   forward;
-- `messagingctl init`, `check`, `preview`, `apply`, and `messages list`,
-  `show`, `retry`, `settle`, and `cancel`;
+- each access profile's request rate per caller and daily limit, and each
+  provider's send rate;
+- retention: payloads and records erased their configured periods after a
+  message reached a terminal state, by the runtime's hourly sweep or on
+  demand;
+- `messagingctl init`, `check`, `preview`, `apply`, `messages list`,
+  `show`, `retry`, `settle`, and `cancel`, and `retention erase-expired`;
 - the Rust client for health, readiness, and reading one message's status;
 - the security invariant matrix, the problem catalog, and the generated
   OpenAPI and runtime schema.
 
-Quotas and the retention sweep arrive in later slices. A provider the
-runtime configuration gives no connection is not activated, so the worker
+A provider the runtime configuration gives no connection is not activated, so the worker
 fails its messages with the attempt failure code `provider-unconfigured`,
 without a send, and startup logs a warning.
 
@@ -77,19 +81,28 @@ with the caller's source of record.
 The starter under `examples/starter/` is a runtime configuration and a package
 with an email and an SMS sender profile, an email template in English and
 French, an SMS template, a sender access profile, and an operator access
-profile. `messagingctl init DIRECTORY` writes a copy. Copy
-`runtime.example.yaml`, set its absolute paths and secret references, then:
+profile. `messagingctl init DIRECTORY` writes a copy, and `DIRECTORY` is
+itself the package root: it holds `messaging.yaml`, `providers/`, and
+`templates/` directly, so `--package ./notices` works and
+`--package ./notices/package` is refused with exit 3. Copy its
+`runtime.example.yaml`, point `package.root` at that directory, set the other
+absolute paths and secret references, then:
 
 ```bash
+messagingctl init ./notices
+messagingctl check --package ./notices
 messagingctl check --runtime-config /abs/path/runtime.yaml
 messagingctl preview --runtime-config /abs/path/runtime.yaml \
-  appointment-reminder 1 --locale fr --data sample.json
+  appointment-reminder 1 --locale fr \
+  --data ./notices/templates/appointment-reminder/1/sample.json
 messaging --runtime-config /abs/path/runtime.yaml migrate
 messagingctl apply --runtime-config /abs/path/runtime.yaml --apply
 messaging --runtime-config /abs/path/runtime.yaml serve
 ```
 
-`migrate` uses the migration connection and is safe to run from several
+`--data` names a JSON file, read relative to the directory the command runs
+in like any other relative path; each template version's `sample.json`
+serves. `migrate` uses the migration connection and is safe to run from several
 processes at once. `messagingctl apply` without `--apply` reports whether the
 package differs from the one the ledger names active; with `--apply` it
 records it. `serve` refuses to start against a database whose applied schema
@@ -119,10 +132,11 @@ never hand-edited.
 |---|---|---|
 | `GET /health` | none | `200` with an empty body while the process serves |
 | `GET /ready` | none | `200` when the database carries every expected migration, `503 service.unavailable` otherwise |
-| `POST /v1/messages` | bearer, an access profile listing the sender profile and template, and an `Idempotency-Key` header | `202` with the message receipt; the same key and request answer the stored receipt again |
-| `GET /v1/messages/{message_id}` | bearer, the submitting profile or an operator | `200` with the status derived from the dispatch state and the delivery report, both of those, the masked recipient, and the attempts; `404 message.not-visible` for any other message |
-| `POST /v1/messages/{message_id}/cancel` | bearer, the submitting profile or an operator | `200` with the cancelled status; `409 message.dispatch-started` once dispatch started, `409 message.terminal` once it is final |
+| `POST /v1/messages` | bearer, an access profile listing the sender profile and template, and an `Idempotency-Key` header | `202` with the message receipt; the same key and request answer the stored receipt again; `429 rate-limit.exceeded` past the caller's rate and `429 quota.exceeded` past the profile's daily limit, both with `Retry-After` |
+| `GET /v1/messages/{message_id}` | bearer, the submitting principal (the same issuer and subject) or an operator | `200` with the status derived from the dispatch state and the delivery report, both of those, the masked recipient, and the attempts; `404 message.not-visible` for any other message |
+| `POST /v1/messages/{message_id}/cancel` | bearer, the submitting principal (the same issuer and subject) or an operator | `200` with the cancelled status; `409 message.dispatch-started` once dispatch started, `409 message.terminal` once it is final |
 | `POST /v1/templates/{template_id}/versions/{version}/preview` | bearer, a sender profile listing the template | `200` with the rendered parts and the SMS segment count; persists nothing |
+| `POST /v1/provider-callbacks/{provider_id}` and `POST /v1/provider-callbacks/{provider_id}/{token}` | the provider's configured callback verifier, no bearer | `204` once the receipt is read; `403 callback.unverified` for any callback that does not verify, `422 callback.unreadable` for one the receipt script cannot read |
 | `GET /metrics` | metrics listener only | Prometheus text; never served on the public listener |
 
 Every response carries a `traceparent` header. Problems are
@@ -145,6 +159,10 @@ Every response carries a `traceparent` header. Problems are
 | `request.body-too-large` | 413 |
 | `request.unsupported-media-type` | 415 |
 | `request.unprocessable` | 422 |
+| `callback.unverified` | 403 |
+| `callback.unreadable` | 422 |
+| `rate-limit.exceeded` | 429 |
+| `quota.exceeded` | 429 |
 | `template.not-found` | 404 |
 | `template.data-invalid` | 422 |
 | `template.locale-unavailable` | 422 |
@@ -174,6 +192,10 @@ MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
   -p registry-messaging --features postgres-test --test postgres_messages
 MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
   -p registry-messaging --features postgres-test --test postgres_dispatch
+MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
+  -p registry-messaging --features postgres-test --test postgres_callbacks
+MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
+  -p registry-messaging --features postgres-test --test postgres_retention
 MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
   -p registry-messagingctl --features postgres-test --test postgres_messages_cli
 ```

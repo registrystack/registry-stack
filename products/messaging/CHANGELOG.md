@@ -33,7 +33,7 @@
   after the caller is authorized and the message rendered again.
 - Serve `GET /v1/messages/{message_id}` from the message store and add
   `POST /v1/messages/{message_id}/cancel`. Both answer only the submitting
-  access profile and operators, mask the recipient, and answer a message the
+  principal, the same issuer and subject, and operators, mask the recipient, and answer a message the
   caller may not see exactly like one that does not exist.
 - Add the dispatch worker on the platform PostgreSQL dispatch substrate, with
   lease-fenced outcome writes, retries bounded by the sender profile's

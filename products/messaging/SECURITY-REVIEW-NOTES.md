@@ -61,9 +61,10 @@ such as an operator submitting, is refused `403 operation.not-authorized`.
   it before the store is reached, on every request including a replay
   (MESSAGING-DEC-07).
 - Visibility (MESSAGING-SEC-04, enforced): `check_message_visibility` shows
-  a message to its submitting profile and to operator profiles only, and a
-  missing message answers exactly like an invisible one, `404
-  message.not-visible` (MESSAGING-DEC-01). The status and cancel routes both
+  a message to the principal that submitted it, the same issuer and
+  subject, and to operator profiles only; another caller of the same
+  access profile does not see it. A missing message answers exactly like an
+  invisible one, `404 message.not-visible` (MESSAGING-DEC-01). The status and cancel routes both
   apply it, and a malformed identifier answers the same way before the store
   is consulted. The `postgres_messages` suite has a second sender read and
   cancel a real message.
