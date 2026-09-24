@@ -118,12 +118,22 @@ reviewed directory root, starting with `modules/<module-id>/migrations/<migratio
   from `diff --format json` that is not compatible additive), `recovery` (`exact_target_resume`),
   `lockTimeoutMs`, `statementTimeoutMs`, `steps`, `preAssertions`, `postAssertions`,
   `rehearsalReceiptPath`, and, for a destructive change, `backupBindingPath`.
-- A step is one of three kinds. `transactional_sql` runs one statement from `sqlPath` in the
-  activation transaction; DML must declare `affectedRows` bounds, and every row it changes gets a
-  history revision. `chunked_backfill` runs its statement once per chunk of record identifiers,
-  bound as a UUID array, within `chunkSize` and `maxTotalRows`. `field_encryption_backfill` carries
-  no SQL; the engine seals the covered fields chunk by chunk. Each step lists the `objects`
-  (schema, table, entity, kind, member, physical name) its SQL may touch.
+- A step is one of three kinds. `transactional_sql` runs one statement from `sqlPath` in its own
+  transaction, which also records the step's ledger progress, so a later step or post-assertion
+  that fails does not roll it back and `apply` resumes after it; DML must declare `affectedRows`
+  bounds, and every row it changes gets a history revision. `chunked_backfill` runs one `UPDATE` of its declared entity once per chunk of
+  record identifiers, bound as a UUID array, within `chunkSize` (at most 1,000) and
+  `maxTotalRows`; each chunk commits on its own and appends one history revision for every row it
+  changed, in one history commit, so snapshot and as-of reads agree with the backfilled rows.
+  `field_encryption_backfill` carries no SQL; the engine seals the covered fields chunk by chunk
+  and journals each chunk the same way. A journaled step is one `UPDATE`, after any leading
+  comments, and may not write record metadata (`record_revision`, `record_lifecycle`,
+  `active_package_revision`, `created_at`, `updated_at`). Outside comments and plain string
+  literals, its text may not contain a second statement or another statement word such as `drop`
+  or `delete`, and a `transactional_sql` step may not name `record_id`. A dollar-quoted body or a
+  literal holding a backslash is read as written, so a statement word inside it refuses the step.
+  Each step lists the `objects` (schema, table, entity, kind, member, physical name) its SQL may
+  touch.
 - An assertion is one `SELECT` returning exactly one boolean column. Pre-assertions run against
   the predecessor tables before any step, post-assertions against the successor tables after
   every step, and activation stops on a false result.
@@ -151,8 +161,9 @@ pre-assertions, the compiler's statements, your reviewed steps, the deferred con
 views, and post-assertions. It then requires the result to match the candidate's schema
 fingerprint, and rolls everything back before the ordinary journey test runs. A statement
 PostgreSQL refuses, an assertion that is not a single boolean column, or a plan that does not reach
-the candidate schema fails `test`, so `package`, which requires that receipt, cannot sign a plan
-`apply` would reject. The report names the migration, step or assertion, the SQLSTATE and its
+the candidate schema fails `test`, and so does a journaled step whose SQL the history journal
+refuses. `package`, which requires that receipt, therefore cannot sign a plan `apply` would
+reject. The report names the migration, step or assertion, the SQLSTATE and its
 class, and the table, column, or constraint PostgreSQL named. It never includes a PostgreSQL
 message, because those can quote row values.
 
@@ -180,6 +191,9 @@ Reviewed artifacts cannot authorize a change the planner classifies as unsupport
     crates/registry-breg/tests/action_vocabulary_codes.rs;
     crates/registry-bregctl/tests/cli/reviewed_migrations.rs;
     crates/registry-breg/src/postgres/rehearsal.rs;
+    crates/registry-breg/src/history_migration.rs, check_reviewed_history_step();
+    crates/registry-breg/src/postgres/interlock.rs, execute_reviewed_chunk();
+    crates/registry-breg/tests/postgres_migration.rs, reviewed_migration_history();
     crates/registry-breg/src/migration.rs, open_bound_backup();
     crates/registry-breg/tests/postgres_migration.rs, real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse;
     products/breg/scripts/test-adopter-workflow.sh. */}
@@ -340,6 +354,7 @@ server binary, and earlier packages keep verifying under their recorded rules.
 | `test` or `package` reports `migration.review.refused` | A precondition failed before the reviewed directory was read, such as the prior revision or the baseline binding. Check the baseline arguments and the fingerprints in the rehearsal receipt. |
 | `test` or `package` reports `migration.review.fingerprint_mismatch` | The rehearsal receipt was taken for a different candidate or baseline. Rehearse the exact candidate again. |
 | `test` reports `migration.rehearsal.step_failed`, `migration.rehearsal.assertion_failed`, or `migration.rehearsal.compiler_statement_failed` | PostgreSQL refused the named step, assertion, or generated statement when `test` rehearsed the successor over the predecessor schema, so `apply` would refuse it too. The message names the SQLSTATE, its class, and the object. Correct the reviewed SQL or the project, then repeat test and package. |
+| `test` reports `migration.rehearsal.history_step_refused` | The named step changes rows, and `apply` journals every row it changes, but the step's SQL is not an update the journal can record: it does not start with `UPDATE` once leading comments are set aside, it holds a second statement or a semicolon before its end, it names a record metadata column (`record_revision`, `record_lifecycle`, `active_package_revision`, `created_at`, `updated_at`), a transactional step names `record_id`, it uses a refused statement word (`insert`, `delete`, `truncate`, `alter`, `drop`, `create`, `merge`) outside a comment or plain string literal, or inside a dollar-quoted body or a literal holding a backslash, or its objects span more than the step's entity. Correct the reviewed SQL, then repeat test and package. |
 | `test` reports `migration.rehearsal.schema_mismatch` | The rehearsed migration does not reach the candidate schema, for example a required field the reviewed steps never constrain. Activation would refuse it. |
 | `test` reports `migration.rehearsal.baseline_unavailable` or `migration.rehearsal.baseline_not_reproducible` | This `bregctl` cannot rebuild the active package's schema from its signed sources. Run `test` with a `bregctl` release that compiles the predecessor, or report the mismatch. |
 | `apply` reports `apply.migration.failed` | The apply failed after maintenance began. Read the report, fix the cause, and retry the same target. If that is not available, run `migration reconcile` to assess the pinned target, execute the transition it names, and restore the pre-activation backup only when it reports `unresolvable`. |

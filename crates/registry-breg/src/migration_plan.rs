@@ -52,12 +52,10 @@ const MAX_LOCK_TIMEOUT_MS: u64 = 300_000;
 #[cfg(feature = "tooling")]
 const MAX_STATEMENT_TIMEOUT_MS: u64 = 3_600_000;
 #[cfg(feature = "tooling")]
-const MAX_CHUNK_SIZE: u32 = 10_000;
-#[cfg(feature = "tooling")]
-/// Every field-encryption backfill chunk journals one commit whose member
-/// budget the history machinery caps, so its chunk size shares that cap.
-const MAX_FIELD_ENCRYPTION_CHUNK_SIZE: u32 =
-    crate::history_migration::MAX_HISTORY_MIGRATION_COMMIT_MEMBERS as u32;
+/// Every chunk of a chunked or field-encryption backfill journals one commit
+/// whose member budget the history machinery caps, so the chunk size shares
+/// that cap.
+const MAX_CHUNK_SIZE: u32 = crate::history_migration::MAX_HISTORY_MIGRATION_COMMIT_MEMBERS as u32;
 #[cfg(feature = "tooling")]
 const MAX_TOTAL_ROWS: u64 = 100_000_000;
 #[cfg(feature = "tooling")]
@@ -874,7 +872,7 @@ fn validate_descriptor_shape(
                 ..
             } if !valid_id(entity_id)
                 || *chunk_size == 0
-                || *chunk_size > MAX_FIELD_ENCRYPTION_CHUNK_SIZE
+                || *chunk_size > MAX_CHUNK_SIZE
                 || *max_total_rows == 0
                 || *max_total_rows > MAX_TOTAL_ROWS
                 || !valid_timeout(*lock_timeout_ms, descriptor.lock_timeout_ms)

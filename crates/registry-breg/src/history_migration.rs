@@ -58,8 +58,6 @@ impl SupportedHistoryMigrationStep {
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub(crate) enum HistoryMigrationError {
-    #[error("reviewed chunked backfills are not history-safe yet")]
-    ChunkedBackfillUnsupported,
     #[error("reviewed transactional SQL must declare affected-row bounds for history")]
     UnboundedTransactionalSql,
     #[error("reviewed transactional SQL must name at least one data object")]
@@ -92,10 +90,10 @@ pub(crate) struct BoundedHistoryUpdateCapture {
     rows: BTreeMap<Uuid, CapturedEntityRow>,
 }
 
-/// The page-scoped capture one field-encryption chunk journals: exactly the
-/// rows the chunk selected, locked, sealed, and rewrote in this transaction.
+/// The page-scoped capture one reviewed chunk journals: exactly the rows the
+/// chunk selected, locked, and rewrote in this transaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct FieldEncryptionPageCapture {
+pub(crate) struct ReviewedPageCapture {
     step: SupportedHistoryMigrationStep,
     rows: BTreeMap<Uuid, CapturedEntityRow>,
 }
@@ -211,18 +209,19 @@ pub(crate) async fn finish_bounded_history_update(
     .await
 }
 
-/// Capture the pre-change rows of one field-encryption chunk page. The step's
-/// classified entity is the successor registry's entity, so encrypted fields
-/// project their envelope column and the capture is already in journal shape.
+/// Capture the pre-change rows of one chunk page of a reviewed chunked
+/// backfill or a field-encryption backfill. The step's classified entity is
+/// the successor registry's entity, so encrypted fields project their envelope
+/// column and the capture is already in journal shape.
 #[cfg(feature = "runtime")]
-pub(crate) async fn prepare_field_encryption_page_capture(
+pub(crate) async fn prepare_reviewed_page_capture(
     transaction: &Transaction<'_>,
     registry: &CompiledRegistry,
     descriptor_path: &str,
     step: &ValidatedReviewedMigrationStep,
     page: &[Uuid],
-) -> Result<FieldEncryptionPageCapture> {
-    let supported = classify_reviewed_history_step(descriptor_path, step)?;
+) -> Result<ReviewedPageCapture> {
+    let supported = check_reviewed_history_step(descriptor_path, step)?;
     let page_len =
         u64::try_from(page.len()).map_err(|_| HistoryMigrationError::InvalidAffectedRows)?;
     if page_len > supported.affected_rows.max {
@@ -230,18 +229,18 @@ pub(crate) async fn prepare_field_encryption_page_capture(
     }
     let entity = entity_for_step(registry, &supported)?;
     let rows = capture_entity_rows_page(transaction, entity, page).await?;
-    Ok(FieldEncryptionPageCapture {
+    Ok(ReviewedPageCapture {
         step: supported,
         rows,
     })
 }
 
 #[cfg(feature = "runtime")]
-pub(crate) async fn finish_field_encryption_page_update(
+pub(crate) async fn finish_reviewed_page_update(
     transaction: &Transaction<'_>,
     registry: &CompiledRegistry,
     package_revision: &str,
-    capture: FieldEncryptionPageCapture,
+    capture: ReviewedPageCapture,
 ) -> Result<u64> {
     if package_revision.is_empty() {
         return Err(HistoryMigrationError::RevisionUnavailable);
@@ -786,8 +785,33 @@ fn classify_reviewed_history_step(
                 affected_rows,
             })
         }
-        ReviewedMigrationStepDescriptor::ChunkedBackfill { .. } => {
-            Err(HistoryMigrationError::ChunkedBackfillUnsupported)
+        ReviewedMigrationStepDescriptor::ChunkedBackfill {
+            id,
+            entity_id,
+            objects,
+            chunk_size,
+            ..
+        } => {
+            let chunk_size = u64::from(*chunk_size);
+            // One chunk's changed rows are one commit's member set, so the
+            // commit-member budget bounds the chunk size.
+            if chunk_size == 0 || chunk_size > MAX_HISTORY_MIGRATION_COMMIT_MEMBERS {
+                return Err(HistoryMigrationError::InvalidAffectedRows);
+            }
+            let (object_entity_id, physical_table) = classify_step_objects(objects)?;
+            if &object_entity_id != entity_id {
+                return Err(HistoryMigrationError::CrossEntityStep);
+            }
+            Ok(SupportedHistoryMigrationStep {
+                descriptor_path: descriptor_path.to_owned(),
+                step_id: id.clone(),
+                entity_id: object_entity_id,
+                physical_table,
+                affected_rows: AffectedRowBounds {
+                    min: 0,
+                    max: chunk_size,
+                },
+            })
         }
         ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
             id,
@@ -853,32 +877,184 @@ fn classify_step_objects(
     Ok((entity_id, physical_table))
 }
 
+/// Classify a reviewed step apply journals and check its authored SQL has the
+/// shape the journal accepts, without touching the database. Activation runs
+/// this before a journaled step changes a row, and `bregctl test` runs it
+/// during the rehearsal, so both refuse the same steps.
+pub(crate) fn check_reviewed_history_step(
+    descriptor_path: &str,
+    step: &ValidatedReviewedMigrationStep,
+) -> Result<SupportedHistoryMigrationStep> {
+    let supported = classify_reviewed_history_step(descriptor_path, step)?;
+    match &step.descriptor {
+        ReviewedMigrationStepDescriptor::TransactionalSql { .. } => {
+            validate_reviewed_update_sql(&step.sql)?;
+        }
+        ReviewedMigrationStepDescriptor::ChunkedBackfill { .. } => {
+            validate_reviewed_chunk_sql(&step.sql)?;
+        }
+        // The engine writes the field-encryption statement; no authored SQL.
+        ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { .. } => {}
+    }
+    Ok(supported)
+}
+
+/// Statements a reviewed update may not contain, and the record metadata only
+/// the journal may write, each matched as a whole word.
+const REFUSED_REVIEWED_UPDATE_WORDS: [&str; 12] = [
+    "insert",
+    "delete",
+    "truncate",
+    "alter",
+    "drop",
+    "create",
+    "merge",
+    "record_revision",
+    "record_lifecycle",
+    "active_package_revision",
+    "created_at",
+    "updated_at",
+];
+
 fn validate_reviewed_update_sql(sql: &str) -> Result<()> {
-    let normalized = sql.trim().trim_end_matches(';').trim();
-    let lowercase = normalized.to_ascii_lowercase();
-    if !lowercase.starts_with("update ") || lowercase.contains(';') {
+    let words = reviewed_update_words(sql)?;
+    if words.iter().any(|word| word == "record_id") {
         return Err(HistoryMigrationError::UnsupportedSqlShape);
     }
-    for refused in [
-        " insert ",
-        " delete ",
-        " truncate ",
-        " alter ",
-        " drop ",
-        " create ",
-        " merge ",
-        " record_id",
-        " record_revision",
-        " record_lifecycle",
-        " active_package_revision",
-        " created_at",
-        " updated_at",
-    ] {
-        if lowercase.contains(refused) {
-            return Err(HistoryMigrationError::UnsupportedSqlShape);
+    Ok(())
+}
+
+/// A chunked backfill binds its page of record identifiers as `$1`, so it may
+/// name `record_id`; every other refusal of a reviewed update still applies.
+fn validate_reviewed_chunk_sql(sql: &str) -> Result<()> {
+    reviewed_update_words(sql).map(|_| ())
+}
+
+/// The lowercased words of one reviewed update statement, refused unless the
+/// statement starts with `UPDATE`, holds no second statement, and names no
+/// refused word. This is a lexical first check only: activation parses the
+/// statement and pins its shape, and the journal refuses a step that changes
+/// record metadata.
+fn reviewed_update_words(sql: &str) -> Result<Vec<String>> {
+    // A statement the scan cannot delimit with certainty is read as written,
+    // so a leading comment then refuses it and every word inside its literals
+    // counts.
+    let text = mask_comments_and_literals(sql).unwrap_or_else(|| sql.to_owned());
+    let statement = text.trim().trim_end_matches(';').trim();
+    if statement.contains(';') {
+        return Err(HistoryMigrationError::UnsupportedSqlShape);
+    }
+    let words = statement
+        // `$` splits words here, so a dollar-quoted body read as written
+        // still exposes the words inside it.
+        .split(|character: char| character == '$' || !is_sql_word_character(character))
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    let starts_with_update = statement
+        .get(..6)
+        .is_some_and(|first| first.eq_ignore_ascii_case("update"))
+        && words.first().is_some_and(|word| word == "update");
+    if !starts_with_update
+        || words
+            .iter()
+            .any(|word| REFUSED_REVIEWED_UPDATE_WORDS.contains(&word.as_str()))
+    {
+        return Err(HistoryMigrationError::UnsupportedSqlShape);
+    }
+    Ok(words)
+}
+
+fn is_sql_word_character(character: char) -> bool {
+    character.is_ascii_alphanumeric()
+        || character == '_'
+        || character == '$'
+        || !character.is_ascii()
+}
+
+/// Replace comments and the contents of plain string literals with a space and
+/// keep a quoted identifier's name as a word. Returns `None` when the statement
+/// holds a construct whose extent depends on server settings or on a tag this
+/// scan would have to trust: a dollar-quoted body, a backslash inside a quoted
+/// literal, or an unterminated comment, literal, or identifier.
+fn mask_comments_and_literals(sql: &str) -> Option<String> {
+    let characters = sql.chars().collect::<Vec<_>>();
+    let mut masked = String::with_capacity(sql.len());
+    let mut index = 0;
+    while let Some(&character) = characters.get(index) {
+        let next = characters.get(index + 1).copied();
+        match character {
+            '-' if next == Some('-') => {
+                while characters.get(index).is_some_and(|&c| c != '\n') {
+                    index += 1;
+                }
+                masked.push(' ');
+            }
+            '/' if next == Some('*') => {
+                let mut depth = 0_usize;
+                loop {
+                    match (characters.get(index), characters.get(index + 1)) {
+                        (Some('/'), Some('*')) => {
+                            depth += 1;
+                            index += 2;
+                        }
+                        (Some('*'), Some('/')) => {
+                            depth -= 1;
+                            index += 2;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        (Some(_), _) => index += 1,
+                        (None, _) => return None,
+                    }
+                }
+                masked.push(' ');
+            }
+            '\'' | '"' => {
+                let mut name = String::new();
+                index += 1;
+                loop {
+                    match (characters.get(index), characters.get(index + 1)) {
+                        (Some('\\'), _) => return None,
+                        (Some(&c), Some(&following))
+                            if c == character && following == character =>
+                        {
+                            name.push(c);
+                            index += 2;
+                        }
+                        (Some(&c), _) if c == character => {
+                            index += 1;
+                            break;
+                        }
+                        (Some(&c), _) => {
+                            name.push(c);
+                            index += 1;
+                        }
+                        (None, _) => return None,
+                    }
+                }
+                masked.push(' ');
+                if character == '"' {
+                    masked.push_str(&name);
+                    masked.push(' ');
+                }
+            }
+            '$' => {
+                let follows_word = index > 0 && is_sql_word_character(characters[index - 1]);
+                if !follows_word && !next.is_some_and(|c| c.is_ascii_digit()) {
+                    return None;
+                }
+                masked.push(character);
+                index += 1;
+            }
+            _ => {
+                masked.push(character);
+                index += 1;
+            }
         }
     }
-    Ok(())
+    Some(masked)
 }
 
 fn entity_for_step<'a>(
@@ -929,8 +1105,8 @@ async fn capture_entity_rows(
     decode_captured_rows(rows, entity)
 }
 
-/// Capture exactly the rows one field-encryption chunk selected and locked in
-/// this transaction. The caller holds the page's row locks, so no table lock
+/// Capture exactly the rows one reviewed chunk selected and locked in this
+/// transaction. The caller holds the page's row locks, so no table lock
 /// or re-lock is needed here.
 #[cfg(feature = "runtime")]
 async fn capture_entity_rows_page(
@@ -1214,26 +1390,164 @@ mod tests {
         assert_eq!(error, HistoryMigrationError::InvalidAffectedRows);
     }
 
-    #[test]
-    fn chunked_backfill_is_refused_for_history_migration() {
-        let error = classify_reviewed_history_step(
-            "migrations/descriptor.json",
-            &step(ReviewedMigrationStepDescriptor::ChunkedBackfill {
-                id: "backfill-household".to_owned(),
-                entity_id: "household".to_owned(),
-                sql_path: "migrations/backfill.sql".to_owned(),
-                objects: vec![object("household", "households")],
-                cursor: ChunkCursorProtocol::RecordIdUuidArray,
-                chunk_size: 100,
-                max_total_rows: 1_000,
-                lock_timeout_ms: 1_000,
-                statement_timeout_ms: 10_000,
-                exact_affected_rows: true,
-            }),
-        )
-        .expect_err("chunked backfills need a fuller history engine");
+    fn chunked_step(entity_id: &str, chunk_size: u32) -> ValidatedReviewedMigrationStep {
+        let mut step = step(ReviewedMigrationStepDescriptor::ChunkedBackfill {
+            id: "backfill-household".to_owned(),
+            entity_id: entity_id.to_owned(),
+            sql_path: "migrations/backfill.sql".to_owned(),
+            objects: vec![object("household", "households")],
+            cursor: ChunkCursorProtocol::RecordIdUuidArray,
+            chunk_size,
+            max_total_rows: 10_000,
+            lock_timeout_ms: 1_000,
+            statement_timeout_ms: 10_000,
+            exact_affected_rows: true,
+        });
+        step.sql = "UPDATE registry_data.households SET status = 'active' \
+                    WHERE record_id = ANY($1::pg_catalog.uuid[])"
+            .to_owned();
+        step
+    }
 
-        assert_eq!(error, HistoryMigrationError::ChunkedBackfillUnsupported);
+    #[test]
+    fn chunked_backfill_journals_each_chunk_as_one_commit() {
+        let classified = check_reviewed_history_step(
+            "migrations/descriptor.json",
+            &chunked_step("household", 100),
+        )
+        .expect("a chunked backfill over one entity is journaled");
+
+        assert_eq!(classified.entity_id, "household");
+        assert_eq!(classified.physical_table, "households");
+        assert_eq!(
+            classified.affected_rows,
+            AffectedRowBounds { min: 0, max: 100 },
+            "one chunk commits at most its chunk size, and may change nothing"
+        );
+    }
+
+    #[test]
+    fn chunked_backfill_above_the_commit_limit_is_refused() {
+        let chunk_size = u32::try_from(MAX_HISTORY_MIGRATION_COMMIT_MEMBERS + 1).unwrap();
+        let error = check_reviewed_history_step(
+            "migrations/descriptor.json",
+            &chunked_step("household", chunk_size),
+        )
+        .expect_err("one chunk is one commit, so it cannot exceed the commit-member cap");
+
+        assert_eq!(error, HistoryMigrationError::InvalidAffectedRows);
+    }
+
+    #[test]
+    fn chunked_backfill_over_another_entity_than_its_objects_is_refused() {
+        let error =
+            check_reviewed_history_step("migrations/descriptor.json", &chunked_step("member", 100))
+                .expect_err("the chunked entity and the step's objects must agree");
+
+        assert_eq!(error, HistoryMigrationError::CrossEntityStep);
+    }
+
+    #[test]
+    fn chunked_backfill_may_bind_its_page_but_not_write_record_metadata() {
+        let mut forged = chunked_step("household", 100);
+        forged.sql = "UPDATE registry_data.households SET record_revision = 9 \
+                      WHERE record_id = ANY($1::pg_catalog.uuid[])"
+            .to_owned();
+        assert_eq!(
+            check_reviewed_history_step("migrations/descriptor.json", &forged),
+            Err(HistoryMigrationError::UnsupportedSqlShape),
+            "record metadata belongs to the journal"
+        );
+
+        let mut transactional = step(ReviewedMigrationStepDescriptor::TransactionalSql {
+            id: "normalize-household".to_owned(),
+            sql_path: "migrations/normalize.sql".to_owned(),
+            objects: vec![object("household", "households")],
+            affected_rows: Some(AffectedRowBounds { min: 0, max: 10 }),
+        });
+        transactional.sql = "UPDATE registry_data.households SET status = 'active' \
+                             WHERE record_id = ANY('{}'::pg_catalog.uuid[])"
+            .to_owned();
+        assert_eq!(
+            check_reviewed_history_step("migrations/descriptor.json", &transactional),
+            Err(HistoryMigrationError::UnsupportedSqlShape),
+            "a transactional update binds no page, so it still may not name record_id"
+        );
+    }
+
+    fn chunked_sql_check(sql: &str) -> Result<SupportedHistoryMigrationStep> {
+        let mut step = chunked_step("household", 100);
+        step.sql = sql.to_owned();
+        check_reviewed_history_step("migrations/descriptor.json", &step)
+    }
+
+    #[test]
+    fn chunked_backfill_accepts_comments_line_breaks_and_words_inside_literals() {
+        for sql in [
+            "-- SPDX-License-Identifier: Apache-2.0\n\
+             /* Normalise the status, /* nested */ once. */\n\
+             UPDATE registry_data.households SET status = 'active' \
+             WHERE record_id = ANY($1::pg_catalog.uuid[]);",
+            "UPDATE\n  registry_data.households\n   SET status = 'active'\n\t WHERE \
+             record_id = ANY($1::pg_catalog.uuid[])",
+            "UPDATE registry_data.households SET created_at_source = 'form', \
+             updated_at_source = 'form' WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            "UPDATE registry_data.households SET note = 'delete me; then insert it''s drop' \
+             WHERE record_id = ANY($1::pg_catalog.uuid[]) -- create nothing else",
+        ] {
+            assert!(
+                chunked_sql_check(sql).is_ok(),
+                "a valid chunked update is accepted: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn chunked_backfill_refuses_the_statement_shapes_the_journal_cannot_hold() {
+        for sql in [
+            // Record metadata, however it is spelled.
+            "UPDATE registry_data.households SET created_at = now() \
+             WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            "UPDATE registry_data.households AS h SET status = h.updated_at::text \
+             WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            "UPDATE registry_data.households SET \"record_revision\" = 9 \
+             WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            "UPDATE registry_data.households SET RECORD_LIFECYCLE = 'active' \
+             WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            // A second statement, or a statement that is not an update.
+            "UPDATE registry_data.households SET status = 'a' \
+             WHERE record_id = ANY($1::pg_catalog.uuid[]); DELETE FROM registry_data.households",
+            "UPDATE registry_data.households SET status = 'a' \
+             WHERE record_id = ANY($1::pg_catalog.uuid[]);\nSELECT 1",
+            "-- UPDATE registry_data.households\nSELECT 1",
+            "/* UPDATE */ DELETE FROM registry_data.households WHERE record_id = ANY($1)",
+            "WITH moved AS (DELETE FROM registry_data.households RETURNING record_id) \
+             UPDATE registry_data.households SET status = 'a' WHERE record_id = ANY($1)",
+            "UPDATE registry_data.households SET status = (SELECT 1 FROM (INSERT INTO x VALUES (1)) i) \
+             WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            // Constructs whose extent the scan will not guess are read as
+            // written, so a refused word inside them still refuses.
+            "UPDATE registry_data.households SET status = $$delete$$ \
+             WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            "UPDATE registry_data.households SET status = E'\\' delete ' \
+             WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            "UPDATE registry_data.households SET status = 'unterminated delete \
+             WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            "$$ $$ UPDATE registry_data.households SET status = 'a' \
+             WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            "-- a comment the scan cannot end\n UPDATE registry_data.households \
+             SET status = $x$a$x$ WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            "/* unterminated UPDATE registry_data.households SET status = 'a' \
+             WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            "",
+            ";",
+        ] {
+            assert_eq!(
+                chunked_sql_check(sql),
+                Err(HistoryMigrationError::UnsupportedSqlShape),
+                "the statement is refused: {sql}"
+            );
+        }
     }
 
     #[test]

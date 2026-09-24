@@ -631,6 +631,43 @@ fn reviewed_encryption_flip_refuses_a_chunk_size_beyond_the_commit_budget() {
 }
 
 #[test]
+fn reviewed_chunked_backfill_refuses_a_chunk_size_beyond_the_commit_budget() {
+    let previous = compile_variant(Variant::Base, 1);
+    let candidate = compile_variant(Variant::RequiredField, 2);
+    let mut artifacts = backfill_artifacts("required-field", &previous, &candidate);
+    // Every chunk journals the rows it changed as one history commit, so a
+    // chunked backfill shares the commit-member budget too.
+    let ReviewedMigrationStepDescriptor::ChunkedBackfill { chunk_size, .. } =
+        &mut artifacts.descriptor.steps[0]
+    else {
+        panic!("the backfill step is chunked");
+    };
+    *chunk_size = 1_000;
+    artifacts.rebind();
+    prepare_reviewed_package(
+        Variant::RequiredField,
+        previous.clone(),
+        vec![artifacts.source()],
+    )
+    .expect("a chunk size at the commit-member budget prepares");
+
+    let ReviewedMigrationStepDescriptor::ChunkedBackfill { chunk_size, .. } =
+        &mut artifacts.descriptor.steps[0]
+    else {
+        panic!("the backfill step is chunked");
+    };
+    *chunk_size = 1_001;
+    artifacts.rebind();
+    assert_refused(
+        Variant::RequiredField,
+        previous,
+        vec![artifacts.source()],
+        ReviewedMigrationError::Descriptor,
+        "a chunked backfill chunk size beyond the commit-member budget",
+    );
+}
+
+#[test]
 fn reviewed_encryption_flip_refuses_multiple_backfill_steps_for_one_entity() {
     let previous = compile_variant(Variant::EncryptedBase, 1);
     let candidate = compile_variant(Variant::EncryptedFlipOn, 2);

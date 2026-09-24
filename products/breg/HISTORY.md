@@ -321,10 +321,15 @@ field makes the query unavailable instead of inventing today's default.
 
 Reviewed bounded data migrations append internal `migration` revisions and
 commit membership. They do not fabricate user patches or business events.
-The supported data step is a direct reviewed `UPDATE` on one retained entity
+A transactional data step is a direct reviewed `UPDATE` on one retained entity
 table with explicit affected-row bounds. The complete table must fit that bound,
 up to 1,000 rows, so before/after capture remains bounded within the transaction.
-Establishing an existing-data baseline also has a 1,000-row limit.
+A chunked backfill is a direct reviewed `UPDATE` of one retained entity per
+chunk of at most 1,000 record identifiers; each chunk commits on its own with
+one migration commit for the rows it changed, so a resumed backfill never
+journals a committed chunk twice and the table size is bounded only by the
+step's `maxTotalRows`. Establishing an existing-data baseline also has a
+1,000-row limit.
 Unsupported data-changing migrations refuse before changing records. Runtime
 credentials do not acquire journal UPDATE or DELETE authority.
 
