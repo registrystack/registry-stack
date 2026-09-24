@@ -11,7 +11,7 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES};
 
@@ -101,21 +101,21 @@ fn require_absolute(field: &str, path: &Path) -> Result<(), ConfigBlockError> {
         {"required": ["environment"], "properties": {"environment": {"$ref": "#/$defs/EnvironmentSecretProviderConfig"}}}
     ]))
 )]
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SecretProvidersConfig {
     /// Enables `secret:file/name` references, read from files under `root`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<FileSecretProviderConfig>,
     /// Enables `secret:env/NAME` references, read from the process
     /// environment. Declared as an empty mapping: `environment: {}`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<EnvironmentSecretProviderConfig>,
 }
 
 /// The file secret provider.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FileSecretProviderConfig {
     /// Absolute directory holding one file per secret. Each file must be a
@@ -127,7 +127,7 @@ pub struct FileSecretProviderConfig {
 
 /// The environment secret provider. It takes no settings.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnvironmentSecretProviderConfig {}
 
@@ -290,7 +290,7 @@ impl DatabaseConfig {
 
 /// Where a runtime obtains the OIDC issuer's signing keys.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum JwksSource {
     /// Read `jwks_uri` from the issuer's OpenID Connect discovery document.
@@ -387,7 +387,7 @@ fn valid_jwks_uri(value: &str, allow_loopback_http: bool) -> bool {
 /// and `expectedDigest`, when set, pins the package identity the runtime must
 /// find there.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PackageConfig {
     /// Absolute path of the package directory.
@@ -395,7 +395,7 @@ pub struct PackageConfig {
     pub root: PathBuf,
     /// `sha256:` label of the package identity. When set, the runtime refuses
     /// to start on any other package.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^sha256:[0-9a-f]{64}$")))]
     pub expected_digest: Option<String>,
 }
@@ -484,6 +484,12 @@ impl FromStr for ListenerBind {
     }
 }
 
+impl Serialize for ListenerBind {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(&self.0)
+    }
+}
+
 impl<'de> Deserialize<'de> for ListenerBind {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = String::deserialize(deserializer)?;
@@ -518,7 +524,7 @@ impl schemars::JsonSchema for ListenerBind {
 
 /// The listener of a runtime that declares no TLS or exposure settings.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListenerConfig {
     pub bind: ListenerBind,
@@ -529,7 +535,7 @@ pub struct ListenerConfig {
 /// termination; direct plaintext is limited to the explicit loopback-only
 /// development mode.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TlsTermination {
     OperatorControlledUpstream,
@@ -538,7 +544,7 @@ pub enum TlsTermination {
 
 /// The operator-declared private network placement of an HTTP listener.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ListenerNetworkExposure {
     #[default]
@@ -549,7 +555,7 @@ pub enum ListenerNetworkExposure {
 /// The listener of a runtime that declares its TLS termination and network
 /// exposure.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PrivateListenerConfig {
     pub bind: ListenerBind,

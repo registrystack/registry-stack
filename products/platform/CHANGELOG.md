@@ -31,7 +31,9 @@
   refused inside `*Ref` fields and in authored package files.
 - Add the shared configuration blocks (`secretProviders`, `database`,
   `jwksSource`, `package`, `listener`) and their canonical JSON Schema under
-  `products/platform/generated/`.
+  `products/platform/generated/`. The blocks also serialize back to the form
+  they were read from, so a runtime that renders its configuration keeps the
+  same key names.
 - Add Ed25519 and ES256 private key generation beside ES384, with RFC 7638
   thumbprint tests for RSA, EC, and OKP keys.
 - BREAKING: remove `reject_deprecated_config_fields`; runtimes declare removed
