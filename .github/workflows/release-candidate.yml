@@ -741,6 +741,7 @@ jobs:
             crates/registry-relay-client-node/package-lock.json
             crates/registry-breg-client-node/package-lock.json
             crates/registry-casework-client-node/package-lock.json
+            crates/registry-messaging-client-node/package-lock.json
             crates/registry-stack-client-node/package-lock.json
 
       - name: Restore native client Cargo cache
@@ -753,7 +754,7 @@ jobs:
             target/release-client-node
           # AWS-LC does not track the deployment-target environment variable.
           # Exclude caches configured before the macOS 11 compatibility pin.
-          key: registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-deployment-11.0-' || '' }}${{ hashFiles('.github/workflows/release-candidate.yml', 'rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/macos_fips_packaging.py', 'release/scripts/bundle-client-macos-fips.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
+          key: registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-deployment-11.0-' || '' }}${{ hashFiles('.github/workflows/release-candidate.yml', 'rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/macos_fips_packaging.py', 'release/scripts/bundle-client-macos-fips.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-messaging-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
           restore-keys: |
             registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-deployment-11.0-' || '' }}
 
@@ -786,12 +787,19 @@ jobs:
           if (( client_major > 0 || client_minor >= 30 )); then
             include_casework=1
           fi
+          include_messaging=0
+          if (( client_major > 0 || client_minor >= 35 )); then
+            include_messaging=1
+          fi
           clients=(discovery evidence relay)
           if [[ "${unified_client}" -eq 1 ]]; then
             clients+=(breg)
           fi
           if [[ "${include_casework}" -eq 1 ]]; then
             clients+=(casework)
+          fi
+          if [[ "${include_messaging}" -eq 1 ]]; then
+            clients+=(messaging)
           fi
           for client in "${clients[@]}"; do
             if [[ "${client}" == discovery ]] &&
@@ -838,6 +846,8 @@ jobs:
               wheel_stem=registry_breg_client_native
             elif [[ "${client}" == casework ]]; then
               wheel_stem=registry_casework_client_native
+            elif [[ "${client}" == messaging ]]; then
+              wheel_stem=registry_messaging_client_native
             fi
             wheel="${wheel_stem}-${CLIENT_VERSION}-${wheel_tag}.whl"
             if [[ ! -f "${built_wheel_dir}/${wheel}" ]]; then
@@ -854,6 +864,13 @@ jobs:
                 "${built_wheel_dir}/registry_casework_client_native-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl"
               )
             fi
+            messaging_wheel_args=()
+            if [[ "${include_messaging}" -eq 1 ]]; then
+              messaging_wheel_args=(
+                --messaging-wheel
+                "${built_wheel_dir}/registry_messaging_client_native-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl"
+              )
+            fi
             macos_wheel_args=()
             if [[ "${RUNNER_OS}" == macOS ]] &&
                 (( client_major > 0 || client_minor >= 33 )); then
@@ -867,7 +884,8 @@ jobs:
               --evidence-wheel "${built_wheel_dir}/registry_evidence_client-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
               --relay-wheel "${built_wheel_dir}/registry_relay_client-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
               --breg-wheel "${built_wheel_dir}/registry_breg_client_native-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
-              "${casework_wheel_args[@]}"
+              "${casework_wheel_args[@]}" \
+              "${messaging_wheel_args[@]}"
             expected_wheels=1
           else
             cp "${built_wheel_dir}"/*.whl "${wheel_dir}/"
@@ -951,12 +969,19 @@ jobs:
           if (( client_major > 0 || client_minor >= 30 )); then
             include_casework=1
           fi
+          include_messaging=0
+          if (( client_major > 0 || client_minor >= 35 )); then
+            include_messaging=1
+          fi
           clients=(discovery evidence relay)
           if [[ "${unified_client}" -eq 1 ]]; then
             clients+=(breg)
           fi
           if [[ "${include_casework}" -eq 1 ]]; then
             clients+=(casework)
+          fi
+          if [[ "${include_messaging}" -eq 1 ]]; then
+            clients+=(messaging)
           fi
           for client in "${clients[@]}"; do
             if [[ "${client}" == discovery ]] &&
@@ -1018,6 +1043,9 @@ jobs:
             if [[ "${include_casework}" -eq 1 ]]; then
               platform_clients+=(casework)
             fi
+            if [[ "${include_messaging}" -eq 1 ]]; then
+              platform_clients+=(messaging)
+            fi
             for client in "${platform_clients[@]}"; do
               cp "${GITHUB_WORKSPACE}/crates/registry-${client}-client-node/${client}-client.${{ matrix.napi_platform }}.node" \
                 "${platform_dir}/"
@@ -1059,6 +1087,10 @@ jobs:
             if (( major > 0 || minor >= 30 )); then
               include_casework=1
             fi
+            include_messaging=0
+            if (( major > 0 || minor >= 35 )); then
+              include_messaging=1
+            fi
             smoke="${RUNNER_TEMP}/node-smoke-registry"
             root_stage="${RUNNER_TEMP}/node-root-registry"
             mkdir -p "${smoke}" "${root_stage}"
@@ -1082,7 +1114,10 @@ jobs:
                 -maxdepth 1 -name '*.node' -print -quit)"
               expected_addons=4
               if [[ "${include_casework}" -eq 1 ]]; then
-                expected_addons=5
+                expected_addons=$((expected_addons + 1))
+              fi
+              if [[ "${include_messaging}" -eq 1 ]]; then
+                expected_addons=$((expected_addons + 1))
               fi
               test "$(find node_modules/@registrystack/client-${{ matrix.napi_platform }} \
                 -maxdepth 1 -name '*.node' | wc -l)" -eq "${expected_addons}"

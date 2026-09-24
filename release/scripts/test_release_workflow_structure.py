@@ -1383,6 +1383,73 @@ class NativeBenchmarkWorkflowStructureTest(unittest.TestCase):
         self.assertEqual(text.count("actions/upload-artifact@"), 2)
 
 
+class MessagingClientWorkflowStructureTest(unittest.TestCase):
+    MESSAGING_LOCK = "crates/registry-messaging-client-node/package-lock.json"
+
+    def test_candidate_builds_messaging_clients_from_version_0_35(self) -> None:
+        _, document = workflow("release-candidate.yml")
+        clients = document["jobs"]["clients"]
+        setup_node = next(
+            step for step in clients["steps"] if step.get("name") == "Setup Node"
+        )
+        self.assertIn(
+            self.MESSAGING_LOCK,
+            setup_node["with"]["cache-dependency-path"].splitlines(),
+        )
+        cargo_cache = next(
+            step
+            for step in clients["steps"]
+            if step.get("name") == "Restore native client Cargo cache"
+        )
+        self.assertIn(f"'{self.MESSAGING_LOCK}'", cargo_cache["with"]["key"])
+
+        gate = "if (( client_major > 0 || client_minor >= 35 )); then\n  include_messaging=1\nfi"
+        python = step_run(document, "clients", "Build Python client wheels")
+        node = step_run(document, "clients", "Build Node client packages")
+        for build in (python, node):
+            self.assertIn(gate, build)
+            self.assertIn(
+                'if [[ "${include_messaging}" -eq 1 ]]; then\n  clients+=(messaging)\nfi',
+                build,
+            )
+        self.assertIn("wheel_stem=registry_messaging_client_native", python)
+        self.assertIn("--messaging-wheel", python)
+        self.assertIn('"${messaging_wheel_args[@]}"', python)
+        self.assertIn(
+            'if [[ "${include_messaging}" -eq 1 ]]; then\n'
+            "    platform_clients+=(messaging)\n"
+            "  fi",
+            node,
+        )
+        smoke = step_run(document, "clients", "Smoke Node client packages")
+        self.assertIn("if (( major > 0 || minor >= 35 )); then", smoke)
+        self.assertIn(
+            'if [[ "${include_messaging}" -eq 1 ]]; then\n'
+            "      expected_addons=$((expected_addons + 1))",
+            smoke,
+        )
+
+    def test_rehearsal_builds_messaging_into_the_unified_node_client(self) -> None:
+        _, document = workflow("release-rehearsal.yml")
+        clients = document["jobs"]["node-clients"]
+        setup_node = next(
+            step for step in clients["steps"] if step.get("name") == "Setup Node"
+        )
+        self.assertIn(
+            self.MESSAGING_LOCK,
+            setup_node["with"]["cache-dependency-path"].splitlines(),
+        )
+        build = step_run(
+            document, "node-clients", "Build, package, and smoke Linux Node clients"
+        )
+        self.assertIn("clients+=(breg casework messaging)", build)
+        self.assertIn(
+            "for client in discovery evidence relay breg casework messaging; do",
+            build,
+        )
+        self.assertIn("-maxdepth 1 -name '*.node' | wc -l)\" -eq 6", build)
+
+
 class MacOSFipsWorkflowStructureTest(unittest.TestCase):
     def test_candidate_packages_shared_fips_before_client_publication(self) -> None:
         _, document = workflow("release-candidate.yml")
