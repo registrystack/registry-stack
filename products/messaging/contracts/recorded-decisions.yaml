@@ -288,3 +288,53 @@ decisions:
     evidence:
       - {path: crates/registry-messagingctl/tests/postgres_messages_cli.rs, name: retention_previews_by_default_and_erases_only_expired_terminal_messages_with_apply}
       - {path: crates/registry-messagingctl/src/lib.rs, name: a_malformed_or_future_cutoff_is_refused_before_any_file_or_database}
+  - id: MESSAGING-DEC-20
+    subject: A caller's request rate is per process and charged before the body
+    decision: >-
+      An access profile's requestsPerMinute and burst are a token bucket per
+      caller, keyed by the caller's keyed principal pseudonym and held in
+      the runtime process. A submission is charged after the role check and
+      before the body is read, a replay included; past the burst it is
+      refused with 429 rate-limit.exceeded and Retry-After, and a limiter
+      that cannot decide answers 503 service.unavailable.
+    reasoning: >-
+      One replica is the supported topology, and the platform token bucket
+      is the primitive Evidence already uses. Charging before the
+      body keeps rendering behind the budget, and keying by the pseudonym
+      keeps the raw subject out of the limiter.
+    evidence:
+      - {path: crates/registry-messaging/src/http.rs, name: a_caller_past_its_profile_rate_is_refused_with_the_wait_needed}
+      - {path: crates/registry-messaging/src/limits.rs, name: callers_and_profiles_have_separate_budgets}
+  - id: MESSAGING-DEC-21
+    subject: A profile's daily limit is counted from its accepted messages
+    decision: >-
+      dailyLimit bounds the messages one access profile, all its callers
+      together, accepted in the last 24 hours. The acceptance transaction
+      counts them under a transaction advisory lock of the profile; past the
+      limit the submission is refused with 429 quota.exceeded and
+      Retry-After set to when the oldest counted message leaves the window.
+      A replay is not counted again.
+    reasoning: >-
+      A daily limit that a restart or a second replica resets is not a
+      limit. The accepted messages already are the count, so no counter
+      table can drift from them, and a record is deleted only well after it
+      leaves the window.
+    evidence:
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_profile_past_its_daily_limit_is_refused_across_a_restart}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: concurrent_submissions_never_take_more_than_the_daily_limit}
+  - id: MESSAGING-DEC-22
+    subject: A provider's send rate paces the worker inside the lease
+    decision: >-
+      An http provider's capabilities.ratePerSecond is enforced in-process by
+      the worker: a leased attempt waits in turn for the provider's next
+      send slot, with a ten-second allowance added to its time budget, and
+      an attempt whose slot does not open in time is a transient failure
+      with nothing sent.
+    reasoning: >-
+      Pacing before the claim would hold the rate by delaying claims that a
+      second provider's messages need. Pacing inside the lease keeps other
+      providers moving, and the allowance keeps the wait from shortening
+      the send's own budget.
+    evidence:
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_paced_provider_starts_one_send_per_interval}
+      - {path: crates/registry-messaging/src/limits.rs, name: a_slot_that_opens_after_the_deadline_is_refused_without_waiting}

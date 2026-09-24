@@ -212,6 +212,51 @@ suite proves.
 
 Tests: MESSAGING-SEC-01 and -02 in `contracts/security-test-traceability.yaml`.
 
+## Limits
+
+Threat: one integration exhausts the runtime, the provider account, or the
+recipients' patience by submitting faster or more than its profile allows;
+a limit that forgets on restart or splits across replicas lets a caller
+reset it; the limiter itself becomes a label or journal channel for caller
+identities.
+
+Each access profile's `requestsPerMinute` and `burst` are a
+`registry-platform-ratelimit` token bucket per caller, keyed by the caller's
+keyed principal pseudonym, never by the raw subject. A submission is charged
+after authentication and the role check and before its body is read, so a
+caller cannot spend the runtime's rendering on requests it has no budget
+for; past the burst it is `429 rate-limit.exceeded` with `Retry-After`, and
+a limiter that cannot decide answers `503 service.unavailable`
+(MESSAGING-DEC-20). The bucket is in-process: each replica enforces its own,
+and a restart refills it. `dailyLimit` is counted over the profile's
+accepted messages of the last 24 hours inside the acceptance transaction,
+under a transaction advisory lock of the profile, so concurrent submissions
+cannot both take the last place and the count survives a restart and holds
+across replicas; past it the answer is `429 quota.exceeded` with
+`Retry-After` (MESSAGING-DEC-21). A replay is charged to the rate, not to
+the daily count. A refusal is journaled like every refused submission, as
+`messaging.message.refused` with its problem code.
+
+A provider's `capabilities.ratePerSecond` paces the worker in-process: a
+leased attempt waits for the provider's next send slot, with a ten-second
+allowance added to its time budget, and an attempt whose slot does not open
+in it is transient and nothing is sent (MESSAGING-DEC-22).
+
+Residual risk: a caller that keeps sending past its rate still makes the
+runtime authenticate each request and write one journal record for it. The
+request edge's body limit bounds each request, but no limit bounds the
+journal growth of a refused flood; an operator relies on the deployment's
+edge proxy for that.
+
+Tests: `limits.rs` (`a_caller_is_refused_past_its_profile_burst_with_the_wait_needed`,
+`callers_and_profiles_have_separate_budgets`,
+`an_unknown_profile_or_an_unusable_key_is_refused_as_unavailable`,
+`a_provider_starts_one_send_per_interval`), `http.rs`
+`a_caller_past_its_profile_rate_is_refused_with_the_wait_needed`, and the
+PostgreSQL suites' `a_profile_past_its_daily_limit_is_refused_across_a_restart`,
+`concurrent_submissions_never_take_more_than_the_daily_limit`, and
+`a_paced_provider_starts_one_send_per_interval`.
+
 ## Dispatch
 
 Threat: a worker that lost its lease overwrites the outcome another worker

@@ -88,6 +88,13 @@
   `failed` once its report is final. `messagingctl messages list --status`
   filters on the derived status, list and show print the dispatch state, and
   `retry`, `settle`, and `cancel` decide eligibility from it.
+- Enforce each access profile's `requestsPerMinute` and `burst` per caller
+  (`429 rate-limit.exceeded`) and its `dailyLimit` over the profile's
+  accepted messages of the last 24 hours (`429 quota.exceeded`), both with
+  `Retry-After`. Pace each `http` provider's sends to its
+  `capabilities.ratePerSecond`. Migration 0004 indexes a profile's
+  acceptances.
+- Add the problems `rate-limit.exceeded` (429) and `quota.exceeded` (429).
 - Enforce retention: a payload is erased `retention.payloadDays` and a
   record deleted `retention.recordDays` after the message reached a terminal
   state, and a submission receipt is dropped after

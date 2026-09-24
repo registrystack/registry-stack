@@ -223,8 +223,19 @@ requestsPerMinute, burst, dailyLimit}`. `actorKind` is `human`, `agent`, or
 `service`, and omitted means any. `role` is `sender` or `operator`. A sender
 lists at least one sender profile and one template; an operator lists none and
 may not allow direct content. A requester client belongs to exactly one
-profile. Rates, bursts, and daily limits must be positive; they are declared
-now and enforced when submission lands.
+profile. Rates, bursts, and daily limits must be positive.
+
+`requestsPerMinute` and `burst` bound how fast each caller of the profile
+submits: every `POST /v1/messages` after the role check is charged to a
+token bucket keyed by the caller's issuer and subject, and one past the
+burst is refused `429 rate-limit.exceeded` with `Retry-After`. The bucket
+lives in the runtime process, so each replica enforces it on its own and a
+restart refills it. `dailyLimit`, when set, bounds the messages the whole
+profile has accepted in the last 24 hours. It is counted from the accepted
+messages in the acceptance transaction, so it holds across replicas and
+restarts; a submission past it is refused `429 quota.exceeded` with
+`Retry-After` set to when the oldest counted message leaves the window. A
+replayed submission is charged to the rate but not to the daily limit.
 
 The rest of the manifest declares what callers send through:
 
@@ -294,6 +305,13 @@ capabilities:
   concurrencyLimit: 8                     # 1 to 64
   ratePerSecond: 20                       # optional, 1 to 1000
 ```
+
+`ratePerSecond` paces the worker: an attempt waits for the provider's next
+send slot after it is leased and before anything reaches the provider, so at
+most one send starts every `1 / ratePerSecond` seconds per runtime process.
+The wait has its own ten-second allowance on top of the send's time budget;
+an attempt whose slot does not open in it is retried under its dispatch
+policy without a send.
 
 `provider.yaml` is closed and at most 64 KiB; each script is at most 64 KiB
 and must compile with exactly its entry point when the package loads. A
