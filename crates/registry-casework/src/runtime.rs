@@ -692,6 +692,58 @@ fn resolve_audit_secret(
     })
 }
 
+/// What a read-only verification of the retained audit chain covered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditJournalVerification {
+    /// Records whose keyed chain links verified.
+    pub records: usize,
+    /// Segment files read, sealed and active.
+    pub segments: usize,
+    /// Whether the active segment was verified. A running writer holds it,
+    /// so only the sealed history is verified while the runtime serves.
+    pub active_segment_verified: bool,
+}
+
+/// Verify the retained audit chain at `path` under the key `hash_key_ref`
+/// names, without writing a record or taking the writer's place.
+///
+/// A path with no retained file yet verifies as an empty chain. A chain that
+/// does not verify under the key is refused with the same description the
+/// runtime gives at startup.
+pub fn verify_audit_journal(
+    path: &Path,
+    secrets: &SecretResolver,
+    hash_key_ref: &str,
+) -> Result<AuditJournalVerification, RuntimeError> {
+    let audit_secret = resolve_audit_secret(secrets, hash_key_ref)?;
+    let audit_profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+        audit_secret.expose_secret().to_vec(),
+    ))
+    .map_err(|_| RuntimeError::Audit)?;
+    refuse_rotated_audit_layout(path)?;
+    let directory_exists = path.parent().is_some_and(Path::is_dir);
+    if !directory_exists
+        || registry_platform_audit::segmented_audit_paths(path)
+            .map_err(|error| RuntimeError::AuditJournal(describe_audit_journal_failure(&error)))?
+            .is_empty()
+    {
+        return Ok(AuditJournalVerification {
+            records: 0,
+            segments: 0,
+            active_segment_verified: false,
+        });
+    }
+    let summary =
+        registry_platform_audit::verify_segmented_audit_chain(path, &audit_profile.chain_hasher())
+            .map_err(|error| RuntimeError::AuditJournal(describe_audit_journal_failure(&error)))?;
+    Ok(AuditJournalVerification {
+        records: summary.records,
+        segments: summary.segments,
+        active_segment_verified: summary.active_verified,
+    })
+}
+
 /// Open the audit journal, authenticate its retained chain, and recover the
 /// publication state its tail implies.
 async fn open_audit_journal(
@@ -1734,6 +1786,83 @@ mod tests {
         assert!(
             event_ids.contains(&oldest_event_id.to_string()),
             "the oldest record must not be deleted once its segment rotates out of the active file"
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_journal_verification_reports_the_chain_and_refuses_another_key() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (_root, audit) = audit_directory_with_mode(0o700);
+        let path = audit.join("casework.jsonl");
+        let secret_root = tempfile::tempdir().expect("temporary secret root");
+        for (name, key) in [
+            (
+                "casework-audit-key",
+                b"casework-audit-verify-secret-32-bytes".as_slice(),
+            ),
+            (
+                "other-audit-key",
+                b"casework-audit-another-secret-32-bytes".as_slice(),
+            ),
+        ] {
+            let secret = secret_root.path().join(name);
+            std::fs::write(&secret, key).expect("write audit secret");
+            std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600))
+                .expect("restrict audit secret");
+        }
+        let secrets =
+            SecretResolver::new([SecretProvider::File], secret_root.path()).expect("resolver");
+
+        assert_eq!(
+            verify_audit_journal(&path, &secrets, "secret:file/casework-audit-key")
+                .expect("a journal with no file yet verifies as empty"),
+            AuditJournalVerification {
+                records: 0,
+                segments: 0,
+                active_segment_verified: false,
+            }
+        );
+
+        let profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+            b"casework-audit-verify-secret-32-bytes".to_vec(),
+        ))
+        .expect("audit profile");
+        let sink = DurableSegmentedJsonlSink::open(&path, MAXIMUM_AUDIT_SEGMENT_BYTES)
+            .expect("writer lock");
+        let chain = profile
+            .bootstrap_or_start_empty(&sink)
+            .await
+            .expect("keyed bootstrap");
+        for index in 0..3 {
+            chain
+                .append(
+                    &sink,
+                    serde_json::json!({
+                        "eventId": Uuid::new_v4().to_string(),
+                        "event": "casework.synthetic",
+                        "index": index,
+                    }),
+                )
+                .await
+                .expect("append");
+        }
+        drop(chain);
+        drop(sink);
+
+        let verified = verify_audit_journal(&path, &secrets, "secret:file/casework-audit-key")
+            .expect("the chain verifies under its own key");
+        assert_eq!(verified.records, 3);
+        assert!(verified.active_segment_verified);
+
+        let refused = verify_audit_journal(&path, &secrets, "secret:file/other-audit-key")
+            .expect_err("another key does not verify the chain");
+        assert_eq!(
+            refused.to_string(),
+            RuntimeError::AuditJournal(
+                "the retained audit chain does not verify under audit.hashKeyRef".to_owned()
+            )
+            .to_string()
         );
     }
 

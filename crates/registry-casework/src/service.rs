@@ -16,7 +16,25 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::{PostgresStore, StoreError};
+use crate::{PostgresStore, ReconciliationFailure, StoreError};
+
+/// Readiness fails once a source's reconciliation has failed this many
+/// consecutive passes, and recovers on the next pass that succeeds.
+pub const RECONCILIATION_FAILURE_THRESHOLD: i32 = 5;
+
+/// The closed failure class recorded for a failed reconciliation pass.
+fn reconciliation_failure(error: &ServiceError) -> ReconciliationFailure {
+    match error {
+        ServiceError::Adapter(SourceAdapterError::Unavailable | SourceAdapterError::Concealed) => {
+            ReconciliationFailure::SourceUnavailable
+        }
+        ServiceError::Adapter(_) | ServiceError::SourceProtocol | ServiceError::BindingMoved => {
+            ReconciliationFailure::SourceRefused
+        }
+        ServiceError::Store(_) => ReconciliationFailure::Store,
+        _ => ReconciliationFailure::Configuration,
+    }
+}
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -146,6 +164,19 @@ impl CaseworkService {
             return Err(StoreError::Unavailable.into());
         }
         self.store.ready().await?;
+        let source_ids: Vec<String> = self.adapters.keys().cloned().collect();
+        if let Some(failing) = self
+            .store
+            .reconciliation_health(&source_ids)
+            .await?
+            .into_iter()
+            .find(|health| health.consecutive_failures >= RECONCILIATION_FAILURE_THRESHOLD)
+        {
+            return Err(ServiceError::ReconciliationFailing {
+                source_id: failing.source_id,
+                consecutive_failures: failing.consecutive_failures,
+            });
+        }
         Ok(())
     }
 
@@ -204,31 +235,61 @@ impl CaseworkService {
     pub async fn synchronize_pending(&self, maximum: i64) -> Result<usize, ServiceError> {
         let subjects = self.store.claim_sync_batch(maximum.min(100), 30).await?;
         let mut applied = 0;
+        let mut failed = 0_usize;
+        let mut first_failure = None;
+        // A subject that fails keeps its claim lease and is read again later;
+        // the subjects behind it are still applied in this batch.
         for subject in subjects {
-            let adapter = self.adapter(&subject.source_id)?;
-            match adapter.read_authoritative(&subject).await {
-                Ok(observation) => {
-                    let (routing, target) = self.routing_policy_for(&observation)?;
-                    let routing_policy_digest =
-                        routing_policy_digest(self.request_policy_for(&observation.subject)?)?;
-                    let clock = self.clock_policy_for(&subject)?;
-                    self.store
-                        .apply_observation_with_policy_context(
-                            &observation,
-                            &routing.queue,
-                            target,
-                            Some(&routing),
-                            Some(&routing_policy_digest),
-                            clock.as_ref(),
-                        )
-                        .await?;
-                    applied += 1;
+            let outcome = match self.adapter(&subject.source_id) {
+                Ok(adapter) => self.synchronize_subject(adapter.as_ref(), &subject).await,
+                Err(error) => Err(error),
+            };
+            match outcome {
+                Ok(()) => applied += 1,
+                Err(ServiceError::Adapter(
+                    SourceAdapterError::Unavailable | SourceAdapterError::Concealed,
+                )) => {}
+                Err(error) => {
+                    failed += 1;
+                    first_failure.get_or_insert(error);
                 }
-                Err(SourceAdapterError::Unavailable | SourceAdapterError::Concealed) => {}
-                Err(error) => return Err(error.into()),
             }
         }
+        if let Some(error) = first_failure {
+            tracing::warn!(
+                applied,
+                failed,
+                error = %error,
+                "Casework synchronization could not apply every claimed subject"
+            );
+            return Err(error);
+        }
         Ok(applied)
+    }
+
+    /// Read and apply one claimed subject. The caller decides whether a
+    /// failure stops its batch.
+    async fn synchronize_subject(
+        &self,
+        adapter: &dyn SourceAdapter,
+        subject: &SubjectRef,
+    ) -> Result<(), ServiceError> {
+        let observation = adapter.read_authoritative(subject).await?;
+        let (routing, target) = self.routing_policy_for(&observation)?;
+        let routing_policy_digest =
+            routing_policy_digest(self.request_policy_for(&observation.subject)?)?;
+        let clock = self.clock_policy_for(subject)?;
+        self.store
+            .apply_observation_with_policy_context(
+                &observation,
+                &routing.queue,
+                target,
+                Some(&routing),
+                Some(&routing_policy_digest),
+                clock.as_ref(),
+            )
+            .await?;
+        Ok(())
     }
 
     async fn synchronize_source_pending(
@@ -248,37 +309,75 @@ impl CaseworkService {
             .await?;
         let mut applied = 0;
         let mut unavailable = false;
+        let mut first_failure = None;
+        let mut failed = 0_usize;
+        // A subject that fails keeps its claim lease and is read again on a
+        // later pass; the subjects behind it are still applied in this one.
         for subject in subjects {
-            match adapter.read_authoritative(&subject).await {
-                Ok(observation) => {
-                    let (routing, target) = self.routing_policy_for(&observation)?;
-                    let routing_policy_digest =
-                        routing_policy_digest(self.request_policy_for(&observation.subject)?)?;
-                    let clock = self.clock_policy_for(&subject)?;
-                    self.store
-                        .apply_observation_with_policy_context(
-                            &observation,
-                            &routing.queue,
-                            target,
-                            Some(&routing),
-                            Some(&routing_policy_digest),
-                            clock.as_ref(),
-                        )
-                        .await?;
-                    applied += 1;
+            match self.synchronize_subject(adapter.as_ref(), &subject).await {
+                Ok(()) => applied += 1,
+                Err(ServiceError::Adapter(
+                    SourceAdapterError::Unavailable | SourceAdapterError::Concealed,
+                )) => unavailable = true,
+                Err(error) => {
+                    failed += 1;
+                    first_failure.get_or_insert(error);
                 }
-                Err(SourceAdapterError::Unavailable | SourceAdapterError::Concealed) => {
-                    unavailable = true
-                }
-                Err(error) => return Err(error.into()),
             }
+        }
+        if let Some(error) = first_failure {
+            tracing::warn!(
+                source_id,
+                applied,
+                failed,
+                error = %error,
+                "Casework reconciliation could not apply every claimed subject"
+            );
+            return Err(error);
         }
         Ok((applied, unavailable))
     }
 
     /// Run the two independent repair passes: remote-active discovery, then
-    /// authoritative reads of every locally active subject.
+    /// authoritative reads of every locally active subject. The outcome is
+    /// recorded per source, so readiness and `caseworkctl doctor` report a
+    /// reconciliation that keeps failing.
     pub async fn reconcile_source(&self, source_id: &str) -> Result<usize, ServiceError> {
+        let adapter = self.adapter(source_id)?;
+        let outcome = self.reconcile_source_pass(source_id).await;
+        let failure = outcome.as_ref().err().map(reconciliation_failure);
+        match self
+            .store
+            .record_reconciliation_outcome(source_id, adapter.binding_generation(), failure)
+            .await
+        {
+            Ok(consecutive_failures) => {
+                if let Some(failure) = failure {
+                    if consecutive_failures == RECONCILIATION_FAILURE_THRESHOLD {
+                        tracing::error!(
+                            source_id,
+                            consecutive_failures,
+                            failure = failure.as_str(),
+                            "Casework reconciliation keeps failing; readiness fails until a pass succeeds"
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    source_id,
+                    error = %error,
+                    "Casework reconciliation outcome could not be recorded"
+                );
+                if outcome.is_ok() {
+                    return Err(error.into());
+                }
+            }
+        }
+        outcome
+    }
+
+    async fn reconcile_source_pass(&self, source_id: &str) -> Result<usize, ServiceError> {
         let adapter = self.adapter(source_id)?;
         self.store
             .begin_reconciliation_cycle(source_id, adapter.binding_generation())
@@ -2102,6 +2201,13 @@ fn local_actions(
 pub enum ServiceError {
     #[error("the Casework service configuration is invalid")]
     Configuration,
+    #[error(
+        "reconciliation of source {source_id} failed {consecutive_failures} consecutive passes"
+    )]
+    ReconciliationFailing {
+        source_id: String,
+        consecutive_failures: i32,
+    },
     #[error("the source is not registered")]
     Source,
     #[error("the source response does not match its registration")]

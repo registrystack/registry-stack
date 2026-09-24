@@ -13,7 +13,8 @@ use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use registry_casework::{
     router, CaseworkAuthenticator, CaseworkService, DatabaseConfig, HttpState, HumanIdentityConfig,
-    PostgresStore, ServiceError, StoreError,
+    PostgresStore, ReconciliationFailure, ServiceError, StoreError,
+    RECONCILIATION_FAILURE_THRESHOLD,
 };
 use registry_casework_core::{
     AccessProfile, ActiveSubjectsPage, ActorContext, AttemptState, AuthoritativeObservation,
@@ -3954,4 +3955,161 @@ fn authenticated_request(
 
 async fn response_body(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn one_failing_subject_does_not_stall_the_rest_of_a_reconciliation_pass() {
+    let _database = DATABASE.lock().await;
+    let (mut source, _) = MockSource::with_large_discovery(3);
+    let failing = Uuid::from_u128(1).to_string();
+    source.open_reads.remove(&failing);
+    let fixture = fixture_with_source(source, policy(10, 1_000)).await;
+
+    assert!(matches!(
+        fixture.service.reconcile_source(SOURCE_ID).await,
+        Err(ServiceError::Adapter(SourceAdapterError::Invalid))
+    ));
+
+    let applied: Vec<String> = fixture
+        .database
+        .query(
+            "SELECT subject_id FROM casework_subjects WHERE source_id=$1 AND applied_revision > 0 ORDER BY subject_id",
+            &[&SOURCE_ID],
+        )
+        .await
+        .expect("read applied subjects")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(
+        applied,
+        [
+            Uuid::from_u128(2).to_string(),
+            Uuid::from_u128(3).to_string()
+        ],
+        "the subjects behind a failing one are applied in the same pass"
+    );
+    let health = fixture
+        .service
+        .store()
+        .reconciliation_health(&[SOURCE_ID.to_owned()])
+        .await
+        .expect("read reconciliation health");
+    assert_eq!(health.len(), 1);
+    assert_eq!(health[0].consecutive_failures, 1);
+    assert_eq!(
+        health[0].last_failure,
+        Some(ReconciliationFailure::SourceRefused)
+    );
+    assert!(health[0].last_succeeded_at.is_none());
+    assert!(health[0].last_failed_at.is_some());
+}
+
+#[tokio::test]
+async fn readiness_fails_after_consecutive_failed_reconciliation_passes_and_recovers() {
+    let _database = DATABASE.lock().await;
+    let (source, unavailable) = MockSource::with_discovery_control();
+    unavailable.store(true, Ordering::SeqCst);
+    let fixture = fixture_with_source(source, policy(10, 1_000)).await;
+    fixture
+        .service
+        .ready()
+        .await
+        .expect("ready before any pass");
+
+    for pass in 1..RECONCILIATION_FAILURE_THRESHOLD {
+        assert!(fixture.service.reconcile_source(SOURCE_ID).await.is_err());
+        fixture
+            .service
+            .ready()
+            .await
+            .unwrap_or_else(|error| panic!("pass {pass} stays below the threshold: {error}"));
+    }
+    assert!(fixture.service.reconcile_source(SOURCE_ID).await.is_err());
+    let refusal = fixture
+        .service
+        .ready()
+        .await
+        .expect_err("a wedged reconciliation fails readiness");
+    assert!(
+        matches!(
+            &refusal,
+            ServiceError::ReconciliationFailing { source_id, consecutive_failures }
+                if source_id == SOURCE_ID && *consecutive_failures == RECONCILIATION_FAILURE_THRESHOLD
+        ),
+        "{refusal:?}"
+    );
+    let health = fixture
+        .service
+        .store()
+        .reconciliation_health(&[SOURCE_ID.to_owned()])
+        .await
+        .expect("read reconciliation health");
+    assert_eq!(
+        health[0].last_failure,
+        Some(ReconciliationFailure::SourceUnavailable)
+    );
+
+    unavailable.store(false, Ordering::SeqCst);
+    fixture
+        .service
+        .reconcile_source(SOURCE_ID)
+        .await
+        .expect("the source answers again");
+    fixture
+        .service
+        .ready()
+        .await
+        .expect("one successful pass restores readiness");
+    let health = fixture
+        .service
+        .store()
+        .reconciliation_health(&[SOURCE_ID.to_owned()])
+        .await
+        .expect("read reconciliation health");
+    assert_eq!(health[0].consecutive_failures, 0);
+    assert!(health[0].last_succeeded_at.is_some());
+    assert_eq!(
+        health[0].last_failure,
+        Some(ReconciliationFailure::SourceUnavailable),
+        "the last failure stays recorded for the operator after recovery"
+    );
+}
+
+#[tokio::test]
+async fn one_failing_subject_does_not_stall_the_rest_of_an_event_synchronization() {
+    let _database = DATABASE.lock().await;
+    let (mut source, _) = MockSource::with_large_discovery(3);
+    source.open_reads.remove(&Uuid::from_u128(1).to_string());
+    let fixture = fixture_with_source(source, policy(10, 1_000)).await;
+    for value in 1..=3 {
+        assert!(fixture
+            .service
+            .store()
+            .ingest_transition(
+                GENERATION,
+                &TransitionHint {
+                    subject: subject(Uuid::from_u128(value)),
+                    deduplication_key: format!("event-{value}"),
+                    ordered_revision: 1,
+                },
+            )
+            .await
+            .unwrap());
+    }
+
+    assert!(matches!(
+        fixture.service.synchronize_pending(10).await,
+        Err(ServiceError::Adapter(SourceAdapterError::Invalid))
+    ));
+    let applied: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_subjects WHERE source_id=$1 AND applied_revision > 0",
+            &[&SOURCE_ID],
+        )
+        .await
+        .expect("count applied subjects")
+        .get(0);
+    assert_eq!(applied, 2, "the subjects behind a failing one are applied");
 }

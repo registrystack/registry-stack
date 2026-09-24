@@ -2,8 +2,9 @@
 
 use anyhow::{bail, Context, Result};
 use registry_casework::{
-    secret_resolver, validate_breg_source_description, verify_policy_package,
-    PolicyPackageManifest, PostgresStore, RuntimeConfig, POLICY_PACKAGE_MANIFEST_FILE,
+    secret_resolver, validate_breg_source_description, verify_audit_journal, verify_policy_package,
+    PolicyPackageManifest, PostgresStore, RuntimeConfig, SourceReconciliationHealth,
+    POLICY_PACKAGE_MANIFEST_FILE, RECONCILIATION_FAILURE_THRESHOLD,
 };
 use registry_casework_breg::MAXIMUM_REQUEST_ENTITIES;
 use registry_casework_core::{
@@ -906,6 +907,101 @@ fn secret_file_checks(config: &RuntimeConfig, resolver: &SecretResolver) -> Resu
     Ok(checks)
 }
 
+/// A `doctor` check that failed, named so the operator knows which
+/// dependency to repair.
+///
+/// Its message is built only from the check's own sentence and from errors
+/// whose text never carries a connection string, a response body, or a
+/// secret value.
+#[derive(Debug)]
+pub(crate) struct DoctorCheckFailure {
+    pub(crate) check: &'static str,
+    pub(crate) message: String,
+    pub(crate) action: &'static str,
+}
+
+impl std::fmt::Display for DoctorCheckFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for DoctorCheckFailure {}
+
+/// Name the doctor check a runtime dependency failed.
+///
+/// A typed configuration error is returned unchanged, because it already
+/// carries its exact location. Any other cause is summarized by the first
+/// Casework error in its chain whose text is value-free; an opaque cause is
+/// not echoed.
+pub(crate) fn doctor_dependency_failure(
+    check: &'static str,
+    message: String,
+    action: &'static str,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    if carries_typed_configuration_error(&error) {
+        return error;
+    }
+    let cause = error.chain().find_map(|cause| {
+        if let Some(store) = cause.downcast_ref::<registry_casework::StoreError>() {
+            Some(store.to_string())
+        } else if let Some(source) =
+            cause.downcast_ref::<registry_casework_core::SourceAdapterError>()
+        {
+            Some(source.to_string())
+        } else {
+            cause.downcast_ref::<SecretError>().map(ToString::to_string)
+        }
+    });
+    let message = match cause {
+        Some(cause) => format!("{message}: {cause}"),
+        None => message,
+    };
+    anyhow::Error::new(DoctorCheckFailure {
+        check,
+        message,
+        action,
+    })
+}
+
+/// Name the doctor check an authored-input check failed. Its refusal text is
+/// written by caseworkctl from the operator's own files, so it is kept whole.
+fn doctor_check_failure(
+    check: &'static str,
+    action: &'static str,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    if carries_typed_configuration_error(&error)
+        || error.chain().any(|cause| cause.is::<std::io::Error>())
+    {
+        return error;
+    }
+    let message = format!("{error:#}");
+    anyhow::Error::new(DoctorCheckFailure {
+        check,
+        message,
+        action,
+    })
+}
+
+fn carries_typed_configuration_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.is::<registry_casework::RuntimeConfigError>()
+            || cause.is::<registry_casework_core::ConfigLoadError>()
+            || cause.is::<registry_casework_core::ConfigError>()
+    })
+}
+
+const DOCTOR_CONFIGURATION_ACTION: &str =
+    "Correct the operator source bindings named by the refusal so they match casework.yaml, then retry.";
+const DOCTOR_SOURCE_ACTION: &str = "Check that the source runtime is reachable and ready, and that the configured reader profile holds exact get and list access to every declared request projection, then retry.";
+const DOCTOR_DATABASE_ACTION: &str = "Restore the Casework database named by database.runtimeUrlRef; if its schema is not current, apply the migrations with casework migrate or caseworkctl db migrate, then retry.";
+const DOCTOR_DIRECTORY_ACTION: &str =
+    "Authenticate as an Administrator and give every declared queue a serving team, then retry.";
+const DOCTOR_RECONCILIATION_ACTION: &str = "Restore the source named by the refusal and read the casework runtime log for the failing pass; readiness recovers after the next pass that succeeds.";
+const DOCTOR_AUDIT_ACTION: &str = "Configure audit.hashKeyRef with the key that wrote the retained chain at audit.path, or restore the retained chain from the backup taken with that key, then retry.";
+
 pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
     let config =
         RuntimeConfig::load(runtime_config).context("loading Casework runtime configuration")?;
@@ -913,58 +1009,144 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
         fs::canonicalize(runtime_config).context("resolving Casework runtime configuration")?;
     let package_root = fs::canonicalize(&config.package.root)
         .context("resolving the configured Casework package root")?;
-    check_source_descriptions(&package_root)?;
+    let package_digest = config
+        .policy_package_digest()
+        .context("verifying the configured Casework package")?;
+    check_source_descriptions(&package_root).map_err(|error| {
+        doctor_check_failure(
+            "sourceDescriptions",
+            "Repeat caseworkctl source add for the source description named by the refusal, then retry.",
+            error,
+        )
+    })?;
     let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
-    let secret_files = secret_file_checks(&config, &resolver)?;
+    let secret_files = secret_file_checks(&config, &resolver).map_err(|error| {
+        doctor_check_failure(
+            "secretFiles",
+            "Correct the secret files named by the refusal, then retry.",
+            error,
+        )
+    })?;
     // Resolve the audit key as a readiness check without retaining or reporting
     // its bytes. Database references are resolved inside PostgresStore.
     resolver
         .resolve(&config.audit.hash_key_ref)
-        .context("the audit secret is unavailable")?;
+        .map_err(|error| {
+            doctor_dependency_failure(
+                "secretFiles",
+                "the audit secret named by audit.hashKeyRef is unavailable".to_owned(),
+                "Provide the audit secret named by audit.hashKeyRef, then retry.",
+                error.into(),
+            )
+        })?;
     let runtime = async_runtime()?;
     let policy = load_and_check_policy(&package_root)?;
     if config.sources.len() != policy.sources.len() {
-        bail!("operator source bindings do not exactly match the authored Casework sources");
+        return Err(anyhow::Error::new(DoctorCheckFailure {
+            check: "configuration",
+            message: "operator source bindings do not exactly match the authored Casework sources"
+                .to_owned(),
+            action: DOCTOR_CONFIGURATION_ACTION,
+        }));
     }
-    let mut source_checks = Vec::with_capacity(policy.sources.len());
+    let mut adapters = Vec::with_capacity(policy.sources.len());
     for source in &policy.sources {
-        let binding = config
-            .sources
-            .get(&source.id)
-            .with_context(|| format!("operator source binding {} is missing", source.id))?;
+        let Some(binding) = config.sources.get(&source.id) else {
+            return Err(anyhow::Error::new(DoctorCheckFailure {
+                check: "configuration",
+                message: format!("operator source binding {} is missing", source.id),
+                action: DOCTOR_CONFIGURATION_ACTION,
+            }));
+        };
         let adapter = binding
             .build_adapter(source, &package_root, &resolver)
-            .with_context(|| format!("source binding {} is invalid", source.id))?;
-        runtime
-            .block_on(adapter.verify_reader_readiness())
-            .with_context(|| {
-                format!(
-                    "source {} is unavailable, unready, or its configured reader lacks exact get/list access to the declared request projection or a readableRequestFields grant naming review_state",
-                    source.id
+            .map_err(|error| {
+                doctor_dependency_failure(
+                    "configuration",
+                    format!("source binding {} is invalid", source.id),
+                    DOCTOR_CONFIGURATION_ACTION,
+                    error.into(),
                 )
             })?;
-        source_checks.push(doctor_source_check(&source.id));
+        adapters.push((source.id.clone(), adapter));
     }
+    for (source_id, adapter) in &adapters {
+        runtime
+            .block_on(adapter.verify_reader_readiness())
+            .map_err(|error| {
+                doctor_dependency_failure(
+                    "sourceConnections",
+                    format!("source {source_id} did not pass the reader readiness check"),
+                    DOCTOR_SOURCE_ACTION,
+                    error.into(),
+                )
+            })?;
+    }
+    let database_failure = |error: anyhow::Error| {
+        doctor_dependency_failure(
+            "database",
+            "the Casework runtime database is not ready".to_owned(),
+            DOCTOR_DATABASE_ACTION,
+            error,
+        )
+    };
     let store = PostgresStore::connect_runtime(&config.database, &resolver)
-        .context("the Casework runtime database configuration is invalid")?;
+        .map_err(|error| database_failure(error.into()))?;
     runtime
         .block_on(store.ready())
-        .context("the Casework runtime database is unavailable")?;
+        .map_err(|error| database_failure(error.into()))?;
     runtime
         .block_on(config.oidc_verifier(&resolver))
         .context("the configured OIDC issuer is unavailable or incompatible")?;
     let expected_queue_ids: Vec<_> = policy.queues.iter().map(|queue| queue.id.clone()).collect();
     if !runtime
         .block_on(store.directory_ready(&expected_queue_ids))
-        .context("checking Casework directory readiness")?
+        .map_err(|error| database_failure(error.into()))?
     {
-        bail!("the Casework directory does not have a team serving every declared queue; authenticate as an Administrator and complete the queue assignments before retrying doctor");
+        return Err(anyhow::Error::new(DoctorCheckFailure {
+            check: "directory",
+            message: "the Casework directory does not have a team serving every declared queue"
+                .to_owned(),
+            action: DOCTOR_DIRECTORY_ACTION,
+        }));
     }
+    let source_ids: Vec<_> = policy
+        .sources
+        .iter()
+        .map(|source| source.id.clone())
+        .collect();
+    let reconciliation = runtime
+        .block_on(store.reconciliation_health(&source_ids))
+        .map_err(|error| database_failure(error.into()))?;
+    if let Some(failing) = reconciliation
+        .iter()
+        .find(|health| health.consecutive_failures >= RECONCILIATION_FAILURE_THRESHOLD)
+    {
+        return Err(anyhow::Error::new(DoctorCheckFailure {
+            check: "reconciliation",
+            message: reconciliation_failure_message(failing),
+            action: DOCTOR_RECONCILIATION_ACTION,
+        }));
+    }
+    let audit_chain = verify_audit_journal(
+        &config.audit.path,
+        &resolver,
+        &config.audit.hash_key_ref,
+    )
+    .map_err(|error| {
+        anyhow::Error::new(DoctorCheckFailure {
+            check: "auditChain",
+            message: format!("the retained audit chain at audit.path did not verify: {error}"),
+            action: DOCTOR_AUDIT_ACTION,
+        })
+    })?;
+    let source_checks: Vec<_> = reconciliation.iter().map(doctor_source_check).collect();
     Ok(json!({
         "ok": true,
         "command": "doctor",
         "runtimeConfig": runtime_config,
         "packageRoot": package_root,
+        "packageDigest": package_digest,
         "checks": {
             "configuration": "ready",
             "secretFiles": "ready",
@@ -972,21 +1154,50 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
             "sourceConnections": "ready",
             "database": "ready",
             "oidcIssuer": "ready",
-            "directory": "ready"
+            "directory": "ready",
+            "reconciliation": "ready",
+            "auditChain": "ready"
         },
         "secretFileChecks": secret_files,
         "sourceChecks": source_checks,
+        "auditChain": audit_chain,
         "eventWiringGuidance": EVENT_WIRING_GUIDANCE
     }))
 }
 
-fn doctor_source_check(source_id: &str) -> Value {
+fn reconciliation_failure_message(health: &SourceReconciliationHealth) -> String {
+    let cause = health
+        .last_failure
+        .map(|failure| format!("; the last failure was {}", failure.as_str()))
+        .unwrap_or_default();
+    let since = health
+        .last_succeeded_at
+        .map(|at| {
+            format!(
+                "; the last pass that succeeded finished at {}",
+                at.to_rfc3339()
+            )
+        })
+        .unwrap_or_else(|| "; no pass has succeeded".to_owned());
+    format!(
+        "reconciliation of source {} failed {} consecutive passes{cause}{since}",
+        health.source_id, health.consecutive_failures
+    )
+}
+
+fn doctor_source_check(health: &SourceReconciliationHealth) -> Value {
     json!({
-        "sourceId": source_id,
+        "sourceId": health.source_id,
         "runtime": "ready",
         "readerProfile": "ready",
         "requiredGrants": "ready",
-        "eventWiring": "unknown"
+        "eventWiring": "unknown",
+        "reconciliation": {
+            "consecutiveFailures": health.consecutive_failures,
+            "lastSucceededAt": health.last_succeeded_at,
+            "lastFailedAt": health.last_failed_at,
+            "lastFailure": health.last_failure
+        }
     })
 }
 
@@ -1415,7 +1626,10 @@ mod tests {
 
     #[test]
     fn doctor_never_reports_unattested_event_wiring_as_ready() {
-        let check = doctor_source_check("professional-register");
+        let check = doctor_source_check(&SourceReconciliationHealth {
+            source_id: "professional-register".into(),
+            ..SourceReconciliationHealth::default()
+        });
         assert_eq!(check["sourceId"], "professional-register");
         assert_eq!(check["runtime"], "ready");
         assert_eq!(check["readerProfile"], "ready");
@@ -1424,6 +1638,46 @@ mod tests {
         assert!(!check.to_string().contains("eventWiring\":\"ready"));
         assert!(EVENT_WIRING_GUIDANCE.contains("bregctl doctor"));
         assert!(EVENT_WIRING_GUIDANCE.contains("confirm one lifecycle delivery"));
+    }
+
+    #[test]
+    fn doctor_reports_reconciliation_health_and_names_a_failing_source() {
+        use chrono::TimeZone as _;
+
+        let succeeded = chrono::Utc.with_ymd_and_hms(2026, 9, 24, 8, 0, 0).unwrap();
+        let failed = chrono::Utc.with_ymd_and_hms(2026, 9, 24, 8, 5, 0).unwrap();
+        let health = SourceReconciliationHealth {
+            source_id: "professional-register".into(),
+            consecutive_failures: RECONCILIATION_FAILURE_THRESHOLD,
+            last_succeeded_at: Some(succeeded),
+            last_failed_at: Some(failed),
+            last_failure: Some(registry_casework::ReconciliationFailure::SourceUnavailable),
+        };
+
+        let check = doctor_source_check(&health);
+        assert_eq!(
+            check["reconciliation"],
+            json!({
+                "consecutiveFailures": RECONCILIATION_FAILURE_THRESHOLD,
+                "lastSucceededAt": "2026-09-24T08:00:00Z",
+                "lastFailedAt": "2026-09-24T08:05:00Z",
+                "lastFailure": "source-unavailable"
+            })
+        );
+        assert_eq!(
+            reconciliation_failure_message(&health),
+            format!(
+                "reconciliation of source professional-register failed {RECONCILIATION_FAILURE_THRESHOLD} consecutive passes; the last failure was source-unavailable; the last pass that succeeded finished at 2026-09-24T08:00:00+00:00"
+            )
+        );
+        assert_eq!(
+            reconciliation_failure_message(&SourceReconciliationHealth {
+                source_id: "professional-register".into(),
+                consecutive_failures: 7,
+                ..SourceReconciliationHealth::default()
+            }),
+            "reconciliation of source professional-register failed 7 consecutive passes; no pass has succeeded"
+        );
     }
 
     #[test]

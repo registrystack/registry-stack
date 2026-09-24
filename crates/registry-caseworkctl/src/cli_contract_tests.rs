@@ -327,10 +327,10 @@ fn db_migrate_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
     assert_eq!(migrated["status"], "migrated");
     execute_in_test_database(
         &scoped,
-        "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(17,now())",
+        "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(18,now())",
     );
 
-    let refusal = "the Casework database schema version 17 is newer than this binary supports (16); run a casework release that supports it";
+    let refusal = "the Casework database schema version 18 is newer than this binary supports (17); run a casework release that supports it";
     let (exit, report) = invoke(migrate.clone());
     assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report:#?}");
     assert_eq!(report["ok"], false);

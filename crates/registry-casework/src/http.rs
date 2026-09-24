@@ -1747,7 +1747,9 @@ impl From<StoreError> for HttpError {
             StoreError::AttemptPending => Self::RecoveryPending(None),
             StoreError::Invalid => Self::Invalid,
             StoreError::ReviewValidation(validation) => Self::Validation(validation),
-            StoreError::Unavailable | StoreError::Postgres(_) => Self::ServiceUnavailable,
+            StoreError::Unavailable
+            | StoreError::Postgres(_)
+            | StoreError::SchemaNotCurrent { .. } => Self::ServiceUnavailable,
             StoreError::Configuration
             | StoreError::SecretConfiguration(_)
             | StoreError::Corrupt
@@ -1762,6 +1764,7 @@ impl From<ServiceError> for HttpError {
     fn from(error: ServiceError) -> Self {
         match error {
             ServiceError::Configuration => Self::Internal,
+            ServiceError::ReconciliationFailing { .. } => Self::ServiceUnavailable,
             ServiceError::Source => Self::SourceNotFound,
             ServiceError::SourceProtocol => Self::SourceBadGateway,
             ServiceError::Store(error) => error.into(),

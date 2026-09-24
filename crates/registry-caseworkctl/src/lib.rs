@@ -307,7 +307,7 @@ enum OutputFormat {
 
 const DOMAIN_REFUSAL_EXIT: u8 = 1;
 const OPERATIONAL_FAILURE_EXIT: u8 = 3;
-const CLI_API_VERSION: &str = "registry.registrystack.org/caseworkctl/v1alpha1";
+const CLI_API_VERSION: &str = "registry.registrystack.org/caseworkctl/v1alpha2";
 
 pub fn main_entry() -> ExitCode {
     main_entry_from(
@@ -503,6 +503,19 @@ fn command_kind(command: &Command) -> CommandKind {
 fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
     if let Some(diagnostic) = operator_refusal(kind, error) {
         return (DOMAIN_REFUSAL_EXIT, diagnostic);
+    }
+    if let Some(check) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<project::DoctorCheckFailure>())
+    {
+        return (
+            OPERATIONAL_FAILURE_EXIT,
+            json!({
+                "severity":"error", "code":"casework.doctor.check-failed",
+                "artifact":"runtime_dependency", "path":format!("doctor:/checks/{}", check.check),
+                "message":check.message, "suggestedAction":check.action
+            }),
+        );
     }
     let io_failure = error.chain().any(|cause| cause.is::<std::io::Error>());
     let runtime_error = error
@@ -1626,6 +1639,66 @@ mod tests {
                 "A Casework runtime dependency check failed."
             );
         }
+    }
+
+    #[test]
+    fn doctor_names_the_check_that_failed_instead_of_a_generic_dependency_failure() {
+        let doctor = command_kind(
+            &Cli::try_parse_from(["caseworkctl", "doctor", "--runtime-config", "runtime.yaml"])
+                .unwrap()
+                .command,
+        );
+        let unmigrated = project::doctor_dependency_failure(
+            "database",
+            "the Casework runtime database is not ready".to_owned(),
+            "Apply the migrations with casework migrate or caseworkctl db migrate, then retry.",
+            anyhow::Error::new(StoreError::SchemaNotCurrent {
+                applied: None,
+                required: 17,
+            })
+            .context("checking the database"),
+        );
+        let (exit, diagnostic) = classify_failure(doctor, &unmigrated);
+        assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
+        assert_eq!(diagnostic["code"], "casework.doctor.check-failed");
+        assert_eq!(diagnostic["artifact"], "runtime_dependency");
+        assert_eq!(diagnostic["path"], "doctor:/checks/database");
+        assert_eq!(
+            diagnostic["message"],
+            "the Casework runtime database is not ready: the Casework database schema is not current: no migration has been applied, and this binary requires version 17; apply the migrations with `casework migrate` or `caseworkctl db migrate`"
+        );
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "Apply the migrations with casework migrate or caseworkctl db migrate, then retry."
+        );
+
+        // A cause outside the closed set of Casework errors is never echoed:
+        // it may carry a connection string or a response body.
+        let opaque = project::doctor_dependency_failure(
+            "sourceConnections",
+            "source registry did not answer the reader readiness check".to_owned(),
+            "Check the source binding, then retry.",
+            anyhow::anyhow!("postgresql://user:do-not-echo@db.example.test/casework"),
+        );
+        let (_, diagnostic) = classify_failure(doctor, &opaque);
+        assert_eq!(diagnostic["path"], "doctor:/checks/sourceConnections");
+        assert_eq!(
+            diagnostic["message"],
+            "source registry did not answer the reader readiness check"
+        );
+
+        // A typed configuration refusal keeps its precise location.
+        let typed = project::doctor_dependency_failure(
+            "configuration",
+            "the Casework runtime configuration is invalid".to_owned(),
+            "Correct the configuration, then retry.",
+            anyhow::Error::new(RuntimeConfigError::Oidc),
+        );
+        let (_, diagnostic) = classify_failure(doctor, &typed);
+        assert_eq!(
+            diagnostic["code"],
+            "casework.runtime-dependency.unavailable"
+        );
     }
 
     #[test]

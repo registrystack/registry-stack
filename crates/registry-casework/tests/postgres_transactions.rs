@@ -973,7 +973,7 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
     let (store, client, schema) = isolated_schema("migrate").await;
     store.migrate().await.expect("first migration");
     let applied = applied_versions(&client).await;
-    assert_eq!(applied, (1..=16).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=17).collect::<Vec<i64>>());
     let index = occurrence_index(&client, &schema).await;
     assert!(index.1, "the occurrence identity index is unique");
 
@@ -1171,7 +1171,7 @@ async fn migration_16_releases_superseded_identities_in_a_database_that_holds_th
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=16).collect::<Vec<_>>()
+        (1..=17).collect::<Vec<_>>()
     );
     let second_a = observe_open_in_generation(&store, "binding-a").await;
     let states: Vec<(uuid::Uuid, String)> = items_by_state(&client)
@@ -1323,7 +1323,7 @@ async fn migration_replaces_empty_hosted_tables_through_the_ledger_head() {
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=16).collect::<Vec<_>>()
+        (1..=17).collect::<Vec<_>>()
     );
     let hosted_tables_remaining: bool = client
         .query_one(
@@ -1354,7 +1354,7 @@ async fn migration_13_adds_sync_claim_indexes_to_an_existing_schema() {
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=16).collect::<Vec<_>>()
+        (1..=17).collect::<Vec<_>>()
     );
     let indexes: Vec<String> = client
         .query(
@@ -1394,8 +1394,18 @@ async fn readiness_rejects_an_unmigrated_schema() {
     let (store, _client, _schema) = isolated_schema("ready_unmigrated").await;
 
     assert!(
-        matches!(store.ready().await, Err(StoreError::Postgres(_))),
+        matches!(
+            store.ready().await,
+            Err(StoreError::SchemaNotCurrent {
+                applied: None,
+                required: 17
+            })
+        ),
         "a schema without the migration ledger must fail readiness"
+    );
+    assert_eq!(
+        store.ready().await.unwrap_err().to_string(),
+        "the Casework database schema is not current: no migration has been applied, and this binary requires version 17; apply the migrations with `casework migrate` or `caseworkctl db migrate`"
     );
 }
 
@@ -1415,7 +1425,13 @@ async fn readiness_rejects_a_partial_schema_missing_review_tables() {
         .expect("simulate a partial schema without the unified review migration");
 
     assert!(
-        matches!(store.ready().await, Err(StoreError::Corrupt)),
+        matches!(
+            store.ready().await,
+            Err(StoreError::SchemaNotCurrent {
+                applied: Some(17),
+                required: 17
+            })
+        ),
         "a partial migration ledger must fail readiness"
     );
 }
@@ -1444,15 +1460,15 @@ async fn readiness_rejects_an_unsupported_migration_version() {
         matches!(
             refusal,
             StoreError::SchemaNewer {
-                found: 17,
-                supported: 16
+                found: 18,
+                supported: 17
             }
         ),
         "a newer schema is not reported as corrupt data: {refusal:?}"
     );
     assert_eq!(
         refusal.to_string(),
-        "the Casework database schema version 17 is newer than this binary supports (16); run a casework release that supports it"
+        "the Casework database schema version 18 is newer than this binary supports (17); run a casework release that supports it"
     );
 }
 
@@ -1465,7 +1481,7 @@ async fn migration_refuses_a_schema_newer_than_this_binary_and_writes_nothing() 
         .expect("migrate to the current schema");
     client
         .execute(
-            "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(17,now())",
+            "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(18,now())",
             &[],
         )
         .await
@@ -1480,8 +1496,8 @@ async fn migration_refuses_a_schema_newer_than_this_binary_and_writes_nothing() 
         matches!(
             refusal,
             StoreError::SchemaNewer {
-                found: 17,
-                supported: 16
+                found: 18,
+                supported: 17
             }
         ),
         "{refusal:?}"
