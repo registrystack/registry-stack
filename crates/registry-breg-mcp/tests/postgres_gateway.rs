@@ -528,28 +528,13 @@ struct ProjectSources {
 }
 
 impl ProjectSources {
-    /// Load the acceptance project and grant the citizen agent `list` on its
-    /// linked address, the lookup through which the gateway resolves the
-    /// citizen's own record. The project on disk is not changed.
+    /// Load the acceptance project exactly as it is on disk.
     fn load() -> Self {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/breg/acceptance")
             .join(PROJECT);
-        let source =
-            fs::read_to_string(root.join("registry.yaml")).expect("acceptance registry reads");
-        let agent_address_grant = "        operations: [get]\n        readableFields: [address-line, locality, postal-code]\n      - entity: address-correction-request";
-        assert_eq!(
-            source.matches(agent_address_grant).count(),
-            1,
-            "the citizen agent's address grant is found exactly once"
-        );
-        let project_bytes = source
-            .replacen(
-                agent_address_grant,
-                &agent_address_grant.replacen("[get]", "[get, list]", 1),
-                1,
-            )
-            .into_bytes();
+        let project_bytes =
+            fs::read(root.join("registry.yaml")).expect("acceptance registry reads");
         let project = parse_project_yaml(&project_bytes)
             .expect("acceptance registry follows the strict authoring contract");
         let compiled = compile_project_with_assets(&project, &[], &[], CompileProfile::Production)

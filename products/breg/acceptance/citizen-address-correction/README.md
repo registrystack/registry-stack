@@ -24,7 +24,7 @@ exact requester clients.
 
 | Profile | Actor kind and client | Grants |
 | --- | --- | --- |
-| `citizen-agent` | `agent`, `citizen-gateway`, no task grant | `get` on `person-address` through a membership boundary on the active `self-service-link` for the caller, reading only the three address fields; `create`, `get`, and `patch` on `address-correction-request`, bound to rows whose `owner` equals `sub`, with `requestVisibility: owner` |
+| `citizen-agent` | `agent`, `citizen-gateway`, no task grant | `get` and `list` on `person-address` through a membership boundary on the active `self-service-link` for the caller, reading only the three address fields, so a list answers with the caller's own linked address and nothing else; `create`, `get`, and `patch` on `address-correction-request`, bound to rows whose `owner` equals `sub`, with `requestVisibility: owner` |
 | `citizen-review` | `human`, `citizen-review-page` | `get`, `patch`, `submit_request`, and `cancel_request` on `address-correction-request`, with the same owner row boundary and request visibility; `owner` is not writable. `get` on `person-address` through the same `self-service-link` membership boundary, limited to the same three address fields |
 | `reviewer` | `human`, `registry-staff-console` | `get` and `list` on `address-correction-request` |
 | `applier` | `human`, `registry-staff-console` | `get` and `apply_request` on `address-correction-request`, with `person-address` as its apply target |

@@ -581,6 +581,50 @@ async fn review_page_reads_only_the_linked_target_of_a_draft() {
     fixture.finish().await;
 }
 
+/// The agent finds the citizen's address by listing under the self-service
+/// link, so the list is bounded exactly like the read: the caller's own
+/// linked address, its three readable fields, and nothing of another citizen.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn citizen_agent_list_returns_only_the_linked_address() {
+    let fixture = RunningFixture::start().await;
+    let citizen_a = fixture.seed_citizen("P-0001", CITIZEN_A).await;
+    let citizen_b = fixture.seed_citizen("P-0002", CITIZEN_B).await;
+
+    for (principal, citizen, own) in [
+        (
+            CITIZEN_B,
+            &citizen_b,
+            json!({"addressLine": "4 Mill Street", "locality": "Port Selene", "postalCode": "PS-400"}),
+        ),
+        (
+            CITIZEN_A,
+            &citizen_a,
+            json!({"addressLine": "1 Harbour Road", "locality": "Port Selene", "postalCode": "PS-100"}),
+        ),
+    ] {
+        let listed = fixture
+            .call(
+                Method::GET,
+                "/v1/records/person-addresses?accessProfile=citizen-agent",
+                None,
+                &[],
+                &fixture.agent_token(principal),
+            )
+            .await;
+        assert_eq!(listed.status, StatusCode::OK, "{}", listed.body);
+        let items = listed.body["items"]
+            .as_array()
+            .expect("the list answers with items");
+        assert_eq!(items.len(), 1, "{principal}: {}", listed.body);
+        assert_eq!(
+            items[0]["recordIdentifier"].as_str(),
+            Some(citizen.address.as_str())
+        );
+        assert_eq!(items[0]["domainData"], own, "{principal}");
+    }
+    fixture.finish().await;
+}
+
 /// A retried create and a retried submission, each under its own key, answer
 /// with the first result and leave exactly one draft and one submission.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

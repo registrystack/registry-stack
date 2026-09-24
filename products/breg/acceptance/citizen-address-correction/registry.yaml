@@ -118,7 +118,7 @@ accessProfiles:
         rowBoundaries: []
         membershipBoundaries:
           - {field: subject, membershipEntity: self-service-link, membershipKeyField: subject, principalField: principal, activeField: active}
-        operations: [get]
+        operations: [get, list]
         readableFields: [address-line, locality, postal-code]
       - entity: address-correction-request
         rowBoundaries:
