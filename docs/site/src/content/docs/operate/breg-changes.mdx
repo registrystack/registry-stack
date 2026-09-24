@@ -147,7 +147,9 @@ unavailable, a restart does not repair it, and the target stays pinned: no other
 activate until that target is resolved. Resolving the reported cause and retrying the same target
 package is the ordinary answer. When it is not available, `migration reconcile` reports what the
 database actually holds and names the one transition that is safe. Do not run generated SQL by
-hand or edit migration state. Take a backup before every `apply`.
+hand or edit migration state. Take a backup before every `apply`. A database that cannot be
+reached before maintenance begins reports `apply.database.unavailable` instead; nothing changed,
+so retry the same apply once the database is reachable.
 :::
 
 A successful report carries the activated revision, sequence, and schema fingerprint. Update the
@@ -280,7 +282,8 @@ server binary, and earlier packages keep verifying under their recorded rules.
 | `test` or `package` reports `migration.review.closure_refused` | The set of files does not close: a descriptor the directory names is missing, a path appears twice, or there are too many artifacts. |
 | `test` or `package` reports `migration.review.refused` | A precondition failed before the reviewed directory was read, such as the prior revision or the baseline binding. Check the baseline arguments and the fingerprints in the rehearsal receipt. |
 | `test` or `package` reports `migration.review.fingerprint_mismatch` | The rehearsal receipt was taken for a different candidate or baseline. Rehearse the exact candidate again. |
-| `apply` fails after maintenance begins | Read the report, fix the cause, and retry the same target. If that is not available, run `migration reconcile` to assess the pinned target, execute the transition it names, and restore the pre-activation backup only when it reports `unresolvable`. |
+| `apply` reports `apply.migration.failed` | The apply failed after maintenance began. Read the report, fix the cause, and retry the same target. If that is not available, run `migration reconcile` to assess the pinned target, execute the transition it names, and restore the pre-activation backup only when it reports `unresolvable`. |
+| `apply` reports `apply.database.unavailable` | The migration database could not be reached, or another apply held the migration lock past the lock timeout, before maintenance began. Check that the database is reachable and accepts the migration role, then retry the same apply. Nothing was changed, so there is nothing to reconcile. |
 | `apply` reports `apply.package.older_than_active` | The target package is older than the active one, and packages apply forward only. Build a successor that reverts the change, or restore the pre-activation backup, as [roll back by rolling forward](#roll-back-by-rolling-forward) describes. Nothing was changed. |
 | `apply` reports `apply.package.empty_plan` | The successor has nothing to apply: its plan has no schema statement and no reviewed migration, and it is not an access or disclosure change alone, for example a successor built from unchanged sources with only `package.sequence` raised. Keep the active package until the model changes, then build the successor from that change. Nothing was changed. |
 | `apply` reports `apply.package.binding_mismatch` | The package, or the active package at `package.root`, is bound to a different deployment than the runtime file. The report path names the runtime key that differs (`identity.environment`, `identity.databaseInitializationEnvironment`, `identity.instanceId`, `identity.databaseId`, `package.compilerSourceRevision`, `package.activeRevision`, or `package.activeSequence`) and never either value. A `package.activeSequence` mismatch means the target is a different package at the active sequence: build it as a successor of the active package. Nothing was changed. |

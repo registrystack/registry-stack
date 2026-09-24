@@ -517,53 +517,13 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
 /// confirmation writes nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_confirms_only_the_exact_active_ready_package() {
-    let database = TestDatabase::create(1).await;
-    database
-        .admin
-        .batch_execute("CREATE EXTENSION btree_gist")
-        .await
-        .expect("administrator installs extension");
-    let base = compile_variant(Variant::Base, 1);
-    let fingerprint = initial_fingerprint(&database, &base).await;
-    let root = tempfile::Builder::new()
-        .prefix("registry-active-package-")
-        .tempdir_in(
-            std::env::temp_dir()
-                .canonicalize()
-                .expect("canonical temporary root"),
-        )
-        .expect("package temporary directory creates");
-    let package_root = root.path().join("package");
-    prepare_package(build_request(
-        Variant::Base,
-        1,
-        None,
-        &fingerprint,
-        PackageMigrationPlanInput::InitialCompiledDdl,
-        DATABASE,
-    ))
-    .expect("initial package prepares")
-    .publish_to_directory(&package_root, Vec::new())
-    .expect("initial package publishes");
-    let initial = load_package(
-        &package_root,
-        &local_context(DATABASE, PackageIntent::InitialActivation),
-    )
-    .expect("initial package loads for activation");
-    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
-        .await
-        .expect("initial package activates");
-    let startup = load_package(
-        &package_root,
-        &local_context(
-            DATABASE,
-            PackageIntent::Startup {
-                active_revision: &active.package_revision,
-                active_sequence: 1,
-            },
-        ),
-    )
-    .expect("the active package loads for startup");
+    let ActivePackageFixture {
+        database,
+        root,
+        initial,
+        active,
+        startup,
+    } = ActivePackageFixture::activate().await;
 
     let before = durable_snapshot(&database).await;
     let confirmed = confirm(&database, &startup)
@@ -631,12 +591,155 @@ async fn real_postgres_confirms_only_the_exact_active_ready_package() {
     database.cleanup().await;
 }
 
+/// An unreachable database or an apply lock another session holds, before
+/// maintenance begins, changes nothing, so it is reported as the database
+/// being unavailable and never as a failed migration that needs
+/// reconciliation. This holds for an activation and for the already-active
+/// confirmation alike.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_reports_an_unavailable_database_before_maintenance_as_unchanged() {
+    let ActivePackageFixture {
+        database,
+        root: _root,
+        initial,
+        active: _,
+        startup,
+    } = ActivePackageFixture::activate().await;
+    let before = durable_snapshot(&database).await;
+
+    let unreachable =
+        database.migration_config_for_database(&format!("missing_{}", Uuid::new_v4().simple()));
+    assert_value_free(
+        apply_verified_package(ApplyVerifiedPackageRequest::new(
+            &unreachable,
+            &initial,
+            ApplyPrecondition::InitialActivation,
+            ApplyRoles::new(&database.migration_role, &database.runtime_role),
+            ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+                .expect("test timeouts are bounded"),
+        ))
+        .await
+        .err(),
+        MigrationError::DatabaseUnavailable,
+    );
+    assert_value_free(
+        confirm_with(&unreachable, &database, &startup).await.err(),
+        MigrationError::DatabaseUnavailable,
+    );
+
+    let lock_key = registry_breg::postgres::RegistryLockKey::derive(&initial.manifest().package_id)
+        .expect("package lock key derives");
+    let (holder, holder_task) = database.connect_admin().await;
+    holder
+        .execute("SELECT pg_catalog.pg_advisory_lock($1)", &[&lock_key.get()])
+        .await
+        .expect("another session holds the apply lock");
+    assert_value_free(
+        apply(&database, &initial, ApplyPrecondition::InitialActivation)
+            .await
+            .err(),
+        MigrationError::DatabaseUnavailable,
+    );
+    assert_value_free(
+        confirm(&database, &startup).await.err(),
+        MigrationError::DatabaseUnavailable,
+    );
+    holder
+        .execute(
+            "SELECT pg_catalog.pg_advisory_unlock($1)",
+            &[&lock_key.get()],
+        )
+        .await
+        .expect("the other session releases the apply lock");
+    holder_task.abort();
+
+    assert_eq!(durable_snapshot(&database).await, before);
+    database.cleanup().await;
+}
+
+/// One registry whose initial package is active, with that package loaded
+/// both for its activation and, as the configured active package, for startup.
+struct ActivePackageFixture {
+    database: TestDatabase,
+    root: tempfile::TempDir,
+    initial: VerifiedPackage,
+    active: ExpectedRegistryIdentity,
+    startup: VerifiedPackage,
+}
+
+impl ActivePackageFixture {
+    async fn activate() -> Self {
+        let database = TestDatabase::create(1).await;
+        database
+            .admin
+            .batch_execute("CREATE EXTENSION btree_gist")
+            .await
+            .expect("administrator installs extension");
+        let base = compile_variant(Variant::Base, 1);
+        let fingerprint = initial_fingerprint(&database, &base).await;
+        let root = tempfile::Builder::new()
+            .prefix("registry-active-package-")
+            .tempdir_in(
+                std::env::temp_dir()
+                    .canonicalize()
+                    .expect("canonical temporary root"),
+            )
+            .expect("package temporary directory creates");
+        let package_root = root.path().join("package");
+        prepare_package(build_request(
+            Variant::Base,
+            1,
+            None,
+            &fingerprint,
+            PackageMigrationPlanInput::InitialCompiledDdl,
+            DATABASE,
+        ))
+        .expect("initial package prepares")
+        .publish_to_directory(&package_root, Vec::new())
+        .expect("initial package publishes");
+        let initial = load_package(
+            &package_root,
+            &local_context(DATABASE, PackageIntent::InitialActivation),
+        )
+        .expect("initial package loads for activation");
+        let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+            .await
+            .expect("initial package activates");
+        let startup = load_package(
+            &package_root,
+            &local_context(
+                DATABASE,
+                PackageIntent::Startup {
+                    active_revision: &active.package_revision,
+                    active_sequence: 1,
+                },
+            ),
+        )
+        .expect("the active package loads for startup");
+        Self {
+            database,
+            root,
+            initial,
+            active,
+            startup,
+        }
+    }
+}
+
 async fn confirm(
     database: &TestDatabase,
     package: &VerifiedPackage,
 ) -> registry_breg::migration::Result<ExpectedRegistryIdentity> {
+    confirm_with(&database.migration_config, database, package).await
+}
+
+async fn confirm_with(
+    config: &registry_breg::postgres::ConnectionConfig,
+    database: &TestDatabase,
+    package: &VerifiedPackage,
+) -> registry_breg::migration::Result<ExpectedRegistryIdentity> {
     confirm_active_package(
-        &database.migration_config,
+        config,
         package,
         &database.migration_role,
         ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
