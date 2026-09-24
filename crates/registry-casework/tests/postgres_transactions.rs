@@ -2477,3 +2477,146 @@ async fn no_caller_but_the_original_actor_can_recover_an_expired_pending_attempt
     }
     assert_eq!(fixture.snapshot().await, before);
 }
+
+/// Reservation locks only the item row, so an observation can pass the
+/// subject-wide live-attempt check before the attempt commits and then wait
+/// on that item row. Once the attempt is visible, the observation must leave
+/// the item it would supersede exactly as the attempt left it.
+async fn assert_superseding_observation_leaves_live_attempt_item(
+    prefix: &str,
+    attempt_state: &str,
+) {
+    let (store, mut client, _schema) = isolated_schema(prefix).await;
+    store.migrate().await.expect("migrate");
+    let admin = actor("admin", CaseworkRole::Administrator, "administrator");
+    let holder = actor("officer-1", CaseworkRole::Staff, "staff");
+    store
+        .bootstrap_directory(
+            &admin,
+            0,
+            &BootstrapDirectoryRequest {
+                team_id: "team-a".to_owned(),
+                staff: vec![holder.principal.clone()],
+                supervisors: Vec::new(),
+                queue_id: "default".to_owned(),
+            },
+            "bootstrap-live-attempt-race",
+        )
+        .await
+        .expect("authorized bootstrap");
+    let opened = observation(
+        1,
+        "proposal-1",
+        OccurrenceKind::Review,
+        OccurrenceState::Open,
+    );
+    let item = store
+        .apply_observation(&opened, "default", Some(172_800))
+        .await
+        .expect("initial observation")
+        .expect("item opened");
+    let claimed = store
+        .claim(
+            &holder,
+            item.item_id,
+            item.revision,
+            "claim-live-attempt-race",
+        )
+        .await
+        .expect("holder claims the item");
+
+    // The same writes reservation makes, held open under the item row lock.
+    let reservation = client.transaction().await.expect("begin reservation");
+    let reservation_pid: i32 = reservation
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .expect("reservation backend")
+        .get(0);
+    reservation
+        .query_one(
+            "SELECT item_id FROM casework_items WHERE item_id=$1 FOR UPDATE",
+            &[&claimed.item_id],
+        )
+        .await
+        .expect("reservation locks the item row");
+    reservation.execute(
+        "INSERT INTO casework_attempts(attempt_id,item_id,actor_issuer,actor_subject,casework_profile_id,source_profile_id,item_revision,request_hash,operation,flagged_fields,idempotency_key,displayed_binding,recovery_evidence,state,execution_token,execution_lease_until,created_at,updated_at) VALUES($1,$2,$3,$4,'staff','reviewer',$5,'sha256:request-race','approve','[]','decision-race',$6,$7,$8,$9,now()+interval '5 minutes',now(),now())",
+        &[&uuid::Uuid::new_v4(),&claimed.item_id,&holder.principal.issuer,&holder.principal.subject,&claimed.revision,&serde_json::to_value(&claimed.binding).expect("binding json"),&b"inert recovery capsule".as_slice(),&attempt_state,&uuid::Uuid::new_v4()],
+    ).await.expect("reserve a live attempt");
+    reservation
+        .execute(
+            "UPDATE casework_items SET revision=revision+1,state='synchronizing',updated_at=now() WHERE item_id=$1",
+            &[&claimed.item_id],
+        )
+        .await
+        .expect("the reserved item is synchronizing");
+
+    // A later proposal supersedes the review occurrence the attempt acts on.
+    let superseding = observation(
+        2,
+        "proposal-2",
+        OccurrenceKind::Review,
+        OccurrenceState::Open,
+    );
+    let observer = store.clone();
+    let observed = tokio::spawn(async move {
+        observer
+            .apply_observation(&superseding, "default", Some(172_800))
+            .await
+    });
+    let (watcher, connection) = tokio_postgres::connect(
+        &env::var("CASEWORK_TEST_DATABASE_URL").expect("database url"),
+        tokio_postgres::NoTls,
+    )
+    .await
+    .expect("connect lock watcher");
+    tokio::spawn(async move { connection.await.expect("watcher connection") });
+    let mut blocked = false;
+    for _ in 0..500 {
+        blocked = watcher
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)) AND query LIKE '%ORDER BY first_observed_at FOR UPDATE%')",
+                &[&reservation_pid],
+            )
+            .await
+            .expect("inspect the blocked observation")
+            .get(0);
+        if blocked || observed.is_finished() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        blocked,
+        "the observation passed the subject-wide check and waits on the item row"
+    );
+    reservation.commit().await.expect("commit the reservation");
+    observed
+        .await
+        .expect("observation task")
+        .expect("the observation applies");
+
+    let after = store.item(claimed.item_id).await.expect("raced item");
+    assert_eq!(after.state, OccurrenceState::Synchronizing);
+    assert_eq!(after.revision, claimed.revision + 1);
+    assert_eq!(after.holder, Some(holder.principal.clone()));
+    assert_eq!(after.binding, claimed.binding);
+    let history = store
+        .history(&holder, claimed.item_id, 100)
+        .await
+        .expect("history");
+    assert!(
+        history
+            .iter()
+            .all(|event| event.kind != HistoryKind::Superseded),
+        "an item with a {attempt_state} attempt is never superseded"
+    );
+}
+
+#[tokio::test]
+async fn a_superseding_observation_leaves_an_item_with_a_live_attempt_unchanged() {
+    assert_superseding_observation_leaves_live_attempt_item("race_pending_attempt", "pending")
+        .await;
+    assert_superseding_observation_leaves_live_attempt_item("race_uncertain_attempt", "uncertain")
+        .await;
+}
