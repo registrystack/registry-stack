@@ -61,6 +61,19 @@
   the system roots for that connection alone, without a process-wide trust
   store change.
 
+- Add the shared runtime configuration loader: a bounded, strict YAML reader
+  for `runtime.yaml` that refuses symbolic links, removed keys, and a wrong
+  envelope, then substitutes `${VAR}`, `${VAR:-default}`, and
+  `${VAR:?message}` inside string values after parsing. Substitution is
+  refused inside `*Ref` fields and in authored package files.
+- Add the shared configuration blocks (`secretProviders`, `database`,
+  `jwksSource`, `package`, `listener`) and their canonical JSON Schema under
+  `products/platform/generated/`.
+- Add Ed25519 and ES256 private key generation beside ES384, with RFC 7638
+  thumbprint tests for RSA, EC, and OKP keys.
+- BREAKING: remove `reject_deprecated_config_fields`; runtimes declare removed
+  keys on the loader instead.
+
 ## v0.34.0 - 2026-09-25
 
 - The shared platform crates have no user-visible changes in this release.

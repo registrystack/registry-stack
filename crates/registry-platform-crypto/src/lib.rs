@@ -9,17 +9,19 @@ pub mod transit_datakey;
 mod transit_mock;
 
 use async_trait::async_trait;
-use aws_lc_rs::encoding::{AsBigEndian as _, AsDer as _, EcPrivateKeyBin, Pkcs8V1Der};
+use aws_lc_rs::encoding::{
+    AsBigEndian as _, AsDer as _, Curve25519SeedBin, EcPrivateKeyBin, Pkcs8V1Der,
+};
 use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::rsa::{
     KeyPair as AwsRsaKeyPair, KeySize as AwsRsaKeySize,
     PublicKeyComponents as AwsRsaPublicKeyComponents,
 };
 use aws_lc_rs::signature::{
-    EcdsaKeyPair, KeyPair as _, RsaParameters, RsaSignatureEncoding, UnparsedPublicKey,
-    ECDSA_P256_SHA256_FIXED, ECDSA_P256_SHA256_FIXED_SIGNING, ECDSA_P384_SHA384_FIXED,
-    ECDSA_P384_SHA384_FIXED_SIGNING, RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384,
-    RSA_PKCS1_SHA256, RSA_PKCS1_SHA384,
+    EcdsaKeyPair, EcdsaSigningAlgorithm, Ed25519KeyPair, KeyPair as _, RsaParameters,
+    RsaSignatureEncoding, UnparsedPublicKey, ECDSA_P256_SHA256_FIXED,
+    ECDSA_P256_SHA256_FIXED_SIGNING, ECDSA_P384_SHA384_FIXED, ECDSA_P384_SHA384_FIXED_SIGNING,
+    RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_SHA256, RSA_PKCS1_SHA384,
 };
 #[cfg(feature = "transit")]
 use base64::engine::general_purpose::STANDARD;
@@ -1424,13 +1426,19 @@ pub fn pairwise_subject_ref_hash(
 /// only [`sign`] and [`verify`] handle: asking for one of those is
 /// unrepresentable here rather than a runtime failure.
 ///
-/// The pair is the one SMART on FHIR Backend Services settles on (SMART App
-/// Launch v2.2.0, the `client-confidential-asymmetric` profile): an
-/// authorization server there has to validate only one of RS384 and ES384, so a
-/// generator offering only one of them would leave adopters unable to
-/// authenticate against a conformant server that chose the other.
+/// ES384 and RS384 are the pair SMART on FHIR Backend Services settles on
+/// (SMART App Launch v2.2.0, the `client-confidential-asymmetric` profile): an
+/// authorization server there has to validate only one of them, so a generator
+/// offering only one would leave adopters unable to authenticate against a
+/// conformant server that chose the other. Ed25519 and ES256 are the signing
+/// keys the Registry Stack runtimes themselves use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GeneratedKeyAlgorithm {
+    /// EdDSA over Ed25519, written as an OKP/Ed25519 JWK whose `d` is the
+    /// 32-byte seed.
+    Ed25519,
+    /// ECDSA over P-256 with SHA-256, written as an EC/P-256 JWK.
+    Es256,
     /// ECDSA over P-384 with SHA-384, written as an EC/P-384 JWK.
     Es384,
     /// RSASSA-PKCS1-v1_5 with SHA-384 over a 2048-bit modulus, written as an
@@ -1443,6 +1451,8 @@ impl GeneratedKeyAlgorithm {
     #[must_use]
     pub const fn signing_algorithm(self) -> SigningAlgorithm {
         match self {
+            Self::Ed25519 => SigningAlgorithm::EdDsa,
+            Self::Es256 => SigningAlgorithm::Es256,
             Self::Es384 => SigningAlgorithm::Es384,
             Self::Rs384 => SigningAlgorithm::Rs384,
         }
@@ -1453,6 +1463,9 @@ impl GeneratedKeyAlgorithm {
 /// least 2048 bits, every relying party accepts that width, and a wider modulus
 /// costs generation time on every call for no interoperability gain.
 const GENERATED_RSA_KEY_SIZE: AwsRsaKeySize = AwsRsaKeySize::Rsa2048;
+
+/// Width in bytes of a P-256 scalar and of each of its point coordinates.
+const P256_COORDINATE_BYTES: usize = 32;
 
 /// Width in bytes of a P-384 scalar and of each of its point coordinates.
 const P384_COORDINATE_BYTES: usize = 48;
@@ -1466,7 +1479,17 @@ const P384_COORDINATE_BYTES: usize = 48;
 /// primes, so its cost varies from call to call and belongs off a request path.
 pub fn generate_private_jwk(algorithm: GeneratedKeyAlgorithm) -> Result<PrivateJwk, CryptoError> {
     let mut jwk = match algorithm {
-        GeneratedKeyAlgorithm::Es384 => generate_es384_jwk(),
+        GeneratedKeyAlgorithm::Ed25519 => generate_ed25519_jwk(),
+        GeneratedKeyAlgorithm::Es256 => generate_ecdsa_jwk(
+            &ECDSA_P256_SHA256_FIXED_SIGNING,
+            "P-256",
+            P256_COORDINATE_BYTES,
+        ),
+        GeneratedKeyAlgorithm::Es384 => generate_ecdsa_jwk(
+            &ECDSA_P384_SHA384_FIXED_SIGNING,
+            "P-384",
+            P384_COORDINATE_BYTES,
+        ),
         GeneratedKeyAlgorithm::Rs384 => generate_rs384_jwk(),
     }?;
     jwk.alg = Some(algorithm.signing_algorithm().jwa_name().to_owned());
@@ -1477,32 +1500,63 @@ pub fn generate_private_jwk(algorithm: GeneratedKeyAlgorithm) -> Result<PrivateJ
     Ok(jwk)
 }
 
-fn generate_es384_jwk() -> Result<PrivateJwk, CryptoError> {
-    let key_pair = EcdsaKeyPair::generate(&ECDSA_P384_SHA384_FIXED_SIGNING)
-        .map_err(|_| CryptoError::Crypto("ES384 key generation failed"))?;
+fn generate_ed25519_jwk() -> Result<PrivateJwk, CryptoError> {
+    let key_pair = Ed25519KeyPair::generate()
+        .map_err(|_| CryptoError::Crypto("Ed25519 key generation failed"))?;
+    // The exported seed zeroizes on drop, like the ECDSA scalar below, and is
+    // the 32-byte `d` that `sign_eddsa` reads back.
+    let seed: Curve25519SeedBin<'_> = key_pair
+        .seed()
+        .and_then(|seed| seed.as_be_bytes())
+        .map_err(|_| CryptoError::Crypto("Ed25519 private key export failed"))?;
+    Ok(PrivateJwk {
+        kty: "OKP".to_owned(),
+        kid: None,
+        alg: None,
+        crv: Some("Ed25519".to_owned()),
+        d: Some(URL_SAFE_NO_PAD.encode(seed.as_ref())),
+        x: Some(URL_SAFE_NO_PAD.encode(key_pair.public_key().as_ref())),
+        y: None,
+        n: None,
+        e: None,
+        p: None,
+        q: None,
+        dp: None,
+        dq: None,
+        qi: None,
+    })
+}
+
+fn generate_ecdsa_jwk(
+    signing: &'static EcdsaSigningAlgorithm,
+    curve: &str,
+    coordinate_bytes: usize,
+) -> Result<PrivateJwk, CryptoError> {
+    let key_pair = EcdsaKeyPair::generate(signing)
+        .map_err(|_| CryptoError::Crypto("ECDSA key generation failed"))?;
     // aws-lc-rs zeroizes this buffer on drop, and the base64url encoding below
     // lands straight in the JWK member `PrivateJwk::drop` zeroizes, so the
     // scalar exists in exactly those two places.
     let scalar: EcPrivateKeyBin<'_> = key_pair
         .private_key()
         .as_be_bytes()
-        .map_err(|_| CryptoError::Crypto("ES384 private key export failed"))?;
+        .map_err(|_| CryptoError::Crypto("ECDSA private key export failed"))?;
     let point = key_pair.public_key().as_ref();
     // The SEC 1 uncompressed point `0x04 || x || y` that
-    // `p384_uncompressed_point` assembles for signing, taken apart again into
-    // the JWK's two coordinates.
-    if point.len() != 1 + 2 * P384_COORDINATE_BYTES || point[0] != 0x04 {
+    // `p256_uncompressed_point` and `p384_uncompressed_point` assemble for
+    // signing, taken apart again into the JWK's two coordinates.
+    if point.len() != 1 + 2 * coordinate_bytes || point[0] != 0x04 {
         return Err(CryptoError::Crypto(
-            "ES384 public point is not uncompressed",
+            "ECDSA public point is not uncompressed",
         ));
     }
-    let (x, y) = point[1..].split_at(P384_COORDINATE_BYTES);
+    let (x, y) = point[1..].split_at(coordinate_bytes);
 
     Ok(PrivateJwk {
         kty: "EC".to_owned(),
         kid: None,
         alg: None,
-        crv: Some("P-384".to_owned()),
+        crv: Some(curve.to_owned()),
         d: Some(URL_SAFE_NO_PAD.encode(scalar.as_ref())),
         x: Some(URL_SAFE_NO_PAD.encode(x)),
         y: Some(URL_SAFE_NO_PAD.encode(y)),
@@ -4007,6 +4061,102 @@ mod tests {
             public.jkt().expect("thumbprint computes"),
             "qDygv_6SkrJ6krP3sYb0DCoEuYSYVP0ttF5m1cp_094"
         );
+    }
+
+    // RFC 7638 section 3.1 publishes this vector for its RSA example key; the
+    // ES256 and Ed25519 vectors below were computed independently over the RFC
+    // 7517 appendix A.1 P-256 key and the RFC 8037 appendix A.3 Ed25519 key.
+    #[test]
+    fn public_jwk_thumbprint_matches_rfc_7638_rsa_vector() {
+        let public = PublicJwk::parse(
+            r#"{"kty":"RSA","alg":"RS256","e":"AQAB","n":"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw"}"#,
+        )
+        .expect("RFC 7638 RSA key parses");
+        assert_eq!(
+            public.jkt().expect("thumbprint computes"),
+            "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
+        );
+    }
+
+    #[test]
+    fn public_jwk_thumbprint_matches_es256_vector() {
+        let public = PublicJwk::parse(
+            r#"{"kty":"EC","alg":"ES256","crv":"P-256","kid":"ignored","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"}"#,
+        )
+        .expect("RFC 7517 P-256 key parses");
+        assert_eq!(
+            public.jkt().expect("thumbprint computes"),
+            "cn-I_WNMClehiVp51i_0VpOENW1upEerA8sEam5hn-s"
+        );
+    }
+
+    #[test]
+    fn public_jwk_thumbprint_matches_ed25519_vector() {
+        let public = PublicJwk::parse(
+            r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#,
+        )
+        .expect("RFC 8037 Ed25519 key parses");
+        assert_eq!(
+            public.jkt().expect("thumbprint computes"),
+            "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"
+        );
+    }
+
+    #[test]
+    fn generated_ed25519_key_signs_and_verifies_under_its_public_half() {
+        let private =
+            generate_private_jwk(GeneratedKeyAlgorithm::Ed25519).expect("Ed25519 generates");
+        assert_eq!(private.kty, "OKP");
+        assert_eq!(private.crv.as_deref(), Some("Ed25519"));
+        assert_eq!(private.alg.as_deref(), Some("EdDSA"));
+        assert_eq!(private.y, None, "an OKP JWK carries no y coordinate");
+        let public = private.public();
+        assert_eq!(
+            private.kid.as_deref(),
+            Some(public.jkt().expect("thumbprint computes").as_str())
+        );
+        let rendered = serde_json::to_string(&private).expect("public half renders");
+        PublicJwk::parse(&rendered).expect("generated public half validates");
+        assert_eq!(
+            URL_SAFE_NO_PAD
+                .decode(private.d.as_deref().expect("generated key carries d"))
+                .expect("d is base64url")
+                .len(),
+            32,
+            "an Ed25519 seed is 32 bytes wide"
+        );
+
+        let payload = b"registry-platform-crypto generated ed25519 round trip";
+        let signature = sign(payload, &private).expect("generated key signs");
+        verify(payload, &signature, &public).expect("generated public half verifies");
+        assert!(matches!(
+            verify(b"tampered", &signature, &public),
+            Err(CryptoError::InvalidSignature)
+        ));
+    }
+
+    #[test]
+    fn generated_es256_key_signs_and_verifies_under_its_public_half() {
+        let private = generate_private_jwk(GeneratedKeyAlgorithm::Es256).expect("ES256 generates");
+        assert_eq!(private.kty, "EC");
+        assert_eq!(private.crv.as_deref(), Some("P-256"));
+        assert_eq!(private.alg.as_deref(), Some("ES256"));
+        let public = private.public();
+        assert_eq!(
+            private.kid.as_deref(),
+            Some(public.jkt().expect("thumbprint computes").as_str())
+        );
+        let rendered = serde_json::to_string(&private).expect("public half renders");
+        PublicJwk::parse(&rendered).expect("generated public half validates");
+
+        let payload = b"registry-platform-crypto generated es256 round trip";
+        let signature = sign(payload, &private).expect("generated key signs");
+        assert_eq!(signature.len(), 64, "ES256 JWS signatures are raw r || s");
+        verify(payload, &signature, &public).expect("generated public half verifies");
+        assert!(matches!(
+            verify(b"tampered", &signature, &public),
+            Err(CryptoError::InvalidSignature)
+        ));
     }
 
     #[test]
