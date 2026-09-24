@@ -13,16 +13,21 @@ Pre-1.0 and under construction. This version is the product skeleton:
 - the `messaging` runtime with `migrate` and `serve`, the converged runtime
   configuration, and the package's access profiles;
 - OIDC bearer authentication, access-profile resolution, and the keyed audit
-  journal, which records the runtime start;
+  journal, which records the runtime start and every template preview;
+- the package: providers, sender profiles, and versioned templates rendered
+  with bounded, loader-free Jinja, a JSON Schema per version, exact locales,
+  and SMS segment counting;
+- the package ledger: the runtime serves only the package digest
+  `messagingctl apply` recorded, and a change applies on restart;
 - the unauthenticated `/health` and `/ready` routes, the authenticated
-  message status route, and `/metrics` on a separate private listener;
-- `messagingctl check`, which loads a runtime configuration and its package
-  offline exactly as `serve` would;
+  message status and template preview routes, and `/metrics` on a separate
+  private listener;
+- `messagingctl init`, `check`, `preview`, and `apply`;
 - the Rust client for health and readiness;
 - the security invariant matrix, the problem catalog, and the generated
   OpenAPI and runtime schema.
 
-Submission, templates, providers, dispatch, callbacks, quotas, and retention
+Submission, provider delivery, dispatch, callbacks, quotas, and retention
 arrive in later slices. Until the message store lands, the status route
 answers `message.not-visible` to every authenticated caller, which is the
 same answer it gives for a message the caller may not see.
@@ -48,26 +53,37 @@ with the caller's source of record.
 
 | Crate | Owns |
 |---|---|
-| `registry-messaging-core` | Access profiles and their decisions, message visibility, the problem vocabulary, wire names and DTOs. No I/O. |
-| `registry-messaging` | The runtime and the `messaging` binary: configuration, authentication, HTTP, metrics, the PostgreSQL store, and the audit journal. |
+| `registry-messaging-core` | Access profiles and their decisions, the package manifest, template checking and rendering, SMS segment counting, message visibility, the problem vocabulary, wire names and DTOs. No I/O. |
+| `registry-messaging` | The runtime and the `messaging` binary: configuration, the package loader and digest, authentication, HTTP, metrics, the PostgreSQL store and package ledger, and the audit journal. |
 | `registry-messagingctl` | Adopter and local operator tooling, the `messagingctl` binary. |
 | `registry-messaging-client` | The bounded Rust client over the runtime's HTTP contract. |
 
 ## Running locally
 
 The starter under `examples/starter/` is a runtime configuration and a package
-with one sender profile and one operator profile. Copy
+with an email and an SMS sender profile, an email template in English and
+French, an SMS template, a sender access profile, and an operator access
+profile. `messagingctl init DIRECTORY` writes a copy. Copy
 `runtime.example.yaml`, set its absolute paths and secret references, then:
 
 ```bash
 messagingctl check --runtime-config /abs/path/runtime.yaml
+messagingctl preview --runtime-config /abs/path/runtime.yaml \
+  appointment-reminder 1 --locale fr --data sample.json
 messaging --runtime-config /abs/path/runtime.yaml migrate
+messagingctl apply --runtime-config /abs/path/runtime.yaml --apply
 messaging --runtime-config /abs/path/runtime.yaml serve
 ```
 
 `migrate` uses the migration connection and is safe to run from several
-processes at once. `serve` refuses to start against a database whose applied
-schema it does not recognize. `MESSAGING_LOG` accepts `error`, `warn`, or
+processes at once. `messagingctl apply` without `--apply` reports whether the
+package differs from the one the ledger names active; with `--apply` it
+records it. `serve` refuses to start against a database whose applied schema
+it does not recognize, or whose ledger does not name the package on disk, so
+a package change takes effect on restart after `apply --apply`. Every
+`messagingctl` command takes `--format human|json` and exits 0 on success, 1
+on a refusal, 2 on a usage error, and 3 when a file, secret, or database could
+not be reached. `MESSAGING_LOG` accepts `error`, `warn`, or
 `info` and nothing else. `RUNTIME-CONFIG.md` documents every key.
 
 ## HTTP contract
@@ -80,6 +96,7 @@ never hand-edited.
 | `GET /health` | none | `200` with an empty body while the process serves |
 | `GET /ready` | none | `200` when the database carries every expected migration, `503 service.unavailable` otherwise |
 | `GET /v1/messages/{message_id}` | bearer | `404 message.not-visible` |
+| `POST /v1/templates/{template_id}/versions/{version}/preview` | bearer, a sender profile listing the template | `200` with the rendered parts and the SMS segment count; persists nothing |
 | `GET /metrics` | metrics listener only | Prometheus text; never served on the public listener |
 
 Every response carries a `traceparent` header. Problems are
@@ -100,7 +117,20 @@ Every response carries a `traceparent` header. Problems are
 | `request.body-too-large` | 413 |
 | `request.unsupported-media-type` | 415 |
 | `request.unprocessable` | 422 |
+| `template.not-found` | 404 |
+| `template.data-invalid` | 422 |
+| `template.locale-unavailable` | 422 |
+| `template.render-refused` | 422 |
+| `content.invalid` | 422 |
+| `content.too-large` | 422 |
+| `content.too-many-segments` | 422 |
 | `service.unavailable` | 503 |
+
+The preview body is `{"locale": "fr", "data": {...}}`. Its answer is the same
+bytes `messagingctl --format json preview` prints for the same package,
+template, locale, and data, less the final newline. The audit journal records
+the caller's pseudonym, the template reference, and the outcome of each
+preview, never the data or the rendered text.
 
 ## Verification
 
@@ -110,12 +140,15 @@ products/messaging/scripts/check-checkpoint.sh
 products/messaging/scripts/check-contracts.sh
 MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
   -p registry-messaging --features postgres-test --test postgres_migrate
+MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
+  -p registry-messaging --features postgres-test --test postgres_package
 ```
 
 The checkpoint runs the database-free checks: dependency direction,
 database-suite isolation, the contract validator and its tests, the generated
-artifact drift test, and `messagingctl check` over the starter and five
-refusals. The PostgreSQL suite works in its own schema inside the database the
+artifact drift test, `messagingctl init` against the published starter,
+`messagingctl check` over the starter, a pinned digest, and five refusals, and
+`messagingctl preview` byte stability. Each PostgreSQL suite works in its own schema inside the database the
 URL names and fails, rather than skipping, when the URL is absent. A test
 binary that skips because its database is absent is not database
 verification.

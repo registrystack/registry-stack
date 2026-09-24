@@ -77,11 +77,43 @@ unknown key is refused with its path. Credentials are named only by
 substitution happens after parsing and is refused in any `Ref` member
 (MESSAGING-DEC-05). Refusal messages name the member and never repeat the
 refused value, the substituted text, or a default. `Debug` output of the
-database and metrics settings is redacted. A pinned `package.expectedDigest`
-is refused until the package ledger can verify it (MESSAGING-DEC-06).
+database and metrics settings is redacted.
 
 Tests: the `config.rs` and `environment.rs` unit tests, and the checkpoint's
 `messagingctl check` refusal cases.
+
+## Package integrity and the ledger
+
+Threat: a file edited under `package.root` changes what a running or
+restarted deployment sends without anyone recording the change, or a
+deployment runs a package other than the one reviewed.
+
+The package digest covers every file under `templates/` and
+`messaging.yaml`, each by its own SHA-256 and size, in a canonical JSON
+listing. The loader refuses symbolic links anywhere in the package, bounds the
+entry count, each file, and the total, and reads nothing outside
+`package.root`. A pinned `package.expectedDigest` must equal the digest read,
+or the runtime and `messagingctl` refuse before reaching a database.
+`messaging serve` refuses to start unless the ledger's active digest equals
+the package read; `messagingctl apply --apply` is the one writer of the
+ledger, under an advisory lock, so a change is recorded before it can serve
+and applies on restart (MESSAGING-DEC-06). The runtime reads the package
+once at startup, so a later edit changes nothing until the next restart,
+which then refuses the unrecorded digest.
+
+`messagingctl apply` does not write the audit journal: the runtime is its
+single writer, and the ledger row with its runtime version and time is the
+record of the change. The runtime start record names the package digest.
+
+Residual risks: the package is read twice at startup (once while the
+configuration is checked, once for serving), and only the second read is
+compared with the ledger, which is the one served. A ConfigMap-style mount
+that publishes files through symbolic links is refused; operators copy the
+package into place instead.
+
+Tests: `config.rs::a_pinned_package_digest_must_equal_the_digest_of_the_package_read`,
+`runtime.rs::the_runtime_serves_only_the_package_the_ledger_names_active`,
+the `package.rs` loader tests, and the `postgres_package` suite.
 
 ## Listeners and metrics
 
@@ -104,9 +136,15 @@ public listener.
 ## Audit
 
 The journal is the platform keyed hash-chained sink under `audit.path`, keyed
-by `audit.hashKeyRef`. In this version it records one event, the runtime
-start, carrying the runtime version and the retention periods in force; it
-names no principal, contact, or secret. Listeners bind before the start
+by `audit.hashKeyRef`. In this version it records two events. The runtime
+start carries the runtime version, the package digest, and the retention
+periods in force. A template preview carries the access profile, a keyed
+pseudonym of the verified issuer and subject, the package digest, the
+template reference when the package ships it, and the outcome with its
+problem code; never the data, the rendered parts, or the raw subject. A
+preview the journal cannot record is answered `503 service.unavailable`, not
+rendered. An unauthenticated or unprofiled request is not journaled, as for
+every route (MESSAGING-DEC-02). Listeners bind before the start
 record is written, so a taken address never leaves a start record for a
 runtime that did not serve.
 
@@ -132,10 +170,51 @@ the slice owes.
 MESSAGING-SEC-07: configured verifier kinds, a replay window, and delivery
 reports that only move forward.
 
-## Templates (pending, slice S2)
+## Templates
 
-MESSAGING-SEC-09: a template engine with no loader beyond the package, no
-file or network functions, fuel, and an output ceiling.
+Threat: a template reaches the network or a file, renders without bound and
+exhausts the runtime, injects markup into an email or a header line, or
+renders a message in a language the recipient was not addressed in
+(MESSAGING-SEC-09, enforced).
+
+Every part renders in its own `minijinja` environment built empty: no
+loader, so no `include`, `import`, or `extends`; no macros; no built-in
+filters, tests, or globals; and no file, network, or clock access. Templates
+come only from the package loaded and digested at startup. A render is
+bounded by a fuel budget, a recursion limit, and a byte ceiling per part
+enforced as the output grows. Strict undefined refuses a missing or null
+value rather than rendering it empty. The data is validated against the
+version's JSON Schema first; the schema may not reference anything outside
+itself, and refusals report at most eight JSON Pointers and schema keywords,
+never a value. HTML parts escape every value, and the formatter ignores a
+template's own `autoescape` block, so no author or data can turn escaping
+off. Text and SMS parts strip control characters, and a subject strips
+newlines, so no value can open a header line. A locale the version does not
+declare is refused, never answered in a fallback language. An SMS whose
+segment count exceeds the sender profile's `maximumSegments` is refused
+before acceptance.
+
+The preview route authenticates, requires the sender role
+(`operation.not-authorized` otherwise), and requires the caller's profile to
+list the template (`profile.not-authorized`, before any lookup, so a caller
+cannot probe which templates exist). It persists nothing.
+
+Residual risks: the fuel budget counts instructions, not bytes, so an
+expression such as string repetition can allocate up to the data's size
+multiplied by one factor before the output ceiling refuses it; the request
+body limit bounds the data. `{% autoescape false %}` is accepted by the parser
+and has no effect. The loader reads each file after listing the directory, so
+a file swapped between the two reads is caught only by the digest the ledger
+compares.
+
+Direct content (`contentSource: direct`) needs the profile's
+`allowDirectContent` and passes the same channel, size, control-character,
+and segment rules; it has no route until submission lands in slice S3.
+
+Tests: MESSAGING-SEC-09 in `contracts/security-test-traceability.yaml`, the
+`content.rs` and `template.rs` core tests, and the preview route tests in
+`http.rs`, including the unauthenticated, operator, unlisted-template, and
+journal-failure negatives.
 
 ## Retention (pending, slice S6)
 

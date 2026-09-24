@@ -38,11 +38,11 @@ refusal names the member and never repeats the value or the default text.
 
 ## Keys
 
-`package.root` is the directory holding the authored package,
-`messaging.yaml`. `package.expectedDigest` is part of the grammar for pinning
-the package to a `sha256:` digest; this version cannot verify a package
-digest, so a document that sets it is refused rather than run with an
-unverified pin.
+`package.root` is the directory holding the authored package:
+`messaging.yaml` and its `templates/` tree. `package.expectedDigest`, when
+set, pins the package to a `sha256:` digest: the runtime, `messagingctl
+check`, and `messagingctl apply` refuse a package whose digest differs, before
+any database is reached. `messagingctl check` reports the digest to pin.
 
 `listener` is required. `listener.bind` is one numeric socket address and
 defaults to `127.0.0.1:8107`. `listener.tlsTermination` is required: use
@@ -115,3 +115,63 @@ lists at least one sender profile and one template; an operator lists none and
 may not allow direct content. A requester client belongs to exactly one
 profile. Rates, bursts, and daily limits must be positive; they are declared
 now and enforced when submission lands.
+
+The rest of the manifest declares what callers send through:
+
+```yaml
+providers:
+  - {id: mail-relay, kind: smtp}
+senderProfiles:
+  - {id: transactional, channel: email, provider: mail-relay, sender: notices@example.org}
+  - {id: reminders-sms, channel: sms, provider: sms-gateway, sender: Registry, maximumSegments: 2}
+templates:
+  - {id: appointment-reminder, version: "1"}
+```
+
+A provider declares only its `kind`, `smtp` or `http`; its endpoint and
+credentials are runtime configuration. A sender profile names its `channel`
+(`email` or `sms`), a declared provider that can carry it, and the `sender`
+identity. An SMS sender profile sets `maximumSegments`, from 1 to 10; a
+rendered SMS needing more segments is refused `422
+content.too-many-segments`. Each entry of `templates` names a version the
+package ships; a version is a label, so quote a numeric one.
+
+### Templates
+
+Each template version lives under `templates/<id>/<version>/`:
+
+- `template.yaml`, closed: `channel`, `locales` (at most 32 simple language
+  tags such as `en` or `pt-BR`), and `parts`. An email version renders
+  `subject`, `text`, and optionally `html`; an SMS version renders exactly
+  `text`.
+- `schema.json`, a JSON Schema (draft 2020-12) the data must satisfy before
+  anything renders. It may not reference anything outside itself.
+- `sample.json`, optional: data every locale must render at load, so
+  `messagingctl check` shows each locale's SMS segment count.
+- `<locale>/<part>.j2` for every declared locale and part, at most 64 KiB each.
+
+Templates are Jinja without a loader: no `include`, `import`, `extends`, or
+macros, no built-in filters or globals, and no file, network, or clock access.
+A missing or null value refuses the render rather than printing empty. Two
+filters format for the requested locale: `date` for an ISO calendar date and
+`number(decimals)` for a number. Each part has a fuel budget and a byte
+ceiling (512 bytes for a subject, 64 KiB for text, 256 KiB for HTML). HTML
+parts escape every value and cannot opt out; text and SMS parts strip control
+characters, and a subject strips newlines. A locale the version does not
+declare is refused `422 template.locale-unavailable`, never answered in
+another language.
+
+Symbolic links are refused anywhere in the package, and files at the package
+root other than `messaging.yaml` and `templates/` are ignored and not part of
+the digest.
+
+### The package ledger
+
+The package digest is the SHA-256 of a canonical JSON listing of every
+package file with its own SHA-256 and size. `messagingctl apply
+--runtime-config FILE` reports whether the package on disk differs from the
+one the database's package ledger names active; with `--apply` it records the
+package. `messaging serve` refuses to start unless the package on disk has the
+digest the ledger names active, so a package change takes effect when the
+runtime restarts after `apply --apply`, and an edited file never changes what
+a running deployment sends.
