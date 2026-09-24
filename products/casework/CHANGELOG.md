@@ -28,14 +28,19 @@
   the existing pinned-description re-check is deliberately scoped to the
   casework.yaml on disk now, not a re-derived BReg source.
 - `caseworkctl source add` no longer refuses the whole pairing when a
-  selected request's review or apply access profile declares `rowBoundaries`.
-  It writes the source description and runtime binding as before, and the
-  local BReg dev-client export still grants the profile, since BReg's runtime
-  keeps enforcing the boundary and refuses a token that lacks the claim. What
+  selected request's review or apply access profile declares a `rowBoundaries`
+  claim using operator `equals` over a string-shaped field. It writes the
+  source description and runtime binding as before, and the local BReg
+  dev-client export still grants the profile, since BReg's runtime keeps
+  enforcing the boundary and refuses a token that lacks the claim. What
   changes is that the command now reports a finding naming the profile and
   the boundary claim(s), so an operator knows a local Casework reviewer
-  client needs that claim added by hand to exercise the profile. Preview and
-  apply report the same finding.
+  client needs that claim added by hand, as a string equal to the field's
+  stored value, to exercise the profile. Preview and apply report the same
+  finding. A `rowBoundaries` claim using operator `in`, or `equals` over a
+  non-string-shaped field (for example Boolean or Int64), still refuses the
+  pairing: the local Casework dev-client claim model holds only strings, and
+  neither pairing can be represented that way.
 - The BReg source adapter refuses a source request reported as `superseded`,
   a state BReg no longer defines. A BReg draft still projects as a superseded
   application occurrence.

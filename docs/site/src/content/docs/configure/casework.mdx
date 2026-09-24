@@ -609,7 +609,7 @@ For a deployment, package the connected project and hand it to an operator, who 
 | Finding | Meaning | What to do |
 |---|---|---|
 | `casework.source-add.review-policy-unresolved` | Another change-request entity in the BReg registry names this Casework project's review authority with a `policyId` that no `reviewKinds[].id` matches, or with a `policyId` that is not a string. | Add a matching `reviewKinds[].id` to `casework.yaml`, or correct the entity's `changeRequest.review.policyId`, once that entity's review kind is meant to live here. |
-| `casework.source-add.row-boundary-claim-unsupported` | The selected request's review or apply access profile declares `rowBoundaries`, and the local dev-client export does not add the claim(s) it depends on. | Add the named claim(s) to the local Casework reviewer dev clients that need the profile, matching the values BReg's `rowBoundaries` expects. |
+| `casework.source-add.row-boundary-claim-unsupported` | The selected request's review or apply access profile declares a `rowBoundaries` claim using operator `equals` over a string-shaped field, and the local dev-client export does not add the claim it depends on. An `in` operator, or `equals` over a non-string-shaped field (for example Boolean or Int64), refuses `source add` outright: the local Casework dev-client claim model holds only strings, and neither pairing can be represented that way. | Add the named claim to the local Casework reviewer dev clients that need the profile, each set to the string value equal to the field's stored value. |
 
 {/* Evidence: crates/registry-caseworkctl/src/source_add.rs, run(), select_request(),
     candidate_fragments(), runtime_binding(), check_unpaired_review_policies(), and
