@@ -9546,15 +9546,17 @@ fn render_success(report: &SuccessReport, stdout: &mut dyn Write) -> io::Result<
 
     lines.findings(&report_findings(&report.findings));
 
-    // An access explanation is part of this report and is folded into it. Any
-    // other explanation is a document this renderer has no shape for, so it
-    // keeps its own JSON rendering below the report.
+    // An access explanation and a consent module explanation are each folded
+    // into the report. Any other explanation is a document this renderer has
+    // no shape for, so it keeps its own JSON rendering below the report.
     let mut document = None;
     if let Some(explanation) = &report.explanation {
         if explanation.get("scopeMatching").is_some()
             || explanation.get("mode").and_then(Value::as_str) == Some("offline_synthetic")
         {
             push_access_explanation(explanation, &mut lines);
+        } else if explanation.get("requireConsent").is_some() {
+            push_consent_module_explanation(explanation, &mut lines);
         } else {
             document = Some(serde_json::to_string_pretty(explanation).map_err(io::Error::other)?);
         }
@@ -9813,6 +9815,66 @@ fn push_access_explanation(explanation: &Value, lines: &mut report::Lines) {
         lines.blank();
         push_consent_explanation(&explanation["consent"], lines);
     }
+}
+
+/// The `module add consent` explanation: what the generated module holds, the
+/// vocabularies it added versus reused, the `requireConsent` line each gated
+/// entity still needs, and whether the project compiles yet.
+fn push_consent_module_explanation(explanation: &Value, lines: &mut report::Lines) {
+    lines.heading("Consent module:");
+    lines.pairs(&[
+        (
+            "subject",
+            explanation["subject"].as_str().unwrap_or("").to_owned(),
+        ),
+        (
+            "module",
+            explanation["module"].as_str().unwrap_or("").to_owned(),
+        ),
+    ]);
+    lines.blank();
+    lines.pairs(&[
+        ("entities", joined_or(&explanation["entities"], "none")),
+        ("actions", joined_or(&explanation["actions"], "none")),
+        (
+            "access profiles",
+            joined_or(&explanation["accessProfiles"], "none"),
+        ),
+    ]);
+    let vocabularies = &explanation["vocabularies"];
+    lines.blank();
+    lines.pairs(&[
+        (
+            "vocabularies added",
+            joined_or(&vocabularies["added"], "none"),
+        ),
+        (
+            "vocabularies reused",
+            joined_or(&vocabularies["reused"], "none"),
+        ),
+    ]);
+    if let Some(requirements) = explanation["requireConsent"]
+        .as_array()
+        .filter(|requirements| !requirements.is_empty())
+    {
+        lines.blank();
+        lines.item("requireConsent lines to add:");
+        for requirement in requirements {
+            lines.pairs_at(
+                2,
+                &[(
+                    requirement["entity"].as_str().unwrap_or(""),
+                    requirement["line"].as_str().unwrap_or("").to_owned(),
+                )],
+            );
+        }
+    }
+    let compiles = explanation["compiles"].as_bool() == Some(true);
+    lines.verdict(
+        "Compiles:",
+        if compiles { "yes" } else { "not yet" },
+        compiles,
+    );
 }
 
 fn joined_strings(values: &[Value]) -> String {

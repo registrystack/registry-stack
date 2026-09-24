@@ -108,6 +108,37 @@ fn module_add(project: &Path, subject: &str) -> Output {
     ])
 }
 
+/// The default human output format reports the same explanation `--format
+/// json` carries, folded into the report; it never falls back to a trailing
+/// JSON block the way a renderer with no shape for an explanation would.
+#[test]
+fn module_add_consent_human_output_has_no_trailing_json_block() {
+    let project = TestProject::from_registry_source(BASE_PROJECT.as_bytes());
+
+    let added = bregctl(&[
+        "module",
+        "add",
+        "consent",
+        "--subject",
+        "person",
+        path(project.path()),
+    ]);
+
+    assert!(added.status.success(), "{added:?}");
+    let rendered = String::from_utf8(added.stdout).expect("report is UTF-8");
+    assert!(
+        rendered.starts_with("Added the consent module. 2 artifacts written.\n"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("Consent module:"), "{rendered}");
+    assert!(rendered.contains("consent-person"), "{rendered}");
+    assert!(rendered.contains("Compiles:"), "{rendered}");
+    // A dumped JSON document quotes every key; the folded report never does.
+    for needle in ["\"subject\"", "\"module\"", "\"compiles\"", "\"requireConsent\""] {
+        assert!(!rendered.contains(needle), "{rendered}");
+    }
+}
+
 fn registry_source(project: &Path) -> String {
     fs::read_to_string(project.join("registry.yaml")).expect("registry.yaml reads")
 }
