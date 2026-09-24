@@ -2288,6 +2288,45 @@ mod tests {
         assert!(error.contains("hide"), "{error}");
     }
 
+    // registrystack/registry-stack#1341: a source schema whose items enum
+    // holds one value and whose uniqueItems is not true can still satisfy a
+    // minItems above 1, by repeating that value. A witness search that only
+    // tries distinct items misses that array entirely, so a displaySchema
+    // whose items enum rejects the value passed `check` even though the
+    // runtime rejects the resulting disclosure and hides the review task.
+    #[test]
+    fn check_refuses_a_display_schema_enum_that_rejects_a_repeated_array_item_the_source_admits() {
+        let description = description_with_field_schema(
+            "licensedActivities",
+            json!({"type":"array","items":{"type":"string","enum":["example-general-nursing-care"]},"minItems":2,"x-registry-maxBytes":512}),
+        );
+        let (_root, project) = write_offline_project(CASEWORK_YAML, &description);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(error.contains("licensedActivities"), "{error}");
+        assert!(
+            error.contains("\"example-general-nursing-care\""),
+            "{error}"
+        );
+        assert!(error.contains("hide"), "{error}");
+    }
+
+    #[test]
+    fn check_accepts_a_display_schema_when_unique_items_makes_the_repeated_witness_unprovable() {
+        // Same single-value items enum and minItems: 2, but uniqueItems:
+        // true: the source schema can then never admit a valid array at all
+        // (two unique slots, one distinct value to fill them with), so no
+        // witness is provable and the check must not invent a false refusal.
+        let description = description_with_field_schema(
+            "licensedActivities",
+            json!({"type":"array","items":{"type":"string","enum":["example-general-nursing-care"]},"minItems":2,"uniqueItems":true,"x-registry-maxBytes":512}),
+        );
+        let (_root, project) = write_offline_project(CASEWORK_YAML, &description);
+
+        check_source_descriptions(&project).unwrap();
+    }
+
     #[test]
     fn check_refuses_a_projected_field_the_display_schema_does_not_declare() {
         let yaml = CASEWORK_YAML.replace(

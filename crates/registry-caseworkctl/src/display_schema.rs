@@ -340,19 +340,33 @@ fn witnesses(schema: &Value, depth: usize) -> Vec<(Value, Value)> {
     if let Some(items) = schema.get("items").filter(|items| items.is_object()) {
         let item_values = witnesses_of(items, depth + 1);
         let minimum = schema.get("minItems").and_then(Value::as_u64).unwrap_or(0);
+        let maximum = schema.get("maxItems").and_then(Value::as_u64);
+        let unique = schema.get("uniqueItems") == Some(&Value::Bool(true));
         for item in &item_values {
             if minimum <= 1 {
                 witnesses.push((Value::Array(vec![item.clone()]), item.clone()));
                 continue;
             }
+            if maximum.is_some_and(|maximum| minimum > maximum) {
+                continue;
+            }
             let mut array = vec![item.clone()];
-            array.extend(
-                item_values
-                    .iter()
-                    .filter(|other| *other != item)
-                    .take(minimum as usize - 1)
-                    .cloned(),
-            );
+            if unique {
+                // Distinct items only: a length the source's own item
+                // witnesses cannot fill distinctly is not provable, so it is
+                // left unreported below rather than invented.
+                array.extend(
+                    item_values
+                        .iter()
+                        .filter(|other| *other != item)
+                        .take(minimum as usize - 1)
+                        .cloned(),
+                );
+            } else {
+                // uniqueItems is not true, so the source can repeat this item
+                // to reach minItems.
+                array.extend(std::iter::repeat_n(item.clone(), minimum as usize - 1));
+            }
             if array.len() as u64 == minimum {
                 let array = Value::Array(array);
                 witnesses.push((array.clone(), array));
