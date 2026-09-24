@@ -49,6 +49,13 @@
   `ChainAssertionError`. Keyed audit references from `AuditProfile` and
   `AuditKeyHasher` are unchanged byte for byte.
 
+- BREAKING: `TransitSigner::initialize` returns `TransitInitializationError`,
+  which names the fault it met: an unreachable socket, a refused metadata read,
+  a provider server error on that read, a malformed response, unsafe custody,
+  a key version above `latest_version`, a key version below
+  `min_encryption_version`, a public key mismatch, or a failed self-test. The
+  causes carry no path, provider response, or key material.
+
 ## v0.34.0 - 2026-09-25
 
 - The shared platform crates have no user-visible changes in this release.

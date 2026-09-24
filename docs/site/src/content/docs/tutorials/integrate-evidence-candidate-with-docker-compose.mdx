@@ -128,7 +128,8 @@ Both forms of the command compile the bundle, compile the source plans, refuse a
 already older than its source allows, validate the mounted secret material, and initialize the
 configured signer, which signs a self-test message through the Transit proxy and verifies it
 against the governed public JWK. That is why the proxy starts first: without a reachable socket
-either form stops at `evidence: runtime signing initialization failed`.
+either form stops at `evidence: runtime signing initialization failed: the Transit provider did not
+answer on the configured Unix socket (missing socket, refused connection, or timeout)`.
 
 `--require-runtime-dependencies` adds the dependencies a served request would need. It opens the
 configured audit writer exactly as `serve` would: creating the audit file and its lock if they are
