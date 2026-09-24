@@ -1,0 +1,71 @@
+[package]
+name = "registry-breg-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Citizen-facing MCP gateway that lets a chat host act for one verified citizen against a Base Registry Engine."
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "breg-mcp"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[features]
+# Runs the gateway against a real Base Registry Engine on PostgreSQL. The
+# engine is a dev-dependency only: this feature enables its test features and
+# never places the runtime in the gateway's normal dependency graph.
+postgres-test = [
+    "registry-breg/postgres-test",
+    "registry-breg/runtime",
+    "registry-breg/tooling",
+]
+
+[[test]]
+name = "postgres_gateway"
+path = "tests/postgres_gateway.rs"
+required-features = ["postgres-test"]
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+clap.workspace = true
+http.workspace = true
+jsonwebtoken.workspace = true
+registry-breg-client.workspace = true
+registry-platform-audit.workspace = true
+registry-platform-authcommon.workspace = true
+registry-platform-buildinfo.workspace = true
+registry-platform-canonical-json.workspace = true
+registry-platform-config.workspace = true
+registry-platform-crypto.workspace = true
+registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-httputil.workspace = true
+registry-platform-oidc.workspace = true
+registry-platform-ratelimit.workspace = true
+rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"] }
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+serde_path_to_error.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+registry-breg.workspace = true
+registry-platform-testing = { workspace = true, features = ["test-authorization-server"] }
+reqwest.workspace = true
+rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
+tempfile.workspace = true
+tokio-postgres.workspace = true

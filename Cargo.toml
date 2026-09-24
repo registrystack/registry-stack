@@ -47,6 +47,7 @@ members = [
     "crates/registry-record",
     "crates/registry-render",
     "crates/registry-breg-client",
+    "crates/registry-breg-mcp",
     "crates/registry-breg-client-node",
     "crates/registry-breg-client-py",
     "crates/registry-relay-http-contract",
@@ -114,6 +115,7 @@ registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.
 registry-record = { path = "crates/registry-record", version = "0.34.0" }
 registry-render = { path = "crates/registry-render", version = "0.34.0" }
 registry-breg-client = { path = "crates/registry-breg-client", version = "0.34.0" }
+registry-breg-mcp = { path = "crates/registry-breg-mcp", version = "0.34.0" }
 registry-breg-client-node = { path = "crates/registry-breg-client-node", version = "0.34.0" }
 registry-breg-client-py = { path = "crates/registry-breg-client-py", version = "0.34.0" }
 registry-relay-http-contract = { path = "crates/registry-relay-http-contract", version = "0.34.0" }
@@ -201,6 +203,7 @@ rcgen = { version = "0.13", default-features = false, features = ["ring", "zeroi
 # perf extensions are not.
 regex = { version = "1", default-features = false, features = ["std", "unicode"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots"] }
+rmcp = { version = "3.4.1", default-features = false }
 rhai = { version = "=1.26.1", features = ["sync", "serde"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 # `bundled` vendors the SQLite amalgamation, so a statement source needs no
