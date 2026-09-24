@@ -62,17 +62,16 @@
   `decidedBy`, `operatorReason`, and the attempt's `originalActor` and
   `originalProfileId`. Settle the attempt afterwards with `caseworkctl attempt
   settle`. Its JSON report kind is `AttemptUncertainMarkingReport`.
-- Fix credential rotation and transport tuning superseding in-flight human
-  work. The BReg source binding generation hashed the base URL, reader
-  profile, token authority, client credentials, trust reference, timeouts, and
-  presentation settings, so changing any of them re-keyed every source-backed
-  work item. The generation now covers only the source id, the binding's
-  `eventSource`, and the imported source description digest. Work stored
-  under the earlier formula keeps running under its stored generation after
-  the upgrade, recorded by migration
-  `0017_source_generation_adoptions.sql`, when the runtime file is unchanged
-  across the upgrade; an upgrade that also changes an operational field
-  supersedes that source's in-flight work once.
+- BREAKING: fix credential rotation and transport tuning superseding
+  in-flight human work. The BReg source binding generation hashed the base
+  URL, reader profile, token authority, client credentials, trust reference,
+  timeouts, and presentation settings, so changing any of them re-keyed every
+  source-backed work item. The generation now covers only the source id, the
+  binding's `eventSource`, and the imported source description digest.
+  Upgrading from v0.33.0 or earlier supersedes open work items from BReg
+  sources once, because their stored generation differs from the new formula;
+  claims, drafts, and pending attempts on them do not carry over. Finish or
+  settle source-backed work before upgrading.
 - Fix `casework migrate` silently dropping hosted work. Migration 15, which
   replaces the hosted work tables with unified reviews, dropped them even
   when they still held in-flight items or retained accountability records.

@@ -44,11 +44,9 @@ const SYNC_CLAIM_INDEXES_MIGRATION: &str =
 const UNIFIED_REVIEWS_MIGRATION: &str = include_str!("../migrations/0015_unified_reviews.sql");
 const OCCURRENCE_IDENTITY_MIGRATION: &str =
     include_str!("../migrations/0016_occurrence_identity_excludes_superseded.sql");
-const SOURCE_GENERATION_ADOPTIONS_MIGRATION: &str =
-    include_str!("../migrations/0017_source_generation_adoptions.sql");
 
 /// Every schema version in ledger order.
-const MIGRATIONS: [(i64, &str); 17] = [
+const MIGRATIONS: [(i64, &str); 16] = [
     (1, MIGRATION),
     (2, HOSTED_MIGRATION),
     (3, ASSIGNMENT_MIGRATION),
@@ -65,7 +63,6 @@ const MIGRATIONS: [(i64, &str); 17] = [
     (14, include_str!("../migrations/0014_task_grants.sql")),
     (15, UNIFIED_REVIEWS_MIGRATION),
     (16, OCCURRENCE_IDENTITY_MIGRATION),
-    (17, SOURCE_GENERATION_ADOPTIONS_MIGRATION),
 ];
 
 /// The newest schema version this binary knows how to run against.
@@ -2975,49 +2972,6 @@ impl PostgresStore {
         }
         transaction.commit().await?;
         Ok(())
-    }
-
-    /// Return the generation this source's work continues under. That is
-    /// `generation` itself unless the source's work is stored under
-    /// `legacy_generation`, the value the formula of releases up to v0.33.0
-    /// gives the same binding; the first start that sees such work records the
-    /// adoption, and every later start with the same `generation` keeps it
-    /// whatever the legacy formula then yields.
-    pub async fn adopt_source_generation(
-        &self,
-        source_id: &str,
-        generation: &str,
-        legacy_generation: Option<&str>,
-    ) -> Result<String, StoreError> {
-        if source_id.is_empty()
-            || generation.is_empty()
-            || legacy_generation.is_some_and(str::is_empty)
-        {
-            return Err(StoreError::Invalid);
-        }
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        if let Some(legacy) = legacy_generation.filter(|legacy| *legacy != generation) {
-            let stored: bool = transaction.query_one(
-                "SELECT EXISTS(SELECT 1 FROM casework_source_reconciliation_progress WHERE source_id=$1 AND binding_generation=$2) OR EXISTS(SELECT 1 FROM casework_subjects WHERE source_id=$1 AND binding_generation=$2 AND erased_at IS NULL)",
-                &[&source_id, &legacy],
-            ).await?.get(0);
-            if stored {
-                transaction.execute(
-                    "INSERT INTO casework_source_generation_adoptions(source_id,binding_generation,adopted_generation) VALUES($1,$2,$3) ON CONFLICT(source_id,binding_generation) DO NOTHING",
-                    &[&source_id, &generation, &legacy],
-                ).await?;
-            }
-        }
-        let adopted: Option<String> = transaction
-            .query_opt(
-                "SELECT adopted_generation FROM casework_source_generation_adoptions WHERE source_id=$1 AND binding_generation=$2",
-                &[&source_id, &generation],
-            )
-            .await?
-            .map(|row| row.get(0));
-        transaction.commit().await?;
-        Ok(adopted.unwrap_or_else(|| generation.to_owned()))
     }
 
     pub async fn register_source_generation(

@@ -605,40 +605,6 @@ async fn current_caller_disclosure_controls_the_display_reference() {
 }
 
 #[tokio::test]
-async fn an_adopted_stored_generation_binds_every_later_observation() {
-    let server = MockServer::start().await;
-    let mut value = record("submitted", None);
-    value["data"]["request"]["review"] = review_status("ready");
-    let own = authoritative(&server, value.clone()).await;
-
-    let server = MockServer::start().await;
-    mount_metadata(&server, "reader-token", "reader").await;
-    Mock::given(method("GET"))
-        .and(path(format!("/v1/records/correction/{ID}")))
-        .and(header("authorization", "Bearer reader-token"))
-        .respond_with(response(value))
-        .expect(1)
-        .mount(&server)
-        .await;
-    let mut adopted = adapter(&server.uri());
-    assert_eq!(adopted.legacy_binding_generation(), None);
-    for refused in ["", "stored\ngeneration", &"g".repeat(513)] {
-        assert!(adopted.adopt_stored_binding_generation(refused).is_err());
-    }
-    assert_eq!(adopted.binding_generation(), "generation-1");
-    adopted
-        .adopt_stored_binding_generation("sha256:stored")
-        .unwrap();
-    assert_eq!(adopted.binding_generation(), "sha256:stored");
-    let observed = adopted.read_authoritative(&subject()).await.unwrap();
-    assert_eq!(observed.binding.generation, "sha256:stored");
-    assert_ne!(
-        observed.occurrence_key, own.occurrence_key,
-        "the occurrence identity follows the adopted generation"
-    );
-}
-
-#[tokio::test]
 async fn external_review_projection_controls_only_source_application_state() {
     let mut occurrence_key = None;
     for (application_state, expected) in [

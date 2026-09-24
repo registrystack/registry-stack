@@ -973,7 +973,7 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
     let (store, client, schema) = isolated_schema("migrate").await;
     store.migrate().await.expect("first migration");
     let applied = applied_versions(&client).await;
-    assert_eq!(applied, (1..=17).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=16).collect::<Vec<i64>>());
     let index = occurrence_index(&client, &schema).await;
     assert!(index.1, "the occurrence identity index is unique");
 
@@ -1052,165 +1052,6 @@ async fn returning_to_an_earlier_binding_generation_opens_a_fresh_occurrence() {
     );
 }
 
-/// Start the source the way `casework serve` does: adopt the generation the
-/// store already keeps for this binding, then register it.
-async fn start_source(store: &PostgresStore, semantic: &str, legacy: &str) -> String {
-    let generation = store
-        .adopt_source_generation("source-a", semantic, Some(legacy))
-        .await
-        .expect("adopt the stored source generation");
-    store
-        .register_source_generation("source-a", &generation)
-        .await
-        .expect("register the adopted generation");
-    generation
-}
-
-async fn observe_open(store: &PostgresStore, generation: &str) -> Option<uuid::Uuid> {
-    store
-        .apply_observation(
-            &observation_generation(
-                1,
-                "proposal-1",
-                OccurrenceKind::Review,
-                OccurrenceState::Open,
-                generation,
-            ),
-            "default",
-            None,
-        )
-        .await
-        .expect("the observation applies")
-        .map(|item| item.item_id)
-}
-
-#[tokio::test]
-async fn an_upgrade_keeps_work_stored_under_the_legacy_generation_formula() {
-    let (store, client, _schema) = isolated_schema("legacy_generation").await;
-    store.migrate().await.expect("migrate");
-
-    // A release up to v0.33.0 registered and observed under its own formula.
-    let stored = observe_open_in_generation(&store, "legacy-a").await;
-
-    // The first start of this release recognises that work and keeps it.
-    assert_eq!(
-        start_source(&store, "semantic-a", "legacy-a").await,
-        "legacy-a"
-    );
-    assert_eq!(
-        observe_open(&store, "legacy-a").await,
-        None,
-        "the unchanged source revision is already applied"
-    );
-    let key_a = "Review:proposal-1:legacy-a".to_owned();
-    assert_eq!(
-        items_by_state(&client).await,
-        [(key_a.clone(), "open".to_owned(), stored)]
-    );
-
-    // A later credential or transport change moves the legacy formula but
-    // not the semantic one, and the recorded adoption still holds.
-    assert_eq!(
-        start_source(&store, "semantic-a", "legacy-a-rotated").await,
-        "legacy-a"
-    );
-    assert_eq!(
-        items_by_state(&client).await,
-        [(key_a.clone(), "open".to_owned(), stored)]
-    );
-
-    // A semantic change still supersedes the work and opens it afresh.
-    assert_eq!(
-        start_source(&store, "semantic-b", "legacy-b").await,
-        "semantic-b"
-    );
-    let rebound = observe_open(&store, "semantic-b")
-        .await
-        .expect("the new generation opens an item");
-    let key_b = "Review:proposal-1:semantic-b".to_owned();
-    assert_eq!(
-        items_by_state(&client).await,
-        [
-            (key_a.clone(), "superseded".to_owned(), stored),
-            (key_b.clone(), "open".to_owned(), rebound),
-        ]
-    );
-
-    // Returning to the first binding returns to the generation it adopted.
-    assert_eq!(
-        start_source(&store, "semantic-a", "legacy-a-again").await,
-        "legacy-a"
-    );
-}
-
-#[tokio::test]
-async fn a_source_without_legacy_work_runs_under_its_semantic_generation() {
-    let (store, client, _schema) = isolated_schema("semantic_generation").await;
-    store.migrate().await.expect("migrate");
-
-    assert_eq!(
-        start_source(&store, "semantic-a", "legacy-a").await,
-        "semantic-a",
-        "a new deployment has no stored work to keep"
-    );
-    let item = observe_open(&store, "semantic-a")
-        .await
-        .expect("the semantic generation opens an item");
-    assert_eq!(
-        start_source(&store, "semantic-a", "legacy-a-rotated").await,
-        "semantic-a",
-        "an operational change keeps the semantic generation"
-    );
-    assert_eq!(
-        items_by_state(&client).await,
-        [(
-            "Review:proposal-1:semantic-a".to_owned(),
-            "open".to_owned(),
-            item
-        )]
-    );
-    let adoptions: i64 = client
-        .query_one(
-            "SELECT count(*) FROM casework_source_generation_adoptions",
-            &[],
-        )
-        .await
-        .expect("count adoptions")
-        .get(0);
-    assert_eq!(adoptions, 0, "nothing was stored under a legacy formula");
-}
-
-#[tokio::test]
-async fn an_upgrade_combined_with_an_operational_change_cannot_recognise_legacy_work() {
-    let (store, client, _schema) = isolated_schema("legacy_mismatch").await;
-    store.migrate().await.expect("migrate");
-    let stored = observe_open_in_generation(&store, "legacy-a").await;
-
-    assert_eq!(
-        start_source(&store, "semantic-a", "legacy-a-rotated").await,
-        "semantic-a",
-        "a legacy value the stored work does not carry proves nothing"
-    );
-    let reopened = observe_open(&store, "semantic-a")
-        .await
-        .expect("the semantic generation opens an item");
-    assert_eq!(
-        items_by_state(&client).await,
-        [
-            (
-                "Review:proposal-1:legacy-a".to_owned(),
-                "superseded".to_owned(),
-                stored
-            ),
-            (
-                "Review:proposal-1:semantic-a".to_owned(),
-                "open".to_owned(),
-                reopened
-            ),
-        ]
-    );
-}
-
 #[tokio::test]
 async fn a_database_failure_names_the_violated_constraint_without_row_data() {
     let (store, client, _schema) = isolated_schema("constraint_name").await;
@@ -1256,7 +1097,7 @@ async fn migration_16_releases_superseded_identities_in_a_database_that_holds_th
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=17).collect::<Vec<_>>()
+        (1..=16).collect::<Vec<_>>()
     );
     let second_a = observe_open_in_generation(&store, "binding-a").await;
     let states: Vec<(uuid::Uuid, String)> = items_by_state(&client)
@@ -1408,7 +1249,7 @@ async fn migration_replaces_empty_hosted_tables_through_the_ledger_head() {
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=17).collect::<Vec<_>>()
+        (1..=16).collect::<Vec<_>>()
     );
     let hosted_tables_remaining: bool = client
         .query_one(
@@ -1439,7 +1280,7 @@ async fn migration_13_adds_sync_claim_indexes_to_an_existing_schema() {
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=17).collect::<Vec<_>>()
+        (1..=16).collect::<Vec<_>>()
     );
     let indexes: Vec<String> = client
         .query(
@@ -1529,15 +1370,15 @@ async fn readiness_rejects_an_unsupported_migration_version() {
         matches!(
             refusal,
             StoreError::SchemaNewer {
-                found: 18,
-                supported: 17
+                found: 17,
+                supported: 16
             }
         ),
         "a newer schema is not reported as corrupt data: {refusal:?}"
     );
     assert_eq!(
         refusal.to_string(),
-        "the Casework database schema version 18 is newer than this binary supports (17); run a casework release that supports it"
+        "the Casework database schema version 17 is newer than this binary supports (16); run a casework release that supports it"
     );
 }
 
@@ -1550,7 +1391,7 @@ async fn migration_refuses_a_schema_newer_than_this_binary_and_writes_nothing() 
         .expect("migrate to the current schema");
     client
         .execute(
-            "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(18,now())",
+            "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(17,now())",
             &[],
         )
         .await
@@ -1565,8 +1406,8 @@ async fn migration_refuses_a_schema_newer_than_this_binary_and_writes_nothing() 
         matches!(
             refusal,
             StoreError::SchemaNewer {
-                found: 18,
-                supported: 17
+                found: 17,
+                supported: 16
             }
         ),
         "{refusal:?}"

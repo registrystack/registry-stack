@@ -75,17 +75,6 @@ operational: `baseUrl`, `readerProfile`, `tokenEndpoint`,
 credential, moving the token endpoint, or tuning a timeout keeps the generation,
 the in-flight work items, their claims, and their durable attempts.
 
-A database last served by Casework 0.33.0 or earlier holds its work under the
-generation formula of that release, which also covered the operational fields.
-On the first start of this release, a source whose database still holds
-progress or subjects under that earlier generation keeps running under it,
-recorded once in `casework_source_generation_adoptions`, so an upgrade
-supersedes nothing. The earlier generation is recognised only from the
-binding as that release would have computed it: upgrade first with the
-runtime file unchanged, and make operational changes afterwards. An upgrade
-that changes an operational field at the same time supersedes that source's
-in-flight work items once.
-
 `sources.<id>.reconciliationIntervalMilliseconds` controls only how often
 Casework schedules source readback. When a readback pass lasts longer than the
 interval, Casework skips missed ticks instead of replaying them back-to-back

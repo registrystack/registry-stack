@@ -153,8 +153,6 @@ pub fn build_adapter(
         .map(|reference| resolve_secret(secrets, reference))
         .transpose()?;
     let generation = binding_generation(binding, source, &description_bytes)?;
-    let legacy_generation =
-        legacy_binding_generation(binding, source, &client_id, &description_bytes)?;
 
     let request_timeout = Duration::from_millis(binding.request_timeout_milliseconds);
     let connect_timeout = Duration::from_millis(binding.connect_timeout_milliseconds);
@@ -173,7 +171,7 @@ pub fn build_adapter(
             client_config.with_trusted_root_certificates(trust.expose_secret().to_vec());
     }
     let reader = BaseRegistryClient::new(client_config).map_err(|_| SourceAdapterError::Invalid)?;
-    let adapter = BregAdapter::new(
+    BregAdapter::new(
         BregSourceConfig {
             source_id: source.id.clone(),
             entity,
@@ -189,8 +187,7 @@ pub fn build_adapter(
         },
         reader,
         webhook_secret.expose_secret().to_vec(),
-    )?;
-    Ok(adapter.with_legacy_binding_generation(legacy_generation))
+    )
 }
 
 fn source_token_config(
@@ -531,58 +528,6 @@ fn binding_generation(
     Ok(sha256_uri(&identity))
 }
 
-/// The generation formula of releases up to v0.33.0, which also covered
-/// credentials, transport, and presentation settings. It is computed only so
-/// the runtime can recognise work a deployment stored under that formula and
-/// keep it; it never names new work.
-fn legacy_binding_generation(
-    binding: &BregBinding,
-    source: &SourcePolicy,
-    client_id: &str,
-    description: &[u8],
-) -> Result<String, SourceAdapterError> {
-    let mut identity = json!({
-        "sourceId": source.id,
-        "baseUrl": binding.base_url,
-        "readerProfile": binding.reader_profile,
-        "tokenEndpoint": binding.token_endpoint,
-        "clientIdRef": binding.client_id_ref,
-        "clientIdSha256": sha256_uri(client_id.as_bytes()),
-        "clientAssertionKeyRef": binding.client_assertion_key_ref,
-        "webhookSecretRef": binding.webhook_secret_ref,
-        "eventSource": binding.event_source,
-        "eventType": binding.event_type,
-        "trustedRootCertificatesRef": binding.trusted_root_certificates_ref,
-        "requestTimeoutMilliseconds": binding.request_timeout_milliseconds,
-        "connectTimeoutMilliseconds": binding.connect_timeout_milliseconds,
-        "descriptionSha256": sha256_uri(description),
-    });
-    if let Some(audience) = &binding.client_assertion_audience {
-        identity["clientAssertionAudience"] = json!(audience);
-    }
-    if let Some(resource) = &binding.resource {
-        identity["resource"] = json!(resource);
-    }
-    if let Some(scopes) = &binding.scopes {
-        identity["scopes"] = json!(scopes);
-    }
-    if let Some(display_reference) = source
-        .requests
-        .first()
-        .and_then(|request| request.display_reference.as_ref())
-    {
-        identity["displayReference"] =
-            serde_json::to_value(display_reference).map_err(|_| SourceAdapterError::Invalid)?;
-    }
-    if let Some(request) = source.requests.first() {
-        if !request.context_projection.is_empty() {
-            identity["contextProjection"] = json!(request.context_projection);
-        }
-    }
-    let identity = serde_json::to_vec(&identity).map_err(|_| SourceAdapterError::Invalid)?;
-    Ok(sha256_uri(&identity))
-}
-
 fn default_event_type() -> String {
     DEFAULT_EVENT_TYPE.to_owned()
 }
@@ -840,44 +785,6 @@ mod tests {
         let mut other_instance = binding();
         other_instance.event_source = "urn:registrystack:registry:package:instance:other".into();
         assert_ne!(first, generation(&other_instance, &source()));
-    }
-
-    /// Deployments up to v0.33.0 stored work under these exact values, so the
-    /// legacy formula must keep producing them for the runtime to recognise
-    /// that work.
-    #[test]
-    fn legacy_generation_is_the_released_formula() {
-        assert_eq!(
-            legacy_binding_generation(
-                &binding(),
-                &source(),
-                "casework-client",
-                &description("correction")
-            )
-            .unwrap(),
-            "sha256:e631cbd7693e78edef3d2ed26dda0ca7c4823cfe4f748fde949886fd9bbdd00c"
-        );
-        let mut full_binding = binding();
-        full_binding.client_assertion_audience = Some("https://issuer.example".into());
-        full_binding.resource = Some("urn:breg:example".into());
-        full_binding.scopes = Some(vec!["casework:source-reader".into()]);
-        full_binding.trusted_root_certificates_ref = Some("secret:file/roots.pem".into());
-        let mut full_source = source();
-        full_source.requests[0].display_reference =
-            Some(registry_casework_core::DisplayReferencePolicy {
-                field: "region".to_owned(),
-            });
-        full_source.requests[0].context_projection = vec!["region".to_owned()];
-        assert_eq!(
-            legacy_binding_generation(
-                &full_binding,
-                &full_source,
-                "casework-client",
-                &description("correction")
-            )
-            .unwrap(),
-            "sha256:fd58d8f6b4b9f92a8c8def2798314c53d056b0ca0fdf27ab5305b27a5b114767"
-        );
     }
 
     /// The resolved client id is not an input to the formula, so rotating the

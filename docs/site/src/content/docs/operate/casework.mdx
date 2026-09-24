@@ -394,28 +394,17 @@ disposable local session, use `caseworkctl dev stop PROJECT --remove` and start 
     migration_refuses_to_drop_retained_hosted_work_and_writes_nothing() and
     migration_replaces_empty_hosted_tables_through_the_ledger_head(). */}
 
-### Keep source work across the upgrade
+Upgrading from Casework 0.33.0 or earlier supersedes the open work items of BReg sources once.
+That release also computed the source binding generation from the credential, transport, and
+presentation fields, so the generation stored with each work item differs from the one this release
+computes, and each source's next observation opens fresh work items beside the superseded ones.
+Claims, drafts, and pending attempts on the superseded items do not carry over. Finish or settle
+source-backed work before upgrading.
 
-Casework 0.33.0 and earlier also computed the source binding generation from the credential,
-transport, and presentation fields, so its work items carry a generation this release does not
-compute. On the first `serve` of this release, a source whose database still holds reconciliation
-progress or subjects under the generation that release would have computed from the same binding
-keeps running under that stored generation, and nothing is superseded. The runtime records the
-choice once, and later operational changes keep it.
-
-Upgrade with the runtime file unchanged, and make operational changes such as a credential rotation
-after the first `serve` of this release. An upgrade that also changes an operational field no longer
-matches the stored generation, so that source's open work items are superseded once and reopened
-fresh on the next observation.
-
-{/* Evidence: crates/registry-casework-breg/src/config.rs, legacy_binding_generation() and
-    legacy_generation_is_the_released_formula();
-    crates/registry-casework/src/store.rs, adopt_source_generation();
+{/* Evidence: crates/registry-casework-breg/src/config.rs, binding_generation();
     crates/registry-casework/src/runtime.rs, serve_from_path();
-    crates/registry-casework/migrations/0017_source_generation_adoptions.sql;
     crates/registry-casework/tests/postgres_transactions.rs,
-    an_upgrade_keeps_work_stored_under_the_legacy_generation_formula() and
-    an_upgrade_combined_with_an_operational_change_cannot_recognise_legacy_work(). */}
+    returning_to_an_earlier_binding_generation_opens_a_fresh_occurrence(). */}
 
 ### Upgrade from a release that rotated the audit file
 
