@@ -86,6 +86,8 @@ impl Classification {
 pub(crate) struct ModelFacts {
     pub display_name: &'static str,
     pub version: String,
+    /// The upstream commit the embedded snapshot was copied from.
+    pub revision: String,
     pub repository: String,
     pub license: String,
     pub license_url: String,
@@ -330,6 +332,18 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
                 &format!(
                     "the selection was written against {} {version}, and this bregctl embeds {} {}",
                     facts.display_name, facts.display_name, facts.version
+                ),
+            ));
+        }
+    }
+    if let Some(revision) = &selection.model_revision {
+        if revision != &facts.revision {
+            return Err(diagnostic(
+                "init.selection.model_revision",
+                "selection.modelRevision",
+                &format!(
+                    "the selection was written against {} revision {revision}, and this bregctl embeds revision {}",
+                    facts.display_name, facts.revision
                 ),
             ));
         }
@@ -1119,6 +1133,7 @@ pub(crate) fn model_facts(model: &Model) -> Result<ModelFacts, Diagnostic> {
     Ok(ModelFacts {
         display_name: "PublicSchema",
         version: model.version.clone().unwrap_or(pin.version),
+        revision: pin.commit,
         repository: pin.repository,
         license: pin.license,
         license_url: pin.license_url,
@@ -1373,6 +1388,7 @@ mod tests {
         assert_eq!(plan.registry_id, "household-registry");
         assert_eq!(plan.model.display_name, "PublicSchema");
         assert_eq!(plan.model.version, "0.3.0");
+        assert!(!plan.model.revision.is_empty());
         assert!(!plan.model.repository.is_empty());
         assert!(!plan.model.license.is_empty());
         let ids: Vec<&str> = plan
@@ -1992,6 +2008,21 @@ mod tests {
         let error = resolve(&selection, model()).expect_err("refused");
         assert_eq!(error.code, "init.selection.model_version");
         selection.model_version = Some(model().version.clone().expect("the snapshot is versioned"));
+        assert!(resolve(&selection, model()).is_ok());
+    }
+
+    #[test]
+    fn a_model_revision_pin_must_match_the_snapshot() {
+        let mut selection = selection("entities:\n  - concept: Person\n");
+        assert!(
+            resolve(&selection, model()).is_ok(),
+            "a selection naming no revision is accepted"
+        );
+        selection.model_revision = Some("0000000000000000000000000000000000000000".to_owned());
+        let error = resolve(&selection, model()).expect_err("refused");
+        assert_eq!(error.code, "init.selection.model_revision");
+        selection.model_revision =
+            Some(publicschema::pin().expect("the snapshot is pinned").commit);
         assert!(resolve(&selection, model()).is_ok());
     }
 
