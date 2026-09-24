@@ -172,6 +172,16 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/tests/standing_agent_ceiling.rs;
     products/breg/TASK_GRANTS.md. */}
 
+- BREAKING: BReg accepts an `act` claim of exactly `{sub, iss}` when `iss`
+  equals the verified token issuer, as a token exchange writes it, beside
+  exactly `{sub}`. A token whose `act.sub` is the trusted actor for its
+  client is an agent token whatever its `registry_actor_kind` claim says,
+  so it no longer satisfies a profile that declares `actorKind: human`.
+
+{/* Evidence: crates/registry-breg/src/auth.rs, optional_actor_subject and authenticate;
+    crates/registry-breg/tests/http_auth.rs;
+    products/breg/TASK_GRANTS.md. */}
+
 - BREAKING: BReg refuses to compile an access profile with a `taskGrant`
   that holds `apply_request`, with
   `access_profile.task_grant.operation_forbidden`. Applying a reviewed

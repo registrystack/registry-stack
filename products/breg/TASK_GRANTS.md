@@ -37,8 +37,16 @@ authentication:
 
 The access token keeps the citizen in `sub`. Its `act.sub` must equal the
 configured actor for the verified `azp` or `client_id`; BREG does not accept a
-caller-supplied actor alias. Custom contextual claim names, when needed for an
-existing issuer, are configured together in the closed `contextual` object.
+caller-supplied actor alias. `act` is exactly `{sub}` or exactly `{sub, iss}`,
+and `iss`, when present, must be a string equal to the verified token issuer;
+any other member, a different issuer, or a nested `act` refuses the token. A
+token carrying a verified trusted actor is an agent token whatever its
+`registry_actor_kind` claim says: a token exchange copies that claim from the
+subject token, so it describes the citizen, not the caller. Such a token never
+satisfies a profile that declares `actorKind: human`. A profile that declares no
+`actorKind` accepts every kind, including this one. Custom contextual claim
+names, when needed for an existing issuer, are configured together in the
+closed `contextual` object.
 
 A standing agent profile has a lower ceiling than a task-grant profile. A task
 grant carries the approval of the human who assigned the task; a standing

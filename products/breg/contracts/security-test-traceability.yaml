@@ -104,3 +104,5 @@ traceability:
   - {id: BREG-SEC-101, state: enforced, negativeId: BREG-NEG-101, negativeTest: {path: crates/registry-breg/tests/postgres_consent_examples.rs, name: self_action_answers_an_unknown_subject_like_a_subject_its_link_does_not_cover}}
   - {id: BREG-SEC-102, state: enforced, negativeId: BREG-NEG-102, negativeTest: {path: crates/registry-breg/tests/standing_agent_ceiling.rs, name: standing_agent_cannot_hold_a_request_lifecycle_operation}}
   - {id: BREG-SEC-103, state: enforced, negativeId: BREG-NEG-103, negativeTest: {path: crates/registry-breg/tests/standing_agent_ceiling.rs, name: standing_agent_cannot_hold_a_direct_target_mutation}}
+  - {id: BREG-SEC-104, state: enforced, negativeId: BREG-NEG-104, negativeTest: {path: crates/registry-breg/tests/http_auth.rs, name: standing_agent_actor_may_name_only_the_verified_token_issuer}}
+  - {id: BREG-SEC-105, state: enforced, negativeId: BREG-NEG-105, negativeTest: {path: crates/registry-breg/tests/http_auth.rs, name: trusted_actor_makes_the_token_an_agent_whatever_kind_it_carries}}
