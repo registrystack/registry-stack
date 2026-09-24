@@ -13,7 +13,8 @@ use async_trait::async_trait;
 use chrono::{SubsecRound as _, Utc};
 use registry_platform_audit::{AuditError, AuditProfile};
 use registry_platform_crypto::{
-    LocalJwkSigner, PrivateJwk, SigningProvider, TransitSigner, TransitSignerConfig,
+    LocalJwkSigner, PrivateJwk, SigningProvider, TransitInitializationError, TransitSigner,
+    TransitSignerConfig,
 };
 use registry_platform_oidc::ActorKind;
 use serde_json::{Map as JsonMap, Value};
@@ -57,7 +58,7 @@ use crate::{
         validate_subject_binding_key, AuthorizationError, MatchedEntitlement,
         ResolvedAuthorization, ResolvedSelectorValue, ResolvedSubjectScope,
     },
-    signing::EvidenceSigner,
+    signing::{EvidenceSigner, EvidenceSigningError},
     source::{
         statement_inputs, ResolvedSourceSelector, SourceError, SourceExecutor, SourceResponse,
     },
@@ -83,8 +84,8 @@ pub enum RuntimeInitializationError {
     Secrets,
     #[error("the Evidence audit boundary could not initialize: {0}")]
     Audit(AuditInitializationFault),
-    #[error("the Evidence signing boundary could not initialize")]
-    Signing,
+    #[error("the Evidence signing boundary could not initialize: {0}")]
+    Signing(SigningInitializationFault),
     #[error("an Evidence source plan could not initialize")]
     Source,
     #[error("the Evidence rate limiter could not initialize")]
@@ -165,6 +166,95 @@ impl From<&EvidenceAuditError> for AuditInitializationFault {
     }
 }
 
+/// Why the signing boundary refused to initialize.
+///
+/// A socket that is not there, a key version Transit has retired, and a key
+/// that is not the one the bundle governs are unrelated faults with unrelated
+/// remedies: a proxy to restart, a `keyVersion` to change, or a bundle to
+/// publish. They are reported separately so the operator does not have to
+/// guess. No cause carries a path, a provider response, or key material.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigningInitializationFault {
+    /// The `local-jwk` signing secret is missing, unreadable, or not a usable
+    /// private JWK.
+    LocalKey,
+    /// The runtime `transit` signer binding is out of range.
+    TransitConfiguration,
+    /// The Transit provider refused, for the reason it named.
+    Transit(TransitInitializationError),
+    /// The signing key is not the bundle's governed active public JWK.
+    GovernedKey,
+    /// The signing key did not produce a verifying signature.
+    SelfTest,
+    /// The published key set could not be assembled from the bundle's keys.
+    KeySet,
+}
+
+impl SigningInitializationFault {
+    /// The value-free cause, for the operator message this fault appears in.
+    pub fn cause(self) -> &'static str {
+        match self {
+            Self::LocalKey => {
+                "the local-jwk signing secret is missing, unreadable, or not a private JWK"
+            }
+            Self::TransitConfiguration => "the transit signer configuration is invalid",
+            Self::Transit(fault) => match fault {
+                TransitInitializationError::Client => {
+                    "the Transit client could not be built for unixSocketPath"
+                }
+                TransitInitializationError::Unavailable => {
+                    "the Transit provider did not answer on the configured Unix socket (missing socket, refused connection, or timeout)"
+                }
+                TransitInitializationError::Refused => {
+                    "the Transit provider refused the key metadata read (check the proxy token policy, mount, and keyName)"
+                }
+                TransitInitializationError::ProviderFailed => {
+                    "the Transit provider failed the key metadata read with a server error (for example, sealed or without an active backend)"
+                }
+                TransitInitializationError::InvalidResponse => {
+                    "the Transit provider response is malformed or too large"
+                }
+                TransitInitializationError::Custody => {
+                    "the Transit key is not a non-derived, non-exportable ecdsa-p256 signing key without plaintext backup"
+                }
+                TransitInitializationError::KeyVersionNotCreated => {
+                    "the runtime keyVersion is above the Transit key's latest_version"
+                }
+                TransitInitializationError::KeyVersionRetired => {
+                    "the runtime keyVersion is below the Transit key's min_encryption_version and can no longer sign"
+                }
+                TransitInitializationError::PublicKeyMismatch => {
+                    "the Transit public key for the runtime keyVersion is missing or is not the bundle's governed active public JWK"
+                }
+                TransitInitializationError::SelfTest => {
+                    "the Transit sign-and-verify self-test failed"
+                }
+                _ => "the Transit provider refused initialization",
+            },
+            Self::GovernedKey => "the signing key is not the bundle's governed active public JWK",
+            Self::SelfTest => "the signing key failed its sign-and-verify self-test",
+            Self::KeySet => {
+                "the published signing key set could not be assembled from the bundle's keys"
+            }
+        }
+    }
+}
+
+impl fmt::Display for SigningInitializationFault {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.cause())
+    }
+}
+
+impl From<&EvidenceSigningError> for SigningInitializationFault {
+    fn from(error: &EvidenceSigningError) -> Self {
+        match error {
+            EvidenceSigningError::Provider(_) | EvidenceSigningError::SelfTest => Self::SelfTest,
+            _ => Self::GovernedKey,
+        }
+    }
+}
+
 /// Deployment secret material, resolved and validated exactly as service
 /// startup validates it.
 pub struct ValidatedSecretMaterial {
@@ -236,17 +326,15 @@ pub async fn validate_verification_material(
 
     let provider: Arc<dyn SigningProvider> = match signer_config {
         RuntimeSignerConfig::LocalJwk { private_key_ref } => {
+            let local_key =
+                || RuntimeInitializationError::Signing(SigningInitializationFault::LocalKey);
             let signing_secret = secrets
                 .resolve(private_key_ref.as_str())
-                .map_err(|_| RuntimeInitializationError::Signing)?;
-            let signing_json = str::from_utf8(signing_secret.expose_secret())
-                .map_err(|_| RuntimeInitializationError::Signing)?;
-            let private_jwk =
-                PrivateJwk::parse(signing_json).map_err(|_| RuntimeInitializationError::Signing)?;
-            Arc::new(
-                LocalJwkSigner::new(private_jwk)
-                    .map_err(|_| RuntimeInitializationError::Signing)?,
-            )
+                .map_err(|_| local_key())?;
+            let signing_json =
+                str::from_utf8(signing_secret.expose_secret()).map_err(|_| local_key())?;
+            let private_jwk = PrivateJwk::parse(signing_json).map_err(|_| local_key())?;
+            Arc::new(LocalJwkSigner::new(private_jwk).map_err(|_| local_key())?)
         }
         RuntimeSignerConfig::Transit {
             unix_socket_path,
@@ -263,23 +351,25 @@ pub async fn validate_verification_material(
                 bundle.active_public_jwk.clone(),
                 Duration::from_millis(*timeout_milliseconds),
             )
-            .map_err(|_| RuntimeInitializationError::Signing)?;
-            Arc::new(
-                TransitSigner::initialize(config)
-                    .await
-                    .map_err(|_| RuntimeInitializationError::Signing)?,
-            )
+            .map_err(|_| {
+                RuntimeInitializationError::Signing(
+                    SigningInitializationFault::TransitConfiguration,
+                )
+            })?;
+            Arc::new(TransitSigner::initialize(config).await.map_err(|fault| {
+                RuntimeInitializationError::Signing(SigningInitializationFault::Transit(fault))
+            })?)
         }
     };
     let signer = EvidenceSigner::initialize_governed(provider, &bundle.active_public_jwk)
         .await
-        .map_err(|_| RuntimeInitializationError::Signing)?;
+        .map_err(|error| RuntimeInitializationError::Signing((&error).into()))?;
     let jwks = crate::signing::jwks_document_with_revocations(
         signer.public_jwk(),
         bundle.published_public_jwks.values().cloned(),
         bundle.config.signing.revoked_key_ids.clone(),
     )
-    .map_err(|_| RuntimeInitializationError::Signing)?;
+    .map_err(|_| RuntimeInitializationError::Signing(SigningInitializationFault::KeySet))?;
 
     Ok(ValidatedVerificationMaterial {
         subject_binding_secret,

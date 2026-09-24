@@ -1852,7 +1852,33 @@ fn check_rejects_secret_material_the_server_would_refuse_at_startup() {
         SecretFailureCase {
             label: "signing key differs from the governed active public JWK",
             break_secrets: |deployment| deployment.write_mismatched_signing_key(),
-            expected: "evidence: runtime signing initialization failed\n",
+            expected: "evidence: runtime signing initialization failed: the signing key is not \
+                       the bundle's governed active public JWK\n",
+        },
+        SecretFailureCase {
+            label: "Transit signer socket is missing",
+            break_secrets: |deployment| {
+                // Transit custody is what the evidence-grade profile demands,
+                // so the staged bundle returns to the profile it ships with.
+                deployment.replace(
+                    "bundle/evidence.yaml",
+                    "assuranceProfile: local",
+                    "assuranceProfile: evidence-grade",
+                );
+                let socket = deployment.path("transit.sock");
+                deployment.replace(
+                    "runtime.yaml",
+                    "signer:\n  kind: local-jwk\n  privateKeyRef: secret:file/signing-key\n",
+                    &format!(
+                        "signer:\n  kind: transit\n  unixSocketPath: {}\n  mount: transit\n  \
+                         keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000\n",
+                        socket.display()
+                    ),
+                );
+            },
+            expected: "evidence: runtime signing initialization failed: the Transit provider did \
+                       not answer on the configured Unix socket (missing socket, refused \
+                       connection, or timeout)\n",
         },
         SecretFailureCase {
             label: "audit hash key below the minimum length",

@@ -93,7 +93,10 @@ interoperability and security policy.
   sign-and-verify check before reporting ready. Signing inputs are SHA-256
   hashed locally and sent with Transit `prehashed: true`, so assertion bytes do
   not cross the signing-provider boundary. The proxy owns authentication and
-  token renewal; the application never receives its token.
+  token renewal; the application never receives its token. A refused
+  initialization returns a `TransitInitializationError` naming one cause, such
+  as an unreachable socket or a pinned version below `min_encryption_version`,
+  and never a provider response, path, or key material.
 - Readiness-gated live apply should use `KeyReadinessSnapshot`; only
   `status = active` plus `readiness = ready` is accepted. Degraded,
   not-ready, unknown, publish-only, and disabled keys fail closed before

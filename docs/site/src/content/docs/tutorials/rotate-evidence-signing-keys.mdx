@@ -113,6 +113,15 @@ authorized synthetic request and verify its `kid` with the consumer's approved o
 Missing, unreadable, or mismatched signing material fails closed. Evidence Gateway never falls back
 to an unsigned success.
 
+A replica that refuses to start names the cause after `evidence: runtime signing initialization
+failed:`. The two version causes are the ones a rotation reaches:
+
+- `the runtime keyVersion is above the Transit key's latest_version`: the provider has not created
+  the version `signer.keyVersion` pins yet. Rotate the Transit key first, or pin the version it has.
+- `the runtime keyVersion is below the Transit key's min_encryption_version and can no longer sign`:
+  the provider has retired the pinned version. Pin a version at or above the minimum, or lower the
+  minimum through the provider-administration identity.
+
 After every replica uses the new version and the validity-plus-skew window has elapsed, remove the
 old version from `allowed_parameters.key_version` as part of retiring the old public key.
 

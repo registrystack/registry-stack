@@ -12297,3 +12297,60 @@ async fn sustained_load_holds_one_thousand_requests_per_second() {
         "one disclosure-release record per released assertion"
     );
 }
+
+/// Each Transit startup refusal reaches the operator as its own sentence, and
+/// the two version faults name the Transit field the operator has to compare
+/// the runtime `keyVersion` against. None carries a path or provider response.
+#[test]
+fn signing_initialization_faults_name_distinct_causes() {
+    use crate::runtime::SigningInitializationFault;
+    use registry_platform_crypto::TransitInitializationError;
+
+    let faults = [
+        SigningInitializationFault::LocalKey,
+        SigningInitializationFault::TransitConfiguration,
+        SigningInitializationFault::GovernedKey,
+        SigningInitializationFault::SelfTest,
+        SigningInitializationFault::KeySet,
+        SigningInitializationFault::Transit(TransitInitializationError::Client),
+        SigningInitializationFault::Transit(TransitInitializationError::Unavailable),
+        SigningInitializationFault::Transit(TransitInitializationError::Refused),
+        SigningInitializationFault::Transit(TransitInitializationError::ProviderFailed),
+        SigningInitializationFault::Transit(TransitInitializationError::InvalidResponse),
+        SigningInitializationFault::Transit(TransitInitializationError::Custody),
+        SigningInitializationFault::Transit(TransitInitializationError::KeyVersionNotCreated),
+        SigningInitializationFault::Transit(TransitInitializationError::KeyVersionRetired),
+        SigningInitializationFault::Transit(TransitInitializationError::PublicKeyMismatch),
+        SigningInitializationFault::Transit(TransitInitializationError::SelfTest),
+    ];
+    let causes = faults
+        .iter()
+        .map(|fault| fault.cause())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(causes.len(), faults.len(), "two faults share one cause");
+    // A provider-side failure is not a policy problem, so its cause must not
+    // send the operator to the token policy.
+    assert!(
+        !SigningInitializationFault::Transit(TransitInitializationError::ProviderFailed)
+            .cause()
+            .contains("policy")
+    );
+    assert!(
+        SigningInitializationFault::Transit(TransitInitializationError::KeyVersionRetired)
+            .cause()
+            .contains("min_encryption_version")
+    );
+    assert!(
+        SigningInitializationFault::Transit(TransitInitializationError::KeyVersionNotCreated)
+            .cause()
+            .contains("latest_version")
+    );
+    assert_eq!(
+        RuntimeInitializationError::Signing(SigningInitializationFault::Transit(
+            TransitInitializationError::Unavailable
+        ))
+        .to_string(),
+        "the Evidence signing boundary could not initialize: the Transit provider did not \
+         answer on the configured Unix socket (missing socket, refused connection, or timeout)"
+    );
+}
