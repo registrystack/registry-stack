@@ -110,6 +110,7 @@ kind: BRegMcpRuntimeConfig
 listener:
   bind: 0.0.0.0:8110
   tlsTermination: operator-controlled-upstream
+  networkExposure: container-private
 secretProviders:
   file:
     root: /run/secrets/breg-mcp
