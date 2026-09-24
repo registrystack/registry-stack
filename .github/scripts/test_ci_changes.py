@@ -784,6 +784,14 @@ class CiChangesTest(unittest.TestCase):
                     set(outputs["rust_packages"]) & BREG_PACKAGES
                 )
 
+        # The review page's real-registry journey runs in the PostgreSQL lane
+        # of the product gate, so a change to the page selects that gate.
+        review_outputs = classify(
+            self.workspace, ("crates/registry-breg-review/src/pages.rs",)
+        )
+        self.assertTrue(review_outputs["breg_contracts"])
+        self.assertIn("registry-breg-review", review_outputs["rust_packages"])
+
         product_outputs = classify(
             self.workspace,
             ("products/breg/contracts/definition-of-done.yaml",),

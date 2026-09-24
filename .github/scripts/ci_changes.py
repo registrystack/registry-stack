@@ -57,6 +57,7 @@ SHARDS = {
         "registry-breg-client-node",
         "registry-breg-client-py",
         "registry-breg-mcp",
+        "registry-breg-review",
         "registry-bregctl",
         "registry-linkml",
     ),
