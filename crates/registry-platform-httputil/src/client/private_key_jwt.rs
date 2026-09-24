@@ -158,6 +158,14 @@ impl RedeemedAuthorizationCode {
         &self.access_token
     }
 
+    /// Hand the access token to a caller that keeps it for the signed-in
+    /// user's session. The token is moved, never copied, so it stays in one
+    /// zeroizing owner.
+    #[must_use]
+    pub fn into_access_token(self) -> BearerToken {
+        self.access_token
+    }
+
     /// A monotonic deadline from the issuer's stated `expires_in`, clamped to
     /// [`MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS`]. `None` when the issuer
     /// stated no usable lifetime.
@@ -3160,6 +3168,25 @@ mod tests {
         // The redeemed credential is the signed-in user's, never the client's
         // own, so it neither reads nor fills the service-token cache.
         assert!(provider.cached.read().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_redeemed_code_hands_its_access_token_to_the_caller() {
+        let server = token_endpoint_serving(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": ISSUED_CREDENTIAL,
+            "token_type": "Bearer",
+            "expires_in": TOKEN_LIFETIME_SECONDS,
+            "scope": "openid records:read",
+        })))
+        .await;
+        let redeemed = code_provider(&server)
+            .redeem_authorization_code("synthetic-code", &redirect_uri(), CODE_VERIFIER)
+            .await
+            .expect("the code is redeemed");
+
+        let token = redeemed.into_access_token();
+
+        assert_eq!(token.expose(), ISSUED_CREDENTIAL);
     }
 
     #[tokio::test]
