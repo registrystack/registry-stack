@@ -30,6 +30,17 @@ struct Caller<'a> {
     session: Current,
 }
 
+/// Send a person with no live session to sign in again. A navigation is
+/// redirected. A form post answers a page linking to sign-in instead, because
+/// the content security policy's `form-action 'self'` covers the redirects a
+/// form submission follows, and sign-in continues on the provider's origin.
+fn sign_in_again(app: &App, request_id: &str, action: Action) -> Response {
+    match action {
+        Action::Submit => app.rendered(StatusCode::OK, app.templates.sign_in_again(request_id)),
+        Action::SignIn | Action::Read | Action::SignOut => sign_in_redirect(request_id),
+    }
+}
+
 fn sign_in_redirect(request_id: &str) -> Response {
     let location = format!("/signin?return=%2Frequests%2F{request_id}");
     (
@@ -42,10 +53,11 @@ fn sign_in_redirect(request_id: &str) -> Response {
         .into_response()
 }
 
-/// Admit a request for `/requests/{id}`: the identifier's shape, the
-/// session, and the limit of the person it names, in that order.
+/// Admit a request for `/requests/{id}` made for `action`: the identifier's
+/// shape, the session, and the limit of the person it names, in that order.
 async fn admit<'a>(
     app: &App,
+    action: Action,
     path: Result<Path<String>, PathRejection>,
     headers: &'a HeaderMap,
 ) -> Result<(String, Caller<'a>), Response> {
@@ -58,7 +70,7 @@ async fn admit<'a>(
     let Some((cookie, session)) = cookie(headers, app.cookies.session)
         .and_then(|value| app.sessions.current(value).map(|session| (value, session)))
     else {
-        return Err(sign_in_redirect(&request_id));
+        return Err(sign_in_again(app, &request_id, action));
     };
     app.admit_citizen(&session.citizen).await?;
     Ok((request_id, Caller { cookie, session }))
@@ -111,7 +123,9 @@ async fn refused(
     }
     match refusal {
         Refusal::NotFound => app.problem(Problem::NotFound),
-        Refusal::SignedOut => end_session(app, caller.cookie, sign_in_redirect(request_id)),
+        Refusal::SignedOut => {
+            end_session(app, caller.cookie, sign_in_again(app, request_id, action))
+        }
         Refusal::Unavailable(reason) => {
             tracing::warn!(%reason, "the registry could not answer a review");
             app.problem(Problem::RegistryUnavailable)
@@ -128,9 +142,11 @@ fn end_session(app: &App, cookie: &str, mut response: Response) -> Response {
     response
 }
 
-/// Render `review`, remembering a fresh view when it offers a submit.
+/// Render `review` in answer to `answering`, remembering a fresh view when
+/// it offers a submit.
 fn render(
     app: &App,
+    answering: Action,
     caller: &Caller<'_>,
     request_id: &str,
     review: Review,
@@ -149,7 +165,7 @@ fn render(
                 idempotency_key: format!("breg-review-{key}"),
             };
             if !app.sessions.remember_view(caller.cookie, view) {
-                return sign_in_redirect(request_id);
+                return sign_in_again(app, request_id, answering);
             }
             Some(id)
         }
@@ -175,7 +191,7 @@ pub(crate) async fn review(
     path: Result<Path<String>, PathRejection>,
     headers: HeaderMap,
 ) -> Response {
-    let (request_id, caller) = match admit(&app, path, &headers).await {
+    let (request_id, caller) = match admit(&app, Action::Read, path, &headers).await {
         Ok(admitted) => admitted,
         Err(response) => return response,
     };
@@ -187,7 +203,14 @@ pub(crate) async fn review(
     {
         return response;
     }
-    render(&app, &caller, &request_id, review, StatusCode::OK)
+    render(
+        &app,
+        Action::Read,
+        &caller,
+        &request_id,
+        review,
+        StatusCode::OK,
+    )
 }
 
 /// The two fields a form posted to this page may carry.
@@ -229,7 +252,7 @@ pub(crate) async fn submit(
     headers: HeaderMap,
     body: Body,
 ) -> Response {
-    let (request_id, caller) = match admit(&app, path, &headers).await {
+    let (request_id, caller) = match admit(&app, Action::Submit, path, &headers).await {
         Ok(admitted) => admitted,
         Err(response) => return response,
     };
@@ -253,7 +276,14 @@ pub(crate) async fn submit(
     else {
         // Not a view this session rendered for this request: show the
         // current state and ask again.
-        return render(&app, &caller, &request_id, review, StatusCode::CONFLICT);
+        return render(
+            &app,
+            Action::Submit,
+            &caller,
+            &request_id,
+            review,
+            StatusCode::CONFLICT,
+        );
     };
     let Ok(key) = BRegIdempotencyKey::parse(view.idempotency_key.clone()) else {
         tracing::error!("a stored idempotency key is not valid");
@@ -306,7 +336,14 @@ pub(crate) async fn submit(
                 {
                     return response;
                 }
-                render(&app, &caller, &request_id, review, StatusCode::CONFLICT)
+                render(
+                    &app,
+                    Action::Submit,
+                    &caller,
+                    &request_id,
+                    review,
+                    StatusCode::CONFLICT,
+                )
             }
             Some(BRegProblemCode::IdempotencyConflict) => {
                 if let Err(response) = audit(

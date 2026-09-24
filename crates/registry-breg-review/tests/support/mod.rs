@@ -96,6 +96,9 @@ pub struct MockRegistry {
     submit_effects: Mutex<u64>,
     replays: Mutex<HashMap<String, (String, Value)>>,
     bearers: Mutex<Vec<String>>,
+    /// Whether the registry refuses every bearer token, as it does once a
+    /// person's access token is revoked.
+    refusing_tokens: Mutex<bool>,
 }
 
 impl MockRegistry {
@@ -140,7 +143,13 @@ impl MockRegistry {
             submit_effects: Mutex::new(0),
             replays: Mutex::new(HashMap::new()),
             bearers: Mutex::new(Vec::new()),
+            refusing_tokens: Mutex::new(false),
         }
+    }
+
+    /// The registry stops accepting every access token it was issued.
+    pub fn refuse_tokens(&self) {
+        *self.refusing_tokens.lock().unwrap() = true;
     }
 
     /// An agent edits citizen A's draft between the render and the submit.
@@ -556,6 +565,9 @@ async fn read_draft(
     headers: HeaderMap,
 ) -> Response {
     registry.record_call("GET", format!("/v1/records/{ROUTE}/{identifier}"), &headers);
+    if *registry.refusing_tokens.lock().unwrap() {
+        return problem(BRegProblemCode::AuthenticationRefused);
+    }
     let caller = subject(&headers);
     let drafts = registry.drafts.lock().unwrap();
     let Some(draft) = drafts.get(identifier.as_str()) else {

@@ -25,6 +25,26 @@ fn sign_in_location() -> String {
     format!("/signin?return=%2Frequests%2F{REQUEST_ID}")
 }
 
+/// A form post that finds no live session answers a page linking to sign-in,
+/// never a redirect: the content security policy's `form-action 'self'`
+/// would block a form redirect that continues on to the provider.
+fn assert_links_to_sign_in(page: &support::Page) {
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    assert!(page.header("location").is_none(), "{:?}", page.headers);
+    assert!(
+        page.body.contains("data-outcome=\"sign-in-required\""),
+        "{}",
+        page.body
+    );
+    assert!(
+        page.body
+            .contains(&format!("<a href=\"{}\">", sign_in_location())),
+        "{}",
+        page.body
+    );
+    assert!(!page.body.contains("<form"), "{}", page.body);
+}
+
 #[tokio::test]
 async fn t6_submit_without_csrf_is_refused_and_reaches_no_registry() {
     let harness = Harness::start().await;
@@ -113,7 +133,7 @@ async fn t6_foreign_or_absolute_return_path_is_refused() {
 }
 
 #[tokio::test]
-async fn t6_tampered_or_unknown_session_cookie_redirects_to_sign_in() {
+async fn t6_tampered_or_unknown_session_cookie_is_sent_to_sign_in() {
     let harness = Harness::start().await;
     let (cookie, page) = harness.review().await;
     let csrf = page.input("csrf").unwrap();
@@ -137,8 +157,7 @@ async fn t6_tampered_or_unknown_session_cookie_redirects_to_sign_in() {
                 &[("csrf", &csrf), ("view", &view)],
             )
             .await;
-        assert_eq!(submit.status, StatusCode::SEE_OTHER);
-        assert_eq!(submit.location(), sign_in_location());
+        assert_links_to_sign_in(&submit);
     }
     assert_eq!(harness.environment.registry.total_calls(), calls);
     assert_eq!(harness.environment.registry.submits(), 0);
@@ -534,14 +553,70 @@ async fn sign_out_requires_csrf_and_ends_the_session() {
 }
 
 #[tokio::test]
-async fn unauthenticated_submit_redirects_without_a_registry_call() {
+async fn unauthenticated_submit_links_to_sign_in_without_a_registry_call() {
     let harness = Harness::start().await;
     let page = harness
         .post(&submit_path(), None, &[("csrf", "x"), ("view", "y")])
         .await;
-    assert_eq!(page.status, StatusCode::SEE_OTHER);
-    assert_eq!(page.location(), sign_in_location());
+    assert_links_to_sign_in(&page);
     assert_eq!(harness.environment.registry.total_calls(), 0);
+}
+
+#[tokio::test]
+async fn an_expired_session_posts_answer_pages_not_redirects() {
+    let harness = Harness::start_with(Options {
+        token_lifetime: Duration::from_secs(2),
+        ..Options::default()
+    })
+    .await;
+    let (cookie, page) = harness.review().await;
+    let csrf = page.input("csrf").unwrap();
+    let view = page.input("view").unwrap();
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    let calls = harness.environment.registry.total_calls();
+
+    let submit = harness
+        .post(
+            &submit_path(),
+            Some(&cookie),
+            &[("csrf", &csrf), ("view", &view)],
+        )
+        .await;
+    assert_links_to_sign_in(&submit);
+
+    let signed_out = harness
+        .post("/signout", Some(&cookie), &[("csrf", &csrf)])
+        .await;
+    assert_eq!(signed_out.status, StatusCode::OK);
+    assert!(signed_out.header("location").is_none());
+    assert!(signed_out.body.contains("data-outcome=\"signed-out\""));
+    assert_eq!(harness.environment.registry.total_calls(), calls);
+}
+
+#[tokio::test]
+async fn a_submit_the_registry_signs_out_links_to_sign_in_and_ends_the_session() {
+    let harness = Harness::start().await;
+    let (cookie, page) = harness.review().await;
+    let csrf = page.input("csrf").unwrap();
+    let view = page.input("view").unwrap();
+    harness.environment.registry.refuse_tokens();
+
+    let submit = harness
+        .post(
+            &submit_path(),
+            Some(&cookie),
+            &[("csrf", &csrf), ("view", &view)],
+        )
+        .await;
+    assert_links_to_sign_in(&submit);
+    let cleared = submit.set_cookie("breg-review-session").unwrap();
+    assert!(cleared.contains("Max-Age=0"), "{cleared}");
+    assert_eq!(harness.environment.registry.submits(), 0);
+
+    // A navigation may still redirect: only a form post may not.
+    let read = harness.get(&review_path(), Some(&cookie)).await;
+    assert_eq!(read.status, StatusCode::SEE_OTHER);
+    assert_eq!(read.location(), sign_in_location());
 }
 
 #[tokio::test]

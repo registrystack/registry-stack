@@ -83,7 +83,11 @@ The page is an OpenID Connect relying party and a confidential OAuth client.
 A session ends at `maximumLifetimeSeconds` or when the access token expires,
 whichever comes first; a token that states no expiry opens no session. When
 the registry stops accepting the token, the session ends and the person is sent
-to sign in again.
+to sign in again. A page load without a live session redirects to sign-in. A
+submit without one answers a page with a sign-in link instead, and a sign-out
+answers the signed-out page: the content security policy's
+`form-action 'self'` also covers the redirects a form submission follows, and
+sign-in continues on the provider's origin.
 
 ## Review and submit
 

@@ -1,0 +1,7 @@
+{% extends "layout.html" %}
+{% block title %}Sign in again{% endblock %}
+{% block main %}
+<h1 data-outcome="sign-in-required">Sign in again</h1>
+<p>Your session has ended, so nothing was submitted.</p>
+<p><a href="/signin?return=%2Frequests%2F{{ request_id }}">Sign in to continue with your request</a></p>
+{% endblock %}

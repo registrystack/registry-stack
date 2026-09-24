@@ -8,7 +8,7 @@ use serde::Serialize;
 
 pub(crate) const STYLESHEET: &str = include_str!("../static/review.css");
 
-const TEMPLATES: [(&str, &str); 6] = [
+const TEMPLATES: [(&str, &str); 7] = [
     ("layout.html", include_str!("../templates/layout.html")),
     ("review.html", include_str!("../templates/review.html")),
     (
@@ -21,6 +21,7 @@ const TEMPLATES: [(&str, &str); 6] = [
         "signed_out.html",
         include_str!("../templates/signed_out.html"),
     ),
+    ("sign_in.html", include_str!("../templates/sign_in.html")),
 ];
 
 /// One labelled value on the review page.
@@ -72,6 +73,7 @@ impl Templates {
         templates.continue_to("00000000-0000-4000-8000-000000000000")?;
         templates.error("", "", "")?;
         templates.signed_out()?;
+        templates.sign_in_again("00000000-0000-4000-8000-000000000000")?;
         Ok(templates)
     }
 
@@ -104,6 +106,12 @@ impl Templates {
 
     pub(crate) fn signed_out(&self) -> Result<String, minijinja::Error> {
         self.environment.get_template("signed_out.html")?.render(())
+    }
+
+    pub(crate) fn sign_in_again(&self, request_id: &str) -> Result<String, minijinja::Error> {
+        self.environment
+            .get_template("sign_in.html")?
+            .render(minijinja::context! { request_id })
     }
 }
 
