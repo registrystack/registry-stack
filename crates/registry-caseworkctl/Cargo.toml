@@ -28,6 +28,7 @@ getrandom.workspace = true
 jsonschema.workspace = true
 p256.workspace = true
 rcgen.workspace = true
+regex.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
