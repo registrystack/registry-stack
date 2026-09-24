@@ -84,6 +84,8 @@ pub mod hook_handler;
 pub mod idempotency;
 pub mod immediate_actions;
 #[cfg(feature = "runtime")]
+pub mod import_authority;
+#[cfg(feature = "runtime")]
 mod ingestion_store;
 pub mod lifecycle;
 pub mod logical_names;

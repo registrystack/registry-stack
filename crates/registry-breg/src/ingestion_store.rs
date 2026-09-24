@@ -187,6 +187,9 @@ pub(crate) struct IngestionRunRecord {
     pub(crate) chunk_algorithm_version: String,
     pub(crate) maximum_items: i64,
     pub(crate) maximum_bytes: i64,
+    /// The import authority an `import` run consumes, absent for a `batch`
+    /// run. Every chunk of the run is admitted and counted against it.
+    pub(crate) import_authority_id: Option<Uuid>,
     pub(crate) status: IngestionRunStatus,
     pub(crate) blocked_reason: Option<IngestionBlockedReason>,
     pub(crate) next_chunk_index: i64,
@@ -316,6 +319,7 @@ pub(crate) struct NewIngestionRun {
     pub(crate) chunk_algorithm_version: String,
     pub(crate) maximum_items: i64,
     pub(crate) maximum_bytes: i64,
+    pub(crate) import_authority_id: Option<Uuid>,
 }
 
 /// One committed chunk and the receipt that proves it.
@@ -449,13 +453,15 @@ pub(crate) async fn install(
                  chunk_algorithm_version text NOT NULL CHECK (chunk_algorithm_version <> ''),
                  maximum_items int NOT NULL CHECK (maximum_items > 0),
                  maximum_bytes bigint NOT NULL CHECK (maximum_bytes > 0),
+                 import_authority_id uuid
+                     REFERENCES registry_internal.registry_import_authorities(authority_id),
                  status text NOT NULL
                      CONSTRAINT registry_ingestion_runs_status_values
                      CHECK (status IN ('open', 'complete', 'cancelled', 'blocked')),
                  blocked_reason text
                      CONSTRAINT registry_ingestion_runs_blocked_reason_values
                      CHECK (blocked_reason IS NULL OR
-                         blocked_reason IN ('active_package_changed')),
+                         blocked_reason IN ('active_package_changed', 'import_authority_closed')),
                  next_chunk_index bigint NOT NULL CHECK (next_chunk_index >= 0),
                  committed_items bigint NOT NULL CHECK (committed_items >= 0),
                  committed_prefix_digest text NOT NULL
@@ -516,6 +522,29 @@ pub(crate) async fn install(
              CREATE INDEX IF NOT EXISTS registry_ingestion_run_chunk_records_erased_record
                  ON registry_internal.registry_ingestion_run_chunk_records
                      (record_id, record_revision);
+             -- KERNEL INTERNAL SCHEMA MIGRATION (import authorities): a run
+             -- table created before import authorities gains the authority
+             -- reference and the `import_authority_closed` blocked reason.
+             ALTER TABLE registry_internal.registry_ingestion_runs
+                 ADD COLUMN IF NOT EXISTS import_authority_id uuid
+                     REFERENCES registry_internal.registry_import_authorities(authority_id);
+             DO $registry_ingestion_import_authority_upgrade$
+             BEGIN
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid = 'registry_internal.registry_ingestion_runs'::regclass
+                        AND conname = 'registry_ingestion_runs_blocked_reason_values'
+                        AND pg_catalog.pg_get_constraintdef(oid)
+                            LIKE '%import_authority_closed%'
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_ingestion_runs
+                         DROP CONSTRAINT IF EXISTS registry_ingestion_runs_blocked_reason_values,
+                         ADD CONSTRAINT registry_ingestion_runs_blocked_reason_values
+                         CHECK (blocked_reason IS NULL OR blocked_reason IN
+                             ('active_package_changed', 'import_authority_closed'));
+                 END IF;
+             END
+             $registry_ingestion_import_authority_upgrade$;
              REVOKE ALL ON registry_internal.registry_ingestion_runs,
                  registry_internal.registry_ingestion_run_chunks,
                  registry_internal.registry_ingestion_run_chunk_records FROM PUBLIC;
@@ -550,6 +579,7 @@ fn parse_run_row(row: &tokio_postgres::Row) -> Option<IngestionRunRecord> {
         chunk_algorithm_version: row.get("chunk_algorithm_version"),
         maximum_items: i64::from(row.get::<_, i32>("maximum_items")),
         maximum_bytes: row.get("maximum_bytes"),
+        import_authority_id: row.get("import_authority_id"),
         status: IngestionRunStatus::parse(&status)?,
         blocked_reason: row
             .try_get::<_, Option<String>>("blocked_reason")
@@ -578,8 +608,8 @@ fn parse_run_row(row: &tokio_postgres::Row) -> Option<IngestionRunRecord> {
 const RUN_COLUMNS: &str =
     "run_id, created_principal_reference, package_revision, schema_fingerprint,
     entity_id, operation, profile_id, bound_context_reference, input_digest, input_length,
-    item_count, chunk_count, chunk_algorithm_version, maximum_items, maximum_bytes, status,
-    blocked_reason, next_chunk_index, committed_items, committed_prefix_digest,
+    item_count, chunk_count, chunk_algorithm_version, maximum_items, maximum_bytes,
+    import_authority_id, status, blocked_reason, next_chunk_index, committed_items, committed_prefix_digest,
     last_attempt_outcome, last_attempt_chunk_index, created_at, updated_at";
 
 pub(crate) fn validate_new_run(run: &NewIngestionRun) -> Result<(), IngestionStoreError> {
@@ -635,11 +665,11 @@ pub(crate) async fn insert_run(
                      (run_id, created_principal_reference, package_revision, schema_fingerprint,
                       entity_id, operation, profile_id, bound_context_reference, input_digest,
                       input_length, item_count, chunk_count, chunk_algorithm_version,
-                      maximum_items, maximum_bytes, status, blocked_reason, next_chunk_index,
-                      committed_items, committed_prefix_digest, last_attempt_outcome,
-                      last_attempt_chunk_index)
+                      maximum_items, maximum_bytes, import_authority_id, status, blocked_reason,
+                      next_chunk_index, committed_items, committed_prefix_digest,
+                      last_attempt_outcome, last_attempt_chunk_index)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                         'open', NULL, 0, 0, $16, NULL, NULL)
+                         $17, 'open', NULL, 0, 0, $16, NULL, NULL)
                  RETURNING {RUN_COLUMNS}",
             ),
             &[
@@ -659,6 +689,7 @@ pub(crate) async fn insert_run(
                 &maximum_items,
                 &run.maximum_bytes,
                 &empty_digest_hex(),
+                &run.import_authority_id,
             ],
         )
         .await
@@ -1274,6 +1305,7 @@ mod tests {
             chunk_algorithm_version: "greedy-canonical-http-batch-v1".to_owned(),
             maximum_items: 4,
             maximum_bytes: 262_144,
+            import_authority_id: None,
         }
     }
 
@@ -1365,6 +1397,7 @@ mod tests {
             chunk_algorithm_version: "greedy-canonical-http-batch-v1".to_owned(),
             maximum_items: 4,
             maximum_bytes: 262_144,
+            import_authority_id: None,
             status: IngestionRunStatus::Open,
             blocked_reason: None,
             next_chunk_index: 1,
