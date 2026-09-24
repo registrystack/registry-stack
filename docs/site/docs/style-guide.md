@@ -147,7 +147,7 @@ do not relabel an existing integration as a different domain.
 - For keyboard shortcuts, use backticks: `Ctrl+C`. Inline HTML, including `<kbd>`, fails the markdownlint gate (MD033).
 - Show output only if you ran the command and read what came back. An unobserved transcript is a claim without evidence, and Principle 2 applies to it exactly as it applies to prose. If you cannot run the command, write a sentence for what happens instead: "the command prints the key ID and exits 0".
 - Never invent a banner, a log line, a progress message, or a version string. If nobody has seen the software print it, it is not output.
-- A request the page shows was sent as written, at that path and with that body, to a running instance that answered with the status the page names. A body inferred from a schema is a guess: the envelope, the field casing, and the query parameters are exactly what a schema does not tell you.
+- A request the page shows was sent at that path and with that body to a running instance that answered with the status the page names; only the `<placeholder>` values and fake tokens differ from what was sent. A body inferred from a schema is a guess: the envelope, the field casing, and the query parameters are exactly what a schema does not tell you.
 - When a change alters what a command prints, every page that quotes that command is in scope. Search the docs for the command and recapture each transcript from the changed binary; a transcript that was true at the last review is not evidence for this one.
 - When real output is long, quote the lines the reader checks against and say plainly that the rest is omitted. When it varies per reader, replace the varying parts with `<placeholder>` and name what varies: timestamps, identifiers, host names, absolute paths.
 - Repo paths such as `crates/registry-evidence/` and `products/evidence/` address a contributor with the repository checked out. An adopter has a terminal and a released binary. Keep repo paths out of reader-facing prose in tutorials, how-tos, and start pages: put them in an author-facing MDX comment, in a page whose reader is a contributor, or in a pinned link so a reader without a clone can still open the file.
@@ -194,7 +194,7 @@ This applies to `tutorial` and `how-to` pages, and to any page that asks the rea
 - Link into another page's section when the reader wants that section and not the page: a procedure they were sent to perform, a definition they were sent to check. Link to the page itself when they need its context to make sense of the part. `check-built-links` resolves every fragment against the built page, so a renamed heading fails the build rather than dropping the reader silently at the top.
 - Link to upstream standards bodies first, then to mirrors or summaries.
 - Pin links to code to a release tag (`v0.8.3`) or a commit SHA, never a branch, when the claim depends on the code state.
-- The generated CLI reference under `reference/cli/` is `draft: true` on the unreleased docset and is published from release archives only, so a current page must not link into it: `check-built-links` fails the build. Send the reader to `<command> --help` instead.
+- The generated CLI reference under `reference/cli/` is published only while `src/data/cli-reference.yaml` records `status: current`. While that record is `draft`, the generator marks every page `draft: true`, the pages are absent from the build, and `check-built-links` fails a link into them; send the reader to `<command> --help` instead.
 
 ## Tables
 
