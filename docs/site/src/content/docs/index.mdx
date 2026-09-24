@@ -85,6 +85,19 @@ and [deploy Registry Casework](operate/casework/).
 {/* Evidence: crates/registry-casework-core/src/model.rs; crates/registry-casework/src/http.rs, router;
     crates/registry-caseworkctl/src/dev/mod.rs; products/casework/README.md. */}
 
+## Send operational messages with Registry Messaging
+
+Use Registry Messaging when a service must send one email or SMS to one recipient, rendered from a
+reviewed template through a provider the operator connected, and learn what became of it. Why and
+when to send, who the recipient is, and whether they consented stay with the caller's source of
+record; the access profile Messaging resolves for the caller decides whether it may send.
+[Registry Messaging overview](start/messaging/) explains that split. Continue with
+[author a Messaging package](configure/messaging/) and
+[deploy Registry Messaging](operate/messaging/).
+
+{/* Evidence: crates/registry-messaging-core/src/access.rs, AccessProfile;
+    crates/registry-messaging/src/http.rs, router(); products/messaging/README.md. */}
+
 ## Keep the product boundaries clear
 
 Registry Relay owns source access and protected record surfaces.

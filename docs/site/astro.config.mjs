@@ -160,6 +160,31 @@ export function schedulingRedirects(hasScheduling, currentDocsetRedirect) {
     [route, currentDocsetRedirect(route)],
   ]));
 }
+const messagingOpenApiSchema = {
+  base: 'reference/apis/messaging',
+  schema: './openapi/registry-messaging.openapi.json',
+  sidebar: {
+    label: 'API operations',
+    collapsed: true,
+    operations: { labels: /** @type {'path'} */ ('path'), badges: true },
+  },
+};
+const messagingRoutes = [
+  '/start/messaging/',
+  '/configure/messaging/',
+  '/operate/messaging/',
+  '/reference/apis/registry-messaging/',
+];
+/**
+ * @param {boolean} hasMessaging
+ * @param {(path: string) => string} currentDocsetRedirect
+ */
+export function messagingRedirects(hasMessaging, currentDocsetRedirect) {
+  if (hasMessaging) return {};
+  return Object.fromEntries(messagingRoutes.flatMap((route) => [
+    [route, currentDocsetRedirect(route)],
+  ]));
+}
 const caseworkRoutes = [
   '/start/casework/',
   '/tutorials/first-casework/',
@@ -199,6 +224,7 @@ export default defineConfig({
     ...buildRelayV2RetirementRedirects(currentDocsetRedirect),
     ...caseworkRedirects(hasCasework, currentDocsetRedirect),
     ...schedulingRedirects(hasScheduling, currentDocsetRedirect),
+    ...messagingRedirects(hasMessaging, currentDocsetRedirect),
     '/start/': internalRedirect('/'),
     '/start/see-it-live/': internalRedirect('/'),
     // Retired product choosers. The homepage chooses between the products, so
@@ -338,6 +364,7 @@ export default defineConfig({
           },
           ...[caseworkOpenApiSchema].filter(() => hasCasework),
           ...[schedulingOpenApiSchema].filter(() => hasScheduling),
+          ...[messagingOpenApiSchema].filter(() => hasMessaging),
         ]),
       ],
       defaultLocale: 'root',
@@ -597,6 +624,16 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'start/messaging' },
+            { label: 'Author a package', slug: 'configure/messaging' },
+            { label: 'Deploy Messaging', slug: 'operate/messaging' },
+            { label: 'API contract', slug: 'reference/apis/registry-messaging' },
+            // The Messaging operations follow Evidence, Casework, and
+            // Scheduling in the OpenAPI plugin list, and only the products this
+            // docset carries are registered there.
+            ...openAPISidebarGroups.slice(
+              1 + Number(hasCasework) + Number(hasScheduling),
+              2 + Number(hasCasework) + Number(hasScheduling),
+            ),
           ],
         }] : []),
         {

@@ -30,6 +30,13 @@ assert.ok(schedulingRedirectsSource && schedulingRoutesSource,
 const schedulingRedirects = new Function(
   `${schedulingRoutesSource}; ${schedulingRedirectsSource.replace(/^export /, '')}; return schedulingRedirects;`,
 )();
+const messagingRedirectsSource = configSource.match(/export function messagingRedirects[\s\S]*?^}\n/m)?.[0];
+const messagingRoutesSource = configSource.match(/const messagingRoutes = \[[\s\S]*?\];/)?.[0];
+assert.ok(messagingRedirectsSource && messagingRoutesSource,
+  'could not isolate Messaging docset routing');
+const messagingRedirects = new Function(
+  `${messagingRoutesSource}; ${messagingRedirectsSource.replace(/^export /, '')}; return messagingRedirects;`,
+)();
 const homepageSource = readFileSync(resolve(siteRoot, 'src/content/docs/index.mdx'), 'utf8');
 const validationSource = readFileSync(
   resolve(siteRoot, 'src/content/docs/verify/index.mdx'),
@@ -70,13 +77,23 @@ const schedulingOpenApiSchema = {
   schema: './openapi/registry-scheduling.openapi.json',
   sidebar: { label: 'API operations', collapsed: true },
 };
-const apiSchemas = new Function(
+const messagingOpenApiSchema = {
+  base: 'reference/apis/messaging',
+  schema: './openapi/registry-messaging.openapi.json',
+  sidebar: { label: 'API operations', collapsed: true },
+};
+const apiSchemaFactory = new Function(
   'hasCasework',
   'hasScheduling',
+  'hasMessaging',
   'caseworkOpenApiSchema',
   'schedulingOpenApiSchema',
+  'messagingOpenApiSchema',
   `return ${apiConfigSource};`,
-)(true, true, caseworkOpenApiSchema, schedulingOpenApiSchema);
+);
+const apiSchemas = apiSchemaFactory(
+  true, true, true, caseworkOpenApiSchema, schedulingOpenApiSchema, messagingOpenApiSchema,
+);
 const generatedAPI = apiSchemas.map((schema) => ({
   ...schema.sidebar,
   items: [{ label: 'Generated tag', items: [] }],
@@ -233,6 +250,9 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/', products: { 'registry-casework': { ref: 'HEAD' }, 'registry-scheduling': { ref: 'HEAD' }, 'registry-render': { ref: 'HEAD' }, 'registry-messaging': { ref: 'HEAD' } } },
       { id: 'v0.29.0', status: 'archived', availability: 'released', path: '/v/0.29.0/', products: {} },
       { id: 'v0.30.0', status: 'archived', availability: 'candidate', path: '/v/0.30.0/', products: { 'registry-casework': { ref: 'v0.30.0' } } },
+      // A docset that carries Messaging without Scheduling, so the Messaging
+      // operations are not the last of every registered schema.
+      { id: 'v0.31.0', status: 'archived', availability: 'candidate', path: '/v/0.31.0/', products: { 'registry-casework': { ref: 'v0.31.0' }, 'registry-messaging': { ref: 'v0.31.0' } } },
     ],
   };
   for (const [id, env, hasCasework, hasScheduling, hasRender, hasMessaging] of [
@@ -240,6 +260,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     ['v0.29.0', {}, false, false, false, false],
     ['v0.30.0', {}, true, false, false, false],
     ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true, false, false, false],
+    ['v0.31.0', {}, true, false, false, true],
   ]) {
     const context = resolveDocsetBuildContext(docsets, { DOCS_DOCSET: id, ...env });
     assert.equal(context.hasCasework, hasCasework, id);
@@ -257,16 +278,52 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Scheduling'), hasScheduling, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Render'), hasRender, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Messaging'), hasMessaging, id);
-    assert.equal(new Function('hasCasework', 'hasScheduling', 'caseworkOpenApiSchema', 'schedulingOpenApiSchema', `return ${apiConfigSource};`)
-      (context.hasCasework, context.hasScheduling, caseworkOpenApiSchema, schedulingOpenApiSchema).length,
-      1 + Number(hasCasework) + Number(hasScheduling), id);
+    const docsetSchemas = apiSchemaFactory(
+      context.hasCasework,
+      context.hasScheduling,
+      context.hasMessaging,
+      caseworkOpenApiSchema,
+      schedulingOpenApiSchema,
+      messagingOpenApiSchema,
+    );
+    assert.equal(docsetSchemas.length, 1 + Number(hasCasework) + Number(hasScheduling) + Number(hasMessaging), id);
+    // Each product group seats the operations of its own schema, whichever
+    // products come before it in this docset.
+    const docsetAPI = docsetSchemas.map((schema) => ({ ...schema.sidebar, base: schema.base, items: [] }));
+    const docsetMessaging = sidebarFactory(
+      cliReferenceSidebar,
+      sidebarArguments[1],
+      sidebarArguments[2],
+      docsetAPI,
+      flattenSidebarGroups,
+      context.hasCasework,
+      context.hasScheduling,
+      context.hasRender,
+      context.hasMessaging,
+    ).find((item) => item.label === 'Registry Messaging');
+    if (hasMessaging) {
+      assert.deepEqual(
+        docsetMessaging.items.filter((item) => item.base).map((item) => item.base),
+        ['reference/apis/messaging'],
+        id,
+      );
+    }
     const redirects = caseworkRedirects(context.hasCasework, context.currentDocsetRedirect);
     assert.equal(redirects['/operate/casework/'] !== undefined, !hasCasework, id);
     assert.equal(redirects['/tutorials/first-casework.md'] !== undefined, !hasCasework, id);
     const schedulingRedirectsResult = schedulingRedirects(context.hasScheduling, context.currentDocsetRedirect);
     assert.equal(schedulingRedirectsResult['/reference/apis/registry-scheduling/'] !== undefined, !hasScheduling, id);
+    const messagingRedirectsResult = messagingRedirects(context.hasMessaging, context.currentDocsetRedirect);
+    for (const route of [
+      '/start/messaging/',
+      '/configure/messaging/',
+      '/operate/messaging/',
+      '/reference/apis/registry-messaging/',
+    ]) {
+      assert.equal(messagingRedirectsResult[route] !== undefined, !hasMessaging, `${id} ${route}`);
+    }
   }
-  assert.match(fetchOpenapiSource, /\(repoId === 'registry-casework' \|\| repoId === 'registry-scheduling'\) && !docset\.products\[repoId\]/);
+  assert.match(fetchOpenapiSource, /\(repoId === 'registry-casework' \|\| repoId === 'registry-scheduling' \|\| repoId === 'registry-messaging'\) && !docset\.products\[repoId\]/);
   for (const route of [
     '/start/casework/',
     '/tutorials/first-casework/',
@@ -280,6 +337,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
   assert.match(configSource, /\.\.\.caseworkRedirects\(hasCasework, currentDocsetRedirect\)/);
   assert.match(configSource, /'\/reference\/apis\/registry-scheduling\/'/);
   assert.match(configSource, /\.\.\.schedulingRedirects\(hasScheduling, currentDocsetRedirect\)/);
+  assert.match(configSource, /\.\.\.messagingRedirects\(hasMessaging, currentDocsetRedirect\)/);
 });
 
 test('starts with only Start expanded and all secondary groups collapsed', () => {

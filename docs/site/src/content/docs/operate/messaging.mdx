@@ -1,0 +1,590 @@
+---
+title: Deploy Registry Messaging
+description: Build Registry Messaging, provision PostgreSQL, write the runtime file that connects each provider, record and serve a package, and operate messages, the audit journal, and metrics.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-25"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+An author has handed you a Registry Messaging package and its digest, and you want it serving. At
+the end of this page a `messaging` process serves that package against PostgreSQL behind your own
+TLS edge, sends through the providers you connected, and answers `GET /ready`, and you can inspect,
+retry, settle, and cancel its messages.
+
+The package, its templates, and its access profiles stay with the author;
+[Author a Messaging package](../../configure/messaging/) covers that side. This page starts from the
+package directory.
+
+## What you provide
+
+- **One PostgreSQL database and two login credentials.** The migration credential owns the schema,
+  applies migrations, and records the active package. The runtime credential serves requests and
+  runs the dispatch worker. The runtime requires TLS on both connections.
+- **One OpenID Connect issuer** that issues RFC 9068 access tokens (`typ: at+jwt`) to the clients
+  the package's access profiles name, carrying the scopes those profiles require. Messaging verifies
+  tokens and issues none.
+- **A TLS proxy or ingress in front of the listener.** The process serves plain HTTP on a private
+  or container-private address.
+- **A connection for each provider the package declares:** an SMTP relay for email, and the base
+  URL, credentials, and callback secret for each HTTP provider.
+- **Secrets the process can read**, named by `secret:file/<name>` or `secret:env/<NAME>`
+  references, never written into the runtime file.
+- **Durable storage for the audit journal**, one directory owned by the runtime user with mode
+  `0700`.
+
+Messaging needs no message broker and no cache: messages, the dispatch queue, attempts, receipts,
+and the audit outbox all live in its own PostgreSQL database. It writes to no other product's
+database.
+
+{/* Evidence: products/messaging/RUNTIME-CONFIG.md, Keys;
+    crates/registry-messaging/src/store.rs; crates/registry-messaging/migrations;
+    products/messaging/README.md, Product boundary. */}
+
+## Build the binaries
+
+Registry Messaging is unreleased, so both binaries are built from a Registry Stack checkout:
+
+```sh
+cargo build --release --locked -p registry-messaging -p registry-messagingctl
+```
+
+On macOS, build through the runtime-library helper
+[Author a Messaging package](../../configure/messaging/#get-messagingctl) shows, so the shell can
+load the FIPS crypto library.
+
+`target/release/messaging` is the runtime, with the `migrate` and `serve` subcommands.
+`target/release/messagingctl` is the operator tool; `check` and `apply` need no running runtime,
+and `messages` reads and changes messages through the database.
+
+{/* Evidence: crates/registry-messaging/src/main.rs; crates/registry-messagingctl/src/lib.rs, Command. */}
+
+{/* messaging-release: once v0.35.0 publishes, name the released messaging and messagingctl linux-amd64 binaries and the ghcr.io/registrystack/messaging image before the source build. */}
+
+## Provision PostgreSQL
+
+Create a migration role and a runtime role, and keep the migration credential off the serving host
+when no migration is in progress:
+
+```sql
+CREATE ROLE messaging_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOINHERIT NOBYPASSRLS PASSWORD '<migration-password>';
+CREATE ROLE messaging_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOINHERIT NOBYPASSRLS PASSWORD '<runtime-password>';
+CREATE DATABASE messaging;
+```
+
+Messaging's migrations create ordinary tables in the first schema of the connection's
+`search_path`, `public` by default, and create no extension, schema, or role. As an administrator,
+in the `messaging` database:
+
+```sql
+REVOKE ALL ON DATABASE messaging FROM PUBLIC;
+GRANT CONNECT ON DATABASE messaging TO messaging_migration, messaging_runtime;
+ALTER SCHEMA public OWNER TO messaging_migration;
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+GRANT USAGE ON SCHEMA public TO messaging_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE messaging_migration IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO messaging_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE messaging_migration IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO messaging_runtime;
+```
+
+The default privileges cover every table `migrate` creates, because it always runs as the
+migration role. When you reuse a database an earlier session already migrated, grant the same
+privileges on the tables and sequences that already exist.
+
+{/* Evidence: crates/registry-messaging/migrations; crates/registry-messaging/src/store.rs;
+    grants exercised against PostgreSQL 17.11 over TLS with migrate, messagingctl apply, and serve
+    on 2026-09-25. */}
+
+## Write the runtime file
+
+The runtime file binds one package to one database, one issuer, one listener, and one connection
+per provider. Keep it outside the package, and put no credential in it:
+
+```yaml
+apiVersion: registry.registrystack.org/messaging-runtime/v1alpha1
+kind: MessagingRuntimeConfig
+package:
+  root: /srv/registry-messaging/package
+  # The digest messagingctl check reported for the package you were handed.
+  expectedDigest: sha256:c7b2caae4172dc37f01bd519802a3a947fd452e190a624a84905e0051d30ed05
+listener:
+  bind: 10.42.0.7:8107
+  tlsTermination: operator-controlled-upstream
+  networkExposure: private-address
+metricsListener:
+  bind: 10.42.0.7:9107
+secretProviders:
+  file:
+    root: /run/secrets/registry-messaging
+database:
+  runtimeUrlRef: secret:file/runtime-database-url
+  migrationUrlRef: secret:file/migration-database-url
+authentication:
+  oidc:
+    issuer: https://identity.example.test/realms/registry
+    audience: urn:example:messaging
+    allowedClients: [case-system, operations-console]
+audit:
+  path: /var/lib/registry-messaging/audit/audit.ndjson
+  hashKeyRef: secret:file/messaging-audit-key
+retention:
+  payloadDays: 7
+  recordDays: 90
+  submissionReceiptDays: 7
+providers:
+  mail-relay:
+    kind: smtp
+    host: smtp.example.org
+    tls: starttls
+    authentication:
+      usernameRef: secret:file/smtp-username
+      passwordRef: secret:file/smtp-password
+  sms-gateway:
+    kind: http
+    baseUrl: https://sms-gateway.example.org/v1/
+    timeoutMilliseconds: 5000
+    maximumResponseBytes: 65536
+    concurrencyLimit: 4
+    redirects: deny
+    authentication:
+      kind: static-authorization
+      tokenRef: secret:file/sms-gateway-token
+    callbackVerifier:
+      kind: hmac-sha256-body
+      header: x-signature
+      encoding: hex
+      secretRef: secret:file/sms-gateway-callback-key
+```
+
+| Section | What it binds |
+| --- | --- |
+| `package` | The absolute directory holding `messaging.yaml`, and optionally the one digest the runtime may load from it |
+| `listener` | The public listener and the transport boundary it sits behind |
+| `metricsListener` | The private socket that serves `/metrics`. Omit it to serve no metrics |
+| `secretProviders` | The explicitly enabled `file` and `environment` secret providers |
+| `database` | The runtime and migration connection URLs, and optionally `trustedRootCertificateRef` for a private CA |
+| `authentication.oidc` | The issuer, audience, and admitted clients, and optionally `scopeClaim`, `jwksSource`, `jwksUri`, and `assertionIssuers` |
+| `audit` | The journal path and the key that chains it |
+| `retention` | How long payloads, records, and submission receipts are kept |
+| `providers` | One connection per provider the package declares, keyed by its id and tagged with the same `kind` |
+| `tlsTrustProfiles` | Named PEM bundles an HTTP provider's `tlsTrustProfile` selects |
+
+Every mapping is closed, so a misspelled key is refused with its path instead of falling back to a
+default. A string value may carry `${VAR}`, `${VAR:-default}`, or `${VAR:?message}`, except a
+member whose name ends in `Ref`, which names a secret and refuses an environment expression. The
+full key reference is `products/messaging/RUNTIME-CONFIG.md` in the Registry Stack repository.
+
+{/* Evidence: products/messaging/RUNTIME-CONFIG.md; products/messaging/examples/starter/runtime.example.yaml;
+    products/messaging/generated/runtime/runtime.schema.json. */}
+
+### Listener and token rules
+
+`tlsTermination: operator-controlled-upstream` is the production value: TLS terminates at your edge
+and the runtime stays plaintext behind it. `development-loopback` is direct plaintext and is
+refused on any non-loopback bind. `networkExposure` defaults to `private-address`, and
+`container-private` also permits an unspecified bind on a private container network. A public
+unicast address is refused under every combination. The metrics listener must be a concrete
+loopback or private address, and must not be the public listener's socket.
+
+`allowedClients` is never empty, and every client an access profile names must be listed. The
+scope claim is `registry_scopes` unless `scopeClaim` names another. Signing keys come from issuer
+discovery by default; declare `jwksSource: {kind: static, documentRef: secret:file/<name>}` when the
+runtime cannot reach the issuer's discovery document. With discovery, `serve` fails at startup
+with `the OIDC issuer could not be initialized` when the issuer is unreachable.
+
+{/* Evidence: products/messaging/RUNTIME-CONFIG.md, Keys; crates/registry-messaging/src/config.rs;
+    crates/registry-messaging/src/runtime.rs. */}
+
+### Connect providers
+
+A connection for a provider the package does not declare, or with another `kind`, is refused. A
+declared provider with no connection is not activated: startup logs a warning, and its messages
+fail with the attempt failure code `provider-unconfigured` without a send. Every credential, trust
+bundle, and callback secret is resolved once at startup, before either listener binds, and a
+provider that cannot be activated stops the runtime with an error naming the provider and the
+member, never a value.
+
+An `smtp` connection takes `host`, `tls` (`starttls` on port 587 or `implicit` on port 465 by
+default), and optionally `port`, `authentication`, `attemptTimeoutSeconds` (1 to 60, default 30),
+`trustedRootCertificateRef`, and `allowedPrivateCidrs`. SMTP relays report no delivery, so an email
+message's report is `unavailable` and `submitted` is the last status it reaches.
+
+An `http` connection takes `baseUrl`, `timeoutMilliseconds` (at most 10000),
+`maximumResponseBytes` (at most 1 MiB), `concurrencyLimit` (at most the package's),
+`redirects: deny`, and one `authentication` kind: `none` for a loopback `http` base URL only,
+`basic`, `static-authorization`, `static-api-key`, `static-api-key-query`, or
+`oauth2-client-credentials`. The runtime resolves the provider's host and refuses a metadata,
+private, or other non-public address unless `allowedPrivateCidrs` names its network.
+
+When the package declares `receipts: callback` for a provider, its connection needs a
+`callbackVerifier`, and give the provider this callback URL on your public edge:
+
+| `kind` | Keys | Callback URL |
+| --- | --- | --- |
+| `hmac-sha256-body` | `header`, `encoding` (`hex` or `base64`), `secretRef` | `/v1/provider-callbacks/<provider-id>` |
+| `hmac-sha1-url-form` | `url`, `header`, `secretRef` | `/v1/provider-callbacks/<provider-id>` |
+| `path-token` | `tokenRef` | `/v1/provider-callbacks/<provider-id>/<token>` |
+
+For `hmac-sha1-url-form`, `url` is the external callback URL exactly as the provider was given it
+and signs, so a reverse proxy in front of the runtime must not change it.
+
+{/* Evidence: products/messaging/RUNTIME-CONFIG.md, Providers and Provider callbacks;
+    crates/registry-messaging/src/providers.rs; crates/registry-messaging/src/http_provider/mod.rs;
+    crates/registry-messaging/src/messages.rs, settle_report_capability(). */}
+
+### Set retention
+
+| Key | Default | Bounds |
+| --- | --- | --- |
+| `payloadDays` | 7 | 1 to 30 |
+| `recordDays` | 90 | `payloadDays` to 3650 |
+| `submissionReceiptDays` | 7 | 1 to `recordDays` |
+
+`submissionReceiptDays` is also the idempotency window: a repeated key whose stored receipt is
+older is refused with `410 idempotency.expired`. A submission whose `expiresAt` falls after its
+payload period is refused. These values are defaults, not a jurisdictional recommendation, and the
+audit journal's start record carries the values in force.
+
+{/* Evidence: products/messaging/RUNTIME-CONFIG.md, Keys. */}
+
+{/* messaging-s6b: document the retention sweep (payloadDays, recordDays, submissionReceiptDays erasure) and messagingctl retention erase-expired once they land. */}
+
+### Create the secret files
+
+Create each file as the user that runs `messaging`, because the resolver refuses a file owned by
+anyone else:
+
+```sh
+install -d -m 0700 /run/secrets/registry-messaging
+(umask 077; openssl rand -hex 32 | tr -d '\n' \
+  > /run/secrets/registry-messaging/messaging-audit-key)
+(umask 077; printf '%s' 'postgresql://messaging_runtime:<runtime-password>@db.example.org:5432/messaging' \
+  > /run/secrets/registry-messaging/runtime-database-url)
+(umask 077; printf '%s' 'postgresql://messaging_migration:<migration-password>@db.example.org:5432/messaging' \
+  > /run/secrets/registry-messaging/migration-database-url)
+```
+
+Write the provider secrets the same way: here `smtp-username`, `smtp-password`,
+`sms-gateway-token`, and `sms-gateway-callback-key`. Each file must be a regular file owned by the
+effective user, with mode `0400` or `0600` and exactly one link. The bytes are used as written, so
+write them without a trailing newline. The audit key needs at least 32 bytes, which 64 hexadecimal
+characters satisfy. A reference that cannot resolve is refused by name, and the resolved bytes never
+appear in a message or a log.
+
+:::danger[The audit key is the only way back into the chain]
+The audit journal is a keyed hash chain, and the runtime authenticates the retained chain before it
+appends to it. A lost or replaced key leaves every retained record unverifiable and stops the
+process from continuing that journal, and no command reconstructs it. Back the key up separately
+from the audit storage, and keep both for as long as the records must stay provable.
+:::
+
+{/* Evidence: crates/registry-platform-config/src/secrets.rs, validate_file_metadata();
+    crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES and bootstrap_or_start_empty();
+    products/messaging/examples/starter/runtime.example.yaml. */}
+
+## Check the runtime file
+
+`messagingctl check --runtime-config` checks the runtime file and its package offline, before any
+database or issuer is reached:
+
+```sh
+messagingctl check --runtime-config /etc/registry-messaging/runtime.yaml
+```
+
+```text
+ok: /etc/registry-messaging/runtime.yaml
+package digest: sha256:c7b2caae4172dc37f01bd519802a3a947fd452e190a624a84905e0051d30ed05
+listener: 127.0.0.1:8107
+metrics listener: 127.0.0.1:9107
+template: appointment-reminder 1 (email)
+  sample en: renders
+  sample fr: renders
+template: appointment-reminder-sms 1 (sms)
+  sample en: 1 segment(s), gsm7 85 units
+access profile: case-notices (sender)
+access profile: operations (operator)
+retention: payload 7 days, record 90 days, submission receipt 7 days
+```
+
+That run used a loopback listener. When `package.expectedDigest` names another package, `check`,
+`apply`, and `serve` all refuse before reaching a database:
+
+```text
+messagingctl: package.expectedDigest is sha256:0000…, but the package under package.root has digest sha256:c7b2… (package.expectedDigest)
+```
+
+{/* Evidence: crates/registry-messagingctl/src/lib.rs, check();
+    products/messaging/RUNTIME-CONFIG.md, Keys; outputs observed with messagingctl 0.33.0-dev on
+    2026-09-25, digests shortened in the refusal. */}
+
+## Migrate, record the package, and serve
+
+Apply the migrations with the migration credential, from the operator host:
+
+```sh
+messaging --runtime-config /etc/registry-messaging/runtime.yaml migrate
+```
+
+`migrate` prints nothing and exits 0. It takes a PostgreSQL advisory lock, so a second `migrate` on
+the same database waits instead of racing it, and running it again applies nothing new. Run it
+before the first `serve` and before rolling out a release that adds migrations.
+
+Next, record the package in the package ledger. Without `--apply`, `messagingctl apply` only
+compares the package on disk with the one the ledger names active:
+
+```sh
+messagingctl apply --runtime-config /etc/registry-messaging/runtime.yaml
+```
+
+```text
+package digest: sha256:c7b2caae4172dc37f01bd519802a3a947fd452e190a624a84905e0051d30ed05
+active digest: none
+change: activate: run again with --apply to record this package
+```
+
+```sh
+messagingctl apply --runtime-config /etc/registry-messaging/runtime.yaml --apply
+```
+
+```text
+package digest: sha256:c7b2caae4172dc37f01bd519802a3a947fd452e190a624a84905e0051d30ed05
+active digest: none
+change: recorded: restart the runtime to serve this package
+```
+
+`apply` uses the migration credential. Then start the runtime with the runtime credential:
+
+```sh
+messaging --runtime-config /etc/registry-messaging/runtime.yaml serve
+```
+
+The runtime logs JSON lines on standard output. `MESSAGING_LOG` selects `error`, `warn`, or `info`,
+and any other value exits 2. Once both listeners are bound, it logs:
+
+```text
+{"timestamp":"…","level":"INFO","fields":{"message":"serving Registry Messaging","listener":"127.0.0.1:8107","metrics_listener":true}}
+```
+
+`GET /health` answers `200` with an empty body while the process serves, and `GET /ready` answers
+`200` once the database carries every expected migration, `503 service.unavailable` otherwise.
+Neither takes a token, and both carry `Cache-Control: no-store`.
+
+{/* Evidence: crates/registry-messaging/src/main.rs; crates/registry-messaging/src/runtime.rs;
+    crates/registry-messaging/src/store.rs, MIGRATION_LOCK_KEY;
+    crates/registry-messagingctl/src/lib.rs, Command; crates/registry-messaging/src/http.rs, ready();
+    outputs observed with messaging and messagingctl 0.33.0-dev on 2026-09-25. */}
+
+## Change the active package
+
+`serve` refuses to start unless the package on disk has the digest the ledger names active, so an
+edited file never changes what a running deployment sends. To roll out a new package, replace the
+package directory, update `package.expectedDigest` if you set it, run `messagingctl apply` to see
+the change, record it with `--apply`, and restart the runtime.
+
+:::caution[A recorded package stops the old one from restarting]
+Once `apply --apply` records a new digest, every runtime that restarts on the old package directory
+refuses to start. Record a package only when every serving host has the new directory in place, and
+restart them together.
+:::
+
+A restart against a package the ledger does not name fails with both digests:
+
+```text
+messaging: the Messaging package on disk (sha256:41afc8ee…) is not the package the ledger names active (sha256:c7b2…); record it with messagingctl apply, then restart
+```
+
+Each accepted message keeps the rendering and dispatch policy it had when it was accepted, so a
+package change affects only messages submitted after the restart.
+
+{/* Evidence: products/messaging/RUNTIME-CONFIG.md, The package ledger and The package;
+    crates/registry-messaging/src/runtime.rs; output observed with messaging 0.33.0-dev on
+    2026-09-25, digests shortened. */}
+
+## Operate messages
+
+`messagingctl messages` reads messages through the runtime credential and never shows a recipient.
+`list` prints the newest first, and `--status` and `--limit` narrow it:
+
+```sh
+messagingctl messages list --runtime-config /etc/registry-messaging/runtime.yaml
+```
+
+```text
+<message-id> queued (dispatch queued) email transactional generation 1 attempt 1 accepted <timestamp> updated <timestamp>
+```
+
+`show` prints one message, its dispatch state and delivery report, and each attempt. Set
+`MESSAGE_ID` to an identifier from the list:
+
+```sh
+messagingctl messages show --runtime-config /etc/registry-messaging/runtime.yaml "$MESSAGE_ID"
+```
+
+```text
+message: <message-id>
+status: queued (dispatch queued, report unavailable)
+channel: email via transactional
+to: email (redacted)
+template: appointment-reminder 1
+correlation id: case-4711
+access profile: case-notices
+generation: 1 attempt: 1
+accepted: <timestamp>
+expires: <timestamp>
+updated: <timestamp>
+attempt 1.1: transient started <timestamp> finished <timestamp>
+```
+
+This message's first attempt could not reach its SMTP relay, so the attempt was `transient` and the
+message waits in `queued` for its next retry. The status the API reports, and what `dispatch` and
+`report` each mean, are in [Registry Messaging API](../../reference/apis/registry-messaging/#message-status).
+
+{/* Evidence: crates/registry-messagingctl/src/lib.rs, messages commands;
+    crates/registry-messaging/src/runtime.rs, message_store();
+    crates/registry-messaging-core/src/wire.rs, derive_status();
+    outputs observed with messagingctl 0.33.0-dev on 2026-09-25, identifiers and times replaced. */}
+
+### Retry, settle, and cancel
+
+Each action decides on the message's dispatch state, previews without `--apply`, and writes its
+audit record into the outbox the running runtime publishes to the journal once applied:
+
+| Command | Applies to dispatch state | Effect |
+| --- | --- | --- |
+| `messages retry` | `failed` | Queues the message again under a new generation |
+| `messages settle --outcome sent` | `unknown` | Marks the message `submitted` |
+| `messages settle --outcome not-sent` | `unknown` | Queues the message again under a new generation |
+| `messages cancel` | `queued` | Cancels the message |
+
+A submitted message the provider reported `undelivered` has the status `failed` but the dispatch
+state `submitted`, so it is not retried. An action on any other state is refused with exit 1:
+
+```text
+messagingctl: message <message-id> has dispatch state queued; retry applies only to a message whose dispatch state is failed (MESSAGE_ID)
+```
+
+Cancelling previews first:
+
+```sh
+messagingctl messages cancel --runtime-config /etc/registry-messaging/runtime.yaml "$MESSAGE_ID"
+```
+
+```text
+cancel <message-id>: queued -> cancelled
+preview: run again with --apply to change the message
+```
+
+```sh
+messagingctl messages cancel --runtime-config /etc/registry-messaging/runtime.yaml "$MESSAGE_ID" --apply
+```
+
+```text
+cancel <message-id>: queued -> cancelled
+applied
+```
+
+A cancelled message is final: a caller cancelling it again over HTTP receives `409
+message.terminal`.
+
+{/* Evidence: crates/registry-messaging/src/messages.rs, OperatorAction and SettleOutcome;
+    crates/registry-messaging/src/dispatch.rs, Actor; crates/registry-messagingctl/src/lib.rs;
+    outputs observed with messagingctl 0.33.0-dev on 2026-09-25. */}
+
+### Settle an unknown outcome
+
+A message is `unknown` when a send may have reached the provider and nobody can tell whether it did:
+the connection broke after the request left, the attempt ran out of time, or the provider's answer
+could not be read. Under the sender profile's default `onUncertain: hold`, the worker stops there
+and sends nothing more until you settle it.
+
+Before settling, find out from the provider whether it took the message: its console or its logs,
+searched by the time of the attempt `messages show` lists. Settle `sent` when it did, and `not-sent`
+when it did not.
+
+:::caution[Settling not-sent can send the message twice]
+`--outcome not-sent` queues the message for another send. If the provider did take the first one,
+the recipient receives it twice. When you cannot establish the answer, weigh a duplicate against a
+missed message for this recipient before choosing.
+:::
+
+{/* Evidence: crates/registry-messaging/src/dispatch.rs; crates/registry-messaging/src/messages.rs,
+    SettleOutcome; products/messaging/RUNTIME-CONFIG.md, The package. */}
+
+## Read the audit journal
+
+The runtime appends every audited act to one JSONL journal at `audit.path`, each line an envelope
+with `envelope_id`, `timestamp_unix_ms`, `prev_hash`, `record_hash`, and the `record`. The chain is
+keyed by the audit key, so a changed, removed, or reordered line breaks verification. It holds a
+lock file beside the journal for the life of the process, so exactly one process writes one chain,
+and it seals the active file once it reaches 10 MiB.
+
+| Event | Recorded when |
+| --- | --- |
+| `messaging.runtime.started` | The runtime starts, with the package digest, the runtime version, and the retention in force |
+| `messaging.message.accepted`, `.refused`, `.replayed` | A submission is accepted, refused, or answered again from its idempotency key |
+| `messaging.attempt.started`, `messaging.attempt.finished` | The worker starts and finishes a send attempt, with its outcome |
+| `messaging.message.quarantined` | A send may have happened and the message is held as `unknown` |
+| `messaging.dispatch.transition` | The dispatch state changes, naming whether the worker, a caller, or the operator tool changed it |
+| `messaging.message.settled` | An operator settles an unknown outcome |
+| `messaging.receipt.recorded` | A verified provider callback moves a delivery report |
+| `messaging.template.previewed` | A sender previews a template |
+
+A record names a caller only by a keyed pseudonym of the token's issuer and subject, and a
+recipient only by a keyed pseudonym. The journal never carries a subject, a contact, message
+content, or template data. The directory must stay owned by the runtime user with mode `0700`.
+
+{/* Evidence: crates/registry-messaging/src/audit.rs; crates/registry-messaging/src/messages.rs,
+    MESSAGE_SETTLED_EVENT; crates/registry-platform-audit/src/segmented_jsonl.rs,
+    DurableSegmentedJsonlSink; crates/registry-messaging/src/outbox.rs. */}
+
+## Watch metrics
+
+With `metricsListener` set, `GET /metrics` on that socket answers Prometheus text. The public
+listener answers the same path `404 request.not-found`.
+
+| Series | Labels | Counts |
+| --- | --- | --- |
+| `messaging_http_requests_total` | `route`, `method`, `status` | Answered HTTP requests |
+| `messaging_authentication_refusals_total` | `reason` | Bearer credentials refused before a caller was resolved |
+| `messaging_provider_callbacks_total` | `outcome` | Provider callbacks: `unverified`, `unreadable`, `ignored`, `applied`, `unchanged`, `unmatched`, `ambiguous`, or `unavailable` |
+
+A rising `unverified` count usually means a callback secret or URL differs between the provider and
+the runtime file.
+
+{/* Evidence: crates/registry-messaging/src/metrics.rs; products/messaging/RUNTIME-CONFIG.md,
+    Provider callbacks. */}
+
+{/* messaging-s6b: replace this table with the final metrics names, including dispatch and quota series, once they land. */}
+
+## Troubleshooting
+
+Each of these is the process's whole output on standard error, and each exits non-zero:
+
+| Output | Cause |
+| --- | --- |
+| `messaging: MESSAGING_LOG must be one of error, warn, or info` | `MESSAGING_LOG` holds another value. Exits 2 |
+| `messaging: the Messaging runtime database configuration failed: the Messaging database secret could not be resolved: the secret reference secret:file/runtime-database-url could not be resolved: no readable secret of that name exists under the configured provider` | The secret file is missing or unreadable. `migrate` reports the migration connection the same way, and `messagingctl apply` exits 3 with the same message |
+| `messaging: the OIDC issuer could not be initialized` | The issuer's discovery document or keys could not be fetched. Check reachability, or declare a static `jwksSource` |
+| `messaging: the Messaging schema readiness check failed: the Messaging query failed: db error` | `serve` ran against a database `migrate` has not prepared |
+| `messaging: the Messaging package ledger names no active package; record package sha256:… with messagingctl apply before serving` | No package was recorded. Run `messagingctl apply --apply` |
+| `messaging: the Messaging package on disk (…) is not the package the ledger names active (…); record it with messagingctl apply, then restart` | The package changed since it was recorded |
+| `messaging: package.expectedDigest is …, but the package under package.root has digest …` | The package directory is not the one the runtime file pins |
+
+{/* Evidence: crates/registry-messaging/src/main.rs; crates/registry-messaging/src/runtime.rs;
+    crates/registry-messaging/src/store.rs; outputs observed with messaging 0.33.0-dev on
+    2026-09-25, digests shortened. */}
+
+## Next
+
+- [Registry Messaging API](../../reference/apis/registry-messaging/) for the contract your callers
+  use, including provider callbacks and every problem code.
+- [Author a Messaging package](../../configure/messaging/) for the package this runtime serves.
+- [Registry Messaging overview](../../start/messaging/) for what stays with the caller's source of
+  record.

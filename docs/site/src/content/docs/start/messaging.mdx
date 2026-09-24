@@ -39,15 +39,23 @@ request.
 {/* Evidence: crates/registry-messaging-core/src/package.rs, Channel, ProviderKind, and
     ProviderKind::carries. */}
 
-## What a delivery report can say
+## What a message's status says
 
-A delivery report only ever moves forward: none, then sent, then a terminal outcome of delivered
-or undelivered. Once a report reaches delivered or undelivered, no later report can move it
-somewhere else. This is the full vocabulary a caller can learn about a message's fate; Messaging
-does not report intermediate carrier states beyond it.
+A message answers two facts separately. Its dispatch state is what Messaging did with it: queued,
+sending, submitted to the provider, failed, unknown, cancelled, or expired. Submitted means the
+provider accepted the message, not that the recipient received it. Its delivery report is what the
+provider said afterwards: none yet, sent, delivered, or undelivered, only ever moving forward, with
+delivered and undelivered final. A provider that sends no receipts leaves the report unavailable,
+so submitted is the most a caller learns.
 
-{/* Evidence: crates/registry-messaging-core/src/receipt.rs, DeliveryReport, DeliveryReport::rank,
-    and DeliveryReport::is_terminal. */}
+The status a caller reads combines the two: it is the dispatch state, except that a submitted
+message becomes delivered, or failed, once the provider reports it so. Unknown means a send may
+have reached the provider and nobody can tell whether it did; an operator settles it rather than
+Messaging guessing.
+
+{/* Evidence: crates/registry-messaging-core/src/wire.rs, MessageDispatch, MessageReport, and
+    derive_status(); crates/registry-messaging-core/src/receipt.rs, DeliveryReport::rank and
+    DeliveryReport::is_terminal. */}
 
 ## What it is not
 
@@ -61,4 +69,14 @@ surface any other authorized caller uses.
 {/* Evidence: products/messaging/README.md;
     products/messaging/scripts/check_dependency_direction.py. */}
 
-Provider delivery, callbacks, quotas, and the retention sweep are still arriving in later slices.
+{/* messaging-s6b: name per-profile rate limits, the daily quota, and the retention sweep once they land. */}
+
+{/* messaging-s6b: link the Messaging tutorial (one email through Mailpit, one SMS through the mock provider) once messagingctl dev exists. */}
+
+## Next
+
+- [Author a Messaging package](../../configure/messaging/) to declare providers, sender profiles,
+  templates, and who may call.
+- [Deploy Registry Messaging](../../operate/messaging/) to run the runtime against PostgreSQL and
+  your providers.
+- [Registry Messaging API](../../reference/apis/registry-messaging/) for the contract a caller uses.

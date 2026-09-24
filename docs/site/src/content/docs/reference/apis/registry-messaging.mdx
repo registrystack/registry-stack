@@ -1,0 +1,216 @@
+---
+title: Registry Messaging API
+description: Bearer authentication, access profiles, idempotent submission, message status, provider callbacks, problem codes, and routes for the generated Registry Messaging OpenAPI operations.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-25"
+doc_type: reference
+locale: en
+standards_referenced:
+  - openapi
+---
+
+import ApiReferenceTable from '../../../../components/ApiReferenceTable.astro';
+
+Registry Messaging serves one HTTP surface for submitting a message, reading and cancelling it,
+previewing a template, and taking delivery callbacks from providers. Every caller route presents a
+bearer access token, and the access profile that token resolves to decides what the caller may do.
+The contract is unreleased and carries no frozen compatibility promise.
+
+[Open the Registry Messaging API operations](../messaging/) for every route, parameter, schema, and
+reachable problem code. This page holds the authentication, idempotency, status, and callback rules
+those operations assume.
+
+## Contract boundary
+
+Every caller request presents `Authorization: Bearer <token>` holding an RFC 9068 access token,
+`typ: at+jwt`, issued by the one issuer the deployment names, for its audience, to a client the
+deployment admits. The token's scopes are read from `registry_scopes` unless the deployment names
+another claim. Liveness and readiness take no token, and provider callbacks take none either: a
+callback verifier authenticates them instead.
+
+{/* Evidence: crates/registry-messaging/src/config.rs, MESSAGING_ACCESS_TOKEN_TYPE;
+    crates/registry-messaging/src/auth.rs, authenticate();
+    products/messaging/RUNTIME-CONFIG.md, Keys. */}
+
+`POST /v1/messages` requires an `Idempotency-Key` header of 1 to 128 visible ASCII characters,
+scoped to the calling principal. The same key with the same request answers the stored receipt
+again, and the same key with a different request is refused with `idempotency.key-reused`. A key
+whose stored receipt is older than the deployment's `retention.submissionReceiptDays` is refused
+with `idempotency.expired`, because the first answer is no longer held.
+
+{/* Evidence: crates/registry-messaging-core/src/wire.rs, idempotency key bounds;
+    crates/registry-messaging/src/messages.rs, SUBMIT_OPERATION;
+    products/messaging/RUNTIME-CONFIG.md, Keys. */}
+
+A refusal answers `application/problem+json` with `type`, `title`, `status`, `detail`, `code`, and
+`traceId`. The `type` is the code with each dot replaced by a slash under
+`https://id.registrystack.org/problems/registry-messaging/`, and `detail` is the fixed sentence that
+belongs to the code. No field repeats a submitted value. Every response, refusals included, carries
+`Cache-Control: no-store` and a `traceparent` header.
+
+{/* Evidence: crates/registry-messaging-core/src/problem.rs, ProblemCode;
+    crates/registry-messaging-core/src/wire.rs, ProblemDocument;
+    crates/registry-platform-httpsec/src/server.rs, security_headers(). */}
+
+## Access profiles
+
+A token resolves to exactly one access profile in the deployed package, by the client it was issued
+to, the scopes it carries, and, when the profile names one, the actor kind in
+`registry_actor_kind`. A token that resolves to no profile is refused with `authentication.refused`.
+Messaging inherits no authorization from a calling product: being allowed to act on a record
+elsewhere does not make a caller allowed to send.
+
+| Role | May | Refused with |
+| --- | --- | --- |
+| `sender` | Submit through the sender profiles and templates its profile lists, submit direct content only when the profile sets `allowDirectContent`, preview a listed template, and read and cancel the messages its own principal submitted | `profile.not-authorized` for an unlisted sender profile or template, or for direct content the profile does not allow |
+| `operator` | Read and cancel every message | `operation.not-authorized` for a submission or a preview |
+
+{/* Evidence: crates/registry-messaging-core/src/access.rs, AccessRole, resolve(), and
+    authorize_submission(); crates/registry-messaging-core/src/visibility.rs. */}
+
+A message is visible to the principal that submitted it, named by the token's issuer and subject,
+and to every operator. Any other caller reading or cancelling it receives `404
+message.not-visible`, the same answer a message that does not exist receives.
+
+{/* Evidence: crates/registry-messaging-core/src/visibility.rs;
+    products/messaging/generated/registry-messaging.openapi.json, getMessage. */}
+
+{/* messaging-s6b: document per-profile rate limits and the daily quota (429 rate-limit.exceeded, 429 quota.exceeded) once enforcement lands. */}
+
+## Submission
+
+A submission is one closed JSON object in camelCase. It names a `senderProfile`, a recipient in
+`to`, and either a `template` with its `locale` and `data`, or direct `content` with a `text` and,
+for email, a `subject`. `to` is `{"email": ...}` for an email sender profile or `{"phone": ...}` in
+E.164 form for an SMS one. `notBefore`, `expiresAt`, and a `correlationId` of at most 128 bytes are
+optional. A body that breaks these rules is refused with `request.unprocessable`.
+
+{/* Evidence: crates/registry-messaging-core/src/wire.rs, SubmitMessageRequest and Recipient. */}
+
+Messaging renders the message when it accepts it, from the package the deployment serves, and
+answers `202` with the message `id`, its `status`, and `links` to read and cancel it. Template data
+is checked against the template version's JSON Schema before anything renders. A message whose
+`expiresAt` passes before it is sent is never sent.
+
+{/* Evidence: crates/registry-messaging-core/src/wire.rs, MessageReceipt;
+    crates/registry-messaging/src/messages.rs; products/messaging/RUNTIME-CONFIG.md, The package. */}
+
+## Message status
+
+`GET /v1/messages/{message_id}` answers two facts separately, and one status derived from them:
+
+- `dispatch` is what the worker did with the message: `queued`, `sending`, `submitted`, `failed`,
+  `unknown`, `cancelled`, or `expired`. `submitted` means the provider accepted the message, never
+  that it was delivered.
+- `report` is what the provider's delivery receipts said: `none`, `sent`, `delivered`, or
+  `undelivered`, and `reportedAt` records when. A report only moves forward, and `delivered` and
+  `undelivered` are final. `unavailable` means the message's provider records no receipts, so
+  `submitted` is the last status the message reaches.
+- `status` is the dispatch state, except that a submitted message reported `delivered` is
+  `delivered`, and one reported `undelivered` is `failed`.
+
+{/* Evidence: crates/registry-messaging-core/src/wire.rs, MessageDispatch, MessageReport,
+    derive_status(), and MessageView; crates/registry-messaging/src/messages.rs,
+    StoredMessage::settle_report_capability(). */}
+
+`unknown` means a send may have reached the provider and nobody can tell whether it did. The
+message stays there until an operator settles it; see
+[Deploy Registry Messaging](../../../operate/messaging/#settle-an-unknown-outcome).
+
+The answer never returns the recipient's contact: `to` carries the channel with the value
+`redacted`. It returns no rendered part and no template data. `attempts` lists each attempt by its
+`generation` and `attempt` number, its `outcome` (`in-progress`, `accepted`, `transient`,
+`permanent`, `maybe-sent`, or `interrupted`), and whether the provider returned a reference, never
+the reference itself.
+
+{/* Evidence: crates/registry-messaging/src/messages.rs, MASKED_CONTACT;
+    crates/registry-messaging-core/src/wire.rs, AttemptOutcome and AttemptSummary. */}
+
+`POST /v1/messages/{message_id}/cancel` cancels a message that is still queued, including one
+waiting for a retry. Once dispatch started it answers `409 message.dispatch-started`, and once the
+message reached a final state it answers `409 message.terminal`.
+
+{/* Evidence: products/messaging/generated/registry-messaging.openapi.json, cancelMessage. */}
+
+## Provider callbacks
+
+A provider that reports delivery calls `POST /v1/provider-callbacks/{provider_id}` when the runtime
+configuration gives it an `hmac-sha1-url-form` or `hmac-sha256-body` callback verifier, or
+`POST /v1/provider-callbacks/{provider_id}/{token}` when it gives it a `path-token` verifier. These
+routes take no bearer token: the verifier authenticates each callback, and the provider package's
+receipt script reads it.
+
+A verified callback answers `204` whether or not its reference names a message, and a receipt never
+moves a report backwards. An unknown provider, a provider that receives no callbacks, a signature or
+token that does not verify, and a callback on the route its verifier does not use all answer `403
+callback.unverified`, so the route does not reveal which providers receive callbacks. A callback the
+receipt script cannot read answers `422 callback.unreadable`, and one the runtime cannot record
+answers `503 service.unavailable` so the provider retries.
+
+{/* Evidence: crates/registry-messaging/src/http.rs, receiveProviderCallback and CALLBACK_PROBLEMS;
+    crates/registry-messaging/src/http.rs, a_callback_for_a_provider_that_receives_none_is_unverified;
+    crates/registry-messaging/src/receipts.rs;
+    products/messaging/RUNTIME-CONFIG.md, Provider callbacks. */}
+
+## Problem codes
+
+Every Messaging problem response carries one `code` from this closed catalogue, answered with the
+HTTP status listed beside it. `request.not-found` answers a path the contract does not declare.
+
+<ApiReferenceTable id="problem-codes" source="messaging-api" />
+
+{/* Problem code table generated from docs/site/src/data/messaging-api.yaml by
+    docs/site/scripts/generate-data.mjs. Run npm run generate from docs/site. */}
+
+{/* Evidence: crates/registry-messaging-core/src/problem.rs, ProblemCode::detail();
+    products/messaging/generated/registry-messaging.openapi.json;
+    docs/site/src/data/messaging-api.yaml. */}
+
+## Routes
+
+| Route | Authentication | Purpose |
+| --- | --- | --- |
+| `GET /health` | None | `200` while the process serves |
+| `GET /ready` | None | `200` when the database carries every expected migration, `503 service.unavailable` otherwise |
+| `POST /v1/messages` | Bearer, sender | Submit one message |
+| `GET /v1/messages/{message_id}` | Bearer, the submitting principal or an operator | Read one message's status and attempts |
+| `POST /v1/messages/{message_id}/cancel` | Bearer, the submitting principal or an operator | Cancel a queued message |
+| `POST /v1/templates/{template_id}/versions/{version}/preview` | Bearer, sender | Render a listed template version with given data, persisting nothing |
+| `POST /v1/provider-callbacks/{provider_id}` | The provider's callback verifier | Take one delivery callback |
+| `POST /v1/provider-callbacks/{provider_id}/{token}` | A `path-token` verifier | Take one delivery callback |
+
+{/* Evidence: crates/registry-messaging/src/http.rs, router();
+    products/messaging/generated/registry-messaging.openapi.json. */}
+
+`GET /metrics` is not part of this surface: it is served only on the separate metrics listener, and
+the public listener answers it `404 request.not-found`.
+
+{/* Evidence: crates/registry-messaging/src/metrics.rs; products/messaging/RUNTIME-CONFIG.md, Keys. */}
+
+## Source of truth
+
+The implementation is the source of truth, and the generated document is the published form of it.
+The product generator builds the OpenAPI document from the Rust route inventory, wire schemas, and
+problem catalogue, and the product checkpoint regenerates it and refuses byte drift. A running
+Messaging process serves the routes in that document, and does not serve the document itself.
+
+{/* Evidence: crates/registry-messaging/src/schema.rs, openapi_documents();
+    crates/registry-messaging/examples/openapi.rs; products/messaging/scripts/check-checkpoint.sh. */}
+
+The problem code table is generated from maintained data whose codes and statuses a site test holds
+to the generated document. The other tables on this page are maintained by hand against the cited
+source.
+
+{/* Evidence: docs/site/src/data/messaging-api.yaml;
+    docs/site/scripts/messaging-api-reference.test.mjs. */}
+
+## Next
+
+- [Registry Messaging API operations](../messaging/) for every route, parameter, and schema.
+- [Author a Messaging package](../../../configure/messaging/) for the access profiles, sender
+  profiles, and templates a deployment serves.
+- [Deploy Registry Messaging](../../../operate/messaging/) for the runtime, its database, and the
+  operator commands.
