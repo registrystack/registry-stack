@@ -640,16 +640,24 @@ fn occurrence_key(
 }
 
 /// Base Registry's record ETag covers the record revision but not the request
-/// extension, so a review settlement leaves it unchanged. The observed
-/// representation also binds the lifecycle facts derived from that extension,
-/// so a settlement at an unchanged revision is observed as a new representation.
+/// extension, so a review settlement or a resubmitted proposal leaves it
+/// unchanged. The observed representation also binds the proposal it
+/// describes and the lifecycle facts derived from that extension, so either
+/// change at an unchanged revision is observed as a new representation.
 fn observed_representation_etag(
     record_etag: &str,
+    binding: &SourceBinding,
     state: OccurrenceState,
     remaining_actions: &[OperationName],
 ) -> Result<String, SourceAdapterError> {
-    let input = serde_json::to_vec(&(record_etag, state, remaining_actions))
-        .map_err(|_| SourceAdapterError::Invalid)?;
+    let input = serde_json::to_vec(&(
+        record_etag,
+        binding.version.as_str(),
+        binding.integrity.as_deref(),
+        state,
+        remaining_actions,
+    ))
+    .map_err(|_| SourceAdapterError::Invalid)?;
     let digest = domain_separated_sha256(b"registry-casework-breg-representation-v1\0", &input);
     Ok(format!(
         "\"sha256:{}\"",
@@ -842,8 +850,12 @@ impl SourceAdapter for BregAdapter {
             .advertised_operations()
             .filter_map(operation)
             .collect();
-        let representation_etag =
-            observed_representation_etag(&representation_etag, state, &remaining_actions)?;
+        let representation_etag = observed_representation_etag(
+            &representation_etag,
+            &binding,
+            state,
+            &remaining_actions,
+        )?;
         Ok(AuthoritativeObservation {
             subject: subject.clone(),
             occurrence_key: occurrence_key(kind, None, &binding)?,

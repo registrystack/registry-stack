@@ -574,6 +574,23 @@ async fn review_settlement_changes_the_representation_etag_at_an_unchanged_recor
 }
 
 #[tokio::test]
+async fn a_resubmitted_proposal_changes_the_representation_etag_at_an_unchanged_record_etag() {
+    // A revised and resubmitted request keeps its record revision and ETag
+    // when its record data is unchanged; only the proposal version moves.
+    let mut etags = Vec::new();
+    for proposal_version in [1, 2] {
+        let server = MockServer::start().await;
+        let mut representation = record("submitted", None);
+        representation["data"]["request"]["review"] = review_status("awaitingReview");
+        representation["data"]["request"]["proposalVersion"] = json!(proposal_version);
+        let observation = authoritative(&server, representation).await;
+        assert_eq!(observation.ordered_revision, 2);
+        etags.push(observation.representation_etag);
+    }
+    assert_ne!(etags[0], etags[1]);
+}
+
+#[tokio::test]
 async fn authoritative_read_maps_only_imported_routing_fields_and_redacts_values() {
     let server = MockServer::start().await;
     mount_metadata(&server, "reader-token", "reader").await;
