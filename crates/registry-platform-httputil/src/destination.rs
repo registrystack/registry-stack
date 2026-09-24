@@ -608,23 +608,14 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             DestinationProfile::PinnedLoopbackHttpsTest => {}
         }
 
-        for cidr in allowed_private_cidrs {
-            if dns_family == DestinationDnsFamily::Ipv4Only && matches!(cidr, IpNet::V6(_)) {
-                return Err(DestinationPolicyError::Ipv4OnlyIpv6ConfigurationDenied);
-            }
-            let canonical = cidr.trunc();
-            if canonical != *cidr {
-                return Err(DestinationPolicyError::PrivateCidrNotCanonical);
-            }
-            if !cidr_is_eligible_private(canonical) || cidr_is_metadata_singleton(canonical) {
-                return Err(DestinationPolicyError::PrivateCidrDenied);
-            }
+        if dns_family == DestinationDnsFamily::Ipv4Only
+            && allowed_private_cidrs
+                .iter()
+                .any(|cidr| matches!(cidr, IpNet::V6(_)))
+        {
+            return Err(DestinationPolicyError::Ipv4OnlyIpv6ConfigurationDenied);
         }
-
-        let mut retained = Vec::with_capacity(allowed_private_cidrs.len());
-        retained.extend(allowed_private_cidrs.iter().map(IpNet::trunc));
-        retained.sort_unstable();
-        retained.dedup();
+        let retained = retain_private_cidrs(allowed_private_cidrs)?;
 
         // Native trust discovery can require an expensive operating-system
         // trust-store traversal. Initialize it once while activating the
@@ -1019,31 +1010,7 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
                 }
             }
             DestinationProfile::ProductionHttps => {
-                if let IpAddr::V6(ipv6) = ip {
-                    if let Some(embedded) = decode_well_known_nat64(ipv6) {
-                        return self.classify_address(IpAddr::V4(embedded));
-                    }
-                }
-                if is_cloud_metadata_ip(ip) {
-                    return Err(DestinationSendError::CloudMetadataDenied);
-                }
-                if is_always_denied_in_production(ip) {
-                    return Err(DestinationSendError::AlwaysDeniedAddress);
-                }
-                if is_globally_routable(ip) {
-                    return Ok(());
-                }
-                if is_eligible_private_address(ip) {
-                    if self
-                        .allowed_private_cidrs
-                        .iter()
-                        .any(|cidr| cidr.contains(&ip))
-                    {
-                        return Ok(());
-                    }
-                    return Err(DestinationSendError::PrivateAddressNotAllowed);
-                }
-                Err(DestinationSendError::NonGlobalAddressDenied)
+                classify_production_address(ip, &self.allowed_private_cidrs)
             }
         }
     }
@@ -1053,6 +1020,102 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             .port_or_known_default()
             .expect("fixed destination construction proves a port")
     }
+}
+
+/// The production address policy of a fixed destination, for a transport
+/// that is not HTTP.
+///
+/// A product that opens its own connection (an SMTP client, for instance)
+/// resolves its configured host once, classifies every answer here, and
+/// connects only to an address this policy admitted. The private-CIDR
+/// validation and the classification are the ones a
+/// [`DestinationProfile::ProductionHttps`] destination applies, not a copy:
+/// globally routable addresses pass, cloud metadata, loopback, link-local,
+/// unspecified, and multicast addresses never do, and an RFC 1918, RFC 6598,
+/// or IPv6 ULA address passes only inside an allowed private CIDR.
+/// IPv4-mapped and well-known NAT64 IPv6 addresses are classified as the IPv4
+/// address they carry. `Debug` reports only the CIDR count.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProductionAddressPolicy {
+    allowed_private_cidrs: Vec<IpNet>,
+}
+
+impl ProductionAddressPolicy {
+    /// Validate and freeze the private-CIDR allowlist under the rules
+    /// [`FixedDestinationPolicy::new`] applies: at most
+    /// [`MAX_DESTINATION_PRIVATE_CIDRS`], each canonical and wholly inside
+    /// RFC 1918, RFC 6598 CGNAT, or IPv6 ULA space, and never a cloud
+    /// metadata singleton.
+    pub fn new(allowed_private_cidrs: &[IpNet]) -> Result<Self, DestinationPolicyError> {
+        if allowed_private_cidrs.len() > MAX_DESTINATION_PRIVATE_CIDRS {
+            return Err(DestinationPolicyError::TooManyPrivateCidrs);
+        }
+        Ok(Self {
+            allowed_private_cidrs: retain_private_cidrs(allowed_private_cidrs)?,
+        })
+    }
+
+    /// Classify one resolved address. A caller refuses the connection unless
+    /// every answer it resolved is admitted.
+    pub fn classify(&self, ip: IpAddr) -> Result<(), DestinationSendError> {
+        classify_production_address(normalize_ipv4_mapped(ip), &self.allowed_private_cidrs)
+    }
+}
+
+impl fmt::Debug for ProductionAddressPolicy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProductionAddressPolicy")
+            .field("private_cidr_count", &self.allowed_private_cidrs.len())
+            .finish()
+    }
+}
+
+fn retain_private_cidrs(
+    allowed_private_cidrs: &[IpNet],
+) -> Result<Vec<IpNet>, DestinationPolicyError> {
+    for cidr in allowed_private_cidrs {
+        let canonical = cidr.trunc();
+        if canonical != *cidr {
+            return Err(DestinationPolicyError::PrivateCidrNotCanonical);
+        }
+        if !cidr_is_eligible_private(canonical) || cidr_is_metadata_singleton(canonical) {
+            return Err(DestinationPolicyError::PrivateCidrDenied);
+        }
+    }
+    let mut retained = Vec::with_capacity(allowed_private_cidrs.len());
+    retained.extend(allowed_private_cidrs.iter().map(IpNet::trunc));
+    retained.sort_unstable();
+    retained.dedup();
+    Ok(retained)
+}
+
+/// Classify a normalized address under the production profile.
+fn classify_production_address(
+    ip: IpAddr,
+    allowed_private_cidrs: &[IpNet],
+) -> Result<(), DestinationSendError> {
+    if let IpAddr::V6(ipv6) = ip {
+        if let Some(embedded) = decode_well_known_nat64(ipv6) {
+            return classify_production_address(IpAddr::V4(embedded), allowed_private_cidrs);
+        }
+    }
+    if is_cloud_metadata_ip(ip) {
+        return Err(DestinationSendError::CloudMetadataDenied);
+    }
+    if is_always_denied_in_production(ip) {
+        return Err(DestinationSendError::AlwaysDeniedAddress);
+    }
+    if is_globally_routable(ip) {
+        return Ok(());
+    }
+    if is_eligible_private_address(ip) {
+        if allowed_private_cidrs.iter().any(|cidr| cidr.contains(&ip)) {
+            return Ok(());
+        }
+        return Err(DestinationSendError::PrivateAddressNotAllowed);
+    }
+    Err(DestinationSendError::NonGlobalAddressDenied)
 }
 
 fn deadline_from_remaining(
@@ -4699,6 +4762,85 @@ mod tests {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.append(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         assert!(!closed_json_content_type(&headers));
+    }
+
+    #[test]
+    fn production_address_policy_classifies_exactly_like_a_production_destination() {
+        let allowlist = ["10.20.0.0/16", "fd00:1::/64"];
+        let destination = production(&allowlist);
+        let cidrs: Vec<_> = allowlist.iter().map(|raw| cidr(raw)).collect();
+        let addresses =
+            ProductionAddressPolicy::new(&cidrs).expect("production address policy validates");
+        for raw in [
+            "93.184.216.34",
+            "2606:4700::1111",
+            "10.20.3.4",
+            "10.21.3.4",
+            "192.168.1.1",
+            "100.64.0.1",
+            "127.0.0.1",
+            "::1",
+            "0.0.0.0",
+            "169.254.169.254",
+            "100.100.100.200",
+            "192.0.2.1",
+            "224.0.0.1",
+            "fd00:1::5",
+            "fd00:2::5",
+            "fe80::1",
+            "2001:db8::1",
+            "::ffff:10.20.3.4",
+            "::ffff:127.0.0.1",
+            "64:ff9b::a14:304",
+            "64:ff9b::7f00:1",
+        ] {
+            let ip: IpAddr = raw.parse().expect("test address parses");
+            assert_eq!(
+                addresses.classify(ip),
+                destination.classify_address(normalize_ipv4_mapped(ip)),
+                "{raw}"
+            );
+        }
+        assert_eq!(addresses.classify("10.20.3.4".parse().unwrap()), Ok(()));
+        assert_eq!(
+            addresses.classify("10.21.3.4".parse().unwrap()),
+            Err(DestinationSendError::PrivateAddressNotAllowed)
+        );
+        assert_eq!(
+            addresses.classify("::ffff:127.0.0.1".parse().unwrap()),
+            Err(DestinationSendError::AlwaysDeniedAddress)
+        );
+    }
+
+    #[test]
+    fn production_address_policy_refuses_the_private_cidrs_a_destination_refuses() {
+        for (raw, refusal) in [
+            (
+                "10.0.0.1/8",
+                DestinationPolicyError::PrivateCidrNotCanonical,
+            ),
+            ("8.8.8.0/24", DestinationPolicyError::PrivateCidrDenied),
+            ("127.0.0.0/8", DestinationPolicyError::PrivateCidrDenied),
+            (
+                "169.254.169.254/32",
+                DestinationPolicyError::PrivateCidrDenied,
+            ),
+            ("0.0.0.0/0", DestinationPolicyError::PrivateCidrDenied),
+        ] {
+            assert_eq!(
+                ProductionAddressPolicy::new(&[cidr(raw)]).map(|_| ()),
+                Err(refusal),
+                "{raw}"
+            );
+        }
+        let too_many: Vec<_> = (0..=MAX_DESTINATION_PRIVATE_CIDRS)
+            .map(|index| cidr(&format!("10.{index}.0.0/16")))
+            .collect();
+        assert_eq!(
+            ProductionAddressPolicy::new(&too_many).map(|_| ()),
+            Err(DestinationPolicyError::TooManyPrivateCidrs)
+        );
+        assert!(ProductionAddressPolicy::new(&[]).is_ok());
     }
 
     #[test]

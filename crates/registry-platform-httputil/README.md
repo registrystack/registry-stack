@@ -45,6 +45,10 @@ Outbound HTTP utilities for registry services.
   whose content travels in the query string only behind an explicit
   `QueryStringContentAcknowledgement` that the content reaches provider access
   logs.
+- `ProductionAddressPolicy`, the production fixed-destination private-CIDR
+  validation and resolved-address classification for a product that opens its
+  own non-HTTP connection: it resolves once, classifies every answer, and
+  connects only to an admitted address.
 - `DestinationSendError::delivery_certainty`, which reports a failed send as
   `NotSent` when it failed before the connection was established (policy
   refusal, resolution, connect, or TLS handshake) and conservatively as
