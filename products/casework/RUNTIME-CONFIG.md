@@ -70,7 +70,7 @@ something different, so the next observation supersedes the work items opened
 under the earlier generation and opens fresh ones. Every other binding field is
 operational: `baseUrl`, `readerProfile`, `tokenEndpoint`,
 `clientAssertionAudience`, `resource`, `scopes`, the client and key references,
-`eventType`, `trustedRootCertificatesRef`, both timeouts, `displayReference`,
+`trustedRootCertificatesRef`, both timeouts, `displayReference`,
 `contextProjection`, and `reconciliationIntervalMilliseconds`. Rotating a
 credential, moving the token endpoint, or tuning a timeout keeps the generation,
 the in-flight work items, their claims, and their durable attempts.

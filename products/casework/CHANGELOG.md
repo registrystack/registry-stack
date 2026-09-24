@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- BREAKING: give each paired BReg request entity its own lifecycle hook, so
+  a pairing of several request entities in one registry passes `bregctl
+  check`. BReg requires a hook id to be unique across the registry, and
+  `caseworkctl source add --apply` used to write `casework-lifecycle-v1` on
+  every paired entity, which BReg refused as `event.id.registry_duplicate`.
+  - The hook on request entity `<entity>` is now
+    `casework-lifecycle-v1-<entity>`, for one paired entity or several.
+    `source add` refuses, before writing, an entity whose id would push the
+    hook id past BReg's 64-byte identifier limit (entity ids of at most 42
+    bytes fit), naming the entity and the limit.
+  - The BReg source binding no longer accepts `eventType`. The adapter
+    derives the expected `ce-type` from each paired request entity, refuses
+    an event whose type no paired entity derives before verifying its
+    signature, and refuses an event whose type is not the one derived from
+    the request entity its body names.
+  - To migrate, remove `eventType` from each `*.breg-runtime.yaml` binding,
+    which is otherwise refused at startup. Remove every
+    `casework-lifecycle-v1` hook from the BReg `registry.yaml` (and the
+    `hooks` key where it was the only hook), then repeat `caseworkctl source
+    add --apply` to write the per-entity hooks. `source add` refuses a
+    `registry.yaml` that still carries the bare hook and names each entity
+    that carries it. Deliveries BReg queued under the bare hook id before the
+    change are refused by the updated adapter; the runtime's reconciliation
+    readback observes the same work from the source.
 - `caseworkctl source add --apply` compares the source description and the
   runtime binding before refusing either, and the refusal now says how to
   recover. It names each file that differs from what the run would write and
@@ -18,7 +42,7 @@
   remove that fragment and repeat `source add --apply`. Nothing is replaced
   automatically. When `casework.yaml` drops a request entity from the paired
   set, the same conflict message now also names that entity's
-  `casework-lifecycle-v1` hook and `casework-reader` permission as fragments
+  `casework-lifecycle-v1-<entity>` hook and `casework-reader` permission as fragments
   to remove from `registry.yaml`, since `source add` never removes a
   generated fragment on its own. `source add` also refuses, before preview or
   apply, whenever `registry.yaml` still carries a lifecycle hook or

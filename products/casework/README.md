@@ -366,10 +366,11 @@ imported metadata. Existing authored content is retained and conflicting ids
 are refused.
 
 A source may declare up to 32 request entities from one register. `source add`
-pairs every declared entity in one pass: each gets its own lifecycle event and
-its own permission on the shared `casework-reader` profile. A source with one
-entity imports a `casework-source-description/v1alpha1` description with a
-single `request`; several entities import `v1alpha2` with a `requests` array in
+pairs every declared entity in one pass: each gets its own lifecycle hook,
+`casework-lifecycle-v1-<entity>`, and its own permission on the shared
+`casework-reader` profile. A source with one entity imports a
+`casework-source-description/v1alpha1` description with a single `request`;
+several entities import `v1alpha2` with a `requests` array in
 declaration order. Requests that share a review authority must agree on its
 producer admission.
 
