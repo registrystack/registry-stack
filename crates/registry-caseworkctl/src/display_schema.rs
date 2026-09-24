@@ -23,6 +23,15 @@
 //! invented value to disprove (lengths, patterns, formats, numeric bounds) and
 //! properties that use `$ref` are not analysed; the runtime check still
 //! applies to them.
+//!
+//! `allOf` requires every branch to validate the whole display object, so
+//! each root `allOf` branch's own `properties`, `patternProperties`, and
+//! `additionalProperties: false` provably apply too, and the same analysis
+//! above is applied to each one in turn (bounded by `MAXIMUM_SCHEMA_DEPTH`),
+//! with its mismatches labelled by the branch that proved them. `anyOf`,
+//! `oneOf`, `not`, `if`/`then`/`else`, and `$ref` are not analysed this way,
+//! since only one branch of those needs to hold; the runtime check still
+//! applies to them.
 
 use anyhow::{bail, Result};
 use jsonschema::{Draft, JSONSchema};
@@ -102,15 +111,31 @@ fn display_mismatches(display: &Value, request: &Value, projection: &[String]) -
     let Some(fields) = request["fields"].as_array() else {
         return Vec::new();
     };
-    let properties = display.get("properties").and_then(Value::as_object);
+    let mut mismatches = schema_mismatches(display, fields, projection, None);
+    mismatches.extend(allof_branch_mismatches(display, fields, projection, 0));
+    mismatches
+}
+
+/// The mismatches one object schema proves against the projected fields:
+/// either the root display schema (`label_prefix` is `None`), or one `allOf`
+/// branch of it (`label_prefix` names the branch, e.g. `allOf branch 1`).
+fn schema_mismatches(
+    schema: &Value,
+    fields: &[Value],
+    projection: &[String],
+    label_prefix: Option<&str>,
+) -> Vec<String> {
+    let properties = schema.get("properties").and_then(Value::as_object);
     // additionalProperties is evaluated against its sibling properties and
     // patternProperties only, so an undeclared name is refused whatever other
-    // keywords the root carries, unless some patternProperties entry admits
-    // it, or might: JSON Schema applies every patternProperties schema whose
-    // pattern matches a name alongside the properties schema, so a name no
-    // pattern can be proven to match is still refused, and a name a pattern
-    // does match is checked against that pattern's schema too.
-    let closed = display.get("additionalProperties") == Some(&Value::Bool(false));
+    // keywords this schema carries, unless some patternProperties entry
+    // admits it, or might: JSON Schema applies every patternProperties
+    // schema whose pattern matches a name alongside the properties schema,
+    // so a name no pattern can be proven to match is still refused, and a
+    // name a pattern does match is checked against that pattern's schema
+    // too.
+    let closed = schema.get("additionalProperties") == Some(&Value::Bool(false));
+    let prefix = label_prefix.map_or_else(String::new, |prefix| format!("{prefix}: "));
     let mut mismatches = Vec::new();
     for logical in projection {
         let Some(field) = fields.iter().find(|field| field["field"] == *logical) else {
@@ -120,25 +145,80 @@ fn display_mismatches(display: &Value, request: &Value, projection: &[String]) -
             continue;
         };
         let declared = properties.and_then(|properties| properties.get(api_name));
-        let patterns = pattern_matches(display, api_name);
+        let patterns = pattern_matches(schema, api_name);
         if declared.is_none() && closed && !patterns.admits {
             mismatches.push(format!(
-                "property {api_name} (source field {logical}) is not declared, and additionalProperties: false rejects every disclosure that carries it; the source describes it as {source}"
+                "{prefix}property {api_name} (source field {logical}) is not declared, and additionalProperties: false rejects every disclosure that carries it; the source describes it as {source}"
             ));
             continue;
         }
         if let Some(property) = declared {
-            let label = format!("property {api_name}");
+            let label = format!("{prefix}property {api_name}");
             if let Some(mismatch) = property_mismatch(&label, logical, property, source) {
                 mismatches.push(mismatch);
             }
         }
-        for (pattern, schema) in patterns.definite {
-            let label = format!("patternProperties pattern {pattern} matching property {api_name}");
-            if let Some(mismatch) = property_mismatch(&label, logical, schema, source) {
+        for (pattern, pattern_schema) in patterns.definite {
+            let label =
+                format!("{prefix}patternProperties pattern {pattern} matching property {api_name}");
+            if let Some(mismatch) = property_mismatch(&label, logical, pattern_schema, source) {
                 mismatches.push(mismatch);
             }
         }
+    }
+    mismatches
+}
+
+/// The mismatches proved through each `allOf` branch of `schema`, recursing
+/// into a branch's own `allOf` the same way, bounded by
+/// `MAXIMUM_SCHEMA_DEPTH`. `allOf` requires every branch to validate the
+/// whole display object, so a branch's own `properties`, `patternProperties`,
+/// and `additionalProperties: false` provably apply, the same as the root
+/// schema's do. A branch that is not an object schema contributes nothing,
+/// except a `false` branch: it admits no instance at all, so it provably
+/// rejects every disclosure of every projected field.
+fn allof_branch_mismatches(
+    schema: &Value,
+    fields: &[Value],
+    projection: &[String],
+    depth: usize,
+) -> Vec<String> {
+    if depth > MAXIMUM_SCHEMA_DEPTH {
+        return Vec::new();
+    }
+    let mut mismatches = Vec::new();
+    for (index, branch) in schema
+        .get("allOf")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let label = format!("allOf branch {}", index + 1);
+        if branch == &Value::Bool(false) {
+            for logical in projection {
+                let Some(field) = fields.iter().find(|field| field["field"] == *logical) else {
+                    continue;
+                };
+                let Some(api_name) = field["apiName"].as_str() else {
+                    continue;
+                };
+                mismatches.push(format!(
+                    "{label}: property {api_name} (source field {logical}) admits no value"
+                ));
+            }
+            continue;
+        }
+        if !branch.is_object() {
+            continue;
+        }
+        mismatches.extend(schema_mismatches(branch, fields, projection, Some(&label)));
+        mismatches.extend(allof_branch_mismatches(
+            branch,
+            fields,
+            projection,
+            depth + 1,
+        ));
     }
     mismatches
 }

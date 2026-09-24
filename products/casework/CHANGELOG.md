@@ -63,6 +63,12 @@
     an array item.
 
   The refusal names the review kind, the property, and each rejected value.
+  A property a root `allOf` branch declares, instead of the root
+  `properties` map, is checked against the same first two cases, since
+  `allOf` requires every branch to validate the whole disclosure; the
+  refusal names the branch (`allOf branch 1`, and so on). `anyOf`, `oneOf`,
+  `not`, `if`/`then`/`else`, and `$ref` are not provable this way and are
+  left to the runtime check.
   `source add` refuses before preview, so nothing is written. Constraints
   that only an invented value could violate, and properties that use `$ref`,
   are left to the runtime check. The professional-review template now marks
