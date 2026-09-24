@@ -1169,3 +1169,56 @@ fn a_client_reading_a_gated_entity_through_an_ungated_profile_is_a_finding() {
     separate["accessProfiles"][STEWARD]["requesterClients"] = json!(["steward-console"]);
     assert_eq!(findings(&separate), vec![]);
 }
+
+#[test]
+fn a_profile_that_only_writes_or_invokes_on_a_gated_entity_is_not_an_ungated_client() {
+    let findings = |value: &Value| {
+        compile(value)
+            .unwrap()
+            .findings()
+            .iter()
+            .filter(|finding| finding.code == "access.consent.ungated_client")
+            .map(|finding| finding.path.clone())
+            .collect::<Vec<_>>()
+    };
+    // A create response echoes only the row the caller just wrote, so a
+    // create-only permission reads no existing row without consent.
+    let mut create_only = source();
+    for permission in create_only["accessProfiles"][STEWARD]["permissions"]
+        .as_array_mut()
+        .unwrap()
+    {
+        if permission["entity"] == "person" || permission["entity"] == "enrolment" {
+            permission["operations"] = json!(["create"]);
+        }
+    }
+    assert_eq!(findings(&create_only), Vec::<String>::new());
+
+    // A patch answers with an existing row, so it still reads without consent.
+    let mut patching = create_only.clone();
+    for permission in patching["accessProfiles"][STEWARD]["permissions"]
+        .as_array_mut()
+        .unwrap()
+    {
+        if permission["entity"] == "person" {
+            permission["operations"] = json!(["create", "patch"]);
+        }
+    }
+    assert_eq!(
+        findings(&patching),
+        ["entities[id=person].accessProfiles[id=steward].requesterClients"]
+    );
+
+    // An action target with empty row boundaries on the gated entity only
+    // lets the action reference a row; it reads nothing through the profile.
+    let mut self_issued = self_issued_project();
+    for permission in self_issued["accessProfiles"][STEWARD]["permissions"]
+        .as_array_mut()
+        .unwrap()
+    {
+        if permission["entity"] == "person" || permission["entity"] == "enrolment" {
+            permission["operations"] = json!(["create"]);
+        }
+    }
+    assert_eq!(findings(&self_issued), Vec::<String>::new());
+}

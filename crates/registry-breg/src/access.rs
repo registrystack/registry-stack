@@ -321,7 +321,15 @@ fn ungated_client_findings(entity: &CompiledEntity, findings: &mut Vec<Diagnosti
         .collect::<Vec<_>>()
         .join(", ");
     for profile in entity.access_profiles.values() {
+        // A create answers with the row the caller just wrote, and an action
+        // target only lets the action reference a row, so neither reads an
+        // existing row without consent.
+        let reads_existing_rows = profile
+            .operations
+            .iter()
+            .any(|operation| !matches!(operation, Operation::Create | Operation::Invoke));
         if profile.readable_fields.is_empty()
+            || !reads_existing_rows
             || !crate::consent::requirements(entity, &profile.id).is_empty()
         {
             continue;
