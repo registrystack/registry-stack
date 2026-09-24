@@ -65,6 +65,7 @@ impl From<PostgresKernelError> for HistoryMaintenanceError {
                 Self::InvalidInput
             }
             PostgresKernelError::Connection
+            | PostgresKernelError::Statement(_)
             | PostgresKernelError::Pool
             | PostgresKernelError::PoolBuild
             | PostgresKernelError::CatalogInvariant(_)

@@ -179,6 +179,21 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-bregctl/src/test_lifecycle.rs;
     crates/registry-breg/tests/postgres_migration.rs, real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse. */}
 
+- BREAKING: when PostgreSQL refuses a statement after `bregctl apply` began
+  maintenance, the report is `apply.migration.statement_failed` instead of
+  `apply.migration.failed`, and its message names the SQLSTATE, its class,
+  and the table, column, or constraint PostgreSQL reported, never the
+  PostgreSQL message or a stored value. `registry-breg` reports it as
+  `MigrationError::StatementFailed`, and `PostgresFailure` is exported from
+  `registry_breg::postgres` under every feature set. The target stays pinned
+  as before. See
+  [troubleshooting](../operate/breg-changes/#troubleshooting).
+
+{/* Evidence: crates/registry-breg/src/postgres/mod.rs, PostgresKernelError::from_statement_error();
+    crates/registry-breg/src/migration.rs, MigrationError::StatementFailed;
+    crates/registry-bregctl/src/lib.rs, apply_reports_a_refused_statement_with_its_sqlstate_and_objects;
+    crates/registry-breg/tests/postgres_migration.rs, refused_step_reports_its_sqlstate. */}
+
 - BREAKING: `bregctl history rebaseline` no longer refuses a registry holding
   more than 1,000 live rows. It verifies every live row against its journal
   head in pages of 1,000 inside one transaction, so a registry of any size

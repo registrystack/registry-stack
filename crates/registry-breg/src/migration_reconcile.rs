@@ -184,6 +184,7 @@ impl From<PostgresKernelError> for ReconcileError {
                 Self::InvalidInput
             }
             PostgresKernelError::Connection
+            | PostgresKernelError::Statement(_)
             | PostgresKernelError::Pool
             | PostgresKernelError::PoolBuild
             | PostgresKernelError::CatalogInvariant(_)
@@ -199,6 +200,7 @@ impl From<MigrationError> for ReconcileError {
         match error {
             MigrationError::PackageBinding | MigrationError::EmptyPlan => Self::PackageBinding,
             MigrationError::ApplyFailed
+            | MigrationError::StatementFailed(_)
             | MigrationError::ActivePackageMismatch
             | MigrationError::HistoryCoverage
             | MigrationError::DatabaseUnavailable

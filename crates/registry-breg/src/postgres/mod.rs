@@ -6,6 +6,7 @@ mod baseline;
 mod catalog;
 mod config;
 mod context;
+mod failure;
 mod history_read;
 mod interlock;
 mod migration_ledger;
@@ -44,6 +45,7 @@ pub use context::{
     RowBoundaryOperator,
 };
 pub(crate) use context::{install_spatial_bbox_context, validate_field_value, SpatialBboxContext};
+pub use failure::PostgresFailure;
 pub use history_read::PostgresSnapshotReadService;
 #[cfg(feature = "postgres-test")]
 pub use history_read::SnapshotReadFaultPoint;
@@ -71,8 +73,8 @@ pub use read::PostgresRecordReadService;
 pub use read::ReadFaultPoint;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub use rehearsal::{
-    rehearse_successor_migration, MigrationRehearsalError, PostgresFailure,
-    RehearsalAssertionPhase, SuccessorMigrationRehearsal,
+    rehearse_successor_migration, MigrationRehearsalError, RehearsalAssertionPhase,
+    SuccessorMigrationRehearsal,
 };
 pub use revision_read::PostgresRevisionReadService;
 #[cfg(feature = "postgres-test")]
@@ -223,6 +225,23 @@ pub enum PostgresKernelError {
     /// caller has not acknowledged discarding.
     #[error("a retired audit table still carries unacknowledged rows")]
     RetiredAuditRowsPresent,
+    /// PostgreSQL refused a migration statement. Only the SQLSTATE and the
+    /// object names the server reported are retained.
+    #[error("PostgreSQL refused a migration statement: {0}")]
+    Statement(PostgresFailure),
+}
+
+impl PostgresKernelError {
+    /// Classifies the error of one migration statement. A server refusal
+    /// keeps its SQLSTATE and object names; a lost connection stays
+    /// [`Self::Connection`].
+    pub(crate) fn from_statement_error(error: &tokio_postgres::Error) -> Self {
+        if error.as_db_error().is_some() {
+            Self::Statement(PostgresFailure::from_error(error))
+        } else {
+            Self::Connection
+        }
+    }
 }
 
 impl From<tokio_postgres::Error> for PostgresKernelError {
