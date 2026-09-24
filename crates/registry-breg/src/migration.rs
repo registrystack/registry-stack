@@ -43,6 +43,10 @@ pub enum MigrationError {
     EmptyPlan,
     #[error("the Registry package apply failed")]
     ApplyFailed,
+    /// The database, read under the exclusive apply lock, does not record the
+    /// presented package as its active package with maintenance ready.
+    #[error("the database does not record this package as its active, ready package")]
+    ActivePackageMismatch,
     /// Refused before maintenance began: retained history coverage does not
     /// admit a successor until an erasure lifecycle finishes or a rebaseline
     /// restores it.
@@ -99,10 +103,12 @@ pub(crate) fn target_package_identity(
 
 /// Confirms a verified package is the exact activation successor of one active
 /// identity, so no other package can be presented as that identity's target.
+///
+/// The package loader owns the sequence comparison: a package verified for
+/// activation already has a sequence above the active one.
 pub(crate) fn verify_successor_package_binding(
     package: &VerifiedPackage,
     current: &ExpectedRegistryIdentity,
-    target: &ExpectedRegistryIdentity,
 ) -> Result<()> {
     current
         .validate()
@@ -118,7 +124,6 @@ pub(crate) fn verify_successor_package_binding(
         || manifest.prior_revision.as_deref() != Some(current.package_revision.as_str())
         || manifest.migration_plan.from_revision.as_deref()
             != Some(current.package_revision.as_str())
-        || target.package_sequence <= current.package_sequence
     {
         return Err(MigrationError::PackageBinding);
     }
@@ -231,6 +236,61 @@ impl ApplyTimeouts {
         }
         Ok(Self { lock, statement })
     }
+}
+
+/// Confirms that one package verified for startup is exactly the package the
+/// database records as active, with maintenance ready, and writes nothing.
+///
+/// Threat: re-presenting an already-active package must not report success
+/// for a package the database does not run, and a package that merely shares
+/// the active sequence must not pass as the active one. Enforcement is the
+/// startup verification of the whole package (signatures, closure, and the
+/// rederived revision digest bound to the active revision) plus equality of
+/// the full registry identity (package id, environment, instance, database,
+/// revision digest, schema fingerprint, and sequence) read by the exact
+/// migration role under the exclusive apply lock. Any difference, or a
+/// registry in maintenance, refuses.
+pub async fn confirm_active_package(
+    config: &ConnectionConfig,
+    package: &VerifiedPackage,
+    migration_role: &SqlIdentifier,
+    timeouts: ApplyTimeouts,
+) -> Result<ExpectedRegistryIdentity> {
+    let manifest = package.manifest();
+    if !package.verified_for_startup(&manifest.package_revision, manifest.sequence) {
+        return Err(MigrationError::PackageBinding);
+    }
+    let target = target_package_identity(package)?;
+    let lock_key =
+        RegistryLockKey::derive(&target.package_id).map_err(|_| MigrationError::ApplyFailed)?;
+    let mut connection = VerifiedPackageApplyConnection::acquire_for_verified_package(
+        config,
+        lock_key,
+        migration_role,
+        timeouts.lock,
+        timeouts.statement,
+    )
+    .await
+    .map_err(|_| MigrationError::ApplyFailed)?;
+    let snapshot = connection.maintenance_snapshot().await;
+    connection
+        .release()
+        .await
+        .map_err(|_| MigrationError::ApplyFailed)?;
+    let snapshot = match snapshot {
+        Ok(snapshot) => snapshot,
+        Err(crate::postgres::PostgresKernelError::RegistryUnavailable) => {
+            return Err(MigrationError::ActivePackageMismatch);
+        }
+        Err(_) => return Err(MigrationError::ApplyFailed),
+    };
+    if snapshot.maintenance_status != "ready"
+        || snapshot.maintenance_target_revision.is_some()
+        || snapshot.identity != target
+    {
+        return Err(MigrationError::ActivePackageMismatch);
+    }
+    Ok(target)
 }
 
 /// Closed library request for applying one already verified package. There is
@@ -391,7 +451,7 @@ pub async fn apply_verified_package(
             None
         }
         ApplyPrecondition::Successor { current } => {
-            verify_successor_package_binding(request.package, current, &target)?;
+            verify_successor_package_binding(request.package, current)?;
             Some(current)
         }
     };

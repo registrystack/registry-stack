@@ -10,9 +10,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use registry_breg::compiler::{module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::package::{
-    prepare_package, PackageBuildRequest, PackageError, PackageFileRole, PackageMigrationPlanInput,
-    PackageModuleSource, PackageSignature, PackageSourceFile, PackageTrustAnchor, SignaturePolicy,
-    TrustAnchorKey, TRUST_ANCHOR_API_VERSION,
+    prepare_package, PackageBindingField, PackageBuildRequest, PackageError, PackageFileRole,
+    PackageMigrationPlanInput, PackageModuleSource, PackageSignature, PackageSourceFile,
+    PackageTrustAnchor, SignaturePolicy, TrustAnchorKey, TRUST_ANCHOR_API_VERSION,
 };
 use registry_breg::startup::{prepare, StartupError};
 use registry_platform_canonical_json::canonicalize_json;
@@ -85,7 +85,9 @@ async fn a_refused_package_keeps_the_cause_that_refused_it() {
     );
     assert_eq!(
         mismatched,
-        StartupError::PackageRefused(PackageError::Binding)
+        StartupError::PackageRefused(PackageError::BindingMismatch(
+            PackageBindingField::ActiveRevision
+        ))
     );
     assert_ne!(tampered, mismatched);
 }

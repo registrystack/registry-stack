@@ -18,6 +18,26 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- `bregctl apply` treats the already-active package as a no-op, so a repeated
+  deploy exits 0 with `activation: already_active` and changes nothing. The
+  package is verified in full as the configured active package, and the
+  database must record exactly that package (revision digest, schema
+  fingerprint, sequence, and deployment identity) as active with no
+  maintenance pending; otherwise `apply` refuses with
+  `apply.package.active_mismatch`. A different package at the active sequence
+  still refuses. Package binding refusals now report
+  `apply.package.binding_mismatch` with the differing runtime key as the
+  diagnostic path, such as `identity.databaseId` or `package.activeSequence`,
+  instead of the generic `apply.package.refused`, and never either value. See
+  [review and apply changes](../operate/breg-changes/#activate-the-successor).
+
+{/* Evidence: crates/registry-breg/src/package.rs, PackageBindingField and validate_bindings();
+    crates/registry-breg/src/migration.rs, confirm_active_package();
+    crates/registry-bregctl/src/apply_lifecycle.rs, confirm_already_active();
+    crates/registry-breg/tests/postgres_package.rs, activation_names_the_active_package_itself_and_nothing_else;
+    crates/registry-breg/tests/postgres_migration.rs, real_postgres_confirms_only_the_exact_active_ready_package;
+    crates/registry-bregctl/tests/cli.rs, apply_verifies_package_intent_before_database_authority_and_stays_value_free. */}
+
 - `bregctl apply` reports a successor refused because retained history coverage
   does not admit it as `apply.history.coverage_incomplete`, with the suggested
   action `prepare_history_rebaseline_request`, instead of

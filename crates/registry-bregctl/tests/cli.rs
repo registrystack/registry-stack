@@ -5190,6 +5190,11 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
     );
     assert!(!String::from_utf8_lossy(&malformed_backup.stdout).contains(PACKAGE_VALUE_CANARY));
 
+    // Another package at the active sequence is not the active package: it
+    // refuses by naming the differing binding field, never its values, and
+    // before any database authority is opened.
+    let other = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    assert_ne!(other.package_revision, fixture.package_revision);
     let output = bregctl(&[
         "--format",
         "json",
@@ -5197,12 +5202,16 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
         "--runtime-config",
         path(&fixture.runtime_config),
         "--package",
-        path(&fixture.package),
+        path(&other.package),
     ]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(output.stderr.is_empty());
     let report = json_stdout(&output);
-    assert_eq!(report["diagnostics"][0]["code"], "apply.package.refused");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "apply.package.binding_mismatch"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "package.activeSequence");
     assert_tool_diagnostic(
         &report["diagnostics"][0],
         "verified_package",
@@ -5212,12 +5221,35 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
     for forbidden in [
         path(&fixture.runtime_config),
         path(&fixture.package),
+        path(&other.package),
         path(&fixture.anchor),
+        fixture.package_revision.as_str(),
+        other.package_revision.as_str(),
         PACKAGE_VALUE_CANARY,
         "VERIFY_DATABASE_SECRET_IS_NOT_OPENED",
     ] {
         assert!(!rendered.contains(forbidden));
     }
+
+    // The active package itself is verified in full and then needs the
+    // database to confirm it is active and ready, so it reaches database
+    // authority instead of refusing as a binding.
+    let already_active = bregctl(&[
+        "--format",
+        "json",
+        "apply",
+        "--runtime-config",
+        path(&fixture.runtime_config),
+        "--package",
+        path(&fixture.package),
+    ]);
+    assert_eq!(already_active.status.code(), Some(1), "{already_active:?}");
+    assert_eq!(
+        json_stdout(&already_active)["diagnostics"][0]["code"],
+        "apply.database_configuration.refused"
+    );
+    assert!(!String::from_utf8_lossy(&already_active.stdout)
+        .contains("VERIFY_DATABASE_SECRET_IS_NOT_OPENED"));
 
     let database_refusal = bregctl(&[
         "--format",
