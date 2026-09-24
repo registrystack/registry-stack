@@ -134,11 +134,15 @@ and an exact source-owned release receipt without a BReg dependency.
 bounds protected accountability state and must be at least as long. Result-feed
 and history cursors are bound to their caller and query context. After result
 expiry, Casework erases request, context, result, history, notes, drafts, tasks,
-and replay response payloads while retaining only the bounded tombstone needed
+clock occurrences, and replay response payloads while retaining only the bounded tombstone needed
 to prevent unsafe idempotency-key reissue until accountability expiry. The
 producer and initiator identities are kept as request-bound sha256 tombstones for the
 same period, so either one still receives `410` rather than `404` for an
 expired request.
+A subject clock that a changes-requested round paused, or a superseded round
+left running, is the one clock occurrence kept past result expiry: a later round
+of the same review kind continues it, and otherwise it is deleted at the
+accountability deadline.
 
 ## Absence cover and explicit assignment
 
