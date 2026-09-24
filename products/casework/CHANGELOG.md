@@ -56,7 +56,11 @@
   continues that clock only inside the result window; a resubmission after
   it starts a fresh subject clock with a full deadline. A request whose result
   an earlier pass already erased is picked up again while a clock occurrence
-  remains, so existing rows are removed too.
+  remains, so existing rows are removed too. The same expiry check now also
+  runs atomically when the next round is created, so a paused or running
+  subject clock still bound to an already-expired round is erased and
+  restarted there too, rather than depending on the asynchronous retention
+  pass to catch up first.
 - The BReg source adapter projects a request whose approval expired before it
   was applied (BReg application state `expired`) as a waiting application
   occurrence instead of refusing the source read. The professional-review
