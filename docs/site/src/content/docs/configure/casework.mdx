@@ -337,6 +337,7 @@ clocks:
 ```
 
 `after.elapsed` is a bounded ISO 8601 duration in hours, minutes, or seconds, so `PT48H` is 48 hours of wall-clock time.
+A paused subject clock waits for the next round only inside the paused round's `terminalDays`; a resubmission after that result window starts a fresh subject clock with a full deadline, because [retention](../../operate/casework-retention/) erases the paused clock with its round.
 
 An activity clock measures one stage of the work, counts in working days against a calendar, and can warn before it comes due and act when it does.
 
