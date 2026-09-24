@@ -175,6 +175,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         Command::Check {
             require_runtime_dependencies,
             require_audit_under: audit_root,
+            without_audit_lock,
         } => {
             // The inputs are captured once. Every proof below, and the runtime
             // the dependency check initializes, reads this capture rather than
@@ -220,10 +221,19 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                     require_audit_under(Path::new(audit_path), root)
                         .map_err(CommandError::AuditRoot)?;
                 }
-                let serving = EvidenceRuntime::initialize_from(deployment)
-                    .await
-                    .map_err(runtime_initialization_error)?;
-                if !serving.key_source_ready().await || !serving.ready().await {
+                let available = if without_audit_lock {
+                    // The candidate shares the running writer's audit path, so
+                    // the lock is that writer's. Everything else is proved.
+                    EvidenceRuntime::check_dependencies_without_audit_lock(deployment)
+                        .await
+                        .map_err(runtime_initialization_error)?
+                } else {
+                    let serving = EvidenceRuntime::initialize_from(deployment)
+                        .await
+                        .map_err(runtime_initialization_error)?;
+                    serving.key_source_ready().await && serving.ready().await
+                };
+                if !available {
                     return Err(CliError("a required runtime dependency is unavailable").into());
                 }
             }

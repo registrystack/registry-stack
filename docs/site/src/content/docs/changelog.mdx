@@ -106,6 +106,24 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-platform-crypto/src/lib.rs, TransitInitializationError and transit_signer_initialization_names_the_fault_it_met;
     crates/registry-evidence/src/runtime_tests.rs, signing_initialization_faults_name_distinct_causes. */}
 
+- `evidencectl doctor --runtime-config <file> --without-audit-lock`, and the
+  runtime's `evidence check --require-runtime-dependencies
+  --without-audit-lock`, check a candidate staged beside the Evidence instance
+  it will replace. Without the option the check opens the audit destination as
+  startup does, so it refuses while that instance holds the destination's
+  single-writer lock, and the refusal now names the option. With it, the audit
+  hash key is checked as startup checks it, and the audit directory and files
+  are checked for ownership, mode, write access, and a complete final entry,
+  without taking the lock. A second writer is not detected; the JSON
+  `proofBoundary` says so. See
+  [evidencectl](../reference/evidencectl/#project-workflow).
+
+{/* Evidence: crates/registry-platform-audit/src/writer.rs, FileDestination::check_writable();
+    crates/registry-evidence/src/runtime.rs, assemble() and check_dependencies_without_audit_lock();
+    crates/registry-evidence/src/audit.rs, EvidenceAuditLog::preflight();
+    crates/registry-evidencectl/src/runtime.rs, the_lock_free_form_states_its_own_proof_boundary;
+    crates/registry-evidence/tests/cli.rs, dependency_check_without_the_audit_lock_passes_beside_a_running_writer. */}
+
 ## v0.34.0 beta-46
 
 - `bregctl apply` reports a migration database it could not reach, or an

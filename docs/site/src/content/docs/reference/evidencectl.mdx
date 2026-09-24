@@ -39,6 +39,14 @@ The canonical adopter commands do not change the numeric Evidence Gateway Versio
 | `evidencectl doctor --runtime-config <absolute-file>` | Runtime file on its target host | Runs the runtime-owned startup dependency preflight without opening the public listener | Send an Evidence request or establish that a fixture passed |
 | `evidencectl artifact inspect <candidate>` | Completed candidate | Inspects artifact custody without contacting dependencies | Establish live dependency readiness |
 
+`doctor --runtime-config` opens the configured audit destination as startup does, so it refuses
+while another Evidence instance holds that destination's single-writer lock. To check a candidate
+staged beside the instance it will replace, add `--without-audit-lock`: the audit hash key is
+checked as startup checks it, and the audit directory and files are checked for ownership, mode,
+write access, and a complete final entry. The lock stays with the running writer, so a second
+writer is not detected. The JSON `proofBoundary` states this. Every other dependency is checked in
+the same way. The refusal for a held lock names this option.
+
 `package` is create-only. It rejects an existing output directory, unauthenticated or non-HTTPS
 production HTTP sources, source transports with no stated production conditions, missing governance
 metadata or fixtures, unresolved review markers, unknown fields, symlink traversal, and references

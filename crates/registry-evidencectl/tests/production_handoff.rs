@@ -152,6 +152,39 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     let mut service = fixture.start_evidence(evidence);
     fixture.wait_for_evidence(&mut service);
 
+    // A candidate staged beside the serving instance shares its audit path.
+    // The plain form meets that instance's writer lock and says how to check
+    // beside it; the lock-free form proves the candidate without taking it.
+    let beside = evidencectl()
+        .arg("doctor")
+        .arg("--runtime-config")
+        .arg(fixture.candidate.join("runtime.yaml"))
+        .env("EVIDENCE_BIN", evidence)
+        .env("SSL_CERT_FILE", &fixture.ca)
+        .output()
+        .expect("runtime doctor beside the serving instance starts");
+    assert_eq!(
+        beside.status.code(),
+        Some(3),
+        "the serving instance's writer lock must refuse the locking form"
+    );
+    assert!(
+        String::from_utf8_lossy(&beside.stderr).contains("--without-audit-lock"),
+        "a held writer lock must name the lock-free form"
+    );
+    assert_success(
+        evidencectl()
+            .arg("doctor")
+            .arg("--runtime-config")
+            .arg(fixture.candidate.join("runtime.yaml"))
+            .arg("--without-audit-lock")
+            .env("EVIDENCE_BIN", evidence)
+            .env("SSL_CERT_FILE", &fixture.ca)
+            .output()
+            .expect("lock-free runtime doctor starts"),
+        "lock-free runtime doctor beside the serving instance",
+    );
+
     let token = fixture.access_token();
     let published_revision = published_configuration_revision(fixture.evidence_port, &token);
     assert_ne!(

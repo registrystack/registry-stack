@@ -49,6 +49,15 @@ pub enum Command {
             requires = "require_runtime_dependencies"
         )]
         require_audit_under: Option<PathBuf>,
+        /// Prove the audit destination without taking its single-writer lock,
+        /// for a candidate staged beside the running instance that holds it.
+        ///
+        /// Modes, write access, and a complete final entry in the active file
+        /// are still proved, and every other dependency is proved as without
+        /// this flag. A second writer is not detected, so `serve` still
+        /// refuses to start while one holds the lock.
+        #[arg(long, requires = "require_runtime_dependencies")]
+        without_audit_lock: bool,
     },
     /// Evaluate one bundle-owned fixture without source or credential access.
     Evaluate {
@@ -207,11 +216,13 @@ mod tests {
         let Command::Check {
             require_runtime_dependencies,
             require_audit_under,
+            without_audit_lock,
         } = parsed.command
         else {
             panic!("check parsed as another command");
         };
         assert!(require_runtime_dependencies);
+        assert!(!without_audit_lock);
         assert_eq!(
             Some(PathBuf::from("/var/lib/registry-evidence")),
             require_audit_under
