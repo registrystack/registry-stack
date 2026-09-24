@@ -1869,6 +1869,22 @@ pub(crate) fn expand_project_access(
                 "a task-grant profile must be authenticated, actorKind agent, and declare requesterClients and requiredPurposes",
             ));
         }
+        // An immediate action commits its effects at once, with no draft for
+        // a human to confirm, so a standing agent holds none. Action grants
+        // are authored only here: a module contributes entity profiles, which
+        // cannot grant `invoke` at all.
+        if profile.actor_kind == Some(crate::contract::ActorKindSource::Agent)
+            && profile.task_grant.is_none()
+            && profile.permissions.iter().any(|permission| {
+                permission.action.is_some() || permission.operations.contains(&Operation::Invoke)
+            })
+        {
+            errors.push(Diagnostic::error(
+                "access_profile.standing_agent.action_forbidden",
+                "project.accessProfiles[].permissions[]",
+                "a standing agent profile without a taskGrant cannot invoke an immediate action; a human confirms every change it proposes",
+            ));
+        }
         if let Some(task_grant) = &profile.task_grant {
             if !task_grant.source_issuer.starts_with("https://")
                 || task_grant.source_issuer.chars().any(char::is_whitespace)

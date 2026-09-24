@@ -2,8 +2,8 @@
 
 //! A standing agent profile (`actorKind: agent` without a `taskGrant`) may
 //! read and author change-request drafts. It carries no human approval, so it
-//! can neither move a request through its lifecycle nor write target records
-//! directly: a human submits.
+//! can neither move a request through its lifecycle, write target records
+//! directly, nor invoke an immediate action: a human submits.
 
 use std::collections::BTreeSet;
 
@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 
 const OPERATION_FORBIDDEN: &str = "access_profile.standing_agent.operation_forbidden";
 const DIRECT_MUTATION_FORBIDDEN: &str = "access_profile.standing_agent.direct_mutation_forbidden";
+const ACTION_FORBIDDEN: &str = "access_profile.standing_agent.action_forbidden";
 
 fn project() -> Value {
     json!({
@@ -46,6 +47,18 @@ fn project() -> Value {
                 }
             }
         ],
+        "actions": [
+            {
+                "id": "relabel-note",
+                "inputs": [
+                    {"id": "note-ref", "apiName": "noteId", "type": "reference", "target": "note", "required": true, "classification": "internal"},
+                    {"id": "new-label", "apiName": "newLabel", "type": "string", "maxLength": 32, "required": true, "classification": "internal"}
+                ],
+                "effects": [
+                    {"id": "relabelled", "target": {"fromField": "note-ref"}, "operation": "patch", "set": {"label": {"fromField": "new-label"}}}
+                ]
+            }
+        ],
         "accessProfiles": [
             {
                 "id": "clerk", "default": true, "principalClaim": "registry_principal",
@@ -66,6 +79,10 @@ fn project() -> Value {
                         "entity": "note",
                         "operations": ["create", "get", "list", "patch", "tombstone", "batch"],
                         "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": []
+                    },
+                    {
+                        "action": "relabel-note", "operations": ["invoke"],
+                        "targets": [{"entity": "note", "rowBoundaries": []}], "results": ["relabelled"]
                     }
                 ]
             },
@@ -200,6 +217,59 @@ fn standing_agent_cannot_batch_change_request_drafts() {
     );
 }
 
+/// An immediate action commits its effects at once, with no draft for a human
+/// to confirm, so a standing agent may not hold one.
+fn with_assistant_action(value: &mut Value) {
+    value["accessProfiles"][1]["permissions"]
+        .as_array_mut()
+        .expect("permissions array")
+        .push(json!({
+            "action": "relabel-note", "operations": ["invoke"],
+            "targets": [{"entity": "note", "rowBoundaries": []}], "results": ["relabelled"]
+        }));
+}
+
+#[test]
+fn standing_agent_cannot_hold_an_immediate_action() {
+    let mut value = project();
+    with_assistant_action(&mut value);
+    let failure = refused(
+        compile(&value),
+        "a standing agent cannot invoke an immediate action",
+    );
+    let codes = codes(&failure);
+    assert!(
+        codes.contains(&ACTION_FORBIDDEN),
+        "invoke was not refused: {codes:?}"
+    );
+    assert!(
+        !codes.contains(&OPERATION_FORBIDDEN) && !codes.contains(&DIRECT_MUTATION_FORBIDDEN),
+        "invoke is neither a lifecycle operation nor a record write: {codes:?}"
+    );
+}
+
+#[test]
+fn human_profiles_keep_immediate_actions() {
+    // The human profile in the base project invokes the action; a human
+    // profile bound to the agent's client keeps it too.
+    let mut value = project();
+    value["accessProfiles"][1]["actorKind"] = json!("human");
+    with_assistant_action(&mut value);
+    let registry = compile(&value).expect("human profiles keep immediate actions");
+    let action = registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "relabel-note")
+        .expect("the action compiles");
+    let profiles: BTreeSet<&str> = action
+        .permissions
+        .iter()
+        .map(|grant| grant.profile_id.as_str())
+        .collect();
+    assert_eq!(profiles, BTreeSet::from(["assistant", "clerk"]));
+}
+
 #[test]
 fn module_contributed_standing_agent_profiles_meet_the_same_ceiling() {
     let mut value = project();
@@ -283,4 +353,17 @@ fn task_grant_and_human_profiles_keep_their_ceilings() {
     let direct_codes = codes(&failure);
     assert!(direct_codes.contains(&"access_profile.task_grant.direct_mutation_forbidden"));
     assert!(!direct_codes.contains(&DIRECT_MUTATION_FORBIDDEN));
+
+    let mut delegated_action = project();
+    delegated_action["accessProfiles"][1]["requiredPurposes"] = json!(["correction-review"]);
+    delegated_action["accessProfiles"][1]["taskGrant"] =
+        json!({"sourceIssuer": "https://casework.example"});
+    with_assistant_action(&mut delegated_action);
+    let failure = refused(
+        compile(&delegated_action),
+        "a task grant still cannot invoke an immediate action",
+    );
+    let action_codes = codes(&failure);
+    assert!(action_codes.contains(&"access_profile.task_grant.direct_mutation_forbidden"));
+    assert!(!action_codes.contains(&ACTION_FORBIDDEN));
 }

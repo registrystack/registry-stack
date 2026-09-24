@@ -128,6 +128,12 @@ const PROJECT: &str = r#"{
           "writableFields":["tenant","site"],
           "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
           "requestPresence":[{"requestType":"correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
+        },
+        {
+          "action":"name-site",
+          "operations":["invoke"],
+          "targets":[{"entity":"asset-site","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}],
+          "results":["site"]
         }
       ]
     },
@@ -160,12 +166,6 @@ const PROJECT: &str = r#"{
           "readableFields":["tenant","placement","proposed-site","reason"],
           "writableFields":["tenant","placement","proposed-site","reason"],
           "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-        },
-        {
-          "action":"name-site",
-          "operations":["invoke"],
-          "targets":[{"entity":"asset-site","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}],
-          "results":["site"]
         }
       ],
       "actorKind":"agent",
@@ -858,17 +858,20 @@ async fn standing_agent_audit_records_the_delegated_actor_by_pseudonym() {
     )
     .await;
     get(&app, &id(&draft), "standing-agent", &agent).await;
+    // No profile admits a delegated token to an immediate action: a standing
+    // agent cannot hold one, and the steward's permission declares no
+    // actorKind.
     let invoked = send(
         &app,
         Method::POST,
-        "/v1/actions/name-site?accessProfile=standing-agent",
+        "/v1/actions/name-site?accessProfile=steward",
         &agent,
         Some("standing-action"),
         None,
         json!({"input":{"tenant":"tenant-a","name":"agent-named"}}),
     )
     .await;
-    assert_eq!(invoked.status, StatusCode::OK, "{}", invoked.body);
+    assert_eq!(invoked.status, StatusCode::NOT_FOUND, "{}", invoked.body);
     // A direct token carries neither a grant nor an actor, so its read and
     // write terminal records hold no authorization object.
     let direct_read = send(
@@ -919,13 +922,11 @@ async fn standing_agent_audit_records_the_delegated_actor_by_pseudonym() {
                 && record["selectedAccessProfile"] == "standing-agent"
         }
     };
-    let refusal_record =
-        |record: &Value| record["phase"] == "refusal" && record["method"] == "POST";
-    let action_record = |record: &Value| {
-        record["phase"] == "terminal"
-            && record["actionId"] == "name-site"
-            && record["outcome"] == "committed"
+    let refusal_record = |record: &Value| {
+        record["phase"] == "refusal" && record["method"] == "POST" && record["actionId"].is_null()
     };
+    let action_refusal_record =
+        |record: &Value| record["phase"] == "refusal" && record["actionId"] == "name-site";
     let steward_record = |method: &'static str| {
         move |record: &Value| {
             record["phase"] == "terminal"
@@ -952,13 +953,16 @@ async fn standing_agent_audit_records_the_delegated_actor_by_pseudonym() {
             "allowed",
         ),
         (
-            "immediate action",
-            find("standing agent immediate action", &action_record),
-            "allowed",
-        ),
-        (
             "refusal",
             find("standing agent refusal", &refusal_record),
+            "denied",
+        ),
+        (
+            "immediate action refusal",
+            find(
+                "standing agent immediate action refusal",
+                &action_refusal_record,
+            ),
             "denied",
         ),
     ] {

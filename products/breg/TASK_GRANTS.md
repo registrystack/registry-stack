@@ -60,10 +60,13 @@ with `access_profile.standing_agent.operation_forbidden`, and when it holds
 `create` or `patch` on an entity without a `changeRequest`, or `tombstone` or
 `batch` on any entity, with
 `access_profile.standing_agent.direct_mutation_forbidden`. Profiles
-contributed by modules meet the same ceiling. Give the lifecycle operations to
-a separate profile the citizen uses directly. This check does not cover action
-permissions: an `invoke` grant on an immediate action is still accepted on a
-standing agent profile.
+contributed by modules meet the same ceiling. An immediate action commits its
+effects at once, with no draft for the human to confirm, so the compiler also
+refuses a standing agent profile that holds any action permission, with
+`access_profile.standing_agent.action_forbidden`. Action permissions are
+authored only on project access profiles; a module contributes entity
+profiles, which cannot grant `invoke` at all. Give the lifecycle operations
+and immediate actions to a separate profile the citizen uses directly.
 
 ## Configure current status
 
@@ -138,10 +141,11 @@ identifier never reaches the journal. A task-grant token without `act` records
 exactly what it did before.
 
 Both kinds of token also carry the object on a read's terminal record: record
-reads, lists and lookups, revision reads, and history and snapshot reads. An
-immediate action's terminal record carries it whether the action committed,
-replayed a stored receipt, or returned its target conditions. Action admission
-refuses every task-grant token, so on an immediate action only a delegated
-actor appears. A direct token records no `authorization` object anywhere.
+reads, lists and lookups, revision reads, and history and snapshot reads. No
+agent token is admitted to an immediate action: action admission refuses every
+task-grant token, a standing agent profile cannot hold an action permission,
+and a permission on a profile without `actorKind: agent` refuses a token
+carrying a trusted actor. The refusal record carries the object. A direct
+token records no `authorization` object anywhere.
 Neither kind of token adds the object to a pre-I/O attempt record or to the
 refusal record a read or revision read writes.

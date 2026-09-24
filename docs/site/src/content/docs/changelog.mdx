@@ -172,6 +172,18 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/tests/standing_agent_ceiling.rs;
     products/breg/TASK_GRANTS.md. */}
 
+- BREAKING: BReg refuses to compile a standing agent profile that holds an
+  immediate-action permission, with
+  `access_profile.standing_agent.action_forbidden`. An immediate action
+  commits its effects at once, with no draft for the person to confirm, so
+  a token carrying a trusted `act` no longer reaches any immediate action.
+  Move the action permission to a profile the person uses directly.
+
+{/* Evidence: crates/registry-breg/src/compiler.rs, expand_project_access;
+    crates/registry-breg/tests/standing_agent_ceiling.rs;
+    crates/registry-breg/src/api/tests/immediate_action_tests.rs;
+    products/breg/TASK_GRANTS.md. */}
+
 - BREAKING: BReg accepts an `act` claim of exactly `{sub, iss}` when `iss`
   equals the verified token issuer, as a token exchange writes it, beside
   exactly `{sub}`. A token whose `act.sub` is the trusted actor for its
