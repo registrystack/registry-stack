@@ -220,6 +220,21 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/tests/action_vocabulary_codes.rs, a_raised_text_limit_on_a_targeted_entity_keeps_the_action_contracts;
     crates/registry-breg/tests/postgres_compiled_schema.rs, text_length_widening_replaces_the_length_check_and_keeps_existing_rows. */}
 
+- Lowering a `string` field's `minLength` under the same `maxLength` is also
+  `field_length_widened`, applied live: the successor replaces the column's
+  minimum check, or drops it when the minimum falls to 0, with no reviewed
+  migration. Revisions recorded under the higher minimum stay readable, and an
+  action over the entity stays additive. Raising a `minLength`, changing a
+  `string` field's `maxLength`, and widening a `decimal` still need a reviewed
+  migration. See
+  [review and apply changes](../operate/breg-changes/#test-and-package-the-successor).
+
+{/* Evidence: crates/registry-breg/src/contract.rs, FieldTypeSource::lowers_string_min_length_of();
+    crates/registry-breg/src/generated_ddl.rs, replace_length_check_statement();
+    crates/registry-breg/tests/package_change_plan.rs, string_minimum_lowering_is_additive_and_replaces_or_drops_the_length_check;
+    crates/registry-breg/tests/action_vocabulary_codes.rs, a_lowered_string_minimum_on_a_targeted_entity_keeps_the_action_contracts;
+    crates/registry-breg/tests/postgres_compiled_schema.rs, string_minimum_lowering_replaces_or_drops_the_length_check_and_keeps_existing_rows. */}
+
 - `bregctl diff` reports every removed field or entity as
   `diff.history.removed_values_retained`. Removing one from the package drops
   the live column or table, but the values stay in every revision snapshot

@@ -902,6 +902,75 @@ fn text_length_widening_is_additive_and_replaces_the_length_check() {
 }
 
 #[test]
+fn string_minimum_lowering_is_additive_and_replaces_or_drops_the_length_check() {
+    for pattern in [None, Some("^[a-z ]*$")] {
+        for (lowered, expected, drops) in [(2, ">= 2", false), (0, "DROP CONSTRAINT %I'", true)] {
+            let previous = string_length_registry(5, 80, pattern);
+            let candidate = string_length_registry(lowered, 80, pattern);
+            let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+
+            assert_eq!(change_set.changes.len(), 1, "{:#?}", change_set.changes);
+            assert_change(
+                &change_set,
+                CompiledRegistryChangeClass::CompatibleAdditive,
+                CompiledRegistryChangeCode::FieldLengthWidened,
+            );
+            let plan = change_set_to_applicable_migration_plan(&change_set)
+                .expect("a lowered string minimum is applicable");
+            let ids = plan
+                .statements
+                .iter()
+                .map(|statement| statement.id.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(ids, vec!["entity.entry.field.note.length"]);
+            let sql = &plan.statements[0].sql;
+            assert!(
+                sql.contains(expected),
+                "the statement lowers the minimum to {lowered}: {sql}"
+            );
+            assert_eq!(
+                sql.contains("ADD CONSTRAINT"),
+                !drops,
+                "a zero minimum drops the check a fresh install never creates: {sql}"
+            );
+            assert!(
+                sql.starts_with("DO $breg_length$\n") && sql.ends_with("$breg_length$"),
+                "the statement's quoting tag names the check it replaces: {sql}"
+            );
+            assert_eq!(
+                sql.contains("breg_pattern_"),
+                pattern.is_some(),
+                "a field pattern's check is excluded from the replaced check: {sql}"
+            );
+        }
+    }
+
+    for (previous, candidate, reason) in [
+        (
+            string_length_registry(2, 80, None),
+            string_length_registry(5, 80, None),
+            "a raised string minimum can strand stored values",
+        ),
+        (
+            string_length_registry(5, 80, None),
+            string_length_registry(2, 200, None),
+            "a string maxLength is its varchar column type",
+        ),
+    ] {
+        let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+        assert!(
+            change_set.changes.iter().any(|change| {
+                change.class == CompiledRegistryChangeClass::DestructiveOrIrreversible
+                    && change.code == CompiledRegistryChangeCode::FieldTypeChanged
+            }),
+            "{reason}: {:#?}",
+            change_set.changes
+        );
+        assert_eq!(change_set.migration_plan, None, "{reason}");
+    }
+}
+
+#[test]
 fn plaintext_to_encrypted_type_change_is_unsupported() {
     let previous = compile_variant(Variant::PlaintextSecret, 1);
     let candidate = compile_variant(Variant::EncryptedStructuredSecret, 2);
@@ -1515,6 +1584,30 @@ fn length_registry(field_type: &str, max_length: u32, pattern: Option<&str>) -> 
     if let Some(pattern) = pattern {
         field["pattern"] = serde_json::json!(pattern);
     }
+    field_registry(field)
+}
+
+/// A `string` field with the given `minLength` and `maxLength`.
+fn string_length_registry(
+    min_length: u32,
+    max_length: u32,
+    pattern: Option<&str>,
+) -> CompiledRegistry {
+    let mut field = serde_json::json!({
+        "id": "note",
+        "type": "string",
+        "minLength": min_length,
+        "maxLength": max_length,
+        "required": true,
+        "classification": "internal"
+    });
+    if let Some(pattern) = pattern {
+        field["pattern"] = serde_json::json!(pattern);
+    }
+    field_registry(field)
+}
+
+fn field_registry(field: serde_json::Value) -> CompiledRegistry {
     let project = serde_json::json!({
         "apiVersion": "registry.registrystack.org/v1alpha1",
         "kind": "RegistryProject",
