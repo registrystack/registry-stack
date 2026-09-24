@@ -57,6 +57,7 @@ pub fn decisions_claim(entity: &str) -> String {
 
 /// The feed decision set of every consent-record entity, keyed by entity id;
 /// each fills its reserved decisions claim.
+#[cfg(feature = "runtime")]
 pub(crate) fn feed_decisions(
     entities: &BTreeMap<String, CompiledEntity>,
 ) -> BTreeMap<String, BTreeSet<String>> {
