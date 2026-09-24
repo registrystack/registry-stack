@@ -22,9 +22,19 @@ name = "postgres_package"
 path = "tests/postgres_package.rs"
 required-features = ["postgres-test"]
 
+[[test]]
+name = "smtp_mailpit"
+path = "tests/smtp_mailpit.rs"
+required-features = ["smtp-test"]
+
 [features]
 default = []
 postgres-test = []
+# Enables the Mailpit SMTP suite. It requires
+# `MESSAGING_SMTP_TEST_MAILPIT_SMTP` (the relay's `ip:port`) and
+# `MESSAGING_SMTP_TEST_MAILPIT_API` (its HTTP API base URL), and fails when
+# either is absent.
+smtp-test = []
 schema = ["dep:schemars"]
 
 [lints]
@@ -69,6 +79,7 @@ base64.workspace = true
 chrono.workspace = true
 rcgen.workspace = true
 registry-messaging-client.workspace = true
+reqwest.workspace = true
 tempfile.workspace = true
 tokio-rustls.workspace = true
 tower.workspace = true

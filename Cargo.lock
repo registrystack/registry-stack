@@ -5716,6 +5716,7 @@ dependencies = [
  "registry-platform-httpsec",
  "registry-platform-httputil",
  "registry-platform-oidc",
+ "reqwest",
  "rustls",
  "schemars",
  "serde",
