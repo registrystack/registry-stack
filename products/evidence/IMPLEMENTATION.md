@@ -1004,7 +1004,11 @@ At minimum, pin these acceptance and negative cases:
     key, activating it, and retiring the previous one, and an emergency
     revocation through `signing.revokedKeyIds` move the bundle revision but not
     any requirement revision, because key trust travels in the JWKS and the
-    policy denylist rather than in the revision a relying party pins.
+    policy denylist rather than in the revision a relying party pins. An
+    emergency identity-provider key revocation through
+    `authentication.revokedKeyIds` likewise moves the bundle revision but not
+    any requirement revision, because it changes which callers are accepted,
+    not what an assertion means.
 29. Every declared Supported Value form rejects wrong scalar types, unknown
     codes, invalid entity references, excessive precision, oversized strings,
     oversized lists, duplicate values where prohibited, and wrong

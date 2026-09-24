@@ -150,7 +150,9 @@ emergency onboarding channel so they add it to their own denylist before they re
 
 For an exposed OIDC issuer key, add the thumbprint to Evidence Gateway
 `authentication.revokedKeyIds` before restarting Evidence Gateway. This is service-key revocation,
-not an Evidence credential-status or lifecycle feature.
+not an Evidence credential-status or lifecycle feature. It changes which caller tokens Evidence
+Gateway accepts, not any requirement's `configurationRevision`, so consumers keep their pinned
+policies.
 
 ## Next
 

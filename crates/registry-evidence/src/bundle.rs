@@ -46,6 +46,7 @@ const PROJECTION_PATH: &str = "evidence.yaml#requirement";
 const ACQUISITION_CAPABILITIES: &str = "acquisitionCapabilities";
 const PROVIDER_PUBLICATION: &str = "publication";
 const SIGNING: &str = "signing";
+const AUTHENTICATION: &str = "authentication";
 const ACTIVE_PUBLIC_JWK_FILE: &str = "activePublicJwkFile";
 const PUBLISHED_PUBLIC_JWK_FILES: &str = "publishedPublicJwkFiles";
 const REVOKED_KEY_IDS: &str = "revokedKeyIds";
@@ -2840,8 +2841,9 @@ fn requirement_selector_profiles(
 /// grants that offer it. Provider-publication metadata is deliberately removed:
 /// it changes catalog search, not the assertion semantics a relying party pins.
 /// So are the signing member's active, published, and revoked keys, see
-/// [`remove_signing_key_trust`]. Every other member is kept exactly as
-/// configured, so a configuration member
+/// [`remove_signing_key_trust`], and the authentication member's revoked
+/// caller token keys, see [`remove_caller_token_revocations`]. Every other
+/// member is kept exactly as configured, so a configuration member
 /// added later is covered without revisiting this projection.
 ///
 /// Starting from the parsed configuration rather than the file bytes is what
@@ -2860,6 +2862,7 @@ fn canonical_projection(
         .ok_or_else(|| invalid_artifact("the configuration does not project as a mapping"))?;
     members.remove(PROVIDER_PUBLICATION);
     remove_signing_key_trust(members)?;
+    remove_caller_token_revocations(members)?;
     let requirement_value = serde_json::to_value(requirement)
         .map_err(|_| invalid_artifact("the requirement does not project"))?;
     members.insert(
@@ -2923,6 +2926,27 @@ fn remove_signing_key_trust(members: &mut JsonMap<String, JsonValue>) -> Result<
     signing.remove(ACTIVE_PUBLIC_JWK_FILE);
     signing.remove(PUBLISHED_PUBLIC_JWK_FILES);
     signing.remove(REVOKED_KEY_IDS);
+    Ok(())
+}
+
+/// Remove the revoked caller token keys from the authentication member.
+///
+/// The denylist decides which identity-provider keys may sign an accepted
+/// access token, which is who may call, not what an assertion means, and a
+/// relying party never verifies those tokens. Covering it here would move every
+/// requirement revision at an emergency revocation and break every pinned
+/// policy with it. The other authentication members, including the issuer, its
+/// JWKS location, and the claims authorization reads, stay covered.
+fn remove_caller_token_revocations(
+    members: &mut JsonMap<String, JsonValue>,
+) -> Result<(), BundleError> {
+    let authentication = members
+        .get_mut(AUTHENTICATION)
+        .and_then(JsonValue::as_object_mut)
+        .ok_or_else(|| {
+            invalid_artifact("the authentication configuration does not project as a mapping")
+        })?;
+    authentication.remove(REVOKED_KEY_IDS);
     Ok(())
 }
 
@@ -3585,6 +3609,48 @@ mod tests {
         );
     }
 
+    /// Revoking an identity-provider key changes which caller tokens Evidence
+    /// accepts, not what any assertion means, and a relying party never
+    /// verifies those tokens. The revocation therefore leaves each requirement
+    /// revision alone while the bundle revision still records it.
+    #[cfg(unix)]
+    #[test]
+    fn revoking_a_caller_token_key_leaves_every_requirement_revision_alone() {
+        const UNREVOKED: &str = "maximumTokenLifetimeSeconds: 300\n  revokedKeyIds: []";
+        const REVOKED: &str = "maximumTokenLifetimeSeconds: 300\n  revokedKeyIds: [-RNgdUjduVCNV-y15KSAVZnF2gNjGb_02KQ2-MoMu4U]";
+
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("all-definitions", directory.path());
+        let observe = || {
+            set_tree_mode(directory.path(), 0o555, 0o444);
+            let bundle = Bundle::load(directory.path()).expect("the bundle loads");
+            let revisions = requirement_revisions(directory.path());
+            set_tree_mode(directory.path(), 0o755, 0o644);
+            (bundle.revision().to_owned(), revisions)
+        };
+        let (initial_bundle, initial) = observe();
+
+        let path = directory.path().join(CONFIG_FILE);
+        let text = fs::read_to_string(&path).expect("the configuration reads");
+        assert_eq!(
+            text.matches(UNREVOKED).count(),
+            1,
+            "the authentication denylist is configured once"
+        );
+        fs::write(&path, text.replace(UNREVOKED, REVOKED)).expect("the configuration writes");
+        let (revoked_bundle, revoked) = observe();
+
+        assert_eq!(initial.len(), 4);
+        assert_eq!(
+            revoked, initial,
+            "revoking a caller token key keeps every revision"
+        );
+        assert_ne!(
+            revoked_bundle, initial_bundle,
+            "the bundle revision still records the revocation"
+        );
+    }
+
     /// The projection keeps every assertion-semantic configuration member. A member it dropped
     /// would stop being covered by any revision, which is a silently narrower
     /// tripwire rather than a visible failure, so the member list is asserted
@@ -3643,6 +3709,30 @@ mod tests {
                 .collect::<BTreeSet<_>>()
         );
         assert!(!projected_signing.contains_key(REVOKED_KEY_IDS));
+        // The authentication member loses only its revoked caller token keys;
+        // the issuer, JWKS location, and claims authorization reads stay.
+        let configured_authentication = configured[AUTHENTICATION]
+            .as_object()
+            .expect("the authentication configuration is a mapping");
+        let projected_authentication = projected[AUTHENTICATION]
+            .as_object()
+            .expect("the projected authentication configuration is a mapping");
+        assert!(configured_authentication.contains_key(REVOKED_KEY_IDS));
+        assert!(!projected_authentication.contains_key(REVOKED_KEY_IDS));
+        assert_eq!(
+            projected_authentication.keys().collect::<BTreeSet<_>>(),
+            configured_authentication
+                .keys()
+                .filter(|key| key.as_str() != REVOKED_KEY_IDS)
+                .collect::<BTreeSet<_>>()
+        );
+        for (key, value) in projected_authentication {
+            assert_eq!(
+                Some(value),
+                configured_authentication.get(key),
+                "`{key}` is kept as configured"
+            );
+        }
     }
 
     /// A revision must depend on the configuration alone. Canonical JSON is

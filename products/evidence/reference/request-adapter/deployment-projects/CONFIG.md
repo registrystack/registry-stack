@@ -1435,7 +1435,11 @@ requirement's revision. The public verification keys and
 published, which one signs, and which are revoked is trust a relying party
 takes from the JWKS and its verification policy's denylist, so publishing,
 activating, retiring, or revoking a key changes the bundle revision but no
-requirement's revision. An edit
+requirement's revision. `authentication.revokedKeyIds` is in no requirement's
+closure either: it decides which caller tokens are accepted, not what an
+assertion means, so revoking an identity-provider key changes the bundle
+revision but no requirement's revision. Every other `authentication` member
+stays in every requirement's closure. An edit
 outside a requirement's closure leaves its revision unchanged, so it does not
 force every relying party to re-review.
 

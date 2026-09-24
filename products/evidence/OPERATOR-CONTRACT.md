@@ -130,7 +130,9 @@ the assertion answers, not to the whole deployment, so it is neither the runtime
 revision nor the bundle revision. The public signing keys and
 `signing.revokedKeyIds` are outside it: publishing, activating, retiring, or
 revoking a key changes the bundle revision and the JWKS but no
-`configurationRevision`.
+`configurationRevision`. So is `authentication.revokedKeyIds`: revoking an
+identity-provider key changes which caller tokens are accepted and the bundle
+revision, but no `configurationRevision`.
 
 Run the following grouped handoff after provisioning and whenever candidate
 bytes, runtime bindings, trust files, or secrets change:
