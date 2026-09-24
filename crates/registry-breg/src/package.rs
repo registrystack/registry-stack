@@ -798,6 +798,16 @@ impl VerifiedPackage {
         self.intent == VerifiedPackageIntent::InitialActivation
     }
 
+    pub(crate) fn verified_for_startup(&self, active_revision: &str, active_sequence: u64) -> bool {
+        matches!(
+            &self.intent,
+            VerifiedPackageIntent::Startup {
+                active_revision: verified_revision,
+                active_sequence: verified_sequence,
+            } if verified_revision == active_revision && *verified_sequence == active_sequence
+        )
+    }
+
     pub(crate) fn verified_for_activation(
         &self,
         active_revision: &str,
@@ -831,6 +841,15 @@ pub enum PackageError {
     Integrity,
     #[error("the package deployment binding is invalid")]
     Binding,
+    /// One deployment binding differs from the runtime configuration. Only
+    /// the configuration key is named; neither value is.
+    #[error("the package deployment binding differs from the runtime configuration at {0}")]
+    BindingMismatch(PackageBindingField),
+    /// The package is the active package itself, not a successor of it. The
+    /// claim is read before signature verification, so it only routes a caller
+    /// to verify the package as the active one; it never grants anything.
+    #[error("the package is the active package")]
+    AlreadyActive,
     /// The package's sequence is below the active package's. Packages apply
     /// forward only, so a rollback is a new successor, never an older package.
     #[error("the package is older than the active package")]
@@ -853,6 +872,40 @@ pub enum PackageError {
 }
 
 pub type Result<T> = std::result::Result<T, PackageError>;
+
+/// The runtime configuration key whose value a package binding must equal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PackageBindingField {
+    Environment,
+    DatabaseInitializationEnvironment,
+    InstanceId,
+    DatabaseId,
+    CompilerSourceRevision,
+    ActiveRevision,
+    ActiveSequence,
+}
+
+impl PackageBindingField {
+    /// The runtime configuration key path, for example `identity.databaseId`.
+    #[must_use]
+    pub const fn runtime_config_path(self) -> &'static str {
+        match self {
+            Self::Environment => "identity.environment",
+            Self::DatabaseInitializationEnvironment => "identity.databaseInitializationEnvironment",
+            Self::InstanceId => "identity.instanceId",
+            Self::DatabaseId => "identity.databaseId",
+            Self::CompilerSourceRevision => "package.compilerSourceRevision",
+            Self::ActiveRevision => "package.activeRevision",
+            Self::ActiveSequence => "package.activeSequence",
+        }
+    }
+}
+
+impl std::fmt::Display for PackageBindingField {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.runtime_config_path())
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackageSourceFile {
@@ -3940,16 +3993,54 @@ fn validate_root(root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Refuses the first deployment binding field whose package claim differs
+/// from the runtime configuration, naming the field and never either value.
+fn require_binding(matches: bool, field: PackageBindingField) -> Result<()> {
+    if matches {
+        Ok(())
+    } else {
+        Err(PackageError::BindingMismatch(field))
+    }
+}
+
+fn validate_deployment_bindings(
+    manifest: &PackageManifest,
+    environment: &str,
+    database_initialization_environment: &str,
+    instance_id: &str,
+    database_id: &str,
+) -> Result<()> {
+    require_binding(
+        manifest.environment == environment,
+        PackageBindingField::Environment,
+    )?;
+    require_binding(
+        manifest.environment == database_initialization_environment,
+        PackageBindingField::DatabaseInitializationEnvironment,
+    )?;
+    require_binding(
+        manifest.instance_id == instance_id,
+        PackageBindingField::InstanceId,
+    )?;
+    require_binding(
+        manifest.database_id == database_id,
+        PackageBindingField::DatabaseId,
+    )
+}
+
 fn validate_bindings(manifest: &PackageManifest, context: &PackageLoadContext<'_>) -> Result<()> {
     validate_intrinsic_bindings(manifest)?;
-    if manifest.environment != context.environment
-        || manifest.environment != context.database_initialization_environment
-        || manifest.instance_id != context.instance_id
-        || manifest.database_id != context.database_id
-        || manifest.compiler.source_revision != context.compiler_source_revision
-    {
-        return Err(PackageError::Binding);
-    }
+    validate_deployment_bindings(
+        manifest,
+        context.environment,
+        context.database_initialization_environment,
+        context.instance_id,
+        context.database_id,
+    )?;
+    require_binding(
+        manifest.compiler.source_revision == context.compiler_source_revision,
+        PackageBindingField::CompilerSourceRevision,
+    )?;
     match context.intent {
         PackageIntent::InitialActivation => {
             if manifest.sequence != 1
@@ -3966,21 +4057,37 @@ fn validate_bindings(manifest: &PackageManifest, context: &PackageLoadContext<'_
             if manifest.sequence < active_sequence {
                 return Err(PackageError::OlderThanActive);
             }
-            if manifest.sequence == active_sequence
-                || manifest.prior_revision.as_deref() != Some(active_revision)
-                || manifest.migration_plan.from_revision.as_deref() != Some(active_revision)
+            // The whole revision digest names the active package, never the
+            // sequence alone: another package at the active sequence still
+            // refuses below.
+            if manifest.package_revision == active_revision && manifest.sequence == active_sequence
             {
-                return Err(PackageError::Binding);
+                return Err(PackageError::AlreadyActive);
             }
+            require_binding(
+                manifest.sequence != active_sequence,
+                PackageBindingField::ActiveSequence,
+            )?;
+            // The intrinsic checks already hold the plan's source revision
+            // equal to the prior revision.
+            require_binding(
+                manifest.prior_revision.as_deref() == Some(active_revision)
+                    && manifest.migration_plan.from_revision.as_deref() == Some(active_revision),
+                PackageBindingField::ActiveRevision,
+            )?;
         }
         PackageIntent::Startup {
             active_revision,
             active_sequence,
         } => {
-            if manifest.package_revision != active_revision || manifest.sequence != active_sequence
-            {
-                return Err(PackageError::Binding);
-            }
+            require_binding(
+                manifest.package_revision == active_revision,
+                PackageBindingField::ActiveRevision,
+            )?;
+            require_binding(
+                manifest.sequence == active_sequence,
+                PackageBindingField::ActiveSequence,
+            )?;
             if manifest.sequence == 1 && manifest.prior_revision.is_some() {
                 return Err(PackageError::Binding);
             }
@@ -4016,33 +4123,55 @@ fn validate_inspection_bindings(
     manifest: &PackageManifest,
     context: &PackageInspectionContext<'_>,
 ) -> Result<()> {
-    if manifest.environment != context.environment
-        || manifest.environment != context.database_initialization_environment
-        || manifest.instance_id != context.instance_id
-        || manifest.database_id != context.database_id
-        || manifest.compiler.source_revision != context.compiler_source_revision
-        || manifest.package_revision != context.expected_package_revision
-        || manifest.sequence != context.expected_sequence
-    {
-        return Err(PackageError::Binding);
-    }
-    Ok(())
+    validate_deployment_bindings(
+        manifest,
+        context.environment,
+        context.database_initialization_environment,
+        context.instance_id,
+        context.database_id,
+    )?;
+    require_binding(
+        manifest.compiler.source_revision == context.compiler_source_revision,
+        PackageBindingField::CompilerSourceRevision,
+    )?;
+    require_expected_package(
+        manifest,
+        context.expected_package_revision,
+        context.expected_sequence,
+    )
+}
+
+fn require_expected_package(
+    manifest: &PackageManifest,
+    expected_package_revision: &str,
+    expected_sequence: u64,
+) -> Result<()> {
+    require_binding(
+        manifest.package_revision == expected_package_revision,
+        PackageBindingField::ActiveRevision,
+    )?;
+    require_binding(
+        manifest.sequence == expected_sequence,
+        PackageBindingField::ActiveSequence,
+    )
 }
 
 fn validate_predecessor_bindings(
     manifest: &PackageManifest,
     context: &PredecessorPackageContext<'_>,
 ) -> Result<()> {
-    if manifest.environment != context.environment
-        || manifest.environment != context.database_initialization_environment
-        || manifest.instance_id != context.instance_id
-        || manifest.database_id != context.database_id
-        || manifest.package_revision != context.expected_package_revision
-        || manifest.sequence != context.expected_sequence
-    {
-        return Err(PackageError::Binding);
-    }
-    Ok(())
+    validate_deployment_bindings(
+        manifest,
+        context.environment,
+        context.database_initialization_environment,
+        context.instance_id,
+        context.database_id,
+    )?;
+    require_expected_package(
+        manifest,
+        context.expected_package_revision,
+        context.expected_sequence,
+    )
 }
 
 struct PredecessorGovernedModel {

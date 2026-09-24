@@ -184,7 +184,7 @@ fn diagnostic(code: &str, path: &str, message: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_breg::package::PackageError;
+    use registry_breg::package::{PackageBindingField, PackageError};
     use std::collections::HashSet;
 
     #[test]
@@ -365,6 +365,9 @@ mod tests {
             PackageError::Closure,
             PackageError::Integrity,
             PackageError::Binding,
+            PackageError::BindingMismatch(PackageBindingField::Environment),
+            PackageError::BindingMismatch(PackageBindingField::DatabaseId),
+            PackageError::AlreadyActive,
             PackageError::OlderThanActive,
             PackageError::Signature,
             PackageError::Derivation,

@@ -193,6 +193,7 @@ impl From<MigrationError> for ReconcileError {
         match error {
             MigrationError::PackageBinding | MigrationError::EmptyPlan => Self::PackageBinding,
             MigrationError::ApplyFailed
+            | MigrationError::ActivePackageMismatch
             | MigrationError::HistoryCoverage
             | MigrationError::FieldPatternSyntax { .. }
             | MigrationError::FieldPatternExistingRows { .. }
@@ -211,7 +212,7 @@ pub async fn reconcile_failed_migration(
 ) -> Result<ReconcileReport, ReconcileError> {
     validate_request(&request)?;
     let target = target_package_identity(request.target_package)?;
-    verify_successor_package_binding(request.target_package, request.current, &target)?;
+    verify_successor_package_binding(request.target_package, request.current)?;
     let checksums = compiler_statement_checksums(request.target_package);
     let ledger = package_ledger_entry(
         request.target_package,

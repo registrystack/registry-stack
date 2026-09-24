@@ -62,7 +62,7 @@ mod starters;
 mod test_lifecycle;
 mod webhook_lifecycle;
 
-use apply_lifecycle::{ApplyLifecycleError, ApplyLifecycleRequest};
+use apply_lifecycle::{ApplyLifecycleActivation, ApplyLifecycleError, ApplyLifecycleRequest};
 use audit_lifecycle::{AuditCliError, AuditExportOutcome, AuditPruneOutcome, AuditVerifyOutcome};
 use data_lifecycle::{
     DataExportRequest, DataImportRequest, DataLifecycleError, DataValidateRequest, ExportPairState,
@@ -1559,6 +1559,8 @@ struct AuditPruneSuccessReport {
 enum ApplyActivation {
     Initial,
     Successor,
+    /// The target was already the active package; nothing was applied.
+    AlreadyActive,
 }
 
 #[derive(Serialize)]
@@ -2391,7 +2393,9 @@ fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> Fai
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
                 PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding
+                | PackageError::BindingMismatch(_)
+                | PackageError::AlreadyActive => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -2511,7 +2515,9 @@ fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) 
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
                 PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding
+ | PackageError::BindingMismatch(_)
+ | PackageError::AlreadyActive => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -2712,7 +2718,9 @@ fn field_encryption_preflight_failure(
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
                 PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding
+ | PackageError::BindingMismatch(_)
+ | PackageError::AlreadyActive => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -2728,7 +2736,10 @@ fn field_encryption_preflight_failure(
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
                 PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding | PackageError::OlderThanActive => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding
+ | PackageError::BindingMismatch(_)
+ | PackageError::AlreadyActive
+ | PackageError::OlderThanActive => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -2847,7 +2858,9 @@ fn field_encryption_erase_history_failure(
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
                 PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding
+ | PackageError::BindingMismatch(_)
+ | PackageError::AlreadyActive => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -3221,7 +3234,9 @@ fn data_lifecycle_failure(
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
                 PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding
+ | PackageError::BindingMismatch(_)
+ | PackageError::AlreadyActive => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -3732,10 +3747,10 @@ fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
     Ok(ApplySuccessReport {
         ok: true,
         command: "apply",
-        activation: if outcome.initial {
-            ApplyActivation::Initial
-        } else {
-            ApplyActivation::Successor
+        activation: match outcome.activation {
+            ApplyLifecycleActivation::Initial => ApplyActivation::Initial,
+            ApplyLifecycleActivation::Successor => ApplyActivation::Successor,
+            ApplyLifecycleActivation::AlreadyActive => ApplyActivation::AlreadyActive,
         },
         package_revision: outcome.package_revision,
         schema_fingerprint: outcome.schema_fingerprint,
@@ -4072,6 +4087,28 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
         ApplyLifecycleError::RuntimeConfig(error) => {
             return runtime_config_failure("apply", "apply", error);
         }
+        ApplyLifecycleError::CurrentPackage(PackageError::BindingMismatch(field))
+        | ApplyLifecycleError::TargetPackage(PackageError::BindingMismatch(field)) => {
+            let subject = if matches!(error, ApplyLifecycleError::CurrentPackage(_)) {
+                "the active package at package.root"
+            } else {
+                "the target package"
+            };
+            let path = field.runtime_config_path();
+            return source_failure(
+                "apply",
+                diagnostic(
+                    "apply.package.binding_mismatch",
+                    path,
+                    &format!(
+                        "{subject} is bound to a different {path} than the runtime configuration; \
+                         build the package for this deployment or correct {path}. Nothing was changed"
+                    ),
+                ),
+                DiagnosticArtifact::VerifiedPackage,
+                SuggestedAction::VerifyPackageBinding,
+            );
+        }
         error => error,
     };
     let (code, path, message, artifact, action) = match error {
@@ -4102,7 +4139,9 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
                 PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding
+ | PackageError::BindingMismatch(_)
+ | PackageError::AlreadyActive => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -4224,6 +4263,13 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                     SuggestedAction::ReviewFieldEncryptionBackfill,
                 );
             }
+            registry_breg::migration::MigrationError::ActivePackageMismatch => (
+                "apply.package.active_mismatch",
+                "package.activeRevision",
+                "the runtime configuration names the target package as active, but the database does not record it as its active, ready package: set package.activeRevision and package.activeSequence to the package the database runs and apply again, or, if the database is pinned in maintenance, assess it with migration reconcile. Nothing was changed",
+                DiagnosticArtifact::PackageActivation,
+                SuggestedAction::CorrectRuntimeConfiguration,
+            ),
             registry_breg::migration::MigrationError::EmptyPlan => (
                 "apply.package.empty_plan",
                 "package",
@@ -4311,7 +4357,9 @@ fn candidate_package_error(command: &'static str, error: PackageError) -> Failur
             PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
             PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
             PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-            PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+            PackageError::Binding
+            | PackageError::BindingMismatch(_)
+            | PackageError::AlreadyActive => SuggestedAction::VerifyPackageBinding,
             _ => SuggestedAction::CorrectSchemaTestCandidate,
         },
     )
@@ -4467,7 +4515,10 @@ fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport 
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
                 PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding | PackageError::OlderThanActive => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding
+ | PackageError::BindingMismatch(_)
+ | PackageError::AlreadyActive
+ | PackageError::OlderThanActive => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -4589,7 +4640,10 @@ fn inspection_failure(
                 PackageError::Signature => {
                     ("signature_refused", SuggestedAction::VerifyPackageTrust)
                 }
-                PackageError::Binding | PackageError::OlderThanActive => {
+                PackageError::Binding
+                | PackageError::BindingMismatch(_)
+                | PackageError::AlreadyActive
+                | PackageError::OlderThanActive => {
                     ("binding_refused", SuggestedAction::VerifyPackageBinding)
                 }
                 PackageError::TrustAnchorNotCanonical => (
@@ -4679,7 +4733,10 @@ fn package_diff_failure(error: PackageError) -> FailureReport {
             "diff.baseline.signature_refused",
             SuggestedAction::VerifyPackageTrust,
         ),
-        PackageError::Binding | PackageError::OlderThanActive => (
+        PackageError::Binding
+        | PackageError::BindingMismatch(_)
+        | PackageError::AlreadyActive
+        | PackageError::OlderThanActive => (
             "diff.baseline.binding_refused",
             SuggestedAction::VerifyPackageBinding,
         ),
@@ -10756,6 +10813,9 @@ fn write_apply_success(
             match report.activation {
                 ApplyActivation::Initial => "Activated the first package on this registry.",
                 ApplyActivation::Successor => "Activated the package over its predecessor.",
+                ApplyActivation::AlreadyActive => {
+                    "The package is already active; nothing was applied."
+                }
             },
             &[
                 (
@@ -10763,6 +10823,7 @@ fn write_apply_success(
                     match report.activation {
                         ApplyActivation::Initial => "initial",
                         ApplyActivation::Successor => "successor",
+                        ApplyActivation::AlreadyActive => "already active",
                     }
                     .to_owned(),
                 ),
@@ -13813,6 +13874,119 @@ fn apply_reports_a_history_coverage_refusal_with_its_recovery() {
         );
     }
     assert!(!diagnostic.message.contains("reconciliation"));
+}
+
+#[cfg(test)]
+#[test]
+fn apply_names_the_differing_binding_field_and_never_its_values() {
+    use registry_breg::package::PackageBindingField;
+
+    for (error, path, subject) in [
+        (
+            ApplyLifecycleError::TargetPackage(PackageError::BindingMismatch(
+                PackageBindingField::Environment,
+            )),
+            "identity.environment",
+            "target package",
+        ),
+        (
+            ApplyLifecycleError::TargetPackage(PackageError::BindingMismatch(
+                PackageBindingField::DatabaseId,
+            )),
+            "identity.databaseId",
+            "target package",
+        ),
+        (
+            ApplyLifecycleError::TargetPackage(PackageError::BindingMismatch(
+                PackageBindingField::InstanceId,
+            )),
+            "identity.instanceId",
+            "target package",
+        ),
+        (
+            ApplyLifecycleError::CurrentPackage(PackageError::BindingMismatch(
+                PackageBindingField::ActiveRevision,
+            )),
+            "package.activeRevision",
+            "active package",
+        ),
+    ] {
+        let report = apply_lifecycle_failure(error);
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.code, "apply.package.binding_mismatch");
+        assert_eq!(diagnostic.path, path);
+        assert_eq!(diagnostic.artifact, DiagnosticArtifact::VerifiedPackage);
+        assert_eq!(
+            diagnostic.suggested_action,
+            SuggestedAction::VerifyPackageBinding
+        );
+        for fragment in [path, subject] {
+            assert!(
+                diagnostic.message.contains(fragment),
+                "{fragment}: {}",
+                diagnostic.message
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn apply_refuses_an_already_active_package_the_database_does_not_run() {
+    let report = apply_lifecycle_failure(ApplyLifecycleError::Apply(
+        registry_breg::migration::MigrationError::ActivePackageMismatch,
+    ));
+    let diagnostic = &report.diagnostics[0];
+    assert_eq!(diagnostic.code, "apply.package.active_mismatch");
+    assert_eq!(diagnostic.path, "package.activeRevision");
+    assert_eq!(diagnostic.artifact, DiagnosticArtifact::PackageActivation);
+    assert_eq!(
+        diagnostic.suggested_action,
+        SuggestedAction::CorrectRuntimeConfiguration
+    );
+    for fragment in [
+        "names the target package as active",
+        "migration reconcile",
+        "Nothing was changed",
+    ] {
+        assert!(
+            diagnostic.message.contains(fragment),
+            "{fragment}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn apply_reports_an_already_active_package_as_nothing_applied() {
+    let report = ApplySuccessReport {
+        ok: true,
+        command: "apply",
+        activation: ApplyActivation::AlreadyActive,
+        package_revision: "sha256:active".to_owned(),
+        schema_fingerprint: "sha256:schema".to_owned(),
+        package_sequence: 2,
+    };
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    assert_eq!(
+        write_apply_success(&report, OutputFormat::Human, &mut stdout, &mut stderr),
+        ExitCode::SUCCESS
+    );
+    let text = String::from_utf8(stdout).expect("text output is UTF-8");
+    assert!(text.contains("already active"), "{text}");
+    assert!(text.contains("nothing was applied"), "{text}");
+
+    let mut stdout = Vec::new();
+    assert_eq!(
+        write_apply_success(&report, OutputFormat::Json, &mut stdout, &mut stderr),
+        ExitCode::SUCCESS
+    );
+    let json: serde_json::Value = serde_json::from_slice(&stdout).expect("JSON output parses");
+    assert_eq!(json["activation"], "already_active");
+    assert_eq!(json["ok"], true);
+    assert!(stderr.is_empty());
 }
 
 #[cfg(test)]
