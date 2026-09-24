@@ -32,6 +32,7 @@ members = [
     "crates/registry-platform-canonical-json",
     "crates/registry-platform-config",
     "crates/registry-platform-crypto",
+    "crates/registry-platform-dispatch",
     "crates/registry-platform-hooks",
     "crates/registry-platform-httpsec",
     "crates/registry-platform-httputil",
@@ -137,6 +138,7 @@ registry-cli-reference = { path = "crates/registry-cli-reference", version = "0.
 registry-platform-canonical-json = { path = "crates/registry-platform-canonical-json", version = "0.34.0" }
 registry-platform-config = { path = "crates/registry-platform-config", version = "0.34.0" }
 registry-platform-crypto = { path = "crates/registry-platform-crypto", version = "0.34.0" }
+registry-platform-dispatch = { path = "crates/registry-platform-dispatch", version = "0.34.0" }
 registry-platform-hooks = { path = "crates/registry-platform-hooks", version = "0.34.0" }
 registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.34.0", default-features = false }
 registry-platform-httputil = { path = "crates/registry-platform-httputil", version = "0.34.0" }
