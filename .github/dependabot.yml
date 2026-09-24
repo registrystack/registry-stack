@@ -24,6 +24,64 @@ updates:
           - "version-update:semver-major"
           - "version-update:semver-minor"
 
+  # BReg WASM handler SDK: guest authoring crates, the build-time
+  # pre-initializer, and the admission-proof harness. A standalone workspace
+  # on purpose (see products/breg/wasm-handler-sdk/Cargo.toml), so it is not
+  # covered by the root cargo entry above.
+  - package-ecosystem: cargo
+    directory: "/products/breg/wasm-handler-sdk"
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "04:15"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 1
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
+    # wasmtime and wasmtime-wizer are pinned to the same LTS line as the root
+    # workspace's wasmtime dependency (=48.0.2 today); a minor or major
+    # proposal is the LTS jump the pin exists to prevent. phonenumber is
+    # pinned exactly because the module-size ceiling was measured against its
+    # bundled metadata at this release (template/Cargo.toml); any bump,
+    # patch included, needs a deliberate re-measurement, not an automated PR.
+    ignore:
+      - dependency-name: "wasmtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "wasmtime-wizer"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "phonenumber"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+
+  # Remaining standalone cargo workspaces: the Zed editor extension and the
+  # cargo-fuzz targets. Each has its own Cargo.lock outside the root
+  # workspace and none carry a version pin that needs protecting.
+  - package-ecosystem: cargo
+    directories:
+      - "/editors/zed"
+      - "/products/manifest/fuzz"
+      - "/products/platform/fuzz"
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "04:30"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 1
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
+
   # Docs site dependencies.
   - package-ecosystem: npm
     directory: "/docs/site"
@@ -31,6 +89,63 @@ updates:
       interval: weekly
       day: wednesday
       time: "05:30"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 1
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Unified product client Node.js bindings: thin napi-rs wrappers, each with
+  # its own package-lock.json. optionalDependencies seen in these lockfiles
+  # belong to third-party build tooling (e.g. @napi-rs/lzma, @napi-rs/tar)
+  # publishing their own platform binaries; they are not this repo's
+  # @registrystack/client platform packages, which sync-registry-client-node.py
+  # assembles at release time and are never checked into a lockfile Dependabot
+  # reads, so no ignore rule is needed here.
+  - package-ecosystem: npm
+    directories:
+      - "/crates/registry-breg-client-node"
+      - "/crates/registry-casework-client-node"
+      - "/crates/registry-discovery-client-node"
+      - "/crates/registry-evidence-client-node"
+      - "/crates/registry-relay-client-node"
+      - "/crates/registry-stack-client-node"
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "05:45"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 1
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Editor extension (VS Code) dependencies.
+  - package-ecosystem: npm
+    directory: "/editors/vscode"
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 1
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Architecture diagram site (LikeC4) dependencies.
+  - package-ecosystem: npm
+    directory: "/docs/architecture"
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "06:15"
       timezone: Etc/UTC
     open-pull-requests-limit: 1
     groups:
