@@ -576,8 +576,11 @@ impl ExchangeAuthorization {
     /// host.
     ///
     /// The issued token is handed out until the earlier of its stated expiry
-    /// and the context deadline, whatever lifetime the issuer gives it, and the
-    /// token response must state a scope that includes every requested scope.
+    /// and the context deadline, whatever lifetime the issuer gives it. A token
+    /// response that states a scope must include every requested scope; one
+    /// that omits it is taken to grant the scope requested, as RFC 6749 section
+    /// 5.1 defines, so the resource server's own scope check stays the
+    /// authority.
     ///
     /// `actor` is the service's own client-credentials provider. Its token is
     /// acquired and presented as `actor_token` inside the exchange and never
@@ -854,18 +857,15 @@ impl TokenProvider for ExchangeAuthorization {
                 if now_seconds()? >= self.context.deadline {
                     return Err(TokenError::Unavailable);
                 }
-                let acquired = self
-                    .exchange
-                    .exchange_acquired(&subject.token, subject.token_type, actor_token.as_ref())
-                    .await?;
                 // An issuer may narrow an exchange to the scopes the upstream
-                // token carried without refusing it. Only a stated scope, which
-                // the exchange provider has already held to every requested
-                // scope, shows that it did not.
-                if !acquired.scope_stated {
-                    return Err(TokenError::ScopeNarrowed);
-                }
-                acquired
+                // token carried without refusing it. The exchange provider
+                // refuses a stated scope missing a requested one. An omitted
+                // scope means the scope requested (RFC 6749 section 5.1), and
+                // the resource server still enforces the scopes it requires on
+                // the token itself.
+                self.exchange
+                    .exchange_acquired(&subject.token, subject.token_type, actor_token.as_ref())
+                    .await?
             }
         };
         if now_seconds()? >= self.context.deadline {
@@ -1951,39 +1951,51 @@ mod tests {
         assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 
-    #[tokio::test]
-    async fn an_upstream_exchange_whose_scope_is_unstated_or_narrowed_is_refused() {
-        // An issuer may drop requested scopes the subject token did not carry
-        // and still answer 200. The exchange is refused unless the response
-        // states a scope holding every requested one.
-        for stated in [None, Some("other:read")] {
-            let server = MockServer::start().await;
-            let mut body = json!({"access_token": "issued-credential", "token_type": "Bearer",
-                "issued_token_type": ACCESS_TOKEN_URN, "expires_in": 300});
-            if let Some(scope) = stated {
-                body["scope"] = json!(scope);
-            }
-            Mock::given(method("POST"))
-                .and(path("/token"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(body))
-                .mount(&server)
-                .await;
-            let deadline = now_seconds().unwrap() + 120;
-            let provider = ExchangeAuthorization::upstream(
-                exchange(&server, "urn:records", &["records:read"]),
-                context("person-1", deadline),
-                upstream_subject(SubjectTokenType::AccessToken, deadline),
-                None,
-            )
-            .unwrap();
-            assert!(
-                matches!(
-                    provider.bearer_token().await,
-                    Err(TokenError::ScopeNarrowed)
-                ),
-                "stated scope {stated:?}"
-            );
+    /// An upstream exchange whose token response carries `scope`, if given.
+    async fn upstream_with_stated_scope(
+        server: &MockServer,
+        stated: Option<&str>,
+    ) -> ExchangeAuthorization {
+        let mut body = json!({"access_token": "issued-credential", "token_type": "Bearer",
+            "issued_token_type": ACCESS_TOKEN_URN, "expires_in": 300});
+        if let Some(scope) = stated {
+            body["scope"] = json!(scope);
         }
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(server)
+            .await;
+        let deadline = now_seconds().unwrap() + 120;
+        ExchangeAuthorization::upstream(
+            exchange(server, "urn:records", &["records:read"]),
+            context("person-1", deadline),
+            upstream_subject(SubjectTokenType::AccessToken, deadline),
+            None,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_upstream_exchange_whose_scope_is_unstated_is_accepted() {
+        // RFC 6749 section 5.1: an omitted scope is the scope requested. The
+        // resource server still enforces the scopes it requires on the token.
+        let server = MockServer::start().await;
+        let provider = upstream_with_stated_scope(&server, None).await;
+        assert!(provider.bearer_token().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn an_upstream_exchange_whose_stated_scope_is_narrowed_is_refused() {
+        // An issuer may drop requested scopes the subject token did not carry
+        // and still answer 200. A stated scope missing a requested one is
+        // refused.
+        let server = MockServer::start().await;
+        let provider = upstream_with_stated_scope(&server, Some("other:read")).await;
+        assert!(matches!(
+            provider.bearer_token().await,
+            Err(TokenError::ScopeNarrowed)
+        ));
     }
 
     #[tokio::test]

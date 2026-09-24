@@ -974,11 +974,6 @@ impl PrivateKeyJwt {
             // on. The outer `Option` is member presence, so an issuer that
             // states `null` has spoken.
             lifetime_stated: issued.expires_in.is_some(),
-            // Checked above against the request when present. An absent scope
-            // means "as requested" under RFC 6749 and RFC 8693, which a caller
-            // exchanging a token whose scope an issuer may silently narrow can
-            // decline to believe.
-            scope_stated: issued.scope.is_some(),
             // A stated lifetime is what makes caching possible. Without one, or
             // with one already elapsed, the credential is used once and dropped.
             // A lifetime longer than this provider will trust is clamped before
@@ -1089,8 +1084,6 @@ pub(super) struct AcquiredToken {
     /// An absent `expires_at` beside `true` is an issuer saying the credential
     /// is already spent; beside `false` it is an issuer saying nothing.
     pub(super) lifetime_stated: bool,
-    /// Whether the response stated the issued scope.
-    pub(super) scope_stated: bool,
     pub(super) expires_at: Option<Instant>,
 }
 

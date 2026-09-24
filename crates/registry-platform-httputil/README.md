@@ -36,7 +36,9 @@ Outbound HTTP utilities for registry services.
   same client and token endpoint and never returned to the caller. The context
   deadline may not pass the subject token's expiry, so the exchanged token is
   never handed out after the subject token ends, whatever lifetime the issuer
-  states. The response must state a scope holding every requested scope.
+  states. A stated scope must hold every requested scope; an omitted one means
+  the scope requested (RFC 6749 section 5.1), and the resource server's own
+  scope check stays authoritative.
 - Shared strict response-header bounds and exact-one delta-seconds
   `Retry-After` parsing.
 - `ProxyHeaderPolicy` plus request and response header filters for proxy-safe
