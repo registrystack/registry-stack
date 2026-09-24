@@ -1221,6 +1221,7 @@ fn check_source_review_binding(
     };
     for request in described {
         check_request_review_binding(policy, source, path, &root, &request["review"])?;
+        crate::display_schema::check_described_request(policy, source, path, request)?;
     }
     Ok(())
 }
@@ -2231,6 +2232,162 @@ mod tests {
         assert!(error.contains("purpose"), "{error}");
         assert!(error.contains("scope-correction"), "{error}");
         assert!(!error.contains("no declared reviewKinds"), "{error}");
+    }
+
+    // registrystack/registry-stack#1341: a source-context kind validates each
+    // reviewer's source disclosure against its displaySchema, and a rejected
+    // disclosure hides the task from every reviewer. These fixtures change
+    // one side of that pair so the source admits what the kind rejects.
+    fn description_with_field_schema(api_name: &str, schema: Value) -> String {
+        let mut description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
+        let field = description["request"]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|field| field["apiName"] == api_name)
+            .unwrap();
+        field["schema"] = schema;
+        serde_json::to_string(&description).unwrap()
+    }
+
+    fn licensed_activities_schema(values: &[&str]) -> Value {
+        json!({"type":"array","items":{"type":"string","enum":values},"minItems":1,"maxItems":3,"uniqueItems":true,"x-registry-maxBytes":512})
+    }
+
+    const STARTER_LICENSED_ACTIVITIES_ITEMS: &str = "          items:
+            type: string
+            # Starter vocabulary: replace with your registry's values.
+            enum:
+              - example-assessment
+              - example-advisory-services
+              - example-practical-services
+";
+
+    #[test]
+    fn check_refuses_a_display_schema_enum_that_rejects_values_the_source_admits() {
+        let description = description_with_field_schema(
+            "licensedActivities",
+            licensed_activities_schema(&[
+                "example-general-nursing-care",
+                "example-assessment",
+                "example-health-education",
+            ]),
+        );
+        let (_root, project) = write_offline_project(CASEWORK_YAML, &description);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(error.contains("licensedActivities"), "{error}");
+        assert!(
+            error.contains("\"example-general-nursing-care\""),
+            "{error}"
+        );
+        assert!(error.contains("\"example-health-education\""), "{error}");
+        // A value both sides admit is not an offending value.
+        assert!(!error.contains("\"example-assessment\""), "{error}");
+        assert!(error.contains("hide"), "{error}");
+    }
+
+    #[test]
+    fn check_refuses_a_projected_field_the_display_schema_does_not_declare() {
+        let yaml = CASEWORK_YAML.replace(
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n",
+            "",
+        );
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(error.contains("supportingReference"), "{error}");
+        assert!(error.contains("supporting-reference"), "{error}");
+        assert!(error.contains("additionalProperties"), "{error}");
+    }
+
+    #[test]
+    fn check_refuses_a_display_property_whose_type_the_source_never_produces() {
+        let yaml = CASEWORK_YAML.replace(
+            "record: {type: string, format: uuid}",
+            "record: {type: object, additionalProperties: false}",
+        );
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(error.contains("record"), "{error}");
+        assert!(error.contains("object"), "{error}");
+        assert!(error.contains("string"), "{error}");
+    }
+
+    #[test]
+    fn check_accepts_display_schemas_that_admit_every_value_the_source_discloses() {
+        // The kind may be wider than the source: no enum, a superset, or an
+        // unconstrained property.
+        let adopter = description_with_field_schema(
+            "licensedActivities",
+            licensed_activities_schema(&["example-community-nursing"]),
+        );
+        let without_enum = CASEWORK_YAML.replace(
+            STARTER_LICENSED_ACTIVITIES_ITEMS,
+            "          items: {type: string}\n",
+        );
+        assert_ne!(without_enum, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&without_enum, &adopter);
+        check_source_descriptions(&project).unwrap();
+
+        let superset = CASEWORK_YAML.replace(
+            "              - example-practical-services\n",
+            "              - example-practical-services\n              - example-community-nursing\n",
+        );
+        let (_root, project) = write_offline_project(&superset, &adopter);
+        check_source_descriptions(&project).unwrap();
+
+        let unconstrained =
+            CASEWORK_YAML.replace("record: {type: string, format: uuid}", "record: {}");
+        let (_root, project) = write_offline_project(&unconstrained, BREG_SOURCE_DESCRIPTION);
+        check_source_descriptions(&project).unwrap();
+
+        // A source field the request does not project is never disclosed, so
+        // the kind need not declare it: the starter leaves out `reason`.
+        let narrowed = description_with_field_schema(
+            "reason",
+            json!({"type":"string","enum":["anything-the-kind-never-shows"]}),
+        );
+        let (_root, project) = write_offline_project(CASEWORK_YAML, &narrowed);
+        check_source_descriptions(&project).unwrap();
+    }
+
+    #[test]
+    fn check_accepts_display_schemas_it_cannot_analyze_property_by_property() {
+        // A patternProperties entry may admit an undeclared property, and a
+        // $ref resolves against the whole document. Both schemas below admit
+        // everything the source discloses, and the check must not misread
+        // either as a mismatch.
+        let patterned = CASEWORK_YAML.replace(
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n",
+            "      patternProperties:\n        \"^supporting\": {type: string}\n",
+        );
+        assert_ne!(patterned, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&patterned, BREG_SOURCE_DESCRIPTION);
+        check_source_descriptions(&project).unwrap();
+
+        let referenced = CASEWORK_YAML
+            .replace(
+                STARTER_LICENSED_ACTIVITIES_ITEMS,
+                "          items: {$ref: \"#/$defs/activity\"}\n",
+            )
+            .replace(
+            "      properties:\n        record:",
+            "      $defs:\n        activity: {type: string}\n      properties:\n        record:",
+        );
+        assert!(referenced.contains("$ref") && !referenced.contains("example-assessment"));
+        let adopter = description_with_field_schema(
+            "licensedActivities",
+            licensed_activities_schema(&["example-community-nursing"]),
+        );
+        let (_root, project) = write_offline_project(&referenced, &adopter);
+        check_source_descriptions(&project).unwrap();
     }
 
     // A second reviewKinds entry, structurally identical to scope-correction's,

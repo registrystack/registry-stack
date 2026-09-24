@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- `caseworkctl check` and `caseworkctl source add` refuse a source-context
+  review kind whose `displaySchema` the imported source description proves
+  would reject what the source discloses, which hides the review task from
+  every reviewer at runtime. They refuse three cases:
+  - A projected field the closed schema does not declare.
+  - A declared property whose `type` shares no JSON type with the source
+    field.
+  - A value the source schema itself names that the property rejects. That
+    value is an `enum` or `const` member, `null`, or a Boolean, alone or as
+    an array item.
+
+  The refusal names the review kind, the property, and each rejected value.
+  `source add` refuses before preview, so nothing is written. Constraints
+  that only an invented value could violate, and properties that use `$ref`,
+  are left to the runtime check. The professional-review template now marks
+  its display properties and `licensedActivities` enum as the starter
+  registry's vocabulary, to be replaced from `bregctl explain
+  change-requests`.
 - The review retention pass deletes a review's clock occurrences at
   `terminalDays` instead of at `accountabilityDays`. Each occurrence carries
   the subject source, type, and identifier, the pinned clock policy, and its
