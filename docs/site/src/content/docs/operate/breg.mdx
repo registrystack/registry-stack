@@ -683,7 +683,7 @@ the database directly.
 
 | `recovery.code` | Operator action |
 | --- | --- |
-| `remote-uncertain`, `cancellation-uncertain`, `result-lookup-uncertain`, `source-precondition-changed` | Wait through `application.nextAttemptAt` where present and re-read the request. The durable worker retries automatically. |
+| `remote-uncertain`, `cancellation-uncertain`, `result-lookup-uncertain`, `source-precondition-changed` | Wait through `application.nextAttemptAt` where present and re-read the request. The durable worker retries automatically. A reconciled result clears `result-lookup-uncertain`. |
 | `token-unavailable` | Restore the configured review-authority credential provider, then let the durable worker retry. |
 | `submission-recovery-expired` | Reconcile the Casework request by the recorded idempotency and digest bindings before starting a new proposal. |
 | `remote-refused` | Correct the producer, policy, or submitted contract reported by the review authority before submitting a new proposal. |
