@@ -2817,7 +2817,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "1d1060566a9c574c002581f58b754ebbe37f9708afc8fbcbf86e474d4d3569e2",
+        "sha256": "9a548eca02ffea6d52eb89546a2a99286f19bbf5d20b272741f633728762171c",
         "mediaType": "application/schema+json"
       }
     },
