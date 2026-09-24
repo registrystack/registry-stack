@@ -16,7 +16,17 @@
   `casework-reader` permission in the BReg `registry.yaml` that differs from
   the regenerated one is refused with the entity named. The refusal says to
   remove that fragment and repeat `source add --apply`. Nothing is replaced
-  automatically.
+  automatically. When `casework.yaml` drops a request entity from the paired
+  set, the same conflict message now also names that entity's
+  `casework-lifecycle-v1` hook and `casework-reader` permission as fragments
+  to remove from `registry.yaml`, since `source add` never removes a
+  generated fragment on its own. `source add` also refuses, before preview or
+  apply, whenever `registry.yaml` still carries a lifecycle hook or
+  `casework-reader` permission for a request entity the current pairing does
+  not include, whatever left it there, naming the entity and the exact
+  fragment to remove; leaving it in place would keep BReg emitting that
+  entity's lifecycle events and keep the reader credential's read access to
+  it after Casework stopped coordinating it.
 - `caseworkctl check` and `caseworkctl source add` refuse a source-context
   review kind whose `displaySchema` the imported source description proves
   would reject what the source discloses, which hides the review task from

@@ -64,10 +64,12 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         );
     }
     let requests = select_requests(&project, &args.source_id, &registry_id, &explained)?;
+    let paired_entities: BTreeSet<&str> = requests.iter().map(SelectedRequest::entity).collect();
+    refuse_dropped_entity_fragments(&authored, &paired_entities)?;
     let mut findings = check_unpaired_review_policies(
         &project,
         &authored,
-        &requests.iter().map(SelectedRequest::entity).collect(),
+        &paired_entities,
         &requests
             .iter()
             .map(|request| request.authority.as_str())
@@ -640,6 +642,82 @@ fn select_request<'a>(
 /// missing or not a string never reaches this check: `bregctl check` refuses
 /// it first. Only root registry.yaml entities are scanned; entities a locked
 /// module contributes are not.
+/// Refuse, before any write, a BReg registry.yaml that still grants
+/// least-privilege access `apply_breg_candidate` generated for a request
+/// entity this run's paired set no longer includes. `apply_breg_candidate`
+/// only ensures the casework-lifecycle-v1 hook and the READER_CLIENT_ID
+/// permission for entities in the current pairing; it never removes either
+/// for an entity that leaves that set, whether casework.yaml drops a request
+/// or this run targets a different set on retry. Left alone, BReg keeps
+/// emitting that entity's lifecycle events and the reader credential keeps
+/// read access, even though Casework no longer coordinates it: a
+/// least-privilege leak, not a correctness one, so it must be refused
+/// whether this run previews or applies.
+///
+/// Detection trusts the same reserved names `apply_breg_candidate`'s own
+/// collision refusals already trust: a `hooks` entry named
+/// `casework-lifecycle-v1` on any entity, and a `permissions` entry naming
+/// any entity under the `accessProfiles` entry with id READER_CLIENT_ID, are
+/// presumed to be source add's own fragments, whether or not that entity is
+/// in the set this run pairs.
+fn refuse_dropped_entity_fragments(
+    authored: &Value,
+    paired_entities: &BTreeSet<&str>,
+) -> Result<()> {
+    let mut hooked: Vec<&str> = authored["entities"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entity| {
+            let entity_id = entity["id"].as_str()?;
+            let has_hook = entity["hooks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|hook| hook["id"] == "casework-lifecycle-v1");
+            (has_hook && !paired_entities.contains(entity_id)).then_some(entity_id)
+        })
+        .collect();
+    hooked.sort_unstable();
+    hooked.dedup();
+    let mut granted: Vec<&str> = authored["accessProfiles"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|profile| profile["id"] == READER_CLIENT_ID)
+        .flat_map(|profile| profile["permissions"].as_array().into_iter().flatten())
+        .filter_map(|permission| permission["entity"].as_str())
+        .filter(|entity_id| !paired_entities.contains(entity_id))
+        .collect();
+    granted.sort_unstable();
+    granted.dedup();
+    if hooked.is_empty() && granted.is_empty() {
+        return Ok(());
+    }
+    let mut dropped: BTreeSet<&str> = BTreeSet::new();
+    dropped.extend(hooked.iter().copied());
+    dropped.extend(granted.iter().copied());
+    let dropped = dropped.into_iter().collect::<Vec<_>>();
+    let mut instructions = Vec::new();
+    if !hooked.is_empty() {
+        instructions.push(format!(
+            "remove the casework-lifecycle-v1 hook from {} in registry.yaml (and the hooks key itself when that hook is its only entry)",
+            entity_list(&hooked)
+        ));
+    }
+    if !granted.is_empty() {
+        instructions.push(format!(
+            "remove the {READER_CLIENT_ID} permission for {} from access profile {READER_CLIENT_ID} in registry.yaml (and the whole {READER_CLIENT_ID} profile when that permission is its only one)",
+            entity_list(&granted)
+        ));
+    }
+    bail!(
+        "registry.yaml still grants BReg fragments source add generated for a pairing that no longer includes {}, and nothing was written: {}. BReg would keep emitting lifecycle events, and the {READER_CLIENT_ID} credential would keep read access, for a request entity Casework no longer coordinates. Remove the fragments named above from registry.yaml, then repeat source add",
+        entity_list(&dropped),
+        instructions.join("; "),
+    )
+}
+
 fn check_unpaired_review_policies(
     project: &Path,
     authored: &Value,
@@ -2325,8 +2403,21 @@ fn description_conflict(path: &Path, expected: &Value) -> Result<Option<String>>
     }
     let (previous, next) = (described_entities(&actual), described_entities(expected));
     if previous != next {
+        let dropped = previous
+            .iter()
+            .filter(|entity| !next.contains(entity))
+            .copied()
+            .collect::<Vec<_>>();
+        let cleanup = if dropped.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; dropping {} also means removing its casework-lifecycle-v1 hook and {READER_CLIENT_ID} permission from registry.yaml, or source add refuses this pairing",
+                entity_list(&dropped)
+            )
+        };
         return Ok(Some(format!(
-            "pairs {} ({}), and this run pairs {} ({}) because casework.yaml declares a different set of request entities",
+            "pairs {} ({}), and this run pairs {} ({}) because casework.yaml declares a different set of request entities{cleanup}",
             entity_list(&previous),
             description_version(&actual),
             entity_list(&next),
@@ -2614,11 +2705,48 @@ mod tests {
         );
         assert!(error.contains(RETRY), "{error}");
         assert!(error.contains("nothing was written"), "{error}");
+        // Adding scope-review pairs a wider set; nothing was dropped, so this
+        // reason must not send the operator to clean up a fragment that is
+        // still in the paired set.
+        assert!(!error.contains("casework-lifecycle-v1"), "{error}");
         assert_eq!(fs::read(&description_path).unwrap(), previous);
         assert_eq!(
             fs::read_to_string(&binding_path).unwrap(),
             "reviewAuthorities: {edited: true}\n"
         );
+    }
+
+    #[test]
+    fn source_apply_names_the_registry_yaml_cleanup_for_a_dropped_entity() {
+        let project = tempfile::tempdir().unwrap();
+        let description_path = project.path().join("professional-licences.json");
+        let binding_path = project
+            .path()
+            .join("professional-licences.breg-runtime.yaml");
+        fs::write(
+            &description_path,
+            json_file_bytes(&paired_description(
+                "sha256:one",
+                &["scope-correction", "scope-review"],
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let error = require_outputs_absent_or_exact(
+            &description_path,
+            &paired_description("sha256:two", &["scope-correction"]),
+            &binding_path,
+            b"reviewAuthorities: {}\n",
+            RETRY,
+        )
+        .unwrap_err();
+
+        let error = format!("{error:#}");
+        assert!(error.contains("scope-review"), "{error}");
+        assert!(error.contains("casework-lifecycle-v1"), "{error}");
+        assert!(error.contains("casework-reader"), "{error}");
+        assert!(error.contains("registry.yaml"), "{error}");
     }
 
     #[test]
@@ -3112,6 +3240,56 @@ mod tests {
                 && error.contains("repeat source add --apply"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn refuse_dropped_entity_fragments_names_a_dropped_entitys_hook_and_permission() {
+        let mut root = json!({"entities":[{"id":"request"},{"id":"transfer"}],"accessProfiles":[]});
+        apply_breg_candidate(&mut root, "request", &record_reader(&[])).unwrap();
+        apply_breg_candidate(&mut root, "transfer", &record_reader(&[])).unwrap();
+
+        let paired: BTreeSet<&str> = BTreeSet::from(["request"]);
+        let error = format!(
+            "{:#}",
+            refuse_dropped_entity_fragments(&root, &paired).unwrap_err()
+        );
+        assert!(error.contains("transfer"), "{error}");
+        assert!(error.contains("casework-lifecycle-v1"), "{error}");
+        assert!(error.contains("casework-reader"), "{error}");
+        assert!(error.contains("registry.yaml"), "{error}");
+        assert!(error.contains("nothing was written"), "{error}");
+    }
+
+    #[test]
+    fn refuse_dropped_entity_fragments_accepts_when_every_generated_fragment_is_paired() {
+        let mut root = json!({"entities":[{"id":"request"},{"id":"transfer"}],"accessProfiles":[]});
+        apply_breg_candidate(&mut root, "request", &record_reader(&[])).unwrap();
+        apply_breg_candidate(&mut root, "transfer", &record_reader(&[])).unwrap();
+
+        let paired: BTreeSet<&str> = BTreeSet::from(["request", "transfer"]);
+        refuse_dropped_entity_fragments(&root, &paired).unwrap();
+    }
+
+    #[test]
+    fn refuse_dropped_entity_fragments_accepts_after_the_dropped_entitys_fragments_are_removed() {
+        // Models the retry the first refusal points to: once the operator
+        // removes transfer's hook and permission from registry.yaml, the same
+        // check against the same paired set must pass.
+        let mut root = json!({"entities":[{"id":"request"}],"accessProfiles":[]});
+        apply_breg_candidate(&mut root, "request", &record_reader(&[])).unwrap();
+
+        let paired: BTreeSet<&str> = BTreeSet::from(["request"]);
+        refuse_dropped_entity_fragments(&root, &paired).unwrap();
+    }
+
+    #[test]
+    fn refuse_dropped_entity_fragments_ignores_an_entity_with_no_generated_fragment() {
+        // An unpaired entity that never received source add's own hook or
+        // permission is not this check's business; nothing to prove it
+        // leaked a grant.
+        let root = json!({"entities":[{"id":"request"},{"id":"untouched"}],"accessProfiles":[]});
+        let paired: BTreeSet<&str> = BTreeSet::from(["request"]);
+        refuse_dropped_entity_fragments(&root, &paired).unwrap();
     }
 
     #[test]
