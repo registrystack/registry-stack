@@ -1993,6 +1993,7 @@ fn covers_are_metadata_only(covers: &[ReviewedChangeCover]) -> bool {
                 | CompiledRegistryChangeCode::ActionRemoved
                 | CompiledRegistryChangeCode::ActionChanged
                 | CompiledRegistryChangeCode::ActionVocabularyCodesAdded
+                | CompiledRegistryChangeCode::ActionTargetFieldsWidened
                 | CompiledRegistryChangeCode::RecipientOrganizationAdded
                 | CompiledRegistryChangeCode::RecipientOrganizationRemoved
                 | CompiledRegistryChangeCode::RecipientOrganizationChanged
