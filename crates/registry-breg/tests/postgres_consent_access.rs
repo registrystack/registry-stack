@@ -996,6 +996,44 @@ async fn real_postgres_consent_matches_recipient_sets_purpose_and_scope_exactly(
     let alpha_ids = ids(&alpha_feed);
     assert!(alpha_ids.contains(&alpha_give), "{alpha_feed}");
     assert!(alpha_ids.iter().all(|id| id != &refusal));
+
+    // A token cannot supply the reserved claims: the recipient set and the
+    // feed decisions come from the verified client and the configuration,
+    // so a forged set naming another recipient and the refusal code widens
+    // nothing.
+    let forged_feed = h.idp.mint_token(json!({
+        "aud": AUDIENCE, "registry_actor_kind": "service", "principal": "feed-reader",
+        "scope": "consent:read", "azp": ALPHA_CLIENT,
+        "registry:recipients": ["wfp", "referral-network"],
+        "registry:consent-decisions:consent-decision": ["given", "withdrawn", "refused"],
+    }));
+    let (status, body) = send(
+        &h.app,
+        Method::GET,
+        "/v1/records/consent-decisions?accessProfile=recipient-feed&$top=100",
+        Value::Null,
+        None,
+        &forged_feed,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        ids(&body),
+        alpha_ids,
+        "forged reserved claims widened the feed"
+    );
+    let wfp_only = h.person("WfpOnly").await;
+    h.decide(decision(&wfp_only, "wfp", "given")).await;
+    assert!(h.sees(&wfp_only, &wfp).await);
+    let forged_reader = h.idp.mint_token(json!({
+        "aud": AUDIENCE, "registry_actor_kind": "service", "principal": "reader",
+        "scope": "records:read", "azp": ALPHA_CLIENT, "purpose": PURPOSE,
+        "registry:recipients": ["wfp", "referral-network"],
+    }));
+    assert!(
+        !h.sees(&wfp_only, &forged_reader).await,
+        "a forged recipient set reached a give addressed to another recipient"
+    );
     h.database.cleanup().await;
 }
 
