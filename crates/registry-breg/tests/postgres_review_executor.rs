@@ -4079,6 +4079,48 @@ async fn a_resolved_result_lookup_failure_leaves_no_error_on_the_reconciled_subm
 }
 
 #[tokio::test]
+async fn a_failed_result_lookup_asks_for_attention_only_on_the_review_it_claimed() {
+    let database = prepare_review_database().await;
+    let first = Uuid::from_u128(0xb1);
+    let second = Uuid::from_u128(0xb3);
+    seed_accepted_submission(&database, first, Uuid::from_u128(0xb2)).await;
+    seed_accepted_submission(&database, second, Uuid::from_u128(0xb4)).await;
+    make_result_poll_due(&database.admin, first).await;
+    make_result_poll_due(&database.admin, second).await;
+
+    // The configured authority endpoint refuses connections, so the one
+    // lookup the pass claims fails; the other due review is never asked.
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let authorities = authority_registry("casework-a", "producer-a", "sender", "registry-a");
+    assert!(matches!(
+        run_review_authority_once_for_test(&pool, &authorities).await,
+        Err(MutationError::Unavailable)
+    ));
+    let codes: Vec<Option<String>> = database
+        .admin
+        .query(
+            "SELECT last_error_code
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=ANY($1)
+              ORDER BY last_error_code NULLS LAST",
+            &[&vec![first, second]],
+        )
+        .await
+        .expect("rows after one failed lookup")
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(
+        codes,
+        vec![Some("result-lookup-uncertain".to_owned()), None],
+        "a request-specific lookup failure must not flag reviews it never looked up"
+    );
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test]
 async fn a_result_lookup_token_outage_asks_for_attention_without_spending_the_poll_budget() {
     let mut database = prepare_review_database().await;
     let request_id = Uuid::from_u128(0xa7);

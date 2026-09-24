@@ -799,9 +799,9 @@ impl ReviewAuthorityRegistry {
                         authority.lease_seconds,
                     )
                     .await,
-                    "result-lookup-uncertain",
+                    None,
                 ),
-                Err(_) => (Err(MutationError::Unavailable), "token-unavailable"),
+                Err(_) => (Err(MutationError::Unavailable), Some("token-unavailable")),
             };
             match outcome {
                 Ok(true) => {
@@ -823,16 +823,17 @@ impl ReviewAuthorityRegistry {
                 Err(_) => {
                     authority_unavailable = true;
                     unavailable_lookups += 1;
-                    // An authority-wide failure, such as a credential outage,
-                    // records operator attention on every due row but spends
-                    // no poll budget: a healed outage resumes polling, and a
-                    // later pending answer or reconciled result clears the
-                    // code.
+                    // Due rows back off without spending poll budget, so a
+                    // healed outage resumes polling. Only a credential outage
+                    // is authority-wide, so only it records operator attention
+                    // on every due row; a failed lookup already recorded its
+                    // code on the one row it claimed. A later pending answer
+                    // or reconciled result clears the code.
                     client
                         .execute(
                             "UPDATE registry_internal.registry_request_review_submissions
                                 SET next_result_poll_at=transaction_timestamp()+interval '5 seconds',
-                                    last_error_code=$2,
+                                    last_error_code=COALESCE($2,last_error_code),
                                     updated_at=transaction_timestamp()
                               WHERE authority=$1 AND state='accepted'
                                 AND next_result_poll_at <= transaction_timestamp()",
