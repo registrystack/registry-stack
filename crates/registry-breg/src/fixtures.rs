@@ -2312,7 +2312,7 @@ fn validate_expectation(
                 | Operation::ReviseRequest
                 | Operation::CancelRequest
                 | Operation::ApplyRequest => 200,
-                Operation::Tombstone | Operation::Revisions => {
+                Operation::Tombstone | Operation::Revisions | Operation::Import => {
                     return Err(FixtureError::LogicalReferenceRefused)
                 }
             };
@@ -6092,9 +6092,11 @@ fn valid_stable_id(value: &str) -> bool {
 
 fn operation_method(operation: Operation) -> HttpMethod {
     match operation {
-        Operation::Create | Operation::Lookup | Operation::Batch | Operation::Invoke => {
-            HttpMethod::Post
-        }
+        Operation::Create
+        | Operation::Lookup
+        | Operation::Batch
+        | Operation::Invoke
+        | Operation::Import => HttpMethod::Post,
         Operation::Get | Operation::List | Operation::Revisions | Operation::Snapshot => {
             HttpMethod::Get
         }

@@ -1888,6 +1888,11 @@ fn openapi_document(
     let mut paths = Map::new();
     let mut input_schemas = Map::new();
     for route in &routes.routes {
+        // An import grant is exercised only through the ingestion-run
+        // surface, which the static document does not describe.
+        if route.operation == Operation::Import {
+            continue;
+        }
         let entity = entities
             .get(&route.entity_id)
             .expect("compiled route refers to a compiled entity");
@@ -2314,6 +2319,9 @@ fn operation_response_shape(spec: OpenApiOperationSpec<'_>) -> &'static str {
         Operation::Revisions => "BRegRevisionCollectionV1",
         Operation::Batch => "BRegAtomicBatchMutationResponseV1",
         Operation::Invoke => "BRegImmediateActionResponseV1",
+        Operation::Import => {
+            unreachable!("import routes are served only by the ingestion-run surface")
+        }
         Operation::SubmitRequest
         | Operation::ReviseRequest
         | Operation::CancelRequest
@@ -2382,6 +2390,9 @@ fn request_action_target_entities(spec: OpenApiOperationSpec<'_>) -> Vec<String>
                 | Operation::Revisions
                 | Operation::Snapshot => {}
                 Operation::Invoke => {}
+                Operation::Import => {
+                    unreachable!("import routes are served only by the ingestion-run surface")
+                }
             }
             targets.into_iter().collect()
         }
@@ -2523,6 +2534,9 @@ fn operation_parameters(
         }
         Operation::Revisions => {}
         Operation::Invoke => {}
+        Operation::Import => {
+            unreachable!("import routes are served only by the ingestion-run surface")
+        }
         Operation::SubmitRequest
         | Operation::ReviseRequest
         | Operation::CancelRequest
@@ -2742,6 +2756,9 @@ fn operation_request_body(spec: OpenApiOperationSpec<'_>) -> Option<Value> {
         | Operation::Revisions
         | Operation::Snapshot => None,
         Operation::Invoke => None,
+        Operation::Import => {
+            unreachable!("import routes are served only by the ingestion-run surface")
+        }
         Operation::SubmitRequest
         | Operation::ReviseRequest
         | Operation::CancelRequest
@@ -2981,6 +2998,9 @@ fn operation_responses(spec: OpenApiOperationSpec<'_>) -> Value {
             revision_response_schema(spec, false),
             revision_response_schema(spec, true),
         ),
+        Operation::Import => {
+            unreachable!("import routes are served only by the ingestion-run surface")
+        }
         Operation::Invoke => success_response(
             "Action accepted",
             StatusResponseHeaders::ActionMutation,
@@ -4523,6 +4543,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::CancelRequest => "cancel_request",
         Operation::ApplyRequest => "apply_request",
         Operation::Invoke => "invoke",
+        Operation::Import => "import",
     }
 }
 

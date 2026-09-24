@@ -2665,6 +2665,11 @@ pub enum Operation {
     CancelRequest,
     ApplyRequest,
     Invoke,
+    /// Create records through a durable ingestion run, and nothing else. The
+    /// grant is enabled only while an operator-opened import authority is open
+    /// for the entity and profile. It declares no item route and no raw batch
+    /// route, and change control does not count it as a direct write.
+    Import,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

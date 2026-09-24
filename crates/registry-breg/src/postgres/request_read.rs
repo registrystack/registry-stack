@@ -1517,6 +1517,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::ApplyRequest => "apply_request",
         Operation::Invoke => "invoke",
         Operation::Snapshot => "snapshot",
+        Operation::Import => "import",
     }
 }
 

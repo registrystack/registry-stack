@@ -8984,6 +8984,7 @@ fn operation_wire_name(operation: registry_breg::contract::Operation) -> &'stati
         registry_breg::contract::Operation::ApplyRequest => "apply_request",
         registry_breg::contract::Operation::Invoke => "invoke",
         registry_breg::contract::Operation::Snapshot => "snapshot",
+        registry_breg::contract::Operation::Import => "import",
     }
 }
 
