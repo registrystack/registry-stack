@@ -856,7 +856,7 @@ jobs:
         run: cargo test --locked -p registry-platform-dispatch --features postgres-test
 
   messaging-contracts:
-    name: Messaging product contracts
+    name: Messaging product contracts and vendor neutrality
     needs: [changes, rust-policy]
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.messaging_contracts == 'true' }}
     runs-on: ubuntu-24.04
@@ -877,6 +877,12 @@ jobs:
 
       - name: Messaging contract consistency
         run: products/messaging/scripts/check-contracts.sh
+
+      - name: Self-test the Messaging vendor-neutrality gate
+        run: products/messaging/scripts/test-check-vendor-neutrality.sh
+
+      - name: Enforce Messaging vendor neutrality
+        run: products/messaging/scripts/check-vendor-neutrality.sh
 
   messaging-postgres:
     name: Messaging PostgreSQL runtime
@@ -924,6 +930,53 @@ jobs:
         env:
           MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
         run: cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_package
+      - name: Verify message submission, visibility, and cancellation routes
+        env:
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+        run: cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_messages
+      - name: Verify dispatch worker outcomes and settlement
+        env:
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+        run: cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_dispatch
+      - name: Verify messagingctl messages commands
+        env:
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+        run: cargo test --locked --profile ci -p registry-messagingctl --features postgres-test --tests
+
+  messaging-smtp:
+    name: Messaging SMTP provider
+    needs: [changes, rust-policy]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.messaging_postgres == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      mailpit:
+        image: axllent/mailpit:v1.31.2@sha256:74d609a42ec279aa63c6b4622a6fa9b5408d1ad5b1d76a1c4be40a265ce0863d
+        options: >-
+          --health-cmd "/mailpit readyz"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 1025/tcp
+          - 8025/tcp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Rust cache
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Verify the SMTP provider against a real relay
+        env:
+          MESSAGING_SMTP_TEST_MAILPIT_SMTP: 127.0.0.1:${{ job.services.mailpit.ports['1025'] }}
+          MESSAGING_SMTP_TEST_MAILPIT_API: http://127.0.0.1:${{ job.services.mailpit.ports['8025'] }}
+        run: cargo test --locked --profile ci -p registry-messaging --features smtp-test --test smtp_mailpit
 
   breg-contracts:
     name: Base Registry Engine product contracts (${{ matrix.lane }})
@@ -1139,6 +1192,7 @@ jobs:
       - scheduling-contracts
       - messaging-postgres
       - messaging-contracts
+      - messaging-smtp
     runs-on: ubuntu-slim
     timeout-minutes: 5
     env:
@@ -2166,6 +2220,7 @@ jobs:
       - scheduling-contracts
       - messaging-postgres
       - messaging-contracts
+      - messaging-smtp
       - release-tool
       - release-source-proof
       - evidence-tutorials

@@ -289,6 +289,9 @@ class CiChangesTest(unittest.TestCase):
             "messaging-contracts": (
                 "needs.changes.outputs.messaging_contracts == 'true'"
             ),
+            "messaging-smtp": (
+                "needs.changes.outputs.messaging_postgres == 'true'"
+            ),
             "platform-fuzz": "needs.changes.outputs.platform_assurance == 'true'",
             "platform-coverage": (
                 "needs.changes.outputs.platform_assurance == 'true'"
@@ -360,6 +363,7 @@ class CiChangesTest(unittest.TestCase):
             "scheduling-postgres",
             "messaging-contracts",
             "messaging-postgres",
+            "messaging-smtp",
             "release-tool",
             "release-tool-required",
             "release-source-proof",
@@ -397,6 +401,7 @@ class CiChangesTest(unittest.TestCase):
                 "scheduling-contracts",
                 "messaging-postgres",
                 "messaging-contracts",
+                "messaging-smtp",
             ),
             "release-tool-required": ("changes", "release-tool"),
             "release-source-proof-required": ("changes", "release-source-proof"),
@@ -424,6 +429,7 @@ class CiChangesTest(unittest.TestCase):
                 "scheduling-contracts",
                 "messaging-postgres",
                 "messaging-contracts",
+                "messaging-smtp",
                 "release-tool",
                 "release-source-proof",
                 "evidence-tutorials",
@@ -479,7 +485,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(33, len(final_needs))
+        self.assertEqual(34, len(final_needs))
 
         def embedded_python(job: dict[str, Any]) -> str:
             run = job["steps"][0]["run"]
