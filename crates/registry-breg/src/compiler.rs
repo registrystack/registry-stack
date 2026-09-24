@@ -1884,14 +1884,10 @@ pub(crate) fn expand_project_access(
                     && entities
                         .get(&permission.entity)
                         .is_some_and(|entity| entity.change_request.is_some());
-                permission
-                    .operations
-                    .iter()
-                    .any(|operation| match operation {
-                        Operation::Create | Operation::Patch => !governed_request_draft,
-                        Operation::Tombstone | Operation::Batch | Operation::Invoke => true,
-                        _ => false,
-                    })
+                permission.operations.iter().any(|operation| {
+                    *operation == Operation::Invoke
+                        || is_direct_target_mutation(*operation, governed_request_draft)
+                })
             }) {
                 errors.push(Diagnostic::error(
                     "access_profile.task_grant.direct_mutation_forbidden",
@@ -3442,6 +3438,33 @@ fn validate_profiles(
                 "entities[].accessProfiles[].operations",
                 "an anonymous access profile cannot grant a mutation operation",
             ));
+        }
+        // A task grant carries the approval of the human who assigned the
+        // task. A standing agent carries none, so a human must submit what it
+        // drafts. Checked here so module-contributed profiles meet it too.
+        if access.actor_kind == Some(crate::contract::ActorKindSource::Agent)
+            && access.task_grant.is_none()
+        {
+            if access
+                .operations
+                .iter()
+                .any(|operation| is_request_operation(*operation))
+            {
+                errors.push(Diagnostic::error(
+                    "access_profile.standing_agent.operation_forbidden",
+                    "entities[].accessProfiles[].operations",
+                    "a standing agent profile without a taskGrant cannot submit, revise, cancel, or apply a request; a human submits the drafts it authors",
+                ));
+            }
+            if access.operations.iter().any(|operation| {
+                is_direct_target_mutation(*operation, entity.change_request.is_some())
+            }) {
+                errors.push(Diagnostic::error(
+                    "access_profile.standing_agent.direct_mutation_forbidden",
+                    "entities[].accessProfiles[].operations",
+                    "a standing agent profile without a taskGrant can author only change-request drafts; direct target mutations, batch operations, and tombstones are forbidden",
+                ));
+            }
         }
         if access.anonymous && access.operations.contains(&Operation::Snapshot) {
             errors.push(Diagnostic::error(
@@ -6516,6 +6539,16 @@ fn all_operations() -> [Operation; 14] {
         Operation::ApplyRequest,
         Operation::Invoke,
     ]
+}
+
+/// Create and patch on a change-request entity author a draft; anywhere else
+/// they write the record itself. Tombstone and batch always write directly.
+fn is_direct_target_mutation(operation: Operation, change_request_entity: bool) -> bool {
+    match operation {
+        Operation::Create | Operation::Patch => !change_request_entity,
+        Operation::Tombstone | Operation::Batch => true,
+        _ => false,
+    }
 }
 
 fn is_request_operation(operation: Operation) -> bool {

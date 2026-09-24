@@ -157,6 +157,21 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/src/lifecycle.rs, request_lifecycle;
     crates/registry-breg-client/src/lifecycle.rs, BRegExternalReviewApplicationState. */}
 
+- BREAKING: BReg refuses to compile a standing agent profile, one with
+  `actorKind: agent` and no `taskGrant`, that holds `submit_request`,
+  `revise_request`, `cancel_request`, or `apply_request`, with
+  `access_profile.standing_agent.operation_forbidden`, or that holds
+  `create` or `patch` on an entity without a `changeRequest`, or
+  `tombstone` or `batch` on any entity, with
+  `access_profile.standing_agent.direct_mutation_forbidden`. A standing
+  agent carries no human approval, so it may read and author
+  change-request drafts while a human submits them; move the lifecycle
+  operations to a profile the person uses directly.
+
+{/* Evidence: crates/registry-breg/src/compiler.rs, validate_profiles and is_direct_target_mutation;
+    crates/registry-breg/tests/standing_agent_ceiling.rs;
+    products/breg/TASK_GRANTS.md. */}
+
 - BREAKING: BReg refuses to compile an access profile with a `taskGrant`
   that holds `apply_request`, with
   `access_profile.task_grant.operation_forbidden`. Applying a reviewed

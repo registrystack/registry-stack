@@ -40,6 +40,21 @@ configured actor for the verified `azp` or `client_id`; BREG does not accept a
 caller-supplied actor alias. Custom contextual claim names, when needed for an
 existing issuer, are configured together in the closed `contextual` object.
 
+A standing agent profile has a lower ceiling than a task-grant profile. A task
+grant carries the approval of the human who assigned the task; a standing
+agent carries none, so the human must confirm the change themselves by
+submitting it. A standing agent profile may read and may create, read, and
+patch change-request drafts. The compiler refuses it when it holds
+`submit_request`, `revise_request`, `cancel_request`, or `apply_request`,
+with `access_profile.standing_agent.operation_forbidden`, and when it holds
+`create` or `patch` on an entity without a `changeRequest`, or `tombstone` or
+`batch` on any entity, with
+`access_profile.standing_agent.direct_mutation_forbidden`. Profiles
+contributed by modules meet the same ceiling. Give the lifecycle operations to
+a separate profile the citizen uses directly. This check does not cover action
+permissions: an `invoke` grant on an immediate action is still accepted on a
+standing agent profile.
+
 ## Configure current status
 
 Configure BREG's runtime with one entry for each original source issuer used by
