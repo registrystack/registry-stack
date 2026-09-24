@@ -32,7 +32,7 @@ pub mod schema;
 pub mod testing;
 pub mod validate;
 
-pub use derivation::validate_authored_answer;
+pub use derivation::{validate_answer_fact_reads, validate_authored_answer};
 pub use finding::{FieldPath, FieldStep, Finding};
 pub use marker::{
     default_project_marker_document, parse_project_marker, ProjectKind, ProjectMarker,
