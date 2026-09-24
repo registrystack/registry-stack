@@ -5761,6 +5761,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-messaging-client-node"
+version = "0.34.0"
+dependencies = [
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "registry-messaging-client",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
+name = "registry-messaging-client-py"
+version = "0.34.0"
+dependencies = [
+ "pyo3",
+ "pyo3-build-config",
+ "registry-messaging-client",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "registry-messaging-core"
 version = "0.34.0"
 dependencies = [
