@@ -30,6 +30,14 @@ name = "postgres_gateway"
 path = "tests/postgres_gateway.rs"
 required-features = ["postgres-test"]
 
+# The scripted local run of the citizen journey against the `breg-mcp` and
+# `breg-review` binaries, driven by
+# products/breg/acceptance/citizen-address-correction/run-local.sh.
+[[example]]
+name = "citizen_local_run"
+path = "examples/citizen_local_run.rs"
+required-features = ["postgres-test"]
+
 [dependencies]
 async-trait.workspace = true
 axum.workspace = true

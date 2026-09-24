@@ -87,3 +87,52 @@ schema-test receipt, then drives the HTTP router directly for the refusals and
 the approval. The review authority is a loopback stub serving one approved
 result, and the test records the accepted submission the way reconciliation
 records it, so no Casework runtime is started.
+
+## Scripted local run
+
+[`run-local.sh`](run-local.sh) takes one request from MCP tool calls through
+review-page submission, the review authority's approval, and the registry's
+apply, against the `breg-mcp` and `breg-review` binaries. Run it from the
+repository root:
+
+```bash
+products/breg/acceptance/citizen-address-correction/run-local.sh
+```
+
+It needs Docker and starts a disposable `postgres:17` container on a loopback
+port, removed when the run ends. With `BREG_TEST_DATABASE_URL` set to a
+PostgreSQL 17 server it uses that server instead, in a fresh database it drops
+at the end.
+
+The script builds both binaries and the driver,
+[`citizen_local_run.rs`](../../../../crates/registry-breg-mcp/examples/citizen_local_run.rs).
+The driver starts the parties the binaries talk to and then the binaries:
+
+| Party | What runs |
+|---|---|
+| Base Registry Engine | This project, compiled, signed as a package, installed into the fresh database, and served by the engine's verified startup |
+| Authorization server | The test authorization server from `registry-platform-testing`, on loopback. It issues the chat host's token, performs the gateway's token exchange, and signs the citizen in to the review page |
+| Gateway | The `breg-mcp` binary, from a runtime configuration the driver writes |
+| Review page | The `breg-review` binary, from a runtime configuration the driver writes |
+| Review authority | **A loopback stub standing in for Casework.** The driver records the approval the way reconciliation records it and the stub serves that one result for the check the engine makes before it applies. No Casework runtime is started |
+
+The driver then acts as the chat host over MCP (`describe_service`,
+`get_my_details`, `start_application`, `update_application`,
+`prepare_review`), as the citizen's browser on the review page (sign-in, the
+review view, submission), as the review authority through the stub, and as
+the registry applier. It asks `get_application_status` after each stage and
+finishes when the gateway reports `applied` and the stored address carries
+the correction. It prints one line per step and no credential.
+
+Between approval and apply the gateway still reports `submitted`: the
+`citizen-agent` profile's grant does not name `review_state`, so the agent
+reads no review outcome.
+
+The configuration, owner-only secrets, and logs of both binaries go under a
+temporary directory, removed after a successful run and kept for diagnosis
+after a failed one. Every key in it is generated for the run or is a
+committed test fixture.
+
+The same journey runs in process as
+`the_citizen_journey_runs_from_chat_to_an_applied_change` in
+[`postgres_gateway.rs`](../../../../crates/registry-breg-mcp/tests/postgres_gateway.rs).
