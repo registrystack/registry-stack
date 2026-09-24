@@ -5,10 +5,12 @@
 use std::path::Path;
 
 use registry_breg::package::{
-    inspect_package_with_context, load_predecessor_package, IntegrityInspectedPackage,
-    PackageError, PackageInspectionContext, PredecessorPackageContext, VerifiedPredecessorPackage,
+    inspect_package_with_context, load_predecessor_package, load_predecessor_rehearsal_baseline,
+    IntegrityInspectedPackage, PackageError, PackageInspectionContext, PredecessorPackageContext,
+    VerifiedPredecessorPackage,
 };
-use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
+use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
+use registry_breg::CompiledRegistry;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RuntimePackageInspectionError {
@@ -50,12 +52,33 @@ pub(crate) fn inspect_runtime_package(
 pub(crate) fn inspect_runtime_predecessor_package(
     runtime_config: &Path,
 ) -> Result<VerifiedPredecessorPackage, RuntimePackageInspectionError> {
+    let config = load_predecessor_runtime_config(runtime_config)?;
+    load_predecessor_package(config.package().root(), &predecessor_context(&config))
+        .map_err(RuntimePackageInspectionError::Package)
+}
+
+/// Verify the same predecessor package as [`inspect_runtime_predecessor_package`]
+/// and compile its signed sources with the current compiler, so a successor
+/// can be rehearsed over the predecessor schema.
+pub(crate) fn inspect_runtime_predecessor_rehearsal_baseline(
+    runtime_config: &Path,
+) -> Result<(VerifiedPredecessorPackage, CompiledRegistry), RuntimePackageInspectionError> {
+    let config = load_predecessor_runtime_config(runtime_config)?;
+    load_predecessor_rehearsal_baseline(config.package().root(), &predecessor_context(&config))
+        .map_err(RuntimePackageInspectionError::Package)
+}
+
+fn load_predecessor_runtime_config(
+    runtime_config: &Path,
+) -> Result<RuntimeConfig, RuntimePackageInspectionError> {
     if !runtime_config.is_absolute() {
         return Err(RuntimePackageInspectionError::RuntimeConfigPath);
     }
-    let config = load_runtime_config(runtime_config)
-        .map_err(RuntimePackageInspectionError::RuntimeConfig)?;
-    let context = PredecessorPackageContext {
+    load_runtime_config(runtime_config).map_err(RuntimePackageInspectionError::RuntimeConfig)
+}
+
+fn predecessor_context(config: &RuntimeConfig) -> PredecessorPackageContext<'_> {
+    PredecessorPackageContext {
         environment: config.identity().environment(),
         instance_id: config.identity().instance_id(),
         database_id: config.identity().database_id(),
@@ -65,7 +88,5 @@ pub(crate) fn inspect_runtime_predecessor_package(
         trust_anchor: config.package_trust_anchor(),
         expected_package_revision: config.package().active_revision(),
         expected_sequence: config.package().active_sequence(),
-    };
-    load_predecessor_package(config.package().root(), &context)
-        .map_err(RuntimePackageInspectionError::Package)
+    }
 }

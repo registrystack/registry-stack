@@ -36,11 +36,12 @@ use registry_breg::package::{
     compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
     CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline, PackageBuildRequest,
     PackageIntent, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
-    PackageSourceFile, SignaturePolicy, VerifiedPackage,
+    PackageSourceFile, PreparedPackage, SignaturePolicy, VerifiedPackage,
 };
 use registry_breg::postgres::{
-    install_compiled_schema, managed_schema_fingerprint, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity,
+    install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, MigrationRehearsalError,
+    SuccessorMigrationRehearsal,
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
@@ -1153,6 +1154,166 @@ async fn real_postgres_added_required_field_backfills_before_the_column_is_const
     database.cleanup().await;
 }
 
+/// `bregctl test` rehearses a successor over an empty reproduction of the
+/// verified predecessor schema before it measures the candidate. The rehearsal
+/// accepts the plan activation accepts, refuses the plans activation would
+/// refuse with a value-free PostgreSQL class and object, and rolls back so the
+/// schema-test database is still clean afterward.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse() {
+    let database = TestDatabase::create(1).await;
+    let _unused_harness_configs = (&database.runtime_config, &database.tls_runtime_config);
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+
+    let base = compile_variant(Variant::Base, 1);
+    let base_fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &base_fingerprint);
+    let active = target_identity(&initial);
+    let candidate = compile_variant(Variant::RankRequired, 2);
+    // A package's fingerprint is the fresh-install fingerprint of its registry,
+    // and activation holds the migrated catalog to it.
+    let target_fingerprint = initial_fingerprint(&database, &candidate).await;
+    let rehearsal_request = |id: &'static str| BackfillSourceRequest {
+        id,
+        current: &active,
+        prior: &base,
+        candidate: &candidate,
+        final_fingerprint: &target_fingerprint,
+        pre: AssertionMode::True,
+        post: AssertionMode::True,
+        rehearsed_rows: 0,
+    };
+
+    let accepted = prepare_reviewed_candidate(
+        &active,
+        &base,
+        &target_fingerprint,
+        backfill_source(rehearsal_request("rank-reviewed")),
+    );
+    rehearse(&database, &base, &base_fingerprint, &accepted)
+        .await
+        .expect("the reviewed plan activation accepts also rehearses");
+    assert_rehearsal_database_clean(&database).await;
+
+    let unconstrained = prepare_reviewed_candidate(
+        &active,
+        &base,
+        &target_fingerprint,
+        backfill_source_with_steps(rehearsal_request("rank-unconstrained"), None, false),
+    );
+    let refused = rehearse(&database, &base, &base_fingerprint, &unconstrained)
+        .await
+        .expect_err("a plan that leaves the column nullable misses the candidate schema");
+    assert_eq!(refused, MigrationRehearsalError::FinalSchemaMismatch);
+    assert_rehearsal_database_clean(&database).await;
+
+    let entity = &candidate.entities()["asset"];
+    let rank = &entity.fields["rank"].physical_name;
+    let canary = "rehearsal-canary-value";
+    let uncastable = prepare_reviewed_candidate(
+        &active,
+        &base,
+        &target_fingerprint,
+        backfill_source_with_steps(
+            rehearsal_request("rank-uncastable"),
+            Some(format!(
+                "UPDATE registry_data.{} SET {rank} = '{canary}' WHERE record_id = ANY($1::pg_catalog.uuid[])",
+                entity.physical_table
+            )),
+            true,
+        ),
+    );
+    let refused = rehearse(&database, &base, &base_fingerprint, &uncastable)
+        .await
+        .expect_err("PostgreSQL refuses the reviewed step's constant");
+    let MigrationRehearsalError::Step {
+        migration_id,
+        step_id,
+        failure,
+    } = &refused
+    else {
+        panic!("the refusal names the reviewed step: {refused:?}");
+    };
+    assert_eq!(migration_id, "rank-uncastable");
+    assert_eq!(step_id, "backfill-rank");
+    assert_eq!(failure.sqlstate.as_deref(), Some("22P02"));
+    let rendered = format!("{refused} {refused:?}");
+    assert!(
+        rendered.contains("data exception"),
+        "the refusal names the PostgreSQL error class: {rendered}"
+    );
+    assert!(
+        !rendered.contains(canary),
+        "the refusal carries no value from the statement: {rendered}"
+    );
+    assert_rehearsal_database_clean(&database).await;
+
+    let wrong_baseline = rehearse(&database, &base, &target_fingerprint, &accepted)
+        .await
+        .expect_err("a baseline that does not reproduce is refused before any step");
+    assert_eq!(
+        wrong_baseline,
+        MigrationRehearsalError::BaselineNotReproducible
+    );
+    assert_rehearsal_database_clean(&database).await;
+
+    database.cleanup().await;
+}
+
+/// A reviewed plan that also carries compiler DDL rehearses it in activation
+/// order: the added column arrives nullable, the managed read views are
+/// rebuilt, and the deferred `SET NOT NULL` runs after the reviewed backfill.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_rehearsal_runs_compiler_ddl_around_the_reviewed_steps() {
+    let database = TestDatabase::create(1).await;
+    let _unused_harness_configs = (&database.runtime_config, &database.tls_runtime_config);
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+
+    let base = compile_variant(Variant::Base, 1);
+    let base_fingerprint = initial_fingerprint(&database, &base).await;
+    let active = target_identity(&prepare_and_load_initial(&base, &base_fingerprint));
+    let candidate = compile_variant(Variant::BatchAddedRequired, 2);
+    let target_fingerprint = initial_fingerprint(&database, &candidate).await;
+    let prepared = prepare_package(build_request(
+        Variant::BatchAddedRequired,
+        2,
+        Some(&active.package_revision),
+        &target_fingerprint,
+        PackageMigrationPlanInput::ReviewedSuccessor {
+            prior_registry: Box::new(base.clone()),
+            prior_schema_fingerprint: active.schema_fingerprint.clone(),
+            migrations: vec![added_required_source(
+                "add-required-rehearsal",
+                &active,
+                &base,
+                &candidate,
+                &target_fingerprint,
+                0,
+            )],
+        },
+        DATABASE,
+    ))
+    .expect("reviewed candidate prepares");
+    assert!(
+        !prepared.manifest().migration_plan.statements.is_empty(),
+        "the candidate carries compiler DDL around its reviewed step"
+    );
+    rehearse(&database, &base, &base_fingerprint, &prepared)
+        .await
+        .expect("compiler DDL and the reviewed backfill rehearse in activation order");
+    assert_rehearsal_database_clean(&database).await;
+
+    database.cleanup().await;
+}
+
 /// A reviewed field-encryption flip over rows an active registry already
 /// holds: the engine seals each keyset chunk under lock in one transaction
 /// with its journal capture and durable cursor, an injected fault after one
@@ -2192,6 +2353,17 @@ struct BackfillSourceRequest<'a> {
 }
 
 fn backfill_source(request: BackfillSourceRequest<'_>) -> ReviewedMigrationSource {
+    backfill_source_with_steps(request, None, true)
+}
+
+/// The rank backfill with its update statement optionally replaced and its
+/// `SET NOT NULL` step optionally left out, so a rehearsal can be handed a
+/// plan PostgreSQL or activation would refuse.
+fn backfill_source_with_steps(
+    request: BackfillSourceRequest<'_>,
+    update_sql_override: Option<String>,
+    constrain_rank: bool,
+) -> ReviewedMigrationSource {
     let BackfillSourceRequest {
         id,
         current,
@@ -2214,10 +2386,12 @@ fn backfill_source(request: BackfillSourceRequest<'_>) -> ReviewedMigrationSourc
     let alter_path = format!("{base}/steps/set-rank-not-null.sql");
     let pre_path = format!("{base}/assertions/pre.sql");
     let post_path = format!("{base}/assertions/post.sql");
-    let update_sql = format!(
-        "UPDATE registry_data.{} SET {} = 1 WHERE record_id = ANY($1::pg_catalog.uuid[])",
-        entity.physical_table, field.physical_name
-    );
+    let update_sql = update_sql_override.unwrap_or_else(|| {
+        format!(
+            "UPDATE registry_data.{} SET {} = 1 WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            entity.physical_table, field.physical_name
+        )
+    });
     let alter_sql = format!(
         "ALTER TABLE registry_data.{} ALTER COLUMN {} SET NOT NULL",
         entity.physical_table, field.physical_name
@@ -2253,26 +2427,27 @@ fn backfill_source(request: BackfillSourceRequest<'_>) -> ReviewedMigrationSourc
         recovery: ReviewedMigrationRecovery::ExactTargetResume,
         lock_timeout_ms: 50,
         statement_timeout_ms: 5_000,
-        steps: vec![
-            ReviewedMigrationStepDescriptor::ChunkedBackfill {
-                id: "backfill-rank".to_owned(),
-                entity_id: "asset".to_owned(),
-                sql_path: update_path.clone(),
-                objects: vec![object.clone()],
-                cursor: ChunkCursorProtocol::RecordIdUuidArray,
-                chunk_size: 2,
-                max_total_rows: 10,
-                lock_timeout_ms: 50,
-                statement_timeout_ms: 5_000,
-                exact_affected_rows: true,
-            },
-            ReviewedMigrationStepDescriptor::TransactionalSql {
+        steps: std::iter::once(ReviewedMigrationStepDescriptor::ChunkedBackfill {
+            id: "backfill-rank".to_owned(),
+            entity_id: "asset".to_owned(),
+            sql_path: update_path.clone(),
+            objects: vec![object.clone()],
+            cursor: ChunkCursorProtocol::RecordIdUuidArray,
+            chunk_size: 2,
+            max_total_rows: 10,
+            lock_timeout_ms: 50,
+            statement_timeout_ms: 5_000,
+            exact_affected_rows: true,
+        })
+        .chain(
+            constrain_rank.then(|| ReviewedMigrationStepDescriptor::TransactionalSql {
                 id: "set-rank-not-null".to_owned(),
                 sql_path: alter_path.clone(),
                 objects: vec![object],
                 affected_rows: None,
-            },
-        ],
+            }),
+        )
+        .collect(),
         pre_assertions: vec![ReviewedMigrationAssertionDescriptor {
             id: "pre".to_owned(),
             sql_path: pre_path.clone(),
@@ -2289,7 +2464,9 @@ fn backfill_source(request: BackfillSourceRequest<'_>) -> ReviewedMigrationSourc
         descriptor,
         current,
         final_fingerprint,
-        steps: vec![(update_path, update_sql), (alter_path, alter_sql)],
+        steps: std::iter::once((update_path, update_sql))
+            .chain(constrain_rank.then_some((alter_path, alter_sql)))
+            .collect(),
         pre: (pre_path, pre_sql),
         post: (post_path, post_sql),
         backup: None,
@@ -3208,6 +3385,63 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
         },
         files,
     }
+}
+
+fn prepare_reviewed_candidate(
+    current: &ExpectedRegistryIdentity,
+    prior: &CompiledRegistry,
+    fingerprint: &str,
+    source: ReviewedMigrationSource,
+) -> PreparedPackage {
+    prepare_package(build_request(
+        Variant::RankRequired,
+        2,
+        Some(&current.package_revision),
+        fingerprint,
+        PackageMigrationPlanInput::ReviewedSuccessor {
+            prior_registry: Box::new(prior.clone()),
+            prior_schema_fingerprint: current.schema_fingerprint.clone(),
+            migrations: vec![source],
+        },
+        DATABASE,
+    ))
+    .expect("reviewed candidate prepares")
+}
+
+async fn rehearse(
+    database: &TestDatabase,
+    predecessor: &CompiledRegistry,
+    predecessor_schema_fingerprint: &str,
+    candidate: &PreparedPackage,
+) -> Result<(), MigrationRehearsalError> {
+    rehearse_successor_migration(
+        &database.migration_config,
+        &database.migration_role,
+        &database.runtime_role,
+        SuccessorMigrationRehearsal {
+            predecessor,
+            predecessor_schema_fingerprint,
+            candidate,
+        },
+    )
+    .await
+}
+
+async fn assert_rehearsal_database_clean(database: &TestDatabase) {
+    let managed = database
+        .admin
+        .query_one(
+            "SELECT pg_catalog.count(*)
+               FROM pg_catalog.pg_class c
+               JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname IN ('registry_internal', 'registry_data', 'registry_source',
+                                  'registry_derived', 'registry_context')",
+            &[],
+        )
+        .await
+        .expect("managed schemas are counted")
+        .get::<_, i64>(0);
+    assert_eq!(managed, 0, "the rehearsal rolls back every managed object");
 }
 
 async fn initial_fingerprint(database: &TestDatabase, registry: &CompiledRegistry) -> String {

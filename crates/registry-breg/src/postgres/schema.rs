@@ -808,7 +808,7 @@ pub(crate) async fn rehearse_schema_fingerprint_with_connection(
 }
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]
-async fn connect_schema_test(
+pub(super) async fn connect_schema_test(
     config: &ConnectionConfig,
 ) -> Result<(Client, tokio::task::JoinHandle<()>)> {
     match config.tls_connector() {
@@ -831,7 +831,7 @@ async fn connect_schema_test(
 }
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]
-async fn refuse_existing_managed_objects(client: &impl GenericClient) -> Result<()> {
+pub(super) async fn refuse_existing_managed_objects(client: &impl GenericClient) -> Result<()> {
     client
         .batch_execute("SAVEPOINT registry_empty_schema_probe")
         .await?;

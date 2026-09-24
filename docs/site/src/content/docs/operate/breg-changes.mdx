@@ -109,6 +109,60 @@ bregctl --format json test ./my-registry \
   --output /srv/registry/schema-test-receipt-2.json
 ```
 
+### Reviewed migration files
+
+Every file is canonical JSON or SQL, and every path inside a descriptor is relative to the
+reviewed directory root, starting with `modules/<module-id>/migrations/<migration-id>/`.
+
+- `descriptor.json` holds `id`, `changeClass`, `covers` (each change `code` and `target`
+  from `diff --format json` that is not compatible additive), `recovery` (`exact_target_resume`),
+  `lockTimeoutMs`, `statementTimeoutMs`, `steps`, `preAssertions`, `postAssertions`,
+  `rehearsalReceiptPath`, and, for a destructive change, `backupBindingPath`.
+- A step is one of three kinds. `transactional_sql` runs one statement from `sqlPath` in the
+  activation transaction; DML must declare `affectedRows` bounds, and every row it changes gets a
+  history revision. `chunked_backfill` runs its statement once per chunk of record identifiers,
+  bound as a UUID array, within `chunkSize` and `maxTotalRows`. `field_encryption_backfill` carries
+  no SQL; the engine seals the covered fields chunk by chunk. Each step lists the `objects`
+  (schema, table, entity, kind, member, physical name) its SQL may touch.
+- An assertion is one `SELECT` returning exactly one boolean column. Pre-assertions run against
+  the predecessor tables before any step, post-assertions against the successor tables after
+  every step, and activation stops on a false result.
+- `rehearsal.json` binds the prior revision and schema fingerprint, the descriptor and SQL
+  digests, the fixture inventory, the PostgreSQL major version, the affected row counts your
+  rehearsal observed, the final schema fingerprint, and the lock-timeout and resume proofs.
+- `backup.json` binds the backup file `apply --backup` will present: `databaseId`,
+  `priorRevision`, `priorSchemaFingerprint`, `sha256`, `byteLength`, `createdAt`, and
+  `maxAgeSeconds`.
+
+`apply` accepts a backup only when all of these hold: the binding names the active database,
+revision, and schema fingerprint; `createdAt` is no older than `maxAgeSeconds` and not in the
+future; the path given to `--backup` is absolute and is a regular file rather than a symbolic
+link, owned by the user running `apply`, with mode `0600` and exactly one hard link; its length
+and SHA-256 digest equal the binding. Take the backup with your PostgreSQL tooling immediately
+before `apply`, `chmod 600` it, and record its digest and length. A backup that fails any check
+refuses the apply before maintenance begins.
+
+### What `test` rehearses
+
+With `--baseline-runtime-config`, `test` rebuilds the predecessor schema from the verified active
+package's signed sources on the disposable database, checks that it reproduces the predecessor's
+schema fingerprint, then runs the successor migration over it in the order `apply` would:
+pre-assertions, the compiler's statements, your reviewed steps, the deferred constraints and
+views, and post-assertions. It then requires the result to match the candidate's schema
+fingerprint, and rolls everything back before the ordinary journey test runs. A statement
+PostgreSQL refuses, an assertion that is not a single boolean column, or a plan that does not reach
+the candidate schema fails `test`, so `package`, which requires that receipt, cannot sign a plan
+`apply` would reject. The report names the migration, step or assertion, the SQLSTATE and its
+class, and the table, column, or constraint PostgreSQL named. It never includes a PostgreSQL
+message, because those can quote row values.
+
+The rehearsal runs over empty tables, so it proves that the SQL is valid, ordered, and reaches
+the target schema. It does not prove that your data satisfies a step or an assertion: a duplicate
+key, a row count outside `affectedRows`, or an assertion that is false over real rows is found
+only by your own rehearsal on a restored copy of production and by `apply` itself. Field-encryption
+backfill steps are skipped, because they need key material and rows. Reviewed fixture files are
+bound by digest only; the rehearsal does not load them.
+
 Package and sign as [deploy a registry](../breg/) describes, with the same
 `--baseline-runtime-config` and `--reviewed-migrations` arguments. If any source, reviewed
 artifact, baseline, or signature-policy input changes afterwards, repeat the test and the signing.
@@ -125,6 +179,9 @@ Reviewed artifacts cannot authorize a change the planner classifies as unsupport
     crates/registry-breg/src/tooling.rs, classify_change();
     crates/registry-breg/tests/action_vocabulary_codes.rs;
     crates/registry-bregctl/tests/cli/reviewed_migrations.rs;
+    crates/registry-breg/src/postgres/rehearsal.rs;
+    crates/registry-breg/src/migration.rs, open_bound_backup();
+    crates/registry-breg/tests/postgres_migration.rs, real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse;
     products/breg/scripts/test-adopter-workflow.sh. */}
 
 ## Activate the successor
@@ -282,6 +339,9 @@ server binary, and earlier packages keep verifying under their recorded rules.
 | `test` or `package` reports `migration.review.closure_refused` | The set of files does not close: a descriptor the directory names is missing, a path appears twice, or there are too many artifacts. |
 | `test` or `package` reports `migration.review.refused` | A precondition failed before the reviewed directory was read, such as the prior revision or the baseline binding. Check the baseline arguments and the fingerprints in the rehearsal receipt. |
 | `test` or `package` reports `migration.review.fingerprint_mismatch` | The rehearsal receipt was taken for a different candidate or baseline. Rehearse the exact candidate again. |
+| `test` reports `migration.rehearsal.step_failed`, `migration.rehearsal.assertion_failed`, or `migration.rehearsal.compiler_statement_failed` | PostgreSQL refused the named step, assertion, or generated statement when `test` rehearsed the successor over the predecessor schema, so `apply` would refuse it too. The message names the SQLSTATE, its class, and the object. Correct the reviewed SQL or the project, then repeat test and package. |
+| `test` reports `migration.rehearsal.schema_mismatch` | The rehearsed migration does not reach the candidate schema, for example a required field the reviewed steps never constrain. Activation would refuse it. |
+| `test` reports `migration.rehearsal.baseline_unavailable` or `migration.rehearsal.baseline_not_reproducible` | This `bregctl` cannot rebuild the active package's schema from its signed sources. Run `test` with a `bregctl` release that compiles the predecessor, or report the mismatch. |
 | `apply` reports `apply.migration.failed` | The apply failed after maintenance began. Read the report, fix the cause, and retry the same target. If that is not available, run `migration reconcile` to assess the pinned target, execute the transition it names, and restore the pre-activation backup only when it reports `unresolvable`. |
 | `apply` reports `apply.database.unavailable` | The migration database could not be reached, or another apply held the migration lock past the lock timeout, before maintenance began. Check that the database is reachable and accepts the migration role, then retry the same apply. Nothing was changed, so there is nothing to reconcile. |
 | `apply` reports `apply.package.older_than_active` | The target package is older than the active one, and packages apply forward only. Build a successor that reverts the change, or restore the pre-activation backup, as [roll back by rolling forward](#roll-back-by-rolling-forward) describes. Nothing was changed. |

@@ -26,6 +26,7 @@ use registry_breg::package::{
     FIXTURE_JOURNEYS_PATH, MAX_PACKAGE_SOURCE_FILE_BYTES, MAX_RHAI_PLANNER_PATH_BYTES,
     MAX_RHAI_PLANNER_SOURCE_BYTES,
 };
+use registry_breg::postgres::MigrationRehearsalError;
 use registry_breg::runtime_config::RuntimeConfigError;
 use registry_breg::tooling::{classify_registry_diff, CompiledRegistryDiff, DiffClassification};
 use registry_breg::{
@@ -80,7 +81,8 @@ use history_rebaseline_lifecycle::{
     HistoryRebaselineLifecycleRequest,
 };
 use package_inspection::{
-    inspect_runtime_package, inspect_runtime_predecessor_package, RuntimePackageInspectionError,
+    inspect_runtime_package, inspect_runtime_predecessor_package,
+    inspect_runtime_predecessor_rehearsal_baseline, RuntimePackageInspectionError,
 };
 use package_lifecycle::{PackageLifecycleError, PackageLifecycleState};
 use reconcile_lifecycle::{
@@ -1681,6 +1683,16 @@ struct CapturedPackageCandidate {
     fixture_journeys: PackageSourceFile,
     migration_plan: PackageMigrationPlanInput,
     prevalidation_schema_fingerprint: Option<String>,
+    rehearsal_baseline: Option<RehearsalBaseline>,
+}
+
+/// The verified predecessor a successor candidate is rehearsed over: its
+/// registry compiled from the signed sources and the schema fingerprint its
+/// signed manifest binds.
+#[derive(Clone, Debug)]
+struct RehearsalBaseline {
+    registry: CompiledRegistry,
+    schema_fingerprint: String,
 }
 
 impl CapturedPackageCandidate {
@@ -3508,7 +3520,7 @@ fn package(args: &PackageArgs) -> Result<PackageSuccessReport, FailureReport> {
 
 fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, FailureReport> {
     let output = test_lifecycle::preflight_output(&args.output).map_err(test_lifecycle_failure)?;
-    let candidate = capture_candidate(&args.candidate, "test")?;
+    let candidate = capture_candidate(&args.candidate, "test", true)?;
     let outcome = test_lifecycle::run(TestLifecycleRequest {
         candidate,
         runtime_config: &args.runtime_config,
@@ -3533,12 +3545,41 @@ fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, FailureReport> {
     })
 }
 
+/// Compile the verified predecessor so `test` can rehearse the successor
+/// migration over its schema. The predecessor was verified a moment earlier;
+/// this second read is bound to the same signed revision.
+fn capture_rehearsal_baseline(
+    command: &'static str,
+    runtime_config: &std::path::Path,
+    package_revision: &str,
+) -> Result<RehearsalBaseline, FailureReport> {
+    let unavailable = || {
+        candidate_failure(
+            command,
+            "migration.rehearsal.baseline_unavailable",
+            "baselineRuntimeConfig",
+            "the current compiler cannot rebuild the verified predecessor registry from its signed sources, so the successor migration cannot be rehearsed; run test with a bregctl release that compiles the predecessor sources",
+            DiagnosticArtifact::VerifiedPackage,
+            SuggestedAction::VerifyPackageIntegrity,
+        )
+    };
+    let (predecessor, registry) = inspect_runtime_predecessor_rehearsal_baseline(runtime_config)
+        .map_err(|_| unavailable())?;
+    if predecessor.package_revision() != package_revision {
+        return Err(unavailable());
+    }
+    Ok(RehearsalBaseline {
+        registry,
+        schema_fingerprint: predecessor.schema_fingerprint().to_owned(),
+    })
+}
+
 fn prepare_candidate(
     args: &PackageCandidateArgs,
     schema_fingerprint: String,
     command: &'static str,
 ) -> Result<PreparedPackage, FailureReport> {
-    capture_candidate(args, command)?
+    capture_candidate(args, command, false)?
         .prepare(schema_fingerprint)
         .map_err(|error| candidate_package_error(command, error))
 }
@@ -3546,6 +3587,7 @@ fn prepare_candidate(
 fn capture_candidate(
     args: &PackageCandidateArgs,
     command: &'static str,
+    rehearse_successor: bool,
 ) -> Result<CapturedPackageCandidate, FailureReport> {
     let source = capture_project_source(&args.project).map_err(|diagnostic| {
         source_failure(
@@ -3612,6 +3654,7 @@ fn capture_candidate(
         )],
     })?;
     let mut prevalidation_schema_fingerprint = None;
+    let mut rehearsal_baseline = None;
     let mut reviewed_changes = String::new();
     let (prior_revision, migration_plan) = match args.baseline_runtime_config.as_deref() {
         Some(runtime_config) => {
@@ -3629,6 +3672,13 @@ fn capture_candidate(
                     DiagnosticArtifact::RuntimeConfiguration,
                     SuggestedAction::CorrectRuntimeConfiguration,
                 ));
+            }
+            if rehearse_successor {
+                rehearsal_baseline = Some(capture_rehearsal_baseline(
+                    command,
+                    runtime_config,
+                    baseline.package_revision(),
+                )?);
             }
             let changes = registry_breg::package::compiled_registry_change_set_from_baseline(
                 baseline.migration_baseline(),
@@ -3728,6 +3778,7 @@ fn capture_candidate(
         },
         migration_plan,
         prevalidation_schema_fingerprint,
+        rehearsal_baseline,
     };
     if args.reviewed_migrations.is_some() {
         candidate.prevalidate().map_err(|error| {
@@ -4023,6 +4074,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
                 )],
             };
         }
+        TestLifecycleError::Rehearsal(error) => return migration_rehearsal_failure(*error),
         TestLifecycleError::Credentials { path, message } => {
             return FailureReport {
                 ok: false,
@@ -4051,6 +4103,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
         TestLifecycleError::Credentials { .. } => unreachable!("handled before match"),
         TestLifecycleError::JourneyStep { .. } => unreachable!("handled before match"),
         TestLifecycleError::CandidateBinding { .. } => unreachable!("handled before match"),
+        TestLifecycleError::Rehearsal(_) => unreachable!("handled before match"),
         TestLifecycleError::Candidate => (
             "test.candidate.refused",
             "candidate",
@@ -4107,6 +4160,80 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
         command: "test",
         diagnostics: vec![tool_diagnostic(
             diagnostic(code, path, message),
+            artifact,
+            action,
+        )],
+    }
+}
+
+/// Report a refused successor-migration rehearsal. Every message is built from
+/// authored identifiers and PostgreSQL's value-free error fields, never from a
+/// server message or detail.
+fn migration_rehearsal_failure(error: MigrationRehearsalError) -> FailureReport {
+    let (code, path, action) = match &error {
+        MigrationRehearsalError::Database => (
+            "test.database.unavailable",
+            "database".to_owned(),
+            SuggestedAction::RecreateDisposableDatabase,
+        ),
+        MigrationRehearsalError::NotSuccessor | MigrationRehearsalError::ReviewedPlan => (
+            "test.candidate.refused",
+            "candidate".to_owned(),
+            SuggestedAction::CorrectPackageBuild,
+        ),
+        MigrationRehearsalError::BaselineNotReproducible => (
+            "migration.rehearsal.baseline_not_reproducible",
+            "baselineRuntimeConfig".to_owned(),
+            SuggestedAction::VerifyPackageIntegrity,
+        ),
+        MigrationRehearsalError::CompilerStatement { statement_id, .. } => (
+            "migration.rehearsal.compiler_statement_failed",
+            format!("migrationPlan.statements[{statement_id}]"),
+            SuggestedAction::CorrectPackageBuild,
+        ),
+        MigrationRehearsalError::Assertion {
+            migration_id,
+            phase,
+            assertion_id,
+            ..
+        }
+        | MigrationRehearsalError::AssertionShape {
+            migration_id,
+            phase,
+            assertion_id,
+        } => (
+            "migration.rehearsal.assertion_failed",
+            format!("reviewedMigrations[{migration_id}].{phase}Assertions[{assertion_id}]"),
+            SuggestedAction::CorrectPackageBuild,
+        ),
+        MigrationRehearsalError::Step {
+            migration_id,
+            step_id,
+            ..
+        } => (
+            "migration.rehearsal.step_failed",
+            format!("reviewedMigrations[{migration_id}].steps[{step_id}]"),
+            SuggestedAction::CorrectPackageBuild,
+        ),
+        MigrationRehearsalError::FinalSchemaMismatch => (
+            "migration.rehearsal.schema_mismatch",
+            "reviewedMigrations".to_owned(),
+            SuggestedAction::CorrectPackageBuild,
+        ),
+    };
+    let artifact = if matches!(error, MigrationRehearsalError::Database) {
+        DiagnosticArtifact::SchemaTestDatabase
+    } else {
+        DiagnosticArtifact::DatabaseMigration
+    };
+    let message = format!(
+        "the successor migration was rehearsed over an empty copy of the verified predecessor schema and refused, so apply would refuse it too: {error}"
+    );
+    FailureReport {
+        ok: false,
+        command: "test",
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(code, &path, &message),
             artifact,
             action,
         )],

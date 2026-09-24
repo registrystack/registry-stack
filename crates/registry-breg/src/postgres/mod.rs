@@ -11,6 +11,8 @@ mod interlock;
 mod migration_ledger;
 mod mutation;
 mod read;
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+mod rehearsal;
 mod revision_read;
 mod roles;
 mod schema;
@@ -67,6 +69,11 @@ pub use mutation::{
 pub use read::PostgresRecordReadService;
 #[cfg(feature = "postgres-test")]
 pub use read::ReadFaultPoint;
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+pub use rehearsal::{
+    rehearse_successor_migration, MigrationRehearsalError, PostgresFailure,
+    RehearsalAssertionPhase, SuccessorMigrationRehearsal,
+};
 pub use revision_read::PostgresRevisionReadService;
 #[cfg(feature = "postgres-test")]
 pub use revision_read::RevisionReadFaultPoint;
