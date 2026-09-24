@@ -415,34 +415,24 @@ pub(crate) fn verifier(config: &ResourceServerConfig, fetcher: Arc<JwksFetcher>)
     TokenVerifier::new(verifier_config(config), fetcher)
 }
 
-/// A fetcher for a published key set. Plain HTTP only under development
-/// loopback, when both the issuer and the key set are on `127.0.0.1`.
-pub(crate) fn uri_fetcher(
-    config: &ResourceServerConfig,
-    uri: &str,
-    development_loopback: bool,
-) -> JwksFetcher {
-    let local = development_loopback
-        && config.issuer.starts_with("http://127.0.0.1:")
-        && uri.starts_with("http://127.0.0.1:");
-    let policy = if local {
-        FetchUrlPolicy {
-            allowed_schemes: vec!["http".to_owned()],
-            allow_localhost: true,
-            allow_http_private_network: false,
-            deny_private_ranges: true,
-            deny_cloud_metadata: true,
-        }
+/// A fetcher for a published key set, under the strict fetch policy, or the
+/// development one when the listener is the loopback development listener.
+pub(crate) fn uri_fetcher(uri: &str, development_loopback: bool) -> JwksFetcher {
+    JwksFetcher::new_with_fetch_url_policy(
+        uri.to_owned(),
+        JwksFetcherConfig::defaults(),
+        jwks_fetch_policy(development_loopback),
+    )
+}
+
+/// The outbound URL policy for the key set: https to a public address in
+/// production, and plain http to loopback as well under development.
+fn jwks_fetch_policy(development_loopback: bool) -> FetchUrlPolicy {
+    if development_loopback {
+        FetchUrlPolicy::dev()
     } else {
-        FetchUrlPolicy {
-            allowed_schemes: vec!["https".to_owned()],
-            allow_localhost: true,
-            allow_http_private_network: false,
-            deny_private_ranges: false,
-            deny_cloud_metadata: true,
-        }
-    };
-    JwksFetcher::new_with_fetch_url_policy(uri.to_owned(), JwksFetcherConfig::defaults(), policy)
+        FetchUrlPolicy::strict()
+    }
 }
 
 /// Whether a verification failure was the deployment's key source rather than
@@ -522,7 +512,7 @@ mod tests {
 
     fn server_for(authorization: &TestAuthorizationServer, limits: RateLimitsConfig) -> Router {
         let config = config(&authorization.issuer(), &authorization.jwks_uri());
-        let fetcher = Arc::new(uri_fetcher(&config, &authorization.jwks_uri(), true));
+        let fetcher = Arc::new(uri_fetcher(&authorization.jwks_uri(), true));
         let server = Arc::new(
             ResourceServer::new(
                 &config,
@@ -803,7 +793,7 @@ mod tests {
         );
         drop(listener);
         let config = config(&authorization.issuer(), &closed);
-        let fetcher = Arc::new(uri_fetcher(&config, &closed, true));
+        let fetcher = Arc::new(uri_fetcher(&closed, true));
         let server = ResourceServer::new(
             &config,
             "x",
@@ -823,11 +813,42 @@ mod tests {
         );
     }
 
+    /// Outside development the key set is fetched under the strict policy:
+    /// a loopback or private address is refused before any connection, even
+    /// over https.
+    #[tokio::test]
+    async fn a_production_key_set_on_a_loopback_address_is_refused_before_any_fetch() {
+        let authorization = authorization_server().await;
+        let token =
+            authorization.issue_access_token(CHAT_HOST, "citizen-a", RESOURCE, SCOPE, now() + 300);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let loopback = format!(
+            "https://{}/jwks.json",
+            listener.local_addr().expect("address")
+        );
+        drop(listener);
+        let config = config(&authorization.issuer(), &loopback);
+        let fetcher = Arc::new(uri_fetcher(&loopback, false));
+        let error = verifier(&config, fetcher)
+            .verify(&token)
+            .await
+            .expect_err("a loopback key set is refused");
+        assert!(matches!(error, OidcError::FetchUrl(_)), "{error:?}");
+    }
+
+    #[test]
+    fn the_key_set_policy_is_strict_outside_development() {
+        assert_eq!(jwks_fetch_policy(false), FetchUrlPolicy::strict());
+        assert_eq!(jwks_fetch_policy(true), FetchUrlPolicy::dev());
+    }
+
     #[tokio::test]
     async fn a_token_that_already_names_an_actor_is_refused() {
         let authorization = authorization_server().await;
         let config = config(&authorization.issuer(), &authorization.jwks_uri());
-        let fetcher = Arc::new(uri_fetcher(&config, &authorization.jwks_uri(), true));
+        let fetcher = Arc::new(uri_fetcher(&authorization.jwks_uri(), true));
         let server = ResourceServer::new(
             &config,
             "x",

@@ -119,7 +119,7 @@ fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
     let development = config.development_loopback();
     let server = &config.resource_server;
     let fetcher = match &server.jwks {
-        JwksSource::Uri { uri } => uri_fetcher(server, uri, development),
+        JwksSource::Uri { uri } => uri_fetcher(uri, development),
         JwksSource::Static { document_ref } => {
             let document = resolve(&secrets, "resourceServer.jwks.documentRef", document_ref)?;
             let keys = serde_json::from_slice(document.expose_secret())

@@ -155,7 +155,11 @@ rateLimits:
 Secrets are references (`secret:file/<name>` or `secret:env/<name>`), never
 inline values; a secret file others can read is refused. The gateway's private
 key is a private JWK. Plain HTTP is accepted only with
-`tlsTermination: development-loopback` on a loopback address.
+`tlsTermination: development-loopback` on a loopback address. A `jwks.uri`
+key set is fetched under the platform's strict URL policy, which refuses a
+loopback, private, or cloud-metadata address before connecting; only under
+`development-loopback` does the development policy also admit plain HTTP to
+loopback.
 
 The endpoint is served at `/mcp` over streamable HTTP, stateless, with JSON
 responses. Requests whose `Host` is not the resource's authority, and any
