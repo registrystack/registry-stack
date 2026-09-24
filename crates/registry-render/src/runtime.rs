@@ -1,63 +1,85 @@
 //! The serve runtime: one strict YAML file with everything a deployment
-//! owns — bind address, sealed bundle path, caller key, limits, audit.
-//! Nothing here can override governed (bundle) behavior.
+//! owns: listener, sealed bundle package, secret providers, caller key,
+//! limits, audit. Nothing here can override governed (bundle) behavior.
+//!
+//! The file is read through the shared Registry Stack runtime configuration
+//! loader, so its envelope, size bound, path rules, `${VAR}` substitution,
+//! and secret provider declarations match every other runtime.
 
 use std::path::{Path, PathBuf};
 
-use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
-use serde::{Deserialize, Serialize};
+use registry_platform_audit::{AuditDestination, AuditDestinationKind};
+use registry_platform_config::{
+    ListenerBind, PackageConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
+    SecretProvidersConfig,
+};
+use serde::Deserialize;
 
 use crate::problem::{ProblemKind, RenderProblem};
 
-pub const RUNTIME_API_VERSION: &str = "render.registrystack.org/v1alpha1";
-pub const RUNTIME_KIND: &str = "RenderRuntime";
+pub const RUNTIME_API_VERSION: &str = "registry.registrystack.org/render-runtime/v1alpha1";
+pub const RUNTIME_KIND: &str = "RenderRuntimeConfig";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+const RENDER_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
+    api_version: RUNTIME_API_VERSION,
+    kind: RUNTIME_KIND,
+};
+
+/// Keys an earlier runtime file carried, each refused with its replacement.
+const RENDER_REMOVED_KEYS: &[RemovedKey] = &[
+    RemovedKey {
+        path: "server",
+        replacement: "declare listener.bind and listener.shutdownGraceSeconds instead",
+    },
+    RemovedKey {
+        path: "bundle",
+        replacement: "declare package.root as the absolute path of the sealed bundle directory",
+    },
+    RemovedKey {
+        path: "audit.directory",
+        replacement: "declare audit.path as the absolute path of the active audit file instead",
+    },
+    RemovedKey {
+        path: "audit.integrityKeyRef",
+        replacement: "remove it; audit entries are not hash-chained, so no integrity key is read",
+    },
+    RemovedKey {
+        path: "audit.maxSegmentBytes",
+        replacement: "declare audit.rotateBytes instead",
+    },
+];
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RenderRuntime {
     pub api_version: String,
     pub kind: String,
-    #[serde(default)]
-    pub server: ServerRuntime,
-    pub bundle: BundleRuntime,
+    pub listener: ListenerRuntime,
+    /// The sealed bundle directory Render serves.
+    pub package: PackageConfig,
+    pub secret_providers: SecretProvidersConfig,
     pub auth: AuthRuntime,
     #[serde(default)]
     pub limits: LimitsRuntime,
     pub audit: AuditRuntime,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ServerRuntime {
-    /// Loopback or private address to listen on; defaults to loopback.
-    /// Public and all-interfaces binds are refused at startup — see
-    /// [`validate_bind`]. TLS is the proxy's job, not Render's.
-    #[serde(default = "default_bind")]
-    pub bind: String,
+pub struct ListenerRuntime {
+    /// Loopback or private address to listen on. Public and all-interfaces
+    /// binds are refused at startup, see [`validate_bind`]. TLS is the
+    /// proxy's job, not Render's.
+    pub bind: ListenerBind,
     /// Grace period for in-flight renders at shutdown.
     #[serde(default = "default_shutdown_grace_seconds")]
     pub shutdown_grace_seconds: u64,
 }
 
-/// The default listener: loopback, fixed port. Deployments behind a proxy
-/// set their own private address explicitly.
-pub fn default_bind() -> String {
-    "127.0.0.1:8080".to_owned()
-}
-
-impl Default for ServerRuntime {
-    fn default() -> Self {
-        Self {
-            bind: default_bind(),
-            shutdown_grace_seconds: default_shutdown_grace_seconds(),
-        }
-    }
-}
-
 /// Render never listens on a public address: TLS termination and network
 /// position belong to the deployment's proxy. Loopback, private, and
 /// link-local addresses pass; unspecified (all interfaces) and public
-/// addresses are refused with a named startup problem — an explicit refusal
+/// addresses are refused with a named startup problem, an explicit refusal
 /// instead of an accidental exposure.
 pub fn validate_bind(addr: std::net::SocketAddr) -> Result<(), RenderProblem> {
     let allowed = match addr {
@@ -76,8 +98,8 @@ pub fn validate_bind(addr: std::net::SocketAddr) -> Result<(), RenderProblem> {
         Err(RenderProblem::new(
             ProblemKind::RuntimeInvalid,
             format!(
-                "server.bind {addr} is not a loopback or private address; Render never \
-                 listens publicly or on all interfaces — terminate TLS and position the \
+                "listener.bind {addr} is not a loopback or private address; Render never \
+                 listens publicly or on all interfaces; terminate TLS and position the \
                  service on a proxy, and bind its private address here"
             ),
         ))
@@ -93,22 +115,14 @@ fn default_shutdown_grace_seconds() -> u64 {
     30
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct BundleRuntime {
-    /// Path to a sealed bundle directory. Relative paths anchor to the
-    /// runtime file's directory (see [`load`]), not the working directory.
-    pub path: PathBuf,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuthRuntime {
-    /// `secret:file/…` or `secret:env/…` reference to the caller API key.
+    /// Secret reference to the caller API key, under a declared provider.
     pub api_key_ref: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct LimitsRuntime {
     /// Wall-clock budget per render; the worker is killed at this bound.
@@ -154,21 +168,20 @@ pub fn default_max_concurrency() -> usize {
 
 /// The audit block every Registry Stack product shares: a `file` (the
 /// default) or `stdout` destination, with rotation and retention for a file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuditRuntime {
     /// Where audit lines go: `file` or `stdout`.
     #[serde(default)]
     pub destination: AuditDestinationKind,
-    /// The active audit file, for a `file` destination. Relative paths
-    /// anchor to the runtime file's directory (see [`load`]).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The absolute path of the active audit file, for a `file` destination.
+    #[serde(default)]
     pub path: Option<PathBuf>,
     /// Size at which the active file rotates, for a `file` destination.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub rotate_bytes: Option<u64>,
     /// Days a rotated file is kept, for a `file` destination.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub retain_days: Option<u32>,
 }
 
@@ -185,146 +198,81 @@ impl AuditRuntime {
     }
 }
 
-/// Load and validate a runtime file, expanding bounded `${VAR}` references.
-/// Relative `bundle.path` and `audit.path` values are anchored to the
-/// runtime file's directory — the same anchor `secret:file/…` refs use — so
-/// one runtime file behaves identically regardless of the working directory
-/// it is loaded from. Returns the runtime and its canonical sha256 config id.
+fn invalid(message: impl Into<String>) -> RenderProblem {
+    RenderProblem::new(ProblemKind::RuntimeInvalid, message)
+}
+
+/// Load and validate a runtime file through the shared loader. Returns the
+/// runtime and the `sha256:` digest of its effective configuration.
 pub fn load(path: &Path) -> Result<(RenderRuntime, String), RenderProblem> {
-    let raw = std::fs::read_to_string(path).map_err(|err| {
-        RenderProblem::new(
-            ProblemKind::RuntimeInvalid,
-            format!("cannot read runtime {}: {err}", path.display()),
-        )
-    })?;
-    let expanded = registry_platform_config::expand_config_env_vars(&raw)
-        .map_err(|err| RenderProblem::new(ProblemKind::RuntimeInvalid, format!("{err}")))?;
-    let mut runtime: RenderRuntime = serde_norway::from_str(&expanded).map_err(|err| {
-        RenderProblem::new(
-            ProblemKind::RuntimeInvalid,
-            format!("runtime YAML invalid: {err}"),
-        )
-    })?;
-    if runtime.api_version != RUNTIME_API_VERSION {
-        return Err(RenderProblem::new(
-            ProblemKind::RuntimeInvalid,
-            format!(
-                "runtime apiVersion must be {RUNTIME_API_VERSION}, found {}",
-                runtime.api_version
-            ),
-        ));
-    }
-    if runtime.kind != RUNTIME_KIND {
-        return Err(RenderProblem::new(
-            ProblemKind::RuntimeInvalid,
-            format!(
-                "runtime kind must be {RUNTIME_KIND}, found {}",
-                runtime.kind
-            ),
-        ));
-    }
+    let loaded = RuntimeConfigLoader::new(RENDER_RUNTIME_ENVELOPE)
+        .removed_keys(RENDER_REMOVED_KEYS)
+        .load::<RenderRuntime>(path)
+        .map_err(|error| invalid(error.to_string()))?;
+    let runtime = loaded.config;
+    let in_file = |message: String| invalid(format!("{}: {message}", path.display()));
+    runtime
+        .package
+        .check()
+        .map_err(|error| in_file(error.to_string()))?;
+    runtime
+        .secret_providers
+        .check()
+        .map_err(|error| in_file(error.to_string()))?;
+    runtime
+        .secret_providers
+        .check_reference("auth.apiKeyRef", &runtime.auth.api_key_ref)
+        .map_err(|error| in_file(error.to_string()))?;
+    runtime
+        .audit
+        .destination()
+        .map_err(|error| in_file(error.detail))?;
     if runtime.limits.max_output_bytes > crate::render::DEFAULT_MAX_OUTPUT_BYTES {
-        return Err(RenderProblem::new(
-            ProblemKind::RuntimeInvalid,
-            format!(
-                "maxOutputBytes {} exceeds the hard ceiling {}",
-                runtime.limits.max_output_bytes,
-                crate::render::DEFAULT_MAX_OUTPUT_BYTES
-            ),
-        ));
+        return Err(invalid(format!(
+            "maxOutputBytes {} exceeds the hard ceiling {}",
+            runtime.limits.max_output_bytes,
+            crate::render::DEFAULT_MAX_OUTPUT_BYTES
+        )));
     }
     if runtime.limits.max_concurrency == 0 || runtime.limits.max_concurrency > 64 {
-        return Err(RenderProblem::new(
-            ProblemKind::RuntimeInvalid,
-            "maxConcurrency must be between 1 and 64",
-        ));
+        return Err(invalid("maxConcurrency must be between 1 and 64"));
     }
     if runtime.limits.max_request_body_bytes > 64 * 1024 * 1024 {
-        return Err(RenderProblem::new(
-            ProblemKind::RuntimeInvalid,
+        return Err(invalid(
             "maxRequestBodyBytes exceeds the 64 MiB hard ceiling",
         ));
     }
     // Zero would drop renders in flight the moment SIGTERM arrives; a value
     // past the hour is not a deployment intent, and the bounded wait the
     // shutdown path computes from it must stay representable.
-    if !(1..=MAX_SHUTDOWN_GRACE_SECONDS).contains(&runtime.server.shutdown_grace_seconds) {
-        return Err(RenderProblem::new(
-            ProblemKind::RuntimeInvalid,
-            format!(
-                "shutdownGraceSeconds must be between 1 and {MAX_SHUTDOWN_GRACE_SECONDS}, found {}",
-                runtime.server.shutdown_grace_seconds
-            ),
-        ));
+    if !(1..=MAX_SHUTDOWN_GRACE_SECONDS).contains(&runtime.listener.shutdown_grace_seconds) {
+        return Err(invalid(format!(
+            "listener.shutdownGraceSeconds must be between 1 and {MAX_SHUTDOWN_GRACE_SECONDS}, found {}",
+            runtime.listener.shutdown_grace_seconds
+        )));
     }
-    let anchor = runtime_anchor(path);
-    runtime.bundle.path = anchored(&anchor, &runtime.bundle.path);
-    if let Some(audit_path) = runtime.audit.path.take() {
-        // An empty path would anchor to the runtime directory itself.
-        if audit_path.as_os_str().is_empty() {
-            return Err(RenderProblem::new(
-                ProblemKind::RuntimeInvalid,
-                AuditDestinationError::MissingPath.to_string(),
-            ));
-        }
-        runtime.audit.path = Some(anchored(&anchor, &audit_path));
-    }
-    runtime.audit.destination()?;
-    let id = crate::hash::sha256_hex(expanded.as_bytes());
-    Ok((runtime, id))
+    Ok((runtime, loaded.effective_digest))
 }
 
-/// The directory runtime-relative values anchor to: the runtime file's own
-/// directory, canonicalized when possible. A bare filename anchors to the
-/// current directory (its parent is empty).
-fn runtime_anchor(runtime_path: &Path) -> PathBuf {
-    let parent = runtime_path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
-    std::fs::canonicalize(&parent).unwrap_or(parent)
+/// Compare the sealed bundle found at `package.root` with the optional
+/// `package.expectedDigest` pin, as `sha256:<bundle hash>`.
+pub fn verify_package(runtime: &RenderRuntime, bundle_hash: &str) -> Result<(), RenderProblem> {
+    let found = format!("sha256:{bundle_hash}");
+    runtime
+        .package
+        .verify_digest(Some(&found))
+        .map_err(|error| invalid(error.to_string()))
 }
 
-/// Join a configured path onto the anchor when relative, collapsing `.` and
-/// `..` lexically so anchored paths stay readable in problems and logs.
-/// Absolute paths pass through verbatim.
-fn anchored(anchor: &Path, field: &Path) -> PathBuf {
-    if field.is_absolute() {
-        return field.to_path_buf();
-    }
-    let mut out = PathBuf::new();
-    if anchor.is_absolute() {
-        out.push(std::path::Component::RootDir.as_os_str());
-    }
-    let mut parts: Vec<std::ffi::OsString> = Vec::new();
-    for component in anchor.join(field).components() {
-        match component {
-            std::path::Component::CurDir | std::path::Component::RootDir => {}
-            std::path::Component::ParentDir => {
-                parts.pop();
-            }
-            std::path::Component::Prefix(prefix) => parts.push(prefix.as_os_str().to_owned()),
-            std::path::Component::Normal(segment) => parts.push(segment.to_owned()),
-        }
-    }
-    for part in parts {
-        out.push(part);
-    }
-    out
-}
-
-/// Resolve a `secret:…` reference relative to the runtime file's directory,
-/// the same provider pair Relay allows (environment and runtime-rooted files).
-pub fn resolve_secret(runtime_path: &Path, reference: &str) -> Result<Vec<u8>, RenderProblem> {
-    use registry_platform_config::{SecretProvider, SecretResolver};
-    let root = runtime_anchor(runtime_path);
-    let resolver =
-        SecretResolver::new([SecretProvider::Environment, SecretProvider::File], root)
-            .map_err(|err| RenderProblem::new(ProblemKind::RuntimeInvalid, format!("{err}")))?;
+/// Resolve a secret reference under the providers the runtime declares.
+pub fn resolve_secret(runtime: &RenderRuntime, reference: &str) -> Result<Vec<u8>, RenderProblem> {
+    let resolver = runtime
+        .secret_providers
+        .resolver()
+        .map_err(|err| invalid(format!("secretProviders: {err}")))?;
     let secret = resolver
         .resolve(reference)
-        .map_err(|err| RenderProblem::new(ProblemKind::RuntimeInvalid, format!("{err}")))?;
+        .map_err(|err| invalid(format!("{err}")))?;
     Ok(secret.expose_secret().to_vec())
 }
 
@@ -333,18 +281,291 @@ mod tests {
     use super::*;
     use std::net::SocketAddr;
 
-    fn runtime_yaml(body: &str) -> RenderRuntime {
-        let text =
-            format!("apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\n{body}");
-        serde_norway::from_str(&text).expect("runtime parses")
+    /// A canonical temporary directory: the loader refuses a path through a
+    /// symbolic link, and the system temporary directory is one on some
+    /// hosts.
+    fn home() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("deployment home");
+        let path = dir.path().canonicalize().expect("canonical home");
+        (dir, path)
+    }
+
+    const HEAD: &str = "apiVersion: registry.registrystack.org/render-runtime/v1alpha1\nkind: RenderRuntimeConfig\n";
+
+    fn minimal(home: &Path) -> String {
+        format!(
+            "{HEAD}listener:\n  bind: 127.0.0.1:8080\npackage:\n  root: /srv/render/package\nsecretProviders:\n  file:\n    root: {secrets}\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  path: /var/lib/render/audit/render.jsonl\n",
+            secrets = home.join("secrets").display(),
+        )
+    }
+
+    fn load_text(home: &Path, text: &str) -> Result<RenderRuntime, RenderProblem> {
+        let file = home.join("runtime.yaml");
+        std::fs::write(&file, text).expect("runtime file");
+        load(&file).map(|(runtime, _)| runtime)
     }
 
     #[test]
-    fn bind_defaults_to_loopback() {
-        let runtime = runtime_yaml(
-            "bundle:\n  path: /b\nauth:\n  apiKeyRef: secret:file/k\naudit:\n  path: /a/render.jsonl\n",
+    fn the_runtime_configuration_is_read_through_the_shared_loader() {
+        let (_dir, home) = home();
+        let file = home.join("runtime.yaml");
+        std::fs::write(&file, minimal(&home)).expect("runtime file");
+        let (runtime, digest) = load(&file).expect("the minimal runtime loads");
+        assert_eq!(runtime.listener.bind.socket_addr().port(), 8080);
+        assert_eq!(runtime.package.root, PathBuf::from("/srv/render/package"));
+        assert!(
+            registry_platform_config::is_sha256_label(&digest),
+            "{digest}"
         );
-        assert_eq!(runtime.server.bind, "127.0.0.1:8080");
+
+        let error = load_text(
+            &home,
+            &minimal(&home).replace(
+                "apiVersion: registry.registrystack.org/render-runtime/v1alpha1",
+                "apiVersion: render.registrystack.org/v1alpha1",
+            ),
+        )
+        .expect_err("the retired envelope is refused");
+        assert!(
+            error.detail.contains(
+                "apiVersion must be exactly registry.registrystack.org/render-runtime/v1alpha1"
+            ),
+            "{}",
+            error.detail
+        );
+    }
+
+    #[test]
+    fn the_listener_bind_is_required() {
+        let (_dir, home) = home();
+        let text = minimal(&home).replace("listener:\n  bind: 127.0.0.1:8080\n", "");
+        let error = load_text(&home, &text).expect_err("no listener");
+        assert_eq!(error.kind, ProblemKind::RuntimeInvalid);
+        assert!(error.detail.contains("listener"), "{}", error.detail);
+    }
+
+    #[test]
+    fn removed_keys_name_their_replacements() {
+        let (_dir, home) = home();
+        for (text, key, replacement) in [
+            (
+                minimal(&home).replace("listener:\n  bind:", "server:\n  bind:"),
+                "server",
+                "listener.bind",
+            ),
+            (
+                minimal(&home).replace("package:\n  root:", "bundle:\n  path:"),
+                "bundle",
+                "package.root",
+            ),
+            (
+                minimal(&home).replace("  path: /var/lib/render/audit/render.jsonl\n", "  directory: /var/lib/render/audit\n"),
+                "audit.directory",
+                "audit.path",
+            ),
+            (
+                minimal(&home).replace(
+                    "  path: /var/lib/render/audit/render.jsonl\n",
+                    "  path: /var/lib/render/audit/render.jsonl\n  integrityKeyRef: secret:file/audit.key\n",
+                ),
+                "audit.integrityKeyRef",
+                "not hash-chained",
+            ),
+            (
+                minimal(&home).replace("  path: /var/lib/render/audit/render.jsonl\n", "  path: /var/lib/render/audit/render.jsonl\n  maxSegmentBytes: 67108864\n"),
+                "audit.maxSegmentBytes",
+                "audit.rotateBytes",
+            ),
+        ] {
+            let error = load_text(&home, &text).expect_err(key);
+            assert!(
+                error
+                    .detail
+                    .contains(&format!("{key} is no longer accepted"))
+                    && error.detail.contains(replacement),
+                "{key}: {}",
+                error.detail
+            );
+        }
+    }
+
+    #[test]
+    fn package_and_audit_paths_must_be_absolute() {
+        let (_dir, home) = home();
+        for (text, field) in [
+            (
+                minimal(&home).replace("root: /srv/render/package", "root: ../package"),
+                "package.root",
+            ),
+            (
+                minimal(&home).replace(
+                    "path: /var/lib/render/audit/render.jsonl",
+                    "path: audit/render.jsonl",
+                ),
+                "audit.path",
+            ),
+        ] {
+            let error = load_text(&home, &text).expect_err(field);
+            assert!(error.detail.contains(field), "{field}: {}", error.detail);
+        }
+    }
+
+    #[test]
+    fn a_secret_reference_must_name_a_declared_provider() {
+        let (_dir, home) = home();
+        let text = minimal(&home).replace(
+            "apiKeyRef: secret:file/api.key",
+            "apiKeyRef: secret:env/RENDER_API_KEY",
+        );
+        let error = load_text(&home, &text).expect_err("environment provider not declared");
+        assert!(error.detail.contains("auth.apiKeyRef"), "{}", error.detail);
+        assert!(
+            error.detail.contains("secretProviders.environment"),
+            "{}",
+            error.detail
+        );
+
+        let text = text.replace(
+            "secretProviders:\n",
+            "secretProviders:\n  environment: {}\n",
+        );
+        load_text(&home, &text).expect("the declared environment provider admits the reference");
+
+        let text = minimal(&home).replace(
+            &format!(
+                "secretProviders:\n  file:\n    root: {}\n",
+                home.join("secrets").display()
+            ),
+            "secretProviders: {}\n",
+        );
+        let error = load_text(&home, &text).expect_err("no provider declared");
+        assert!(error.detail.contains("secretProviders"), "{}", error.detail);
+    }
+
+    #[test]
+    fn environment_expressions_substitute_values_but_never_secret_references() {
+        let (_dir, home) = home();
+        let file = home.join("runtime.yaml");
+        std::fs::write(
+            &file,
+            minimal(&home).replace(
+                "root: /srv/render/package",
+                "root: ${RENDER_PACKAGE_ROOT:-/srv/render/default}",
+            ),
+        )
+        .expect("runtime file");
+        let (runtime, _) = load(&file).expect("a defaulted expression loads");
+        assert_eq!(runtime.package.root, PathBuf::from("/srv/render/default"));
+
+        let text = minimal(&home).replace(
+            "apiKeyRef: secret:file/api.key",
+            "apiKeyRef: ${RENDER_API_KEY_REF:-secret:file/api.key}",
+        );
+        let error = load_text(&home, &text).expect_err("an expression in a *Ref field is refused");
+        assert!(error.detail.contains("auth.apiKeyRef"), "{}", error.detail);
+    }
+
+    #[test]
+    fn secrets_resolve_under_the_declared_file_root_only() {
+        let (_dir, home) = home();
+        let secrets = home.join("secrets");
+        std::fs::create_dir_all(&secrets).expect("secret root");
+        write_secret(&secrets.join("api.key"), b"from-the-declared-root");
+        // A file beside the runtime file is not a secret root.
+        write_secret(&home.join("audit.key"), b"beside-the-runtime-file");
+        let runtime = load_text(&home, &minimal(&home)).expect("runtime loads");
+        assert_eq!(
+            resolve_secret(&runtime, &runtime.auth.api_key_ref).expect("declared root"),
+            b"from-the-declared-root"
+        );
+        resolve_secret(&runtime, "secret:file/audit.key")
+            .expect_err("a file outside the declared root does not resolve");
+    }
+
+    fn with_audit(home: &Path, audit: &str) -> String {
+        minimal(home).replace("  path: /var/lib/render/audit/render.jsonl\n", audit)
+    }
+
+    #[test]
+    fn the_audit_block_takes_the_shared_destination_shape() {
+        let (_dir, home) = home();
+        let file = load_text(
+            &home,
+            &with_audit(
+                &home,
+                "  path: /a/render.jsonl\n  rotateBytes: 1048576\n  retainDays: 30\n",
+            ),
+        )
+        .expect("a file destination with rotation and retention loads");
+        match file.audit.destination().expect("destination") {
+            AuditDestination::File(file) => {
+                assert_eq!(file.path(), Path::new("/a/render.jsonl"));
+                assert_eq!(file.rotate_bytes(), 1_048_576);
+                assert_eq!(file.retain_days(), 30);
+            }
+            AuditDestination::Stdout | AuditDestination::Stderr => {
+                panic!("file is the default destination")
+            }
+        }
+        let stdout = load_text(&home, &with_audit(&home, "  destination: stdout\n"))
+            .expect("a stdout destination loads");
+        assert_eq!(
+            stdout.audit.destination().expect("destination"),
+            AuditDestination::Stdout
+        );
+    }
+
+    #[test]
+    fn an_audit_block_outside_the_shared_shape_is_refused() {
+        let (_dir, home) = home();
+        for (audit, expected) in [
+            ("  destination: file\n", "audit.path is required"),
+            ("  path: \"\"\n", "audit.path"),
+            (
+                "  destination: stdout\n  path: /a/render.jsonl\n",
+                "audit.path applies only",
+            ),
+            (
+                "  path: /a/render.jsonl\n  rotateBytes: 1024\n",
+                "audit.rotateBytes must be between",
+            ),
+            (
+                "  path: /a/render.jsonl\n  retainDays: 0\n",
+                "audit.retainDays must be between",
+            ),
+            ("  path: /a/../render.jsonl\n", "audit.path"),
+        ] {
+            let err = load_text(&home, &with_audit(&home, audit)).expect_err(audit);
+            assert_eq!(err.kind, ProblemKind::RuntimeInvalid, "{audit}");
+            assert!(err.detail.contains(expected), "{audit}: {}", err.detail);
+        }
+    }
+
+    fn write_secret(path: &Path, bytes: &[u8]) {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::write(path, bytes).expect("secret file");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .expect("secret mode");
+    }
+
+    #[test]
+    fn a_pinned_package_digest_must_match_the_sealed_bundle() {
+        let (_dir, home) = home();
+        let hash = "a".repeat(64);
+        let pinned = minimal(&home).replace(
+            "  root: /srv/render/package\n",
+            &format!("  root: /srv/render/package\n  expectedDigest: sha256:{hash}\n"),
+        );
+        let runtime = load_text(&home, &pinned).expect("pinned runtime loads");
+        verify_package(&runtime, &hash).expect("the pinned bundle");
+        let error = verify_package(&runtime, &"b".repeat(64)).expect_err("another bundle");
+        assert!(
+            error.detail.contains("package.expectedDigest"),
+            "{}",
+            error.detail
+        );
+        let unpinned = load_text(&home, &minimal(&home)).expect("unpinned runtime loads");
+        verify_package(&unpinned, &"b".repeat(64)).expect("no pin, no check");
     }
 
     #[test]
@@ -364,32 +585,17 @@ mod tests {
         }
     }
 
-    /// `load` on a runtime file written under a temporary directory, so the
-    /// checks that only `load` performs are exercised.
-    fn load_yaml(body: &str) -> Result<RenderRuntime, RenderProblem> {
-        load_yaml_with_audit("  path: /a/render.jsonl\n", body)
-    }
-
-    fn load_yaml_with_audit(audit: &str, body: &str) -> Result<RenderRuntime, RenderProblem> {
-        let home = tempfile::tempdir().expect("deployment home");
-        let file = home.path().join("runtime.yaml");
-        std::fs::write(
-            &file,
-            format!(
-                "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nbundle:\n  path: /b\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n{audit}{body}"
-            ),
-        )
-        .expect("runtime file");
-        load(&file).map(|(runtime, _)| runtime)
-    }
-
     #[test]
     fn shutdown_grace_outside_the_supported_range_is_refused() {
         // A zero grace drops renders in flight on SIGTERM, and a grace past
         // the hour overflows the bounded wait the shutdown path computes.
+        let (_dir, home) = home();
         for grace in ["0", "3601", "10000000000000000000"] {
-            let err = load_yaml(&format!("server:\n  shutdownGraceSeconds: {grace}\n"))
-                .expect_err("out-of-range grace must be refused");
+            let text = minimal(&home).replace(
+                "  bind: 127.0.0.1:8080\n",
+                &format!("  bind: 127.0.0.1:8080\n  shutdownGraceSeconds: {grace}\n"),
+            );
+            let err = load_text(&home, &text).expect_err("out-of-range grace must be refused");
             assert_eq!(err.kind, ProblemKind::RuntimeInvalid, "grace {grace}");
             assert!(
                 err.detail.contains("shutdownGraceSeconds"),
@@ -401,98 +607,14 @@ mod tests {
 
     #[test]
     fn shutdown_grace_at_the_range_ends_is_accepted() {
+        let (_dir, home) = home();
         for grace in [1, 3600] {
-            let runtime = load_yaml(&format!("server:\n  shutdownGraceSeconds: {grace}\n"))
-                .expect("grace at the range end loads");
-            assert_eq!(runtime.server.shutdown_grace_seconds, grace);
-        }
-    }
-
-    #[test]
-    fn relative_bundle_and_audit_paths_anchor_to_the_runtime_file() {
-        let home = tempfile::tempdir().expect("deployment home");
-        let deploy = home.path().join("deploy");
-        std::fs::create_dir_all(&deploy).expect("deploy directory");
-        let file = deploy.join("runtime.yaml");
-        std::fs::write(
-            &file,
-            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nbundle:\n  path: ../bundle\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  path: ../audit/render.jsonl\n",
-        )
-        .expect("runtime file");
-        let (runtime, _) = load(&file).expect("runtime loads");
-        let home = std::fs::canonicalize(home.path()).expect("canonical home");
-        assert_eq!(runtime.bundle.path, home.join("bundle"));
-        assert_eq!(runtime.audit.path, Some(home.join("audit/render.jsonl")));
-    }
-
-    #[test]
-    fn absolute_bundle_and_audit_paths_are_kept_verbatim() {
-        let home = tempfile::tempdir().expect("deployment home");
-        let file = home.path().join("runtime.yaml");
-        std::fs::write(
-            &file,
-            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nbundle:\n  path: /srv/render/bundle\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  path: /var/lib/render/audit/render.jsonl\n",
-        )
-        .expect("runtime file");
-        let (runtime, _) = load(&file).expect("runtime loads");
-        assert_eq!(runtime.bundle.path, PathBuf::from("/srv/render/bundle"));
-        assert_eq!(
-            runtime.audit.path,
-            Some(PathBuf::from("/var/lib/render/audit/render.jsonl"))
-        );
-    }
-
-    #[test]
-    fn the_audit_block_takes_the_shared_destination_shape() {
-        let file = load_yaml_with_audit(
-            "  path: /a/render.jsonl\n  rotateBytes: 1048576\n  retainDays: 30\n",
-            "",
-        )
-        .expect("a file destination with rotation and retention loads");
-        match file.audit.destination().expect("destination") {
-            AuditDestination::File(file) => {
-                assert_eq!(file.path(), Path::new("/a/render.jsonl"));
-                assert_eq!(file.rotate_bytes(), 1_048_576);
-                assert_eq!(file.retain_days(), 30);
-            }
-            AuditDestination::Stdout | AuditDestination::Stderr => {
-                panic!("file is the default destination")
-            }
-        }
-        let stdout = load_yaml_with_audit("  destination: stdout\n", "")
-            .expect("a stdout destination loads");
-        assert_eq!(
-            stdout.audit.destination().expect("destination"),
-            AuditDestination::Stdout
-        );
-    }
-
-    #[test]
-    fn an_audit_block_outside_the_shared_shape_is_refused() {
-        for (audit, expected) in [
-            ("  destination: file\n", "audit.path is required"),
-            ("  path: \"\"\n", "audit.path is required"),
-            (
-                "  destination: stdout\n  path: /a/render.jsonl\n",
-                "audit.path applies only",
-            ),
-            (
-                "  path: /a/render.jsonl\n  rotateBytes: 1024\n",
-                "audit.rotateBytes must be between",
-            ),
-            (
-                "  path: /a/render.jsonl\n  retainDays: 0\n",
-                "audit.retainDays must be between",
-            ),
-            ("  directory: /a\n", "unknown field `directory`"),
-            (
-                "  path: /a/render.jsonl\n  integrityKeyRef: secret:file/audit.key\n",
-                "unknown field `integrityKeyRef`",
-            ),
-        ] {
-            let err = load_yaml_with_audit(audit, "").expect_err(audit);
-            assert_eq!(err.kind, ProblemKind::RuntimeInvalid, "{audit}");
-            assert!(err.detail.contains(expected), "{audit}: {}", err.detail);
+            let text = minimal(&home).replace(
+                "  bind: 127.0.0.1:8080\n",
+                &format!("  bind: 127.0.0.1:8080\n  shutdownGraceSeconds: {grace}\n"),
+            );
+            let runtime = load_text(&home, &text).expect("grace at the range end loads");
+            assert_eq!(runtime.listener.shutdown_grace_seconds, grace);
         }
     }
 
@@ -508,6 +630,11 @@ mod tests {
             let addr: SocketAddr = bind.parse().unwrap();
             let problem = validate_bind(addr).expect_err(bind);
             assert_eq!(problem.kind, ProblemKind::RuntimeInvalid, "{bind}");
+            assert!(
+                problem.detail.contains("listener.bind"),
+                "{}",
+                problem.detail
+            );
         }
     }
 }

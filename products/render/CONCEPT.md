@@ -34,8 +34,9 @@ One crate (`crates/registry-render`), one binary (`registry-render`),
 following the
 house product anatomy: `init`/`check`/`validate`/`seal`/`compile`/`serve`/
 `healthcheck`; a strict runtime YAML
-(`render.registrystack.org/v1alpha1`) for deployment-local bindings; the
-`registry-platform-*` primitives (config secrets, httpsec layers and
+(`registry.registrystack.org/render-runtime/v1alpha1`, read by the shared
+runtime configuration loader) for deployment-local bindings; the
+`registry-platform-*` primitives (config loader and secrets, httpsec layers and
 problems, the shared audit writer, authcommon key handling, buildinfo, canonical
 JSON) reused rather than reinvented.
 

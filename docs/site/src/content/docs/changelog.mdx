@@ -291,6 +291,24 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/tests/postgres_review_executor.rs, a_live_review_is_polled_before_one_its_authority_does_not_know and a_webhook_completion_makes_its_review_due_and_first_in_the_poll_queue;
     crates/registry-breg/tests/postgres_change_requests.rs, an_operator_resubmits_or_closes_a_review_its_authority_lost. */}
 
+- **Breaking:** Registry Render reads `runtime.yaml` through the shared
+  runtime configuration loader. The file now opens with
+  `apiVersion: registry.registrystack.org/render-runtime/v1alpha1` and
+  `kind: RenderRuntimeConfig`; `server.bind` is `listener.bind` and is
+  required, `server.shutdownGraceSeconds` is
+  `listener.shutdownGraceSeconds`, `bundle.path` is `package.root`, and
+  secret providers are declared under `secretProviders`. Paths, including
+  `audit.path`, must be absolute, and a removed key, among them
+  `audit.directory`, `audit.integrityKeyRef`, and `audit.maxSegmentBytes`,
+  is refused with the name of its replacement. `serve`, `healthcheck`, and
+  `check` take `--runtime-config FILE`, and none reads a default
+  path or the `REGISTRY_RENDER_RUNTIME` variable. See
+  [run Registry Render in serve mode](../operate/registry-render/).
+
+{/* Evidence: crates/registry-render/src/runtime.rs, RENDER_REMOVED_KEYS and load();
+    crates/registry-render/src/cli.rs, Command::Serve;
+    crates/registry-render/src/runtime.rs, removed_keys_name_their_replacements. */}
+
 ## v0.34.0 beta-46
 
 - `bregctl apply` reports a migration database it could not reach, or an

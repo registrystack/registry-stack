@@ -117,18 +117,22 @@ openssl rand -hex 32 > render-work/deploy/api.key
 chmod 600 render-work/deploy/api.key
 ```
 
-Then write `render-work/deploy/runtime.yaml`. Every path in it is relative to the file's own
-directory, the same anchor the `secret:file/…` references use, so the file works from any working
-directory:
+Then write `render-work/deploy/runtime.yaml`. Every path in it is absolute and free of symbolic
+links, so the file works from any working directory, and the `secret:file/…` references resolve
+under the declared `secretProviders.file.root`:
 
 ```sh
-cat > render-work/deploy/runtime.yaml <<'EOF'
-apiVersion: render.registrystack.org/v1alpha1
-kind: RenderRuntime
-server:
+work="$(cd render-work && pwd -P)"
+cat > render-work/deploy/runtime.yaml <<EOF
+apiVersion: registry.registrystack.org/render-runtime/v1alpha1
+kind: RenderRuntimeConfig
+listener:
   bind: 127.0.0.1:64123
-bundle:
-  path: ../bundle
+package:
+  root: $work/bundle
+secretProviders:
+  file:
+    root: $work/deploy
 auth:
   apiKeyRef: secret:file/api.key
 limits:
@@ -137,7 +141,7 @@ limits:
   maxRequestBodyBytes: 8388608
   maxConcurrency: 2
 audit:
-  path: ../audit/render.jsonl
+  path: $work/audit/render.jsonl
 EOF
 ```
 
@@ -145,7 +149,7 @@ Port 64123 is this tutorial's choice; any free loopback port works, because serv
 anything that is not loopback or private. Start it:
 
 ```sh
-target/release/registry-render serve --runtime render-work/deploy/runtime.yaml &
+target/release/registry-render serve --runtime-config "$work/deploy/runtime.yaml" &
 curl -s http://127.0.0.1:64123/health
 ```
 
@@ -155,8 +159,8 @@ You know it is serving when health answers with the bundle hash and the renderer
 {"bundleHash":"1c15a689885df6ac2e0d0fd35f3a58a960a00ba7cd6a6b731c8a7c9516af6ffe","bundleVersion":1,"rendererVersion":"0.32.0-dev (typst 0.15.1)","status":"ok","typstPin":"0.15.1"}
 ```
 
-If startup fails instead, check the two relative paths: serve resolves `bundle.path` and
-`audit.path` from the runtime file's directory, wherever you launched it from.
+If startup fails instead, the refusal names the file and the field: check that `package.root` is
+the sealed bundle directory and that the API key file sits under `secretProviders.file.root`.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, RenderRuntime and validate_bind;
     crates/registry-render/src/audit.rs, RenderAudit. */}

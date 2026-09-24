@@ -520,7 +520,7 @@ fn check_audit_under(runtime: &Path, bundle: &Path, root: &Path) -> Output {
         "check",
         "--bundle",
         bundle.to_str().unwrap(),
-        "--runtime",
+        "--runtime-config",
         runtime.to_str().unwrap(),
         "--require-audit-under",
         root.to_str().unwrap(),
@@ -624,8 +624,9 @@ fn serve_deployment() -> (PathBuf, PathBuf, u16) {
         .unwrap()
         .port();
     let runtime = format!(
-        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nserver:\n  bind: 127.0.0.1:{port}\nbundle:\n  path: {}\nauth:\n  apiKeyRef: secret:file/api.key\nlimits:\n  renderTimeoutSeconds: 20\naudit:\n  path: {}\n",
+        "apiVersion: registry.registrystack.org/render-runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{port}\npackage:\n  root: {}\nsecretProviders:\n  file:\n    root: {}\nauth:\n  apiKeyRef: secret:file/api.key\nlimits:\n  renderTimeoutSeconds: 20\naudit:\n  path: {}\n",
         bundle.display(),
+        home.display(),
         home.join("audit/render.jsonl").display()
     );
     let runtime_path = home.join("runtime.yaml");
@@ -647,7 +648,7 @@ impl Drop for Server {
 
 fn start_server(runtime_path: &Path) -> Server {
     let mut child = render_bin()
-        .args(["serve", "--runtime", runtime_path.to_str().unwrap()])
+        .args(["serve", "--runtime-config", runtime_path.to_str().unwrap()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
