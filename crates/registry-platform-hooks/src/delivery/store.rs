@@ -440,6 +440,9 @@ impl<S: DeliverySeams> DispatchStore for HookStore<S> {
             // The hook operational vocabulary reports failures only; an
             // expiry is recorded by its delivery audit.
             DispatchEvent::JobExpired => return,
+            // The hook store never quarantines, so the core never reports
+            // one: a refused hook row fails its claim instead.
+            DispatchEvent::JobQuarantined(_) => return,
         });
     }
 

@@ -26,7 +26,9 @@ pub struct Decoded<T> {
     pub job: T,
 }
 
-/// Why the store refused a claimed row.
+/// Why the store refused a claimed row. A store that
+/// [quarantines](DispatchStore::quarantines) has the row quarantined
+/// instead, and the claim goes on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClaimRefusal {
     /// The row could not be read. The claim fails without an operational
@@ -213,6 +215,46 @@ pub enum DispatchEvent {
     /// One job expired undispatched, reported after its transition
     /// committed.
     JobExpired,
+    /// One job was quarantined, reported after its quarantine committed.
+    JobQuarantined(QuarantineReason),
+}
+
+/// Which step failed on a row the core quarantined.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum QuarantineReason {
+    /// Recovering the row's lapsed lease failed.
+    RecoveryFailed,
+    /// The expiry sweep failed on the row.
+    ExpiryFailed,
+    /// The claimed row could not be read as a claimable job.
+    ClaimUnreadable,
+    /// The claimed row's captured policy is not one the consumer accepts.
+    PolicyRefused,
+    /// Expiring the claimed row past its captured policy's expiry failed.
+    ClaimExpiryFailed,
+}
+
+/// One row the core asks the store to quarantine. The claim transaction
+/// holds the row locked, and every write the failed step made to it has
+/// been rolled back.
+#[derive(Clone, Copy, Debug)]
+pub struct Quarantine<'a> {
+    pub key: &'a JobKey,
+    pub generation: i64,
+    pub attempt: i16,
+    /// The state the row was selected in.
+    pub from: JobState,
+    pub reason: QuarantineReason,
+}
+
+/// What the store did with a row the core asked it to quarantine.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QuarantineDisposition {
+    /// The store does not quarantine: the claim fails as it would have
+    /// without the request.
+    Unsupported,
+    /// The store moved the row to this terminal state and audited it.
+    Quarantined(JobState),
 }
 
 /// Everything product-owned the core's transactions need.
@@ -322,6 +364,37 @@ pub trait DispatchStore: Send + Sync + 'static {
         _record: &Self::Record,
     ) -> Result<(), DispatchError> {
         Ok(())
+    }
+
+    /// Whether this consumer quarantines rows the claim cannot take.
+    ///
+    /// When it does, the claim runs each selected row's lease recovery,
+    /// expiry, and claim decoding inside a savepoint, and a row whose step
+    /// fails is rolled back to the savepoint and handed to
+    /// [`DispatchStore::quarantine`] instead of failing the claim, so one
+    /// poisoned row no longer stalls every row behind it. When it does not,
+    /// no savepoint is taken and a failing row fails the claim.
+    fn quarantines(&self) -> bool {
+        false
+    }
+
+    /// Move one row the claim cannot take to a terminal state of this
+    /// consumer's choosing and audit it, inside the claim transaction.
+    ///
+    /// The state must be `dead_lettered`, `expired`, `unknown`, or
+    /// `cancelled`, and a state the expiry sweep selects must have
+    /// `expired_at` stamped, so the row leaves the claim, recovery, and
+    /// sweep sets for good; the core checks the row afterwards and fails the
+    /// claim when it could be selected again. Whether an operator may replay
+    /// the row is the consumer's [`DispatchConfig::replayable`] set.
+    ///
+    /// [`DispatchConfig::replayable`]: super::DispatchConfig::replayable
+    async fn quarantine(
+        &self,
+        _transaction: &Transaction<'_>,
+        _quarantine: Quarantine<'_>,
+    ) -> Result<QuarantineDisposition, DispatchError> {
+        Ok(QuarantineDisposition::Unsupported)
     }
 }
 

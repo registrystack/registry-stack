@@ -23,7 +23,8 @@ use registry_platform_dispatch::postgres::{
     enqueue, AttemptAudit, CancelOutcome, Claim, ClaimRefusal, Columns, Decoded, DispatchConfig,
     DispatchConnection, DispatchEvent, DispatchOutcome, DispatchSql, DispatchStore,
     DispatchTransport, DispatchWorker, Dispatcher, ExpirySql, JobKey, JobState, JobTable,
-    LeasedJob, SelectSql, TargetAction, TransitionAudit, TransitionCode, WorkerConfig,
+    LeasedJob, Quarantine, QuarantineDisposition, QuarantineReason, SelectSql, TargetAction,
+    TransitionAudit, TransitionCode, WorkerConfig,
 };
 use registry_platform_dispatch::{
     idempotency_key, AttemptTimeoutBound, Backoff, DispatchError, FailureCode, Jitter, JobPolicy,
@@ -132,6 +133,19 @@ struct TestStore {
     url: String,
     schema: String,
     events: Arc<Mutex<Vec<DispatchEvent>>>,
+    quarantine: QuarantineMode,
+}
+
+/// Whether and how the test consumer quarantines a row the core cannot
+/// take.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum QuarantineMode {
+    /// The consumer keeps the default: the core never quarantines.
+    Unsupported,
+    /// The consumer moves the row to a terminal state and audits it.
+    Terminal,
+    /// The consumer reports a quarantine but leaves the row claimable.
+    Claimable,
 }
 
 struct TestJob {
@@ -284,6 +298,63 @@ impl DispatchStore for TestStore {
             _ => Columns::new(),
         })
     }
+
+    fn quarantines(&self) -> bool {
+        self.quarantine != QuarantineMode::Unsupported
+    }
+
+    async fn quarantine(
+        &self,
+        transaction: &Transaction<'_>,
+        quarantine: Quarantine<'_>,
+    ) -> Result<QuarantineDisposition, DispatchError> {
+        let (state, stamp) = if quarantine.attempt > 0 {
+            (JobState::DeadLettered, "dead_lettered_at")
+        } else {
+            (JobState::Expired, "expired_at")
+        };
+        match self.quarantine {
+            QuarantineMode::Unsupported => return Ok(QuarantineDisposition::Unsupported),
+            QuarantineMode::Claimable => {}
+            QuarantineMode::Terminal => {
+                let changed = transaction
+                    .execute(
+                        &format!(
+                            "UPDATE {}.{JOB_TABLE}
+                                SET state = $4,
+                                    next_attempt_at = NULL,
+                                    attempt_started_at = NULL,
+                                    lease_expires_at = NULL,
+                                    lease_token = NULL,
+                                    {stamp} = transaction_timestamp(),
+                                    updated_at = transaction_timestamp()
+                              WHERE message_id = $1 AND recipient = $2 AND generation = $3",
+                            self.schema
+                        ),
+                        &[
+                            &quarantine.key.id(),
+                            &quarantine.key.part(),
+                            &quarantine.generation,
+                            &state.as_str(),
+                        ],
+                    )
+                    .await?;
+                if changed != 1 {
+                    return Err(DispatchError::Unavailable);
+                }
+            }
+        }
+        self.audit(
+            transaction,
+            quarantine.key,
+            quarantine.generation,
+            quarantine.attempt,
+            "quarantined",
+            state.as_str(),
+        )
+        .await?;
+        Ok(QuarantineDisposition::Quarantined(state))
+    }
 }
 
 impl TestStore {
@@ -349,11 +420,16 @@ fn dispatch_sql() -> DispatchSql {
 }
 
 fn dispatcher(harness: &Harness) -> Dispatcher<TestStore> {
+    quarantining_dispatcher(harness, QuarantineMode::Unsupported)
+}
+
+fn quarantining_dispatcher(harness: &Harness, quarantine: QuarantineMode) -> Dispatcher<TestStore> {
     Dispatcher::new(
         TestStore {
             url: harness.url.clone(),
             schema: harness.schema.clone(),
             events: Arc::clone(&harness.events),
+            quarantine,
         },
         DispatchConfig {
             table: harness.table.clone(),
@@ -1453,6 +1529,7 @@ fn unguarded_dispatcher(harness: &Harness) -> Dispatcher<TestStore> {
             url: harness.url.clone(),
             schema: harness.schema.clone(),
             events: Arc::clone(&harness.events),
+            quarantine: QuarantineMode::Unsupported,
         },
         DispatchConfig {
             table: harness.table.clone(),
@@ -1624,5 +1701,262 @@ async fn sixty_seconds_is_an_accepted_attempt_timeout() {
     assert_eq!(
         lease, 65_000,
         "the lease is the attempt timeout plus five seconds"
+    );
+}
+
+fn quarantine_events(harness: &Harness) -> Vec<QuarantineReason> {
+    harness
+        .events
+        .lock()
+        .expect("events lock")
+        .iter()
+        .filter_map(|event| match event {
+            DispatchEvent::JobQuarantined(reason) => Some(*reason),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Poison the captured policy of one message so no decoder accepts it.
+async fn poison_policy(harness: &Harness, key: &JobKey) {
+    let changed = harness
+        .admin
+        .execute(
+            &format!(
+                "UPDATE {}.test_messages SET attempt_timeout_ms = -1 WHERE message_id = $1",
+                harness.schema
+            ),
+            &[&key.id()],
+        )
+        .await
+        .expect("the policy is poisoned");
+    assert_eq!(changed, 1, "exactly one message is poisoned");
+}
+
+#[tokio::test]
+async fn a_quarantining_store_sets_a_refused_row_aside_and_delivers_the_next() {
+    let harness = harness().await;
+    let poisoned = enqueue_message(
+        &harness,
+        &Message {
+            attempt_timeout_ms: 61_000,
+            ..Message::default()
+        },
+    )
+    .await;
+    let healthy = enqueue_message(&harness, &Message::default()).await;
+    let dispatcher = quarantining_dispatcher(&harness, QuarantineMode::Terminal);
+    let transport = ScriptedTransport::new(|_| accepted());
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::Delivered),
+        "the refused row no longer stalls the claim"
+    );
+    assert_eq!(transport.sends(), vec![(healthy.clone(), 1, 1)]);
+    let row = state_row(&harness, &poisoned).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("expired", 0));
+    assert_eq!(
+        audit_trail(&harness, &poisoned).await,
+        vec!["quarantined:expired:g1:a0"]
+    );
+    assert_eq!(state_row(&harness, &healthy).await.state, "delivered");
+    assert_eq!(
+        quarantine_events(&harness),
+        vec![QuarantineReason::PolicyRefused]
+    );
+    assert!(!harness.events.lock().expect("events lock").contains(
+        &DispatchEvent::TransitionFailed(TransitionCode::ClaimPolicyRefused)
+    ));
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::Idle),
+        "a quarantined row is never claimed again"
+    );
+}
+
+#[tokio::test]
+async fn a_quarantining_store_sets_an_unrecoverable_lapsed_lease_aside_and_delivers_the_next() {
+    let harness = harness().await;
+    let poisoned = enqueue_message(&harness, &Message::default()).await;
+    let dispatcher = quarantining_dispatcher(&harness, QuarantineMode::Terminal);
+    dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due");
+    lapse_lease(&harness, &poisoned).await;
+    poison_policy(&harness, &poisoned).await;
+    let healthy = enqueue_message(&harness, &Message::default()).await;
+    let transport = ScriptedTransport::new(|_| accepted());
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::Delivered),
+        "the unrecoverable lease no longer stalls the claim"
+    );
+    assert_eq!(transport.sends(), vec![(healthy.clone(), 1, 1)]);
+    let row = state_row(&harness, &poisoned).await;
+    assert_eq!(
+        (row.state.as_str(), row.attempt, row.lease_token),
+        ("dead_lettered", 1, None)
+    );
+    assert_eq!(
+        audit_trail(&harness, &poisoned).await,
+        vec![
+            "attempt_started:leased:g1:a1",
+            "quarantined:dead_lettered:g1:a1"
+        ]
+    );
+    assert_eq!(state_row(&harness, &healthy).await.state, "delivered");
+    assert_eq!(
+        quarantine_events(&harness),
+        vec![QuarantineReason::RecoveryFailed]
+    );
+    assert!(!harness.events.lock().expect("events lock").contains(
+        &DispatchEvent::TransitionFailed(TransitionCode::ClaimRecoveryFailed)
+    ));
+    assert_eq!(
+        dispatcher.replay(&poisoned, 1).await,
+        Ok(2),
+        "the consumer's replayable set decides whether a quarantined row replays"
+    );
+}
+
+/// Have the database refuse one audit point for one job, so the step that
+/// writes it fails inside PostgreSQL and aborts its statement.
+async fn refuse_audit(harness: &Harness, key: &JobKey, point: &str) {
+    harness
+        .admin
+        .batch_execute(&format!(
+            "ALTER TABLE {}.test_audit
+                 ADD CONSTRAINT refuse_{point}
+                 CHECK (message_id <> '{}' OR point <> '{point}')",
+            harness.schema,
+            key.id()
+        ))
+        .await
+        .expect("the audit refusal installs");
+}
+
+#[tokio::test]
+async fn a_lapsed_lease_the_database_refuses_is_rolled_back_to_its_savepoint_and_quarantined() {
+    let harness = harness().await;
+    let poisoned = enqueue_message(&harness, &Message::default()).await;
+    let dispatcher = quarantining_dispatcher(&harness, QuarantineMode::Terminal);
+    dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due");
+    lapse_lease(&harness, &poisoned).await;
+    refuse_audit(&harness, &poisoned, "lease_lapsed").await;
+    let healthy = enqueue_message(&harness, &Message::default()).await;
+    let transport = ScriptedTransport::new(|_| accepted());
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::Delivered)
+    );
+    assert_eq!(transport.sends(), vec![(healthy.clone(), 1, 1)]);
+    let row = state_row(&harness, &poisoned).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("dead_lettered", 1));
+    assert_eq!(
+        audit_trail(&harness, &poisoned).await,
+        vec![
+            "attempt_started:leased:g1:a1",
+            "quarantined:dead_lettered:g1:a1"
+        ]
+    );
+    assert_eq!(
+        quarantine_events(&harness),
+        vec![QuarantineReason::RecoveryFailed]
+    );
+}
+
+#[tokio::test]
+async fn an_expiry_the_database_refuses_is_rolled_back_to_its_savepoint_and_quarantined() {
+    let harness = harness().await;
+    let poisoned = enqueue_message(
+        &harness,
+        &Message {
+            expires_in_ms: -1_000,
+            ..Message::default()
+        },
+    )
+    .await;
+    refuse_audit(&harness, &poisoned, "expired").await;
+    let healthy = enqueue_message(&harness, &Message::default()).await;
+    let dispatcher = quarantining_dispatcher(&harness, QuarantineMode::Terminal);
+    let transport = ScriptedTransport::new(|_| accepted());
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::Delivered)
+    );
+    assert_eq!(transport.sends(), vec![(healthy.clone(), 1, 1)]);
+    let row = state_row(&harness, &poisoned).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("expired", 0));
+    assert_eq!(
+        audit_trail(&harness, &poisoned).await,
+        vec!["quarantined:expired:g1:a0"]
+    );
+    assert_eq!(
+        quarantine_events(&harness),
+        vec![QuarantineReason::ExpiryFailed]
+    );
+    assert_eq!(expiry_events(&harness), 0);
+}
+
+#[tokio::test]
+async fn without_quarantine_a_refused_row_still_stalls_the_claim() {
+    let harness = harness().await;
+    let poisoned = enqueue_message(
+        &harness,
+        &Message {
+            attempt_timeout_ms: 61_000,
+            ..Message::default()
+        },
+    )
+    .await;
+    let healthy = enqueue_message(&harness, &Message::default()).await;
+    let dispatcher = dispatcher(&harness);
+    let transport = ScriptedTransport::new(|_| accepted());
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Err(DispatchError::Unavailable)
+    );
+    assert!(transport.sends().is_empty());
+    assert!(harness.events.lock().expect("events lock").contains(
+        &DispatchEvent::TransitionFailed(TransitionCode::ClaimPolicyRefused)
+    ));
+    assert!(quarantine_events(&harness).is_empty());
+    for key in [&poisoned, &healthy] {
+        let row = state_row(&harness, key).await;
+        assert_eq!((row.state.as_str(), row.attempt), ("pending", 0));
+        assert!(audit_trail(&harness, key).await.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn a_quarantine_that_leaves_the_row_claimable_is_refused() {
+    let harness = harness().await;
+    let poisoned = enqueue_message(
+        &harness,
+        &Message {
+            attempt_timeout_ms: 61_000,
+            ..Message::default()
+        },
+    )
+    .await;
+    let dispatcher = quarantining_dispatcher(&harness, QuarantineMode::Claimable);
+    assert!(dispatcher.claim().await.is_err());
+    assert!(harness.events.lock().expect("events lock").contains(
+        &DispatchEvent::TransitionFailed(TransitionCode::ClaimPolicyRefused)
+    ));
+    assert!(quarantine_events(&harness).is_empty());
+    let row = state_row(&harness, &poisoned).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("pending", 0));
+    assert!(
+        audit_trail(&harness, &poisoned).await.is_empty(),
+        "the refused quarantine's audit rolls back with it"
     );
 }

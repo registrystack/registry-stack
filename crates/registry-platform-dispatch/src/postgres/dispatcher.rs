@@ -3,6 +3,7 @@
 //! The fenced lease machine: claim, finish, lease-expiry recovery, expiry,
 //! replay, and cancellation over one product's job table.
 
+use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -10,10 +11,11 @@ use tokio_postgres::types::ToSql;
 use tokio_postgres::{Row, Transaction};
 use uuid::Uuid;
 
-use super::sql::{Columns, DispatchSql, SelectSql};
+use super::sql::{state_list, Columns, DispatchSql, SelectSql};
 use super::store::{
-    AttemptAudit, ClaimRefusal, DispatchEvent, DispatchStore, DispatchTransport, Disposition,
-    Fence, LapsedJob, LeasedJob, TargetAction, Transition, TransitionAudit, TransitionCode,
+    AttemptAudit, ClaimRefusal, Decoded, DispatchEvent, DispatchStore, DispatchTransport,
+    Disposition, Fence, LapsedJob, LeasedJob, Quarantine, QuarantineDisposition, QuarantineReason,
+    TargetAction, Transition, TransitionAudit, TransitionCode,
 };
 use super::table::{JobKey, JobState, JobTable};
 use crate::outcome::{ConfigError, DispatchError, SendOutcome, Sent};
@@ -130,6 +132,54 @@ struct Statements {
     lapsed: String,
     expiry: Option<(String, String)>,
     target: String,
+    /// Reads back a quarantined row's state when it is terminal and no
+    /// claim, recovery, or sweep would select it again.
+    quarantined: String,
+}
+
+/// One row a claim transaction selected and holds locked.
+struct Selected {
+    key: JobKey,
+    generation: i64,
+    attempt: i16,
+    from: JobState,
+}
+
+impl Selected {
+    /// Read the key, generation, and attempt every claim-path selection
+    /// starts with.
+    fn read(row: &Row, from: JobState) -> Result<Self, DispatchError> {
+        Ok(Self {
+            key: read_key(row)?,
+            generation: row.try_get::<_, i64>(2)?,
+            attempt: row.try_get::<_, i16>(3)?,
+            from,
+        })
+    }
+}
+
+/// Why one selected row could not be taken: the reason a quarantining
+/// store is given, and the refusal a claim reports when the row is not
+/// quarantined.
+#[derive(Clone, Copy)]
+struct RowFailure {
+    reason: QuarantineReason,
+    refusal: Option<TransitionCode>,
+}
+
+/// What a claim does with its due row.
+enum Taken<J> {
+    /// The row expired at claim instead of being leased.
+    Expired,
+    /// The row is due for `attempt`.
+    Due { decoded: Decoded<J>, attempt: i16 },
+}
+
+/// The events a claim transaction reports once it has committed.
+#[derive(Default)]
+struct Committed {
+    expired: usize,
+    quarantined: Vec<QuarantineReason>,
 }
 
 /// One locked job an expiry transition is about to take.
@@ -239,11 +289,27 @@ impl<S: DispatchStore> Dispatcher<S> {
     /// whatever the consumer's claim selection says, and is never leased. A
     /// leased job is committed as leased: the caller may send it.
     ///
+    /// For a store that [quarantines](DispatchStore::quarantines), a row
+    /// whose recovery, expiry, or claim decoding fails is quarantined and
+    /// the claim goes on to the next row, so one poisoned row does not stall
+    /// the rows behind it. Every quarantine moves a row out of the claim
+    /// set for good, so the claim ends.
+    ///
     /// # Errors
     ///
     /// [`DispatchError::Unavailable`] on any refusal. Refusals an operator
     /// must see are reported through [`DispatchStore::operational_event`].
     pub async fn claim(&self) -> Result<Claim<S::Job>, DispatchError> {
+        loop {
+            if let Some(claim) = self.claim_in_transaction().await? {
+                return Ok(claim);
+            }
+        }
+    }
+
+    /// One claim transaction, or `None` when its due row was quarantined
+    /// and the claim should select the next.
+    async fn claim_in_transaction(&self) -> Result<Option<Claim<S::Job>>, DispatchError> {
         let store = &self.inner.store;
         let mut client = store.connection().await?;
         let transaction = client.transaction().await?;
@@ -251,11 +317,10 @@ impl<S: DispatchStore> Dispatcher<S> {
             self.refused(TransitionCode::ClaimIdentityRefused);
             return Err(DispatchError::Unavailable);
         }
-        if self.recover_lapsed_lease(&transaction).await.is_err() {
-            self.refused(TransitionCode::ClaimRecoveryFailed);
-            return Err(DispatchError::Unavailable);
-        }
-        let swept = self.expire_one(&transaction).await?;
+        let mut committed = Committed::default();
+        self.recover_lapsed_lease(&transaction, &mut committed)
+            .await?;
+        self.expire_one(&transaction, &mut committed).await?;
         let row = transaction
             .query_opt(&self.inner.statements.claim, &[])
             .await
@@ -265,50 +330,38 @@ impl<S: DispatchStore> Dispatcher<S> {
             })?;
         let Some(row) = row else {
             transaction.commit().await?;
-            self.expired(swept);
-            return Ok(Claim::Idle);
+            self.report(committed);
+            return Ok(Some(Claim::Idle));
         };
-        let key = read_key(&row)?;
-        let generation = row.try_get::<_, i64>(2)?;
-        let prior_attempt = row.try_get::<_, i16>(3)?;
-        let decoded = match store.decode_claim(&row, 4) {
-            Ok(decoded) => decoded,
-            Err(ClaimRefusal::Unavailable) => return Err(DispatchError::Unavailable),
-            Err(ClaimRefusal::PolicyRefused) => {
-                self.refused(TransitionCode::ClaimPolicyRefused);
-                return Err(DispatchError::Unavailable);
-            }
-        };
-        if let Some(expires_at) = decoded.policy.expires_at {
-            if expires_at <= database_now(&transaction).await? {
-                let record = store.claim_record(&decoded.job);
-                self.expire_locked(
-                    &transaction,
-                    &Expiring {
-                        key: &key,
-                        generation,
-                        attempt: prior_attempt,
-                        from: JobState::Pending,
-                        record: &record,
-                    },
-                    &self.inner.statements.expire_claimed,
-                    &[&key.id(), &key.part(), &generation, &prior_attempt],
-                )
-                .await?;
+        let selected = Selected::read(&row, JobState::Pending)?;
+        let taken = self
+            .guarded(
+                &transaction,
+                &selected,
+                &mut committed,
+                self.take_claimed(&transaction, &row, &selected),
+            )
+            .await?;
+        let (decoded, attempt) = match taken {
+            None => {
                 transaction.commit().await?;
-                self.expired(swept);
-                self.expired(true);
-                return Ok(Claim::Expired);
+                self.report(committed);
+                return Ok(None);
             }
-        }
-        let attempt = prior_attempt
-            .checked_add(1)
-            .filter(|attempt| *attempt <= decoded.policy.maximum_attempts)
-            .ok_or(DispatchError::Unavailable)?;
-        if !decoded.policy.is_valid(&self.inner.bound) {
-            self.refused(TransitionCode::ClaimPolicyRefused);
-            return Err(DispatchError::Unavailable);
-        }
+            Some(Taken::Expired) => {
+                transaction.commit().await?;
+                committed.expired += 1;
+                self.report(committed);
+                return Ok(Some(Claim::Expired));
+            }
+            Some(Taken::Due { decoded, attempt }) => (decoded, attempt),
+        };
+        let Selected {
+            key,
+            generation,
+            attempt: prior_attempt,
+            ..
+        } = selected;
         let attempt_timeout_ms = milliseconds(decoded.policy.attempt_timeout)?;
         let allowance_ms = milliseconds(LEASE_FINALIZATION_ALLOWANCE)?;
         let lease_token = Uuid::new_v4();
@@ -356,8 +409,171 @@ impl<S: DispatchStore> Dispatcher<S> {
             self.refused(TransitionCode::ClaimCommitFailed);
             DispatchError::Unavailable
         })?;
-        self.expired(swept);
-        Ok(Claim::Leased(job))
+        self.report(committed);
+        Ok(Some(Claim::Leased(job)))
+    }
+
+    /// Decode one claimed row and decide what the claim does with it:
+    /// expire it past its captured policy's expiry, or take it for its next
+    /// attempt.
+    async fn take_claimed(
+        &self,
+        transaction: &Transaction<'_>,
+        row: &Row,
+        selected: &Selected,
+    ) -> Result<Taken<S::Job>, RowFailure> {
+        let store = &self.inner.store;
+        let unreadable = RowFailure {
+            reason: QuarantineReason::ClaimUnreadable,
+            refusal: None,
+        };
+        let refused = RowFailure {
+            reason: QuarantineReason::PolicyRefused,
+            refusal: Some(TransitionCode::ClaimPolicyRefused),
+        };
+        let expiry_failed = RowFailure {
+            reason: QuarantineReason::ClaimExpiryFailed,
+            refusal: None,
+        };
+        let decoded = store
+            .decode_claim(row, 4)
+            .map_err(|refusal| match refusal {
+                ClaimRefusal::Unavailable => unreadable,
+                ClaimRefusal::PolicyRefused => refused,
+            })?;
+        if let Some(expires_at) = decoded.policy.expires_at {
+            let now = database_now(transaction).await.map_err(|_| expiry_failed)?;
+            if expires_at <= now {
+                let record = store.claim_record(&decoded.job);
+                self.expire_locked(
+                    transaction,
+                    &Expiring {
+                        key: &selected.key,
+                        generation: selected.generation,
+                        attempt: selected.attempt,
+                        from: JobState::Pending,
+                        record: &record,
+                    },
+                    &self.inner.statements.expire_claimed,
+                    &[
+                        &selected.key.id(),
+                        &selected.key.part(),
+                        &selected.generation,
+                        &selected.attempt,
+                    ],
+                )
+                .await
+                .map_err(|_| expiry_failed)?;
+                return Ok(Taken::Expired);
+            }
+        }
+        let attempt = selected
+            .attempt
+            .checked_add(1)
+            .filter(|attempt| *attempt <= decoded.policy.maximum_attempts)
+            .ok_or(unreadable)?;
+        if !decoded.policy.is_valid(&self.inner.bound) {
+            return Err(refused);
+        }
+        Ok(Taken::Due { decoded, attempt })
+    }
+
+    /// Run one selected row's step.
+    ///
+    /// Without quarantine, a failing step reports its refusal and fails the
+    /// claim. With it, the step runs inside a savepoint; a failing step is
+    /// rolled back, the row is quarantined and `None` returned, and only a
+    /// quarantine that fails reports the refusal and fails the claim.
+    async fn guarded<T, F>(
+        &self,
+        transaction: &Transaction<'_>,
+        selected: &Selected,
+        committed: &mut Committed,
+        step: F,
+    ) -> Result<Option<T>, DispatchError>
+    where
+        F: Future<Output = Result<T, RowFailure>>,
+    {
+        if !self.inner.store.quarantines() {
+            return match step.await {
+                Ok(value) => Ok(Some(value)),
+                Err(failure) => Err(self.fail(failure)),
+            };
+        }
+        transaction.batch_execute("SAVEPOINT dispatch_row").await?;
+        match step.await {
+            Ok(value) => {
+                transaction
+                    .batch_execute("RELEASE SAVEPOINT dispatch_row")
+                    .await?;
+                Ok(Some(value))
+            }
+            Err(failure) => {
+                transaction
+                    .batch_execute("ROLLBACK TO SAVEPOINT dispatch_row")
+                    .await?;
+                if self
+                    .quarantine(transaction, selected, failure.reason)
+                    .await
+                    .is_err()
+                {
+                    return Err(self.fail(failure));
+                }
+                committed.quarantined.push(failure.reason);
+                Ok(None)
+            }
+        }
+    }
+
+    /// Hand one row to the store's quarantine and check the row left the
+    /// claim, recovery, and sweep sets.
+    async fn quarantine(
+        &self,
+        transaction: &Transaction<'_>,
+        selected: &Selected,
+        reason: QuarantineReason,
+    ) -> Result<(), DispatchError> {
+        let disposition = self
+            .inner
+            .store
+            .quarantine(
+                transaction,
+                Quarantine {
+                    key: &selected.key,
+                    generation: selected.generation,
+                    attempt: selected.attempt,
+                    from: selected.from,
+                    reason,
+                },
+            )
+            .await?;
+        let QuarantineDisposition::Quarantined(state) = disposition else {
+            return Err(DispatchError::Unavailable);
+        };
+        let settled = transaction
+            .query_opt(
+                &self.inner.statements.quarantined,
+                &[
+                    &selected.key.id(),
+                    &selected.key.part(),
+                    &selected.generation,
+                ],
+            )
+            .await?
+            .map(|row| row.try_get::<_, String>(0))
+            .transpose()?;
+        if settled.as_deref() != Some(state.as_str()) {
+            return Err(DispatchError::Unavailable);
+        }
+        Ok(())
+    }
+
+    /// Report a failing row's refusal, if it has one.
+    fn fail(&self, failure: RowFailure) -> DispatchError {
+        if let Some(code) = failure.refusal {
+            self.refused(code);
+        }
+        DispatchError::Unavailable
     }
 
     /// Record what one send of a leased job did, under its fence.
@@ -676,19 +892,42 @@ impl<S: DispatchStore> Dispatcher<S> {
     async fn recover_lapsed_lease(
         &self,
         transaction: &Transaction<'_>,
+        committed: &mut Committed,
     ) -> Result<(), DispatchError> {
-        let store = &self.inner.store;
-        let Some(row) = transaction
+        let failure = RowFailure {
+            reason: QuarantineReason::RecoveryFailed,
+            refusal: Some(TransitionCode::ClaimRecoveryFailed),
+        };
+        let row = transaction
             .query_opt(&self.inner.statements.lapsed, &[])
-            .await?
-        else {
+            .await
+            .map_err(|_| self.fail(failure))?;
+        let Some(row) = row else {
             return Ok(());
         };
-        let key = read_key(&row)?;
-        let generation = row.try_get::<_, i64>(2)?;
-        let attempt = row.try_get::<_, i16>(3)?;
+        let selected = Selected::read(&row, JobState::Leased).map_err(|_| self.fail(failure))?;
+        self.guarded(transaction, &selected, committed, async {
+            self.recover(transaction, &row, &selected)
+                .await
+                .map_err(|_| failure)
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Recover one lapsed lease this transaction holds locked.
+    async fn recover(
+        &self,
+        transaction: &Transaction<'_>,
+        row: &Row,
+        selected: &Selected,
+    ) -> Result<(), DispatchError> {
+        let store = &self.inner.store;
+        let key = selected.key.clone();
+        let generation = selected.generation;
+        let attempt = selected.attempt;
         let lease_token = row.try_get::<_, Uuid>(4)?;
-        let decoded = store.decode_lapsed(&row, 5)?;
+        let decoded = store.decode_lapsed(row, 5)?;
         if !decoded.policy.is_valid(&self.inner.bound) {
             return Err(DispatchError::Unavailable);
         }
@@ -739,34 +978,56 @@ impl<S: DispatchStore> Dispatcher<S> {
     }
 
     /// Expire at most one undispatched job whose consumer selection says it
-    /// has expired, and report whether one was.
-    async fn expire_one(&self, transaction: &Transaction<'_>) -> Result<bool, DispatchError> {
+    /// has expired.
+    async fn expire_one(
+        &self,
+        transaction: &Transaction<'_>,
+        committed: &mut Committed,
+    ) -> Result<(), DispatchError> {
         let Some((select, update)) = &self.inner.statements.expiry else {
-            return Ok(false);
+            return Ok(());
         };
         let Some(row) = transaction.query_opt(select, &[]).await? else {
-            return Ok(false);
+            return Ok(());
         };
-        let key = read_key(&row)?;
-        let generation = row.try_get::<_, i64>(2)?;
-        let attempt = row.try_get::<_, i16>(3)?;
         let from =
             JobState::parse(&row.try_get::<_, String>(4)?).ok_or(DispatchError::Unavailable)?;
-        let record = self.inner.store.decode_expired(&row, 5)?;
-        self.expire_locked(
-            transaction,
-            &Expiring {
-                key: &key,
-                generation,
-                attempt,
-                from,
-                record: &record,
-            },
-            update,
-            &[&key.id(), &key.part(), &generation],
-        )
-        .await?;
-        Ok(true)
+        let selected = Selected::read(&row, from)?;
+        let failure = RowFailure {
+            reason: QuarantineReason::ExpiryFailed,
+            refusal: None,
+        };
+        let expired = self
+            .guarded(transaction, &selected, committed, async {
+                let record = self
+                    .inner
+                    .store
+                    .decode_expired(&row, 5)
+                    .map_err(|_| failure)?;
+                self.expire_locked(
+                    transaction,
+                    &Expiring {
+                        key: &selected.key,
+                        generation: selected.generation,
+                        attempt: selected.attempt,
+                        from,
+                        record: &record,
+                    },
+                    update,
+                    &[
+                        &selected.key.id(),
+                        &selected.key.part(),
+                        &selected.generation,
+                    ],
+                )
+                .await
+                .map_err(|_| failure)
+            })
+            .await?;
+        if expired.is_some() {
+            committed.expired += 1;
+        }
+        Ok(())
     }
 
     /// Audit, write, and finish one expiry of a job this transaction holds
@@ -802,12 +1063,14 @@ impl<S: DispatchStore> Dispatcher<S> {
             .await
     }
 
-    /// Report a committed expiry.
-    fn expired(&self, committed: bool) {
-        if committed {
-            self.inner
-                .store
-                .operational_event(DispatchEvent::JobExpired);
+    /// Report what a claim transaction did, once it has committed.
+    fn report(&self, committed: Committed) {
+        let store = &self.inner.store;
+        for _ in 0..committed.expired {
+            store.operational_event(DispatchEvent::JobExpired);
+        }
+        for reason in committed.quarantined {
+            store.operational_event(DispatchEvent::JobQuarantined(reason));
         }
     }
 
@@ -993,6 +1256,13 @@ fn render_statements(table: &JobTable, sql: &DispatchSql) -> Result<Statements, 
             ))
         }
     };
+    let unswept = match &sql.expiry {
+        None => String::new(),
+        Some(expiry) => format!(
+            "\n                AND NOT (state IN ({states}) AND expired_at IS NULL)",
+            states = expiry.state_list(),
+        ),
+    };
     Ok(Statements {
         claim: format!(
             "SELECT state.{id}, state.{part}, state.generation, state.attempt{columns}
@@ -1063,6 +1333,20 @@ fn render_statements(table: &JobTable, sql: &DispatchSql) -> Result<Statements, 
             columns = target.columns,
             joins = target.joins,
             predicate = target.predicate,
+        ),
+        quarantined: format!(
+            "SELECT state
+               FROM {qualified}
+              WHERE {id} = $1
+                AND {part} = $2
+                AND generation = $3
+                AND state IN ({terminal}){unswept}",
+            terminal = state_list(&[
+                JobState::DeadLettered,
+                JobState::Expired,
+                JobState::Unknown,
+                JobState::Cancelled,
+            ]),
         ),
     })
 }

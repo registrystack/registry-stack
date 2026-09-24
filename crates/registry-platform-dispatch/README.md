@@ -56,6 +56,29 @@ The opt-in `postgres` feature adds the lease machine in `postgres`:
 - `DispatchWorker` runs `dispatch_once` on a bounded number of lanes until no
   job is due, then polls, until shutdown is signalled.
 
+Quarantine is a consumer opt-in. By default a row whose lease recovery,
+expiry, or claim decoding fails fails the whole claim, and because the claim
+selects in a fixed order, that row stalls every row behind it until an
+operator repairs it. A store whose `quarantines` returns `true` has the core
+run each selected row's step inside a savepoint instead: a failing step is
+rolled back to it, including a statement PostgreSQL aborted, and the store's
+`quarantine` moves the row to a terminal state of its choosing and audits it
+in the same transaction. The core then checks the row is `dead_lettered`,
+`expired`, `unknown`, or `cancelled` and outside the expiry sweep, reports
+`DispatchEvent::JobQuarantined` with the failing step once the transaction
+commits, and goes on to the next row. Whether an operator may replay a
+quarantined row is the consumer's `replayable` set. A quarantine that fails,
+or leaves the row selectable, fails the claim as it would have without one.
+
+Hooks does not opt in. Its delivery table's shape check admits
+`dead_lettered` only after an attempt, so a never-attempted row has no
+dead-letter state to land in; its expiry sweep takes `dead_lettered` rows, so
+that state is not outside the sweep until expiry stamps it; and recovery of a
+lapsed final attempt first recovers any committed proposal receipt, which a
+quarantine that skipped recovery would hide behind an empty proposal
+disposition. A refused hook row therefore still fails its claim and is
+reported as a transition failure.
+
 The core writes no audit of its own. Each transition calls the store's audit
 hook inside the same transaction, so an audit that fails rolls the transition
 back, and no attempt is sent before its audit has committed.
