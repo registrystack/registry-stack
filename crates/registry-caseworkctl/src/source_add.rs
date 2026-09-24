@@ -2371,21 +2371,48 @@ fn require_outputs_absent_or_exact(
         .map(|(path, reason)| format!("{} {reason}", path.display()))
         .collect::<Vec<_>>()
         .join("; ");
+    let stale_previous = conflicts
+        .iter()
+        .filter_map(|(path, _)| {
+            let path = path.display().to_string();
+            let previous = format!("{path}.previous");
+            Path::new(&previous).exists().then(|| {
+                format!(
+                    "{previous} already exists from an earlier recovery; compare it with {path} and delete or rename it before running the commands below"
+                )
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let warning = if stale_previous.is_empty() {
+        String::new()
+    } else {
+        format!(" {stale_previous}.")
+    };
     let mut recovery = conflicts
         .iter()
-        .map(|(path, _)| {
-            let path = path.display().to_string();
-            format!(
-                "mv {} {}",
-                shell_word(&path),
-                shell_word(&format!("{path}.previous"))
-            )
-        })
+        .map(|(path, _)| guarded_move_aside(&path.display().to_string()))
         .collect::<Vec<_>>();
     recovery.push(retry.to_owned());
     bail!(
-        "source add preserved existing output that differs from what this run would write, and nothing was written: {reasons}. source add writes these files and never replaces one; to take this run's output, move each aside and repeat the pairing: {}. Then compare each new file with its .previous copy, carry any hand edit you still need into the new runtime binding, and delete the .previous copies",
+        "source add preserved existing output that differs from what this run would write, and nothing was written: {reasons}.{warning} source add writes these files and never replaces one; to take this run's output, move each aside and repeat the pairing: {}. Then compare each new file with its .previous copy, carry any hand edit you still need into the new runtime binding, and delete the .previous copies",
         recovery.join(" && ")
+    )
+}
+
+/// A `test ! -e ... && mv ... ...` command that moves `path` aside to
+/// `path.previous` before a retry writes fresh output there. The `test`
+/// guard stops the chain instead of replacing a `.previous` copy an earlier,
+/// unfinished recovery already left there, which a plain `mv` would silently
+/// overwrite. `mv -n` is not used here because its exit status differs
+/// between GNU and BSD `mv`.
+fn guarded_move_aside(path: &str) -> String {
+    let previous = format!("{path}.previous");
+    format!(
+        "test ! -e {} && mv {} {}",
+        shell_word(&previous),
+        shell_word(path),
+        shell_word(&previous),
     )
 }
 
@@ -2696,11 +2723,15 @@ mod tests {
             "{error}"
         );
         assert!(
-            error.contains(&format!("mv {description} {description}.previous")),
+            error.contains(&format!(
+                "test ! -e {description}.previous && mv {description} {description}.previous"
+            )),
             "{error}"
         );
         assert!(
-            error.contains(&format!("mv {binding} {binding}.previous")),
+            error.contains(&format!(
+                "test ! -e {binding}.previous && mv {binding} {binding}.previous"
+            )),
             "{error}"
         );
         assert!(error.contains(RETRY), "{error}");
@@ -2778,6 +2809,94 @@ mod tests {
         );
         assert!(!error.contains("breg-runtime.yaml"), "{error}");
         assert!(!binding_path.exists());
+    }
+
+    #[test]
+    fn source_apply_recovery_names_a_previous_copy_an_earlier_recovery_already_left() {
+        let project = tempfile::tempdir().unwrap();
+        let description_path = project.path().join("professional-licences.json");
+        let binding_path = project
+            .path()
+            .join("professional-licences.breg-runtime.yaml");
+        fs::write(
+            &description_path,
+            json_file_bytes(&paired_description("sha256:one", &["scope-correction"])).unwrap(),
+        )
+        .unwrap();
+        // An earlier recovery already moved the description aside, and its
+        // retry never ran (or failed), so this stale copy is still there.
+        let stale_previous = project.path().join("professional-licences.json.previous");
+        fs::write(&stale_previous, b"an operator's earlier hand edit\n").unwrap();
+
+        let error = require_outputs_absent_or_exact(
+            &description_path,
+            &paired_description("sha256:two", &["scope-correction"]),
+            &binding_path,
+            b"reviewAuthorities: {}\n",
+            RETRY,
+        )
+        .unwrap_err();
+
+        let error = format!("{error:#}");
+        let description = description_path.display().to_string();
+        assert!(
+            error.contains(&format!("{description}.previous already exists")),
+            "{error}"
+        );
+        assert!(error.contains("delete or rename it"), "{error}");
+        assert!(
+            error.contains(&format!(
+                "test ! -e {description}.previous && mv {description} {description}.previous"
+            )),
+            "{error}"
+        );
+        // Naming the stale copy is not deleting it: only the operator does.
+        assert_eq!(
+            fs::read(&stale_previous).unwrap(),
+            b"an operator's earlier hand edit\n"
+        );
+    }
+
+    #[test]
+    fn source_apply_recovery_guard_refuses_to_replace_an_existing_previous_copy() {
+        // Runs the exact command guarded_move_aside prints (the same helper
+        // require_outputs_absent_or_exact uses), proving the guard really
+        // stops `mv` in a shell rather than merely reading like it would.
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("professional-licences.json");
+        let previous = project.path().join("professional-licences.json.previous");
+        fs::write(&path, b"current\n").unwrap();
+        fs::write(&previous, b"stale\n").unwrap();
+
+        let command = guarded_move_aside(&path.display().to_string());
+        let status = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .status()
+            .unwrap();
+
+        assert!(!status.success(), "{command}");
+        assert_eq!(fs::read(&previous).unwrap(), b"stale\n");
+        assert_eq!(fs::read(&path).unwrap(), b"current\n");
+    }
+
+    #[test]
+    fn source_apply_recovery_guard_moves_aside_when_no_previous_copy_exists() {
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("professional-licences.json");
+        let previous = project.path().join("professional-licences.json.previous");
+        fs::write(&path, b"current\n").unwrap();
+
+        let command = guarded_move_aside(&path.display().to_string());
+        let status = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .status()
+            .unwrap();
+
+        assert!(status.success(), "{command}");
+        assert_eq!(fs::read(&previous).unwrap(), b"current\n");
+        assert!(!path.exists());
     }
 
     #[test]
