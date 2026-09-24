@@ -5754,8 +5754,8 @@ name = "registry-platform-hooks"
 version = "0.34.0"
 dependencies = [
  "async-trait",
- "hex",
  "registry-platform-canonical-json",
+ "registry-platform-dispatch",
  "registry-platform-httputil",
  "schemars",
  "serde",

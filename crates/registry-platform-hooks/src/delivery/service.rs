@@ -4,29 +4,41 @@
 //! operator status and replay surface.
 //!
 //! This is the moved delivery core. Claim, lease/CAS, lease reaping, retry
-//! scheduling, dead-lettering, payload expiry, attempt-budget accounting,
-//! idempotency-key construction, and transport-vs-deadline classification
-//! keep the behavior they had while the worker lived in the owning product's
-//! runtime; every product-owned input arrives through the seams, and the
-//! worker sends the captured envelope bytes unchanged, with the delivery
-//! attributes the transport carries beside them.
+//! scheduling, dead-lettering, payload expiry, and operator replay run in
+//! [`registry_platform_dispatch::postgres::Dispatcher`] over the delivery
+//! state table, through the hook store in `store.rs`; attempt-budget
+//! accounting, idempotency-key construction, and transport-vs-deadline
+//! classification keep the behavior they had while the worker lived in the
+//! owning product's runtime. Every product-owned input arrives through the
+//! seams, and the worker sends the captured envelope bytes unchanged, with the
+//! delivery attributes the transport carries beside them.
 
 use std::time::{Duration, SystemTime};
 
+use async_trait::async_trait;
+use registry_platform_dispatch::postgres::{
+    DispatchConfig, DispatchOutcome, DispatchTransport, Dispatcher, Fence, JobKey, JobTable,
+    LeasedJob, LeasedReadError, SelectSql,
+};
+use registry_platform_dispatch::{
+    idempotency_key, remaining_attempt_budget, DispatchError, FailureCode, SendOutcome, Sent,
+};
 use registry_platform_httputil::destination::{DestinationSendError, EventDeliveryHeaders};
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use tokio::sync::watch;
 use tokio::time::Instant;
-use tokio_postgres::Transaction;
 use uuid::Uuid;
 
 use super::seams::{
-    DeliveryAuditDisposition, DeliveryAuditOutcome, DeliveryAuditPhase, DeliveryAuditRecord,
-    DeliveryError, DeliveryOperationalEvent, DeliverySeams, DeliverySignatureFields,
-    DeliveryTransitionCode, DestinationAnswer, HookDestination, HookHandler, HookHandlerBinding,
+    DeliveryAuditOutcome, DeliveryError, DeliveryOperationalEvent, DeliverySeams,
+    DeliverySignatureFields, DestinationAnswer, HookDestination, HookHandler, HookHandlerBinding,
     ProposalApplication, ProposalOutcome, ProposalReceiptRecovery,
+};
+use super::store::{
+    attempt_timeout_bound, binding_is_activated, HookJob, HookStore, DISPATCH_SQL, ID_COLUMN,
+    PART_COLUMN, REPLAYABLE, STATE_TABLE,
 };
 use crate::delivery_schema;
 use crate::envelope::{EnvelopeLimits, HookEnvelope};
@@ -38,8 +50,34 @@ impl From<tokio_postgres::Error> for DeliveryError {
     }
 }
 
-const LEASE_FINALIZATION_ALLOWANCE: Duration = Duration::from_secs(5);
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// The columns one attempt reloads under its live lease: the stored
+/// envelope and the delivery row it must agree with.
+const MATERIAL_SELECT: SelectSql = SelectSql {
+    columns: "outbox.event_type, outbox.payload,
+              outbox.package_revision, outbox.schema_fingerprint,
+              delivery.destination_binding_digest,
+              delivery.logical_destination_id,
+              delivery.maximum_payload_bytes,
+              delivery.payload_digest,
+              delivery.deployed_attempt_timeout_ms,
+              delivery.deployed_maximum_attempts,
+              delivery.authentication_profile,
+              delivery.delivery_mode,
+              delivery.dead_letter,
+              delivery.data_schema,
+              outbox.created_at",
+    joins: "JOIN {schema}.registry_webhook_deliveries AS delivery
+              ON delivery.event_id = state.event_id
+             AND delivery.compiled_delivery_id = state.compiled_delivery_id
+            JOIN {schema}.registry_outbox AS outbox
+              ON outbox.event_id = delivery.event_id
+             AND outbox.package_revision = delivery.package_revision
+             AND outbox.schema_fingerprint = delivery.schema_fingerprint",
+    predicate: "outbox.payload IS NOT NULL
+                AND outbox.payload_expires_at > transaction_timestamp()",
+};
 pub const MAX_DELIVERY_STATUS_RESULTS: u16 = 100;
 
 /// The product-supplied constants the worker cannot derive.
@@ -64,7 +102,7 @@ pub struct DeliveryConfig {
 /// The delivery worker over one product's seams.
 #[derive(Clone)]
 pub struct DeliveryService<S: DeliverySeams> {
-    seams: S,
+    dispatcher: Dispatcher<HookStore<S>>,
     schema: String,
     idempotency_domain: Vec<u8>,
     delivery_source: String,
@@ -80,12 +118,31 @@ impl<S: DeliverySeams> DeliveryService<S> {
     #[must_use]
     pub fn new(seams: S, config: DeliveryConfig) -> Self {
         let schema = delivery_schema::require_plain_identifier(&config.schema).to_owned();
+        let table = JobTable::new(&schema, STATE_TABLE, ID_COLUMN, PART_COLUMN)
+            .expect("the delivery state table is a plain identifier in a plain schema");
+        let dispatcher = Dispatcher::new(
+            HookStore {
+                seams,
+                schema: schema.clone(),
+            },
+            DispatchConfig {
+                table,
+                sql: DISPATCH_SQL,
+                attempt_timeout: attempt_timeout_bound(),
+                replayable: REPLAYABLE,
+            },
+        )
+        .expect("the hook delivery statements are contained and well formed");
         Self {
-            seams,
+            dispatcher,
             schema,
             idempotency_domain: config.idempotency_domain,
             delivery_source: config.delivery_source,
         }
+    }
+
+    fn seams(&self) -> &S {
+        &self.dispatcher.store().seams
     }
 
     /// Claim, audit, send, settle, and finalize at most one due delivery.
@@ -98,19 +155,27 @@ impl<S: DeliverySeams> DeliveryService<S> {
     /// finalization; an uncertain apply leaves the lease for expiry
     /// recovery rather than recording a disposition.
     pub async fn deliver_once(&self) -> Result<DeliveryOutcome, DeliveryError> {
-        let Some(claim) = self.claim().await? else {
-            return Ok(DeliveryOutcome::Idle);
-        };
-        let attempt = self.reload_and_send(&claim).await?;
-        self.finalize(&claim, attempt).await
+        match self
+            .dispatcher
+            .dispatch_once(&HookTransport { service: self })
+            .await?
+        {
+            DispatchOutcome::Idle => Ok(DeliveryOutcome::Idle),
+            DispatchOutcome::Delivered => Ok(DeliveryOutcome::Delivered),
+            DispatchOutcome::RetryScheduled => Ok(DeliveryOutcome::RetryScheduled),
+            DispatchOutcome::DeadLettered => Ok(DeliveryOutcome::DeadLettered),
+            // Hook policies retry an uncertain attempt and carry no job
+            // expiry, so the core never ends a hook attempt in either.
+            DispatchOutcome::Unknown | DispatchOutcome::Expired => Err(DeliveryError::Unavailable),
+        }
     }
 
     /// Refuse startup or operator use if retained work cannot use its exact
     /// captured destination under the active deployment bindings.
     pub async fn verify_retained_bindings(&self) -> Result<(), DeliveryError> {
-        let mut client = self.seams.connection().await?;
+        let mut client = self.seams().connection().await?;
         let transaction = client.transaction().await?;
-        self.seams.verify_transaction(&transaction).await?;
+        self.seams().verify_transaction(&transaction).await?;
         let rows = transaction
             .query(
                 &self.sql(
@@ -152,29 +217,14 @@ impl<S: DeliverySeams> DeliveryService<S> {
             // written against: for the `url` kind that is the activated
             // destination, and for a local kind it is the reviewed program
             // the deployed package holds under the same digest.
-            let binding_activated = match handler_kind {
-                Some(HookHandlerKind::Url) => logical_destination_id
-                    .as_deref()
-                    .and_then(|id| self.seams.destination(id))
-                    .is_some_and(|destination| {
-                        destination.binding_digest() == destination_binding_digest
-                    }),
-                Some(kind @ (HookHandlerKind::Rhai | HookHandlerKind::Wasm)) => {
-                    logical_destination_id.is_none()
-                        && self
-                            .seams
-                            .handler(HookHandlerBinding {
-                                kind,
-                                compiled_delivery_id: &compiled_delivery_id,
-                                package_revision: &package_revision,
-                                handler_digest: &destination_binding_digest,
-                            })
-                            .is_some_and(|handler| {
-                                handler.handler_digest() == destination_binding_digest
-                            })
-                }
-                None => false,
-            };
+            let binding_activated = binding_is_activated(
+                self.seams(),
+                handler_kind,
+                logical_destination_id.as_deref(),
+                &compiled_delivery_id,
+                &package_revision,
+                &destination_binding_digest,
+            );
             if !binding_activated {
                 return Err(DeliveryError::Unavailable);
             }
@@ -188,9 +238,9 @@ impl<S: DeliverySeams> DeliveryService<S> {
         if limit == 0 || limit > MAX_DELIVERY_STATUS_RESULTS {
             return Err(DeliveryError::Unavailable);
         }
-        let mut client = self.seams.connection().await?;
+        let mut client = self.seams().connection().await?;
         let transaction = client.transaction().await?;
-        self.seams.verify_transaction(&transaction).await?;
+        self.seams().verify_transaction(&transaction).await?;
         let rows = transaction
             .query(
                 &self.sql(
@@ -253,531 +303,11 @@ impl<S: DeliverySeams> DeliveryService<S> {
         {
             return Err(DeliveryError::Unavailable);
         }
-        let mut client = self.seams.connection().await?;
-        let transaction = client.transaction().await?;
-        self.seams.verify_transaction(&transaction).await?;
-        let row = transaction
-            .query_opt(
-                &self.sql(
-                    "SELECT state.generation, state.state, delivery.operator_replay,
-                        delivery.package_revision, delivery.logical_destination_id,
-                        delivery.destination_binding_digest, delivery.handler_kind
-                 FROM {schema}.registry_webhook_delivery_state AS state
-                 JOIN {schema}.registry_webhook_deliveries AS delivery
-                   ON delivery.event_id = state.event_id
-                  AND delivery.compiled_delivery_id = state.compiled_delivery_id
-                 JOIN {schema}.registry_outbox AS outbox
-                   ON outbox.event_id = delivery.event_id
-                 WHERE state.event_id = $1
-                   AND state.compiled_delivery_id = $2
-                   AND outbox.payload IS NOT NULL
-                   AND outbox.payload_expires_at > transaction_timestamp()
-                 FOR UPDATE OF state",
-                ),
-                &[&event_id, &compiled_delivery_id],
-            )
-            .await?
-            .ok_or(DeliveryError::Unavailable)?;
-        let generation = row.try_get::<_, i64>(0)?;
-        let state = row.try_get::<_, String>(1)?;
-        let operator_replay = row.try_get::<_, bool>(2)?;
-        let package_revision = bounded_text(&row, 3, 256)?;
-        let logical_destination_id = row
-            .try_get::<_, Option<String>>(4)?
-            .filter(|id| id.len() <= 64);
-        let destination_binding_digest = bounded_text(&row, 5, 71)?;
-        let handler_kind = bounded_text(&row, 6, 8)
-            .ok()
-            .and_then(|kind| HookHandlerKind::from_spelling(&kind));
         // The binding a replay re-opens must still be the one the row was
-        // written against: for the `url` kind that is the activated
-        // destination, and for a local kind it is the reviewed program the
-        // deployed package holds under the same digest.
-        let binding_activated = match handler_kind {
-            Some(HookHandlerKind::Url) => logical_destination_id
-                .as_deref()
-                .and_then(|id| self.seams.destination(id))
-                .is_some_and(|destination| {
-                    destination.binding_digest() == destination_binding_digest
-                }),
-            Some(kind @ (HookHandlerKind::Rhai | HookHandlerKind::Wasm)) => {
-                logical_destination_id.is_none()
-                    && self
-                        .seams
-                        .handler(HookHandlerBinding {
-                            kind,
-                            compiled_delivery_id,
-                            package_revision: &package_revision,
-                            handler_digest: &destination_binding_digest,
-                        })
-                        .is_some_and(|handler| {
-                            handler.handler_digest() == destination_binding_digest
-                        })
-            }
-            None => false,
-        };
-        if generation != expected_generation
-            || !operator_replay
-            || state != "dead_lettered"
-            || !binding_activated
-        {
-            return Err(DeliveryError::Unavailable);
-        }
-        let next_generation = generation
-            .checked_add(1)
-            .ok_or(DeliveryError::Unavailable)?;
-        self.seams
-            .record_audit(
-                &transaction,
-                DeliveryAuditRecord {
-                    event_id,
-                    compiled_delivery_id,
-                    package_revision: &package_revision,
-                    generation: next_generation,
-                    attempt: 0,
-                    phase: DeliveryAuditPhase::Replay,
-                    outcome: DeliveryAuditOutcome::ReplayRequested,
-                    disposition: DeliveryAuditDisposition::ReplayPending,
-                },
-            )
-            .await?;
-        let changed = transaction
-            .execute(
-                &self.sql(
-                    "UPDATE {schema}.registry_webhook_delivery_state
-                 SET generation = $4,
-                     state = 'pending',
-                     attempt = 0,
-                     next_attempt_at = transaction_timestamp(),
-                     attempt_started_at = NULL,
-                     lease_expires_at = NULL,
-                     lease_token = NULL,
-                     delivered_at = NULL,
-                     dead_lettered_at = NULL,
-                     expired_at = NULL,
-                     updated_at = transaction_timestamp()
-                 WHERE event_id = $1
-                   AND compiled_delivery_id = $2
-                   AND generation = $3
-                   AND state = 'dead_lettered'",
-                ),
-                &[
-                    &event_id,
-                    &compiled_delivery_id,
-                    &generation,
-                    &next_generation,
-                ],
-            )
-            .await?;
-        if changed != 1 {
-            return Err(DeliveryError::Unavailable);
-        }
-        transaction.commit().await?;
-        Ok(next_generation)
-    }
-
-    async fn claim(&self) -> Result<Option<DeliveryClaim>, DeliveryError> {
-        let mut client = self.seams.connection().await?;
-        let transaction = client.transaction().await?;
-        if self.seams.verify_transaction(&transaction).await.is_err() {
-            self.refused(DeliveryTransitionCode::ClaimIdentityRefused);
-            return Err(DeliveryError::Unavailable);
-        }
-        if self.reap_expired_leases(&transaction).await.is_err() {
-            self.refused(DeliveryTransitionCode::ClaimRecoveryFailed);
-            return Err(DeliveryError::Unavailable);
-        }
-        self.expire_retained_payload(&transaction).await?;
-        let row = transaction
-            .query_opt(
-                &self.sql(
-                    "SELECT state.event_id, state.compiled_delivery_id,
-                        state.generation, state.attempt,
-                        delivery.deployed_attempt_timeout_ms,
-                        delivery.deployed_maximum_attempts,
-                        delivery.retry_delays_ms,
-                        delivery.package_revision,
-                        delivery.handler_kind
-                 FROM {schema}.registry_webhook_delivery_state AS state
-                 JOIN {schema}.registry_webhook_deliveries AS delivery
-                   ON delivery.event_id = state.event_id
-                  AND delivery.compiled_delivery_id = state.compiled_delivery_id
-                 JOIN {schema}.registry_outbox AS outbox
-                   ON outbox.event_id = delivery.event_id
-                 WHERE state.state = 'pending'
-                   AND state.next_attempt_at <= transaction_timestamp()
-                   AND state.attempt < delivery.deployed_maximum_attempts
-                   AND outbox.payload IS NOT NULL
-                   AND outbox.payload_expires_at > transaction_timestamp()
-                 ORDER BY state.next_attempt_at, state.event_id, state.compiled_delivery_id
-                 FOR UPDATE OF state SKIP LOCKED
-                 LIMIT 1",
-                ),
-                &[],
-            )
-            .await
-            .map_err(|_| {
-                self.refused(DeliveryTransitionCode::ClaimSelectFailed);
-                DeliveryError::Unavailable
-            })?;
-        let Some(row) = row else {
-            transaction.commit().await?;
-            return Ok(None);
-        };
-        let event_id = row.try_get::<_, Uuid>(0)?;
-        let compiled_delivery_id = bounded_delivery_id(&row, 1)?;
-        let generation = row.try_get::<_, i64>(2)?;
-        let prior_attempt = row.try_get::<_, i16>(3)?;
-        let deployed_attempt_timeout_ms = row.try_get::<_, i64>(4)?;
-        let deployed_maximum_attempts = row.try_get::<_, i16>(5)?;
-        let retry_delays_ms = row.try_get::<_, Vec<i64>>(6)?;
-        let package_revision =
-            bounded_text(&row, 7, 256).map_err(|_| DeliveryError::Unavailable)?;
-        let Some(handler_kind) = bounded_text(&row, 8, 8)
-            .ok()
-            .and_then(|kind| HookHandlerKind::from_spelling(&kind))
-        else {
-            self.refused(DeliveryTransitionCode::ClaimPolicyRefused);
-            return Err(DeliveryError::Unavailable);
-        };
-        let attempt = prior_attempt
-            .checked_add(1)
-            .filter(|attempt| *attempt <= deployed_maximum_attempts)
-            .ok_or(DeliveryError::Unavailable)?;
-        if validate_captured_policy(
-            deployed_attempt_timeout_ms,
-            deployed_maximum_attempts,
-            &retry_delays_ms,
-        )
-        .is_err()
-        {
-            self.refused(DeliveryTransitionCode::ClaimPolicyRefused);
-            return Err(DeliveryError::Unavailable);
-        }
-        let lease_token = Uuid::new_v4();
-        let allowance_ms = i64::try_from(LEASE_FINALIZATION_ALLOWANCE.as_millis())
-            .map_err(|_| DeliveryError::Unavailable)?;
-        let changed = transaction
-            .execute(
-                &self.sql(
-                    "UPDATE {schema}.registry_webhook_delivery_state
-                 SET state = 'leased',
-                     attempt = $5,
-                     next_attempt_at = NULL,
-                     attempt_started_at = transaction_timestamp(),
-                     lease_expires_at = transaction_timestamp()
-                         + ($6::bigint + $7::bigint) * interval '1 millisecond',
-                     lease_token = $8,
-                     updated_at = transaction_timestamp()
-                 WHERE event_id = $1
-                   AND compiled_delivery_id = $2
-                   AND generation = $3
-                   AND state = 'pending'
-                   AND attempt = $4",
-                ),
-                &[
-                    &event_id,
-                    &compiled_delivery_id,
-                    &generation,
-                    &prior_attempt,
-                    &attempt,
-                    &deployed_attempt_timeout_ms,
-                    &allowance_ms,
-                    &lease_token,
-                ],
-            )
-            .await
-            .map_err(|_| {
-                self.refused(DeliveryTransitionCode::ClaimUpdateFailed);
-                DeliveryError::Unavailable
-            })?;
-        if changed != 1 {
-            return Err(DeliveryError::Unavailable);
-        }
-        let attempt_started_at = transaction
-            .query_one("SELECT transaction_timestamp()", &[])
-            .await?
-            .try_get::<_, SystemTime>(0)?;
-        if self
-            .seams
-            .record_audit(
-                &transaction,
-                DeliveryAuditRecord {
-                    event_id,
-                    compiled_delivery_id: &compiled_delivery_id,
-                    package_revision: &package_revision,
-                    generation,
-                    attempt,
-                    phase: DeliveryAuditPhase::Attempt,
-                    outcome: DeliveryAuditOutcome::AttemptStarted,
-                    disposition: DeliveryAuditDisposition::Leased,
-                },
-            )
-            .await
-            .is_err()
-        {
-            self.refused(DeliveryTransitionCode::ClaimAuditFailed);
-            return Err(DeliveryError::Unavailable);
-        }
-        transaction.commit().await.map_err(|_| {
-            self.refused(DeliveryTransitionCode::ClaimCommitFailed);
-            DeliveryError::Unavailable
-        })?;
-        Ok(Some(DeliveryClaim {
-            event_id,
-            compiled_delivery_id,
-            generation,
-            attempt,
-            attempt_started_at,
-            lease_token,
-            deployed_maximum_attempts,
-            retry_delays_ms,
-            package_revision,
-            handler_kind,
-        }))
-    }
-
-    async fn reap_expired_leases(
-        &self,
-        transaction: &Transaction<'_>,
-    ) -> Result<(), DeliveryError> {
-        let row = transaction
-            .query_opt(
-                &self.sql(
-                    "SELECT state.event_id, state.compiled_delivery_id,
-                        state.generation, state.attempt, state.lease_token,
-                        delivery.deployed_attempt_timeout_ms,
-                        delivery.deployed_maximum_attempts,
-                        delivery.retry_delays_ms,
-                        delivery.package_revision
-                 FROM {schema}.registry_webhook_delivery_state AS state
-                 JOIN {schema}.registry_webhook_deliveries AS delivery
-                   ON delivery.event_id = state.event_id
-                  AND delivery.compiled_delivery_id = state.compiled_delivery_id
-                 WHERE state.state = 'leased'
-                   AND state.lease_expires_at <= transaction_timestamp()
-                 ORDER BY state.lease_expires_at, state.event_id, state.compiled_delivery_id
-                 FOR UPDATE OF state SKIP LOCKED
-                 LIMIT 1",
-                ),
-                &[],
-            )
-            .await?;
-        let Some(row) = row else {
-            return Ok(());
-        };
-        let event_id = row.try_get::<_, Uuid>(0)?;
-        let compiled_delivery_id = bounded_delivery_id(&row, 1)?;
-        let generation = row.try_get::<_, i64>(2)?;
-        let attempt = row.try_get::<_, i16>(3)?;
-        let lease_token = row.try_get::<_, Uuid>(4)?;
-        let deployed_attempt_timeout_ms = row.try_get::<_, i64>(5)?;
-        let deployed_maximum_attempts = row.try_get::<_, i16>(6)?;
-        let retry_delays_ms = row.try_get::<_, Vec<i64>>(7)?;
-        let package_revision = bounded_text(&row, 8, 256)?;
-        validate_captured_policy(
-            deployed_attempt_timeout_ms,
-            deployed_maximum_attempts,
-            &retry_delays_ms,
-        )?;
-        let dead_lettered = attempt >= deployed_maximum_attempts;
-        // The final worker may have committed a proposal before dying or
-        // losing its lease. Recover under the same delivery-scoped boundary
-        // before the reaper makes that row terminal; otherwise this direct
-        // dead-letter path would hide the committed application behind an
-        // all-null proposal disposition.
-        let proposal = if dead_lettered {
-            self.seams
-                .recover_proposal_receipt_in_transaction(
-                    transaction,
-                    ProposalReceiptRecovery {
-                        event_id,
-                        compiled_delivery_id: &compiled_delivery_id,
-                    },
-                )
-                .await?
-        } else {
-            None
-        };
-        self.seams
-            .record_audit(
-                transaction,
-                DeliveryAuditRecord {
-                    event_id,
-                    compiled_delivery_id: &compiled_delivery_id,
-                    package_revision: &package_revision,
-                    generation,
-                    attempt,
-                    phase: DeliveryAuditPhase::Terminal,
-                    outcome: DeliveryAuditOutcome::WorkerInterrupted,
-                    disposition: if dead_lettered {
-                        DeliveryAuditDisposition::DeadLettered
-                    } else {
-                        DeliveryAuditDisposition::RetryPending
-                    },
-                },
-            )
-            .await?;
-        let changed = if dead_lettered {
-            let columns = proposal_columns("dead_lettered", proposal.as_ref())?;
-            transaction
-                .execute(
-                    &self.sql(
-                        "UPDATE {schema}.registry_webhook_delivery_state
-                     SET state = 'dead_lettered',
-                         next_attempt_at = NULL,
-                         attempt_started_at = NULL,
-                         lease_expires_at = NULL,
-                         lease_token = NULL,
-                         proposal_disposition = $6,
-                         proposal_resulting_revision = $7,
-                         proposal_code = $8,
-                         proposal_summary = $9,
-                         dead_lettered_at = transaction_timestamp(),
-                         updated_at = transaction_timestamp()
-                     WHERE event_id = $1
-                       AND compiled_delivery_id = $2
-                       AND generation = $3
-                       AND attempt = $4
-                       AND lease_token = $5
-                       AND state = 'leased'
-                       AND lease_expires_at <= transaction_timestamp()",
-                    ),
-                    &[
-                        &event_id,
-                        &compiled_delivery_id,
-                        &generation,
-                        &attempt,
-                        &lease_token,
-                        &columns.disposition,
-                        &columns.resulting_revision,
-                        &columns.code,
-                        &columns.summary,
-                    ],
-                )
-                .await
-        } else {
-            let delay_ms = scheduled_retry_delay(&retry_delays_ms, attempt)?;
-            transaction
-                .execute(
-                    &self.sql(
-                        "UPDATE {schema}.registry_webhook_delivery_state
-                     SET state = 'pending',
-                         next_attempt_at = transaction_timestamp()
-                             + $6::bigint * interval '1 millisecond',
-                         attempt_started_at = NULL,
-                         lease_expires_at = NULL,
-                         lease_token = NULL,
-                         updated_at = transaction_timestamp()
-                     WHERE event_id = $1
-                       AND compiled_delivery_id = $2
-                       AND generation = $3
-                       AND attempt = $4
-                       AND lease_token = $5
-                       AND state = 'leased'
-                       AND lease_expires_at <= transaction_timestamp()",
-                    ),
-                    &[
-                        &event_id,
-                        &compiled_delivery_id,
-                        &generation,
-                        &attempt,
-                        &lease_token,
-                        &delay_ms,
-                    ],
-                )
-                .await
-        }?;
-        if changed != 1 {
-            return Err(DeliveryError::Unavailable);
-        }
-        Ok(())
-    }
-
-    async fn expire_retained_payload(
-        &self,
-        transaction: &Transaction<'_>,
-    ) -> Result<(), DeliveryError> {
-        let row = transaction
-            .query_opt(
-                &self.sql(
-                    "SELECT state.event_id, state.compiled_delivery_id,
-                        state.generation, state.attempt, delivery.package_revision
-                   FROM {schema}.registry_webhook_delivery_state AS state
-                   JOIN {schema}.registry_webhook_deliveries AS delivery
-                     ON delivery.event_id = state.event_id
-                    AND delivery.compiled_delivery_id = state.compiled_delivery_id
-                   JOIN {schema}.registry_outbox AS outbox
-                     ON outbox.event_id = delivery.event_id
-                  WHERE state.state IN ('pending', 'dead_lettered')
-                    AND outbox.payload IS NOT NULL
-                    AND outbox.payload_expires_at <= transaction_timestamp()
-                  ORDER BY outbox.payload_expires_at, state.event_id,
-                           state.compiled_delivery_id
-                  FOR UPDATE OF state, outbox SKIP LOCKED
-                  LIMIT 1",
-                ),
-                &[],
-            )
-            .await?;
-        let Some(row) = row else {
-            return Ok(());
-        };
-        let event_id = row.try_get::<_, Uuid>(0)?;
-        let compiled_delivery_id = bounded_delivery_id(&row, 1)?;
-        let generation = row.try_get::<_, i64>(2)?;
-        let attempt = row.try_get::<_, i16>(3)?;
-        let package_revision = bounded_text(&row, 4, 256)?;
-        self.seams
-            .record_audit(
-                transaction,
-                DeliveryAuditRecord {
-                    event_id,
-                    compiled_delivery_id: &compiled_delivery_id,
-                    package_revision: &package_revision,
-                    generation,
-                    attempt,
-                    phase: DeliveryAuditPhase::Terminal,
-                    outcome: DeliveryAuditOutcome::PayloadExpired,
-                    disposition: DeliveryAuditDisposition::Expired,
-                },
-            )
-            .await?;
-        let state_changed = transaction
-            .execute(
-                &self.sql(
-                    "UPDATE {schema}.registry_webhook_delivery_state
-                    SET state = CASE WHEN state = 'pending' THEN 'expired' ELSE state END,
-                        next_attempt_at = NULL,
-                        attempt_started_at = NULL,
-                        lease_expires_at = NULL,
-                        lease_token = NULL,
-                        expired_at = transaction_timestamp(),
-                        updated_at = transaction_timestamp()
-                  WHERE event_id = $1
-                    AND compiled_delivery_id = $2
-                    AND generation = $3
-                    AND state IN ('pending', 'dead_lettered')",
-                ),
-                &[&event_id, &compiled_delivery_id, &generation],
-            )
-            .await?;
-        let payload_changed = transaction
-            .execute(
-                &self.sql(
-                    "UPDATE {schema}.registry_outbox
-                    SET payload = NULL
-                  WHERE event_id = $1
-                    AND payload IS NOT NULL
-                    AND payload_expires_at <= transaction_timestamp()",
-                ),
-                &[&event_id],
-            )
-            .await?;
-        if state_changed != 1 || payload_changed != 1 {
-            return Err(DeliveryError::Unavailable);
-        }
-        Ok(())
+        // written against; the hook store refuses the target otherwise.
+        let key =
+            JobKey::new(event_id, compiled_delivery_id).map_err(|_| DeliveryError::Unavailable)?;
+        Ok(self.dispatcher.replay(&key, expected_generation).await?)
     }
 
     async fn reload_and_send(&self, claim: &DeliveryClaim) -> Result<AttemptResult, DeliveryError> {
@@ -797,7 +327,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
         let Some(destination_id) = material.logical_destination_id.as_deref() else {
             return Ok(DeliveryAuditOutcome::DestinationBindingRefused.into());
         };
-        let Some(destination) = self.seams.destination(destination_id) else {
+        let Some(destination) = self.seams().destination(destination_id) else {
             return Ok(DeliveryAuditOutcome::DestinationBindingRefused.into());
         };
         let deployed_timeout_ms = i64::try_from(destination.attempt_timeout().as_millis())
@@ -913,7 +443,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
         claim: &DeliveryClaim,
         material: DeliveryMaterial,
     ) -> Result<AttemptResult, DeliveryError> {
-        let Some(handler) = self.seams.handler(HookHandlerBinding {
+        let Some(handler) = self.seams().handler(HookHandlerBinding {
             kind: claim.handler_kind,
             compiled_delivery_id: &claim.compiled_delivery_id,
             package_revision: &claim.package_revision,
@@ -970,7 +500,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
         };
         if !matches!(answer.message, HookMessage::Proposal { .. }) {
             result.proposal = self
-                .seams
+                .seams()
                 .recover_proposal_receipt(ProposalReceiptRecovery {
                     event_id: claim.event_id,
                     compiled_delivery_id: &claim.compiled_delivery_id,
@@ -979,7 +509,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
             return Ok(result);
         }
         let outcome = self
-            .seams
+            .seams()
             .apply_proposal(ProposalApplication {
                 event_id: claim.event_id,
                 compiled_delivery_id: &claim.compiled_delivery_id,
@@ -1000,368 +530,51 @@ impl<S: DeliverySeams> DeliveryService<S> {
         &self,
         claim: &DeliveryClaim,
     ) -> Result<DeliveryMaterial, MaterialLoadError> {
-        let mut client = self
-            .seams
-            .connection()
+        let fence = Fence {
+            id: claim.event_id,
+            part: &claim.compiled_delivery_id,
+            generation: claim.generation,
+            attempt: claim.attempt,
+            lease_token: claim.lease_token,
+        };
+        let (material, binding) = self
+            .dispatcher
+            .read_leased(fence, &MATERIAL_SELECT, decode_material)
             .await
-            .map_err(|_| MaterialLoadError::Unavailable)?;
-        let transaction = client
-            .transaction()
-            .await
-            .map_err(|_| MaterialLoadError::Unavailable)?;
-        self.seams
-            .verify_transaction(&transaction)
-            .await
-            .map_err(|_| MaterialLoadError::Unavailable)?;
-        let row = transaction
-            .query_opt(
-                &self.sql(
-                    "SELECT outbox.event_type, outbox.payload,
-                        outbox.package_revision, outbox.schema_fingerprint,
-                        delivery.destination_binding_digest,
-                        delivery.logical_destination_id,
-                        delivery.maximum_payload_bytes,
-                        delivery.payload_digest,
-                        delivery.deployed_attempt_timeout_ms,
-                        delivery.deployed_maximum_attempts,
-                        delivery.authentication_profile,
-                        delivery.delivery_mode,
-                        delivery.dead_letter,
-                        delivery.data_schema,
-                        outbox.created_at
-                 FROM {schema}.registry_webhook_delivery_state AS state
-                 JOIN {schema}.registry_webhook_deliveries AS delivery
-                   ON delivery.event_id = state.event_id
-                  AND delivery.compiled_delivery_id = state.compiled_delivery_id
-                 JOIN {schema}.registry_outbox AS outbox
-                   ON outbox.event_id = delivery.event_id
-                  AND outbox.package_revision = delivery.package_revision
-                  AND outbox.schema_fingerprint = delivery.schema_fingerprint
-                 WHERE state.event_id = $1
-                   AND state.compiled_delivery_id = $2
-                   AND state.generation = $3
-                   AND state.attempt = $4
-                   AND state.lease_token = $5
-                   AND state.state = 'leased'
-                   AND state.lease_expires_at > transaction_timestamp()
-                   AND outbox.payload IS NOT NULL
-                   AND outbox.payload_expires_at > transaction_timestamp()
-                 FOR SHARE OF state",
-                ),
-                &[
-                    &claim.event_id,
-                    &claim.compiled_delivery_id,
-                    &claim.generation,
-                    &claim.attempt,
-                    &claim.lease_token,
-                ],
-            )
-            .await
-            .map_err(|_| MaterialLoadError::Unavailable)?
-            .ok_or(MaterialLoadError::Unavailable)?;
-        let event_type =
-            bounded_text(&row, 0, 256).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let body = row
-            .try_get::<_, Option<Vec<u8>>>(1)
-            .map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let body = body.ok_or(MaterialLoadError::PayloadRefused)?;
-        let outbox_package_revision =
-            bounded_text(&row, 2, 256).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let outbox_schema_fingerprint =
-            bounded_text(&row, 3, 256).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let destination_binding_digest =
-            bounded_text(&row, 4, 71).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let logical_destination_id = row
-            .try_get::<_, Option<String>>(5)
-            .map_err(|_| MaterialLoadError::PayloadRefused)?
-            .map(|id| {
-                (id.len() <= 64)
-                    .then_some(id)
-                    .ok_or(MaterialLoadError::PayloadRefused)
-            })
-            .transpose()?;
-        let maximum_payload_bytes = row
-            .try_get::<_, i64>(6)
-            .map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let payload_digest = row
-            .try_get::<_, Vec<u8>>(7)
-            .map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let deployed_attempt_timeout_ms = row
-            .try_get::<_, i64>(8)
-            .map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let deployed_maximum_attempts = row
-            .try_get::<_, i16>(9)
-            .map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let authentication_profile =
-            bounded_text(&row, 10, 32).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let delivery_mode =
-            bounded_text(&row, 11, 32).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let dead_letter =
-            bounded_text(&row, 12, 32).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let data_schema =
-            bounded_text(&row, 13, 2_048).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let event_time = row
-            .try_get::<_, SystemTime>(14)
-            .map_err(|_| MaterialLoadError::PayloadRefused)?;
-        transaction
-            .commit()
-            .await
-            .map_err(|_| MaterialLoadError::Unavailable)?;
+            .map_err(|error| match error {
+                LeasedReadError::Unavailable => MaterialLoadError::Unavailable,
+                LeasedReadError::Refused(refusal) => refusal,
+            })?;
         // A row carries a destination when, and only when, it binds the
         // `url` kind: a local kind runs the engine's own reviewed program
         // and has nowhere to send.
-        if logical_destination_id.is_some() != (claim.handler_kind == HookHandlerKind::Url) {
+        if material.logical_destination_id.is_some() != (claim.handler_kind == HookHandlerKind::Url)
+        {
             return Err(MaterialLoadError::BindingRefused);
         }
-        if outbox_package_revision != claim.package_revision
-            || outbox_schema_fingerprint.is_empty()
-            || authentication_profile != "hmac_sha256_v1"
-            || delivery_mode != "after_commit"
-            || dead_letter != "required"
-            || !(100..=10_000).contains(&deployed_attempt_timeout_ms)
-            || !(1..=20).contains(&deployed_maximum_attempts)
+        if binding.outbox_package_revision != claim.package_revision
+            || binding.outbox_schema_fingerprint.is_empty()
+            || binding.authentication_profile != "hmac_sha256_v1"
+            || binding.delivery_mode != "after_commit"
+            || binding.dead_letter != "required"
+            || !(100..=10_000).contains(&material.deployed_attempt_timeout_ms)
+            || !(1..=20).contains(&material.deployed_maximum_attempts)
         {
             return Err(MaterialLoadError::BindingRefused);
         }
         accept_stored_envelope(
-            &body,
+            &material.body,
             &StoredEnvelope {
                 event_id: claim.event_id,
-                event_type: &event_type,
+                event_type: &material.event_type,
                 source: &self.delivery_source,
-                data_schema: &data_schema,
-                event_time,
-                maximum_payload_bytes,
-                payload_digest: &payload_digest,
+                data_schema: &material.data_schema,
+                event_time: material.event_time,
+                maximum_payload_bytes: binding.maximum_payload_bytes,
+                payload_digest: &material.payload_digest,
             },
         )?;
-        Ok(DeliveryMaterial {
-            event_type,
-            body,
-            payload_digest,
-            destination_binding_digest,
-            logical_destination_id,
-            deployed_attempt_timeout_ms,
-            deployed_maximum_attempts,
-            data_schema,
-            event_time,
-        })
-    }
-
-    async fn finalize(
-        &self,
-        claim: &DeliveryClaim,
-        attempt: AttemptResult,
-    ) -> Result<DeliveryOutcome, DeliveryError> {
-        let AttemptResult {
-            outcome,
-            answer,
-            mut proposal,
-        } = attempt;
-        // A proposal may have committed before an earlier worker lost its
-        // lease or failed to finalize. If every later attempt fails before
-        // accepting an answer, recover that receipt before the last attempt
-        // becomes an all-null dead letter. Nonterminal failures keep the
-        // ordinary retry path and avoid an extra database lookup.
-        if proposal.is_none()
-            && answer.is_none()
-            && claim.attempt >= claim.deployed_maximum_attempts
-        {
-            proposal = self
-                .seams
-                .recover_proposal_receipt(ProposalReceiptRecovery {
-                    event_id: claim.event_id,
-                    compiled_delivery_id: &claim.compiled_delivery_id,
-                })
-                .await?;
-        }
-        let mut client = self.seams.connection().await?;
-        let transaction = client.transaction().await?;
-        self.seams.verify_transaction(&transaction).await?;
-        let (disposition, work_outcome) = if proposal
-            .as_ref()
-            .is_some_and(|proposal| matches!(proposal, ProposalOutcome::DeadLettered { .. }))
-        {
-            // A dead-lettered proposal is deterministic: retrying the
-            // delivery cannot apply it, so the row is terminal now regardless
-            // of the attempts it has left.
-            (
-                DeliveryAuditDisposition::DeadLettered,
-                DeliveryOutcome::DeadLettered,
-            )
-        } else if outcome == DeliveryAuditOutcome::Delivered {
-            (
-                DeliveryAuditDisposition::Delivered,
-                DeliveryOutcome::Delivered,
-            )
-        } else if claim.attempt >= claim.deployed_maximum_attempts {
-            (
-                DeliveryAuditDisposition::DeadLettered,
-                DeliveryOutcome::DeadLettered,
-            )
-        } else {
-            (
-                DeliveryAuditDisposition::RetryPending,
-                DeliveryOutcome::RetryScheduled,
-            )
-        };
-        self.seams
-            .record_audit(
-                &transaction,
-                DeliveryAuditRecord {
-                    event_id: claim.event_id,
-                    compiled_delivery_id: &claim.compiled_delivery_id,
-                    package_revision: &claim.package_revision,
-                    generation: claim.generation,
-                    attempt: claim.attempt,
-                    phase: DeliveryAuditPhase::Terminal,
-                    outcome,
-                    disposition,
-                },
-            )
-            .await?;
-        let changed = match work_outcome {
-            DeliveryOutcome::Delivered => {
-                self.update_terminal_state(
-                    &transaction,
-                    claim,
-                    "delivered",
-                    answer.as_ref(),
-                    proposal.as_ref(),
-                )
-                .await?
-            }
-            DeliveryOutcome::DeadLettered => {
-                self.update_terminal_state(
-                    &transaction,
-                    claim,
-                    "dead_lettered",
-                    None,
-                    proposal.as_ref(),
-                )
-                .await?
-            }
-            DeliveryOutcome::RetryScheduled => {
-                let delay_ms = scheduled_retry_delay(&claim.retry_delays_ms, claim.attempt)?;
-                transaction
-                    .execute(
-                        &self.sql(
-                            "UPDATE {schema}.registry_webhook_delivery_state
-                         SET state = 'pending',
-                             next_attempt_at = transaction_timestamp()
-                                 + $6::bigint * interval '1 millisecond',
-                             attempt_started_at = NULL,
-                             lease_expires_at = NULL,
-                             lease_token = NULL,
-                             updated_at = transaction_timestamp()
-                         WHERE event_id = $1
-                           AND compiled_delivery_id = $2
-                           AND generation = $3
-                           AND attempt = $4
-                           AND lease_token = $5
-                           AND state = 'leased'",
-                        ),
-                        &[
-                            &claim.event_id,
-                            &claim.compiled_delivery_id,
-                            &claim.generation,
-                            &claim.attempt,
-                            &claim.lease_token,
-                            &delay_ms,
-                        ],
-                    )
-                    .await?
-            }
-            DeliveryOutcome::Idle => return Err(DeliveryError::Unavailable),
-        };
-        if changed != 1 {
-            return Err(DeliveryError::Unavailable);
-        }
-        if work_outcome == DeliveryOutcome::Delivered {
-            let erased = transaction
-                .execute(
-                    &self.sql(
-                        "UPDATE {schema}.registry_outbox
-                        SET payload = NULL
-                      WHERE event_id = $1 AND payload IS NOT NULL",
-                    ),
-                    &[&claim.event_id],
-                )
-                .await?;
-            if erased != 1 {
-                return Err(DeliveryError::Unavailable);
-            }
-        }
-        transaction.commit().await?;
-        Ok(work_outcome)
-    }
-
-    async fn update_terminal_state(
-        &self,
-        transaction: &Transaction<'_>,
-        claim: &DeliveryClaim,
-        state: &str,
-        answer: Option<&AcceptedAnswer>,
-        proposal: Option<&ProposalOutcome>,
-    ) -> Result<u64, DeliveryError> {
-        let timestamp_column = match state {
-            "delivered" => "delivered_at",
-            "dead_lettered" => "dead_lettered_at",
-            _ => return Err(DeliveryError::Unavailable),
-        };
-        let columns = proposal_columns(state, proposal)?;
-        // The raw answer is erased when delivery becomes terminal: the row
-        // retains the digest, disposition, code, and bounded summary, never
-        // the answer bytes, so nothing delivered stays readable as a payload.
-        let message: Option<Vec<u8>> = None;
-        let message_digest = answer.map(|answer| answer.digest.to_vec());
-        transaction
-            .execute(
-                &format!(
-                    "UPDATE {schema}.registry_webhook_delivery_state
-                     SET state = '{state}',
-                         next_attempt_at = NULL,
-                         attempt_started_at = NULL,
-                         lease_expires_at = NULL,
-                         lease_token = NULL,
-                         handler_message = $6,
-                         handler_message_digest = $7,
-                         proposal_disposition = $8,
-                         proposal_resulting_revision = $9,
-                         proposal_code = $10,
-                         proposal_summary = $11,
-                         {timestamp_column} = transaction_timestamp(),
-                         updated_at = transaction_timestamp()
-                     WHERE event_id = $1
-                       AND compiled_delivery_id = $2
-                       AND generation = $3
-                       AND attempt = $4
-                       AND lease_token = $5
-                       AND state = 'leased'",
-                    schema = self.schema,
-                ),
-                &[
-                    &claim.event_id,
-                    &claim.compiled_delivery_id,
-                    &claim.generation,
-                    &claim.attempt,
-                    &claim.lease_token,
-                    &message,
-                    &message_digest,
-                    &columns.disposition,
-                    &columns.resulting_revision,
-                    &columns.code,
-                    &columns.summary,
-                ],
-            )
-            .await
-            .map_err(|_| DeliveryError::Unavailable)
-    }
-
-    /// Report one refused claim-path transition through the operational seam.
-    fn refused(&self, code: DeliveryTransitionCode) {
-        self.seams
-            .operational_event(DeliveryOperationalEvent::TransitionFailed(code));
+        Ok(material)
     }
 
     /// Render one SQL template with this deployment's schema name. The
@@ -1392,7 +605,7 @@ impl<S: DeliverySeams> DeliveryWorker<S> {
             }
             if service.deliver_once().await.is_err() {
                 service
-                    .seams
+                    .seams()
                     .operational_event(DeliveryOperationalEvent::IterationFailed);
             }
             tokio::select! {
@@ -1416,7 +629,6 @@ struct DeliveryClaim {
     attempt_started_at: SystemTime,
     lease_token: Uuid,
     deployed_maximum_attempts: i16,
-    retry_delays_ms: Vec<i64>,
     package_revision: String,
     handler_kind: HookHandlerKind,
 }
@@ -1433,22 +645,174 @@ struct DeliveryMaterial {
     event_time: SystemTime,
 }
 
+/// The reloaded columns the material is checked against before it is
+/// accepted.
+struct MaterialBinding {
+    outbox_package_revision: String,
+    outbox_schema_fingerprint: String,
+    maximum_payload_bytes: i64,
+    authentication_profile: String,
+    delivery_mode: String,
+    dead_letter: String,
+}
+
 enum MaterialLoadError {
     Unavailable,
     BindingRefused,
     PayloadRefused,
 }
 
+/// Decode the [`MATERIAL_SELECT`] columns from index `first`.
+fn decode_material(
+    row: &tokio_postgres::Row,
+    first: usize,
+) -> Result<(DeliveryMaterial, MaterialBinding), MaterialLoadError> {
+    let column = |offset: usize| first + offset;
+    let event_type =
+        bounded_text(row, column(0), 256).map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let body = row
+        .try_get::<_, Option<Vec<u8>>>(column(1))
+        .map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let body = body.ok_or(MaterialLoadError::PayloadRefused)?;
+    let outbox_package_revision =
+        bounded_text(row, column(2), 256).map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let outbox_schema_fingerprint =
+        bounded_text(row, column(3), 256).map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let destination_binding_digest =
+        bounded_text(row, column(4), 71).map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let logical_destination_id = row
+        .try_get::<_, Option<String>>(column(5))
+        .map_err(|_| MaterialLoadError::PayloadRefused)?
+        .map(|id| {
+            (id.len() <= 64)
+                .then_some(id)
+                .ok_or(MaterialLoadError::PayloadRefused)
+        })
+        .transpose()?;
+    let maximum_payload_bytes = row
+        .try_get::<_, i64>(column(6))
+        .map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let payload_digest = row
+        .try_get::<_, Vec<u8>>(column(7))
+        .map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let deployed_attempt_timeout_ms = row
+        .try_get::<_, i64>(column(8))
+        .map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let deployed_maximum_attempts = row
+        .try_get::<_, i16>(column(9))
+        .map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let authentication_profile =
+        bounded_text(row, column(10), 32).map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let delivery_mode =
+        bounded_text(row, column(11), 32).map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let dead_letter =
+        bounded_text(row, column(12), 32).map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let data_schema =
+        bounded_text(row, column(13), 2_048).map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let event_time = row
+        .try_get::<_, SystemTime>(column(14))
+        .map_err(|_| MaterialLoadError::PayloadRefused)?;
+    Ok((
+        DeliveryMaterial {
+            event_type,
+            body,
+            payload_digest,
+            destination_binding_digest,
+            logical_destination_id,
+            deployed_attempt_timeout_ms,
+            deployed_maximum_attempts,
+            data_schema,
+            event_time,
+        },
+        MaterialBinding {
+            outbox_package_revision,
+            outbox_schema_fingerprint,
+            maximum_payload_bytes,
+            authentication_profile,
+            delivery_mode,
+            dead_letter,
+        },
+    ))
+}
+
+/// One hook attempt as the dispatch core's send: reload the material under
+/// the lease, send or run it, settle any proposal, and classify the result.
+///
+/// Hook delivery retries every failure until its attempts are spent. The
+/// only failure that stops early is a dead-lettered proposal, which a retry
+/// cannot apply.
+struct HookTransport<'a, S: DeliverySeams> {
+    service: &'a DeliveryService<S>,
+}
+
+#[async_trait]
+impl<S: DeliverySeams> DispatchTransport for HookTransport<'_, S> {
+    type Job = HookJob;
+    type Detail = AttemptResult;
+
+    async fn send(&self, job: &LeasedJob<HookJob>) -> Result<Sent<AttemptResult>, DispatchError> {
+        let claim = DeliveryClaim {
+            event_id: job.key.id(),
+            compiled_delivery_id: job.key.part().to_owned(),
+            generation: job.generation,
+            attempt: job.attempt,
+            attempt_started_at: job.attempt_started_at,
+            lease_token: job.lease_token,
+            deployed_maximum_attempts: job.policy.maximum_attempts,
+            package_revision: job.job.package_revision.clone(),
+            handler_kind: job.job.handler_kind,
+        };
+        let mut result = self.service.reload_and_send(&claim).await?;
+        // A proposal may have committed before an earlier worker lost its
+        // lease or failed to finalize. If every later attempt fails before
+        // accepting an answer, recover that receipt before the last attempt
+        // becomes an all-null dead letter. Nonterminal failures keep the
+        // ordinary retry path and avoid an extra database lookup.
+        if result.proposal.is_none()
+            && result.answer.is_none()
+            && claim.attempt >= claim.deployed_maximum_attempts
+        {
+            result.proposal = self
+                .service
+                .seams()
+                .recover_proposal_receipt(ProposalReceiptRecovery {
+                    event_id: claim.event_id,
+                    compiled_delivery_id: &claim.compiled_delivery_id,
+                })
+                .await?;
+        }
+        let outcome = if matches!(result.proposal, Some(ProposalOutcome::DeadLettered { .. })) {
+            // A dead-lettered proposal is deterministic: retrying the
+            // delivery cannot apply it, so the row is terminal now regardless
+            // of the attempts it has left.
+            SendOutcome::Permanent {
+                code: FailureCode::new("proposal_dead_lettered")
+                    .map_err(|_| DispatchError::Unavailable)?,
+            }
+        } else if result.outcome == DeliveryAuditOutcome::Delivered {
+            SendOutcome::Accepted {
+                provider_reference: None,
+            }
+        } else {
+            SendOutcome::Transient { retry_after: None }
+        };
+        Ok(Sent {
+            outcome,
+            detail: result,
+        })
+    }
+}
+
 /// What one attempt produced: its audited outcome, the accepted message to
 /// record with it when the handler answered, and, when that message carried
 /// a proposal, what became of it.
-struct AttemptResult {
-    outcome: DeliveryAuditOutcome,
-    answer: Option<AcceptedAnswer>,
+pub(super) struct AttemptResult {
+    pub(super) outcome: DeliveryAuditOutcome,
+    pub(super) answer: Option<AcceptedAnswer>,
     /// The settled outcome of the proposal the answer carried, set once the
     /// product's apply seam has answered. Always `None` for an answer that
     /// proposed nothing.
-    proposal: Option<ProposalOutcome>,
+    pub(super) proposal: Option<ProposalOutcome>,
 }
 
 impl From<DeliveryAuditOutcome> for AttemptResult {
@@ -1464,10 +828,10 @@ impl From<DeliveryAuditOutcome> for AttemptResult {
 /// One accepted handler message and the digest of exactly the bytes
 /// recorded for it.
 #[derive(Debug)]
-struct AcceptedAnswer {
+pub(super) struct AcceptedAnswer {
     message: HookMessage,
     bytes: Vec<u8>,
-    digest: [u8; 32],
+    pub(super) digest: [u8; 32],
 }
 
 /// The refusal recorded when the delivery row and its binding disagree,
@@ -1538,7 +902,7 @@ fn accept_handler_answer(body: &[u8]) -> Result<AcceptedAnswer, ErrorCategory> {
 /// row the proposal path dead-letters states `dead_lettered` with its
 /// reason. A row that dead-letters without accepting an answer keeps the
 /// all-null legacy shape: it never had a proposal to settle.
-fn proposal_columns<'a>(
+pub(super) fn proposal_columns<'a>(
     state: &str,
     proposal: Option<&'a ProposalOutcome>,
 ) -> Result<ProposalColumns<'a>, DeliveryError> {
@@ -1586,11 +950,11 @@ fn proposal_columns<'a>(
 
 /// The proposal columns one terminal UPDATE writes, borrowed from the
 /// settled outcome they record.
-struct ProposalColumns<'a> {
-    disposition: Option<&'a str>,
-    resulting_revision: Option<i64>,
-    code: Option<&'a str>,
-    summary: Option<&'a str>,
+pub(super) struct ProposalColumns<'a> {
+    pub(super) disposition: Option<&'a str>,
+    pub(super) resulting_revision: Option<i64>,
+    pub(super) code: Option<&'a str>,
+    pub(super) summary: Option<&'a str>,
 }
 
 /// What the delivery row and the worker's own configuration say the stored
@@ -1679,17 +1043,6 @@ fn delivery_status_kind(
     }
 }
 
-/// The retry delay owed after `attempt`, or a refusal when the captured
-/// profile has no positive delay for it.
-fn scheduled_retry_delay(retry_delays_ms: &[i64], attempt: i16) -> Result<i64, DeliveryError> {
-    let delay_index = usize::try_from(attempt - 1).map_err(|_| DeliveryError::Unavailable)?;
-    retry_delays_ms
-        .get(delay_index)
-        .filter(|delay| **delay > 0)
-        .copied()
-        .ok_or(DeliveryError::Unavailable)
-}
-
 fn classify_send_error(
     error: DestinationSendError,
     deadline_reached: bool,
@@ -1737,29 +1090,11 @@ fn classify_send_error(
     }
 }
 
-/// Attempt budget still available for the request, or `None` once the captured
-/// attempt timeout is spent.
-///
-/// The claim timestamp is the database clock and `now` is this process's clock,
-/// so the two disagree by whatever offset separates the two hosts. An attempt
-/// that appears to start in the local future has spent none of its budget, and
-/// the request that follows still gets at most the captured attempt timeout.
-fn remaining_attempt_budget(
-    attempt_timeout: Duration,
-    attempt_started_at: SystemTime,
-    now: SystemTime,
-) -> Option<Duration> {
-    let elapsed = now
-        .duration_since(attempt_started_at)
-        .unwrap_or(Duration::ZERO);
-    attempt_timeout.checked_sub(elapsed)
-}
-
 fn bounded_delivery_id(row: &tokio_postgres::Row, index: usize) -> Result<String, DeliveryError> {
     bounded_text(row, index, 256)
 }
 
-fn bounded_text(
+pub(super) fn bounded_text(
     row: &tokio_postgres::Row,
     index: usize,
     maximum: usize,
@@ -1773,7 +1108,7 @@ fn bounded_text(
     Ok(value)
 }
 
-fn validate_captured_policy(
+pub(super) fn validate_captured_policy(
     deployed_attempt_timeout_ms: i64,
     deployed_maximum_attempts: i16,
     retry_delays_ms: &[i64],
@@ -1803,19 +1138,16 @@ fn delivery_idempotency_key(
     payload_digest: &[u8],
     destination_binding_digest: &str,
 ) -> String {
-    let mut input = Vec::new();
-    input.extend_from_slice(idempotency_domain);
-    append_length_prefixed(&mut input, event_id.to_string().as_bytes());
-    append_length_prefixed(&mut input, compiled_delivery_id.as_bytes());
-    append_length_prefixed(&mut input, generation.to_string().as_bytes());
-    append_length_prefixed(&mut input, payload_digest);
-    append_length_prefixed(&mut input, destination_binding_digest.as_bytes());
-    format!("sha256:{}", hex::encode(Sha256::digest(input)))
-}
-
-fn append_length_prefixed(output: &mut Vec<u8>, value: &[u8]) {
-    output.extend_from_slice(&(value.len() as u64).to_be_bytes());
-    output.extend_from_slice(value);
+    idempotency_key(
+        idempotency_domain,
+        &[
+            event_id.to_string().as_bytes(),
+            compiled_delivery_id.as_bytes(),
+            generation.to_string().as_bytes(),
+            payload_digest,
+            destination_binding_digest.as_bytes(),
+        ],
+    )
 }
 
 #[cfg(test)]
@@ -1826,8 +1158,12 @@ mod tests {
         DestinationRequestError, EventDestinationRequest,
     };
 
+    use tokio_postgres::Transaction;
+
     use super::*;
-    use crate::delivery::{DeliveryConnection, DeliverySignatureRefused};
+    use crate::delivery::{
+        DeliveryAuditRecord, DeliveryConnection, DeliverySignatureRefused, DeliveryTransitionCode,
+    };
 
     // A destination the tests below never reach: it exists only so the seam
     // fixtures can name their associated destination type.
@@ -2228,23 +1564,6 @@ mod tests {
     }
 
     #[test]
-    fn the_scheduled_retry_delay_comes_from_the_captured_profile() {
-        let delays = [500, 1_500];
-        assert_eq!(scheduled_retry_delay(&delays, 1), Ok(500));
-        assert_eq!(scheduled_retry_delay(&delays, 2), Ok(1_500));
-        assert_eq!(
-            scheduled_retry_delay(&delays, 3),
-            Err(DeliveryError::Unavailable),
-            "an attempt past the captured profile is refused"
-        );
-        assert_eq!(
-            scheduled_retry_delay(&[0], 1),
-            Err(DeliveryError::Unavailable),
-            "a non-positive delay is refused"
-        );
-    }
-
-    #[test]
     fn the_operator_status_reflects_payload_expiry_on_pending_rows() {
         assert_eq!(
             delivery_status_kind("pending", true),
@@ -2496,7 +1815,6 @@ mod tests {
             attempt_started_at: SystemTime::UNIX_EPOCH + Duration::from_secs(1_000),
             lease_token: Uuid::new_v4(),
             deployed_maximum_attempts: 2,
-            retry_delays_ms: vec![1_000],
             package_revision:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             handler_kind: HookHandlerKind::Rhai,

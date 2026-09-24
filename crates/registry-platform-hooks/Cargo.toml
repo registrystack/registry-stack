@@ -17,7 +17,7 @@ default = []
 schema = ["dep:schemars"]
 postgres = [
     "dep:async-trait",
-    "dep:hex",
+    "dep:registry-platform-dispatch",
     "dep:registry-platform-httputil",
     "dep:sha2",
     "dep:tokio",
@@ -26,8 +26,8 @@ postgres = [
 
 [dependencies]
 async-trait = { workspace = true, optional = true }
-hex = { workspace = true, optional = true }
 registry-platform-canonical-json.workspace = true
+registry-platform-dispatch = { workspace = true, features = ["postgres"], optional = true }
 registry-platform-httputil = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 serde.workspace = true
