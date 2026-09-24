@@ -122,6 +122,28 @@ impl BregAdapter {
         })
     }
 
+    /// Decode a stored discovery cursor. A one-entity source keeps its binding
+    /// generation, so it also resumes from a cursor stored as a bare BReg
+    /// continuation; with several entities that shape names no entity and is
+    /// refused.
+    fn discovery_position(
+        &self,
+        cursor: &DiscoveryCursor,
+    ) -> Result<DiscoveryPosition, SourceAdapterError> {
+        if let Ok(position) = serde_json::from_str::<DiscoveryPosition>(&cursor.0) {
+            return Ok(position);
+        }
+        let [only] = self.config.requests.as_slice() else {
+            return Err(SourceAdapterError::Invalid);
+        };
+        let continuation: BRegContinuationProjection =
+            serde_json::from_str(&cursor.0).map_err(|_| SourceAdapterError::Invalid)?;
+        Ok(DiscoveryPosition {
+            entity: only.entity.clone(),
+            continuation: Some(continuation),
+        })
+    }
+
     /// Verify the configured BReg runtime and the complete read contract
     /// Casework needs without requiring a specimen request to exist.
     ///
@@ -849,8 +871,7 @@ impl SourceAdapter for BregAdapter {
             .await?;
         let (mut index, mut continuation) = match cursor {
             Some(cursor) => {
-                let position: DiscoveryPosition =
-                    serde_json::from_str(&cursor.0).map_err(|_| SourceAdapterError::Invalid)?;
+                let position = self.discovery_position(cursor)?;
                 let index = self
                     .config
                     .requests

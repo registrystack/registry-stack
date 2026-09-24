@@ -854,6 +854,66 @@ async fn a_discovery_cursor_naming_an_unconfigured_request_entity_is_refused() {
     );
 }
 
+/// A one-entity source keeps its binding generation, so a cursor stored as a
+/// bare BReg continuation before request entities were named must still resume.
+fn bare_continuation(cursor: &registry_casework_core::DiscoveryCursor) -> Value {
+    let position: Value = serde_json::from_str(&cursor.0).unwrap();
+    position["continuation"].clone()
+}
+
+#[tokio::test]
+async fn a_one_entity_source_resumes_from_a_bare_continuation_cursor() {
+    let server = MockServer::start().await;
+    mount_metadata_times(&server, 2).await;
+    mount_listing(
+        &server,
+        "corrections",
+        None,
+        listing(&[RECORD_ID], "correction", Some("next-token")),
+    )
+    .await;
+    mount_listing(
+        &server,
+        "corrections",
+        Some("next-token"),
+        listing(&[SECOND_RECORD_ID], "correction", None),
+    )
+    .await;
+    let adapter = adapter_at("source_a", EVENT_SOURCE_A, EVENT_TYPE, &server.uri());
+
+    let first = adapter.discover_active(None, 50).await.unwrap();
+    let legacy = registry_casework_core::DiscoveryCursor(
+        bare_continuation(&first.next_cursor.expect("the listing continues")).to_string(),
+    );
+    let second = adapter.discover_active(Some(&legacy), 50).await.unwrap();
+    assert_eq!(second.subjects.len(), 1);
+    assert_eq!(second.subjects[0].id, SECOND_RECORD_ID);
+    assert!(second.next_cursor.is_none());
+}
+
+#[tokio::test]
+async fn a_several_entity_source_refuses_a_bare_continuation_cursor() {
+    let server = MockServer::start().await;
+    mount_metadata_times(&server, 2).await;
+    mount_listing(
+        &server,
+        "corrections",
+        None,
+        listing(&[RECORD_ID], "correction", Some("next-token")),
+    )
+    .await;
+    let adapter = two_entity_adapter(&server.uri());
+
+    let first = adapter.discover_active(None, 50).await.unwrap();
+    let legacy = registry_casework_core::DiscoveryCursor(
+        bare_continuation(&first.next_cursor.expect("the listing continues")).to_string(),
+    );
+    assert_eq!(
+        adapter.discover_active(Some(&legacy), 50).await,
+        Err(SourceAdapterError::Invalid)
+    );
+}
+
 #[test]
 fn routing_metadata_is_scoped_to_one_request_entity() {
     let adapter = two_entity_adapter("http://127.0.0.1:9");
