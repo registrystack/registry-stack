@@ -1362,7 +1362,7 @@ EVENT_HEADERS = [
     parameter("ce-specversion", "header", "CloudEvents version; exactly 1.0.", {"type": "string", "const": "1.0"}),
     parameter("ce-id", "header", "Event UUID.", {"type": "string", "format": "uuid"}),
     parameter("ce-source", "header", "Configured exact event source URI.", {"type": "string", "format": "uri", "minLength": 1, "maxLength": 512}),
-    parameter("ce-type", "header", "Configured exact request-lifecycle event type.", {"type": "string", "minLength": 1, "maxLength": 512}),
+    parameter("ce-type", "header", "Lifecycle hook identifier of a paired request entity, casework-lifecycle-v1-<entity>, which must name the entity the event body carries.", {"type": "string", "minLength": 1, "maxLength": 512}),
     parameter("ce-time", "header", "Event timestamp.", {"type": "string", "format": "date-time"}),
     parameter("ce-dataschema", "header", "Configured event data schema URI.", {"type": "string", "format": "uri", "minLength": 1, "maxLength": 2048}),
     parameter("x-registry-event-generation", "header", "Activated positive BReg source generation.", {"type": "string", "maxLength": 19, "pattern": "^[1-9][0-9]{0,18}$"}),

@@ -50,7 +50,6 @@ fn adapter_with_context_projection(base: &str) -> BregAdapter {
         expected_registry_revision: DIGEST.into(),
         reader_profile: "reader".into(),
         event_source: "urn:registrystack:registry:test:instance:test".into(),
-        event_type: "casework-lifecycle-v1".into(),
     };
     config.requests[0].routing_metadata.stages.clear();
     BregAdapter::new(
@@ -86,7 +85,6 @@ fn adapter_with_routing(base: &str) -> BregAdapter {
             expected_registry_revision: DIGEST.into(),
             reader_profile: "reader".into(),
             event_source: "urn:registrystack:registry:test:instance:test".into(),
-            event_type: "casework-lifecycle-v1".into(),
         },
         BaseRegistryClient::new(
             BaseRegistryClientConfig::new(base.parse().unwrap())
@@ -129,7 +127,6 @@ fn adapter_with_reference_config(
             expected_registry_revision: DIGEST.into(),
             reader_profile: "reader".into(),
             event_source: "urn:registrystack:registry:test:instance:test".into(),
-            event_type: "casework-lifecycle-v1".into(),
         },
         BaseRegistryClient::new(
             BaseRegistryClientConfig::new(base.parse().unwrap())

@@ -6399,7 +6399,7 @@
             }
           },
           {
-            "description": "Configured exact request-lifecycle event type.",
+            "description": "Lifecycle hook identifier of a paired request entity, casework-lifecycle-v1-<entity>, which must name the entity the event body carries.",
             "in": "header",
             "name": "ce-type",
             "required": true,

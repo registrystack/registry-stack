@@ -2156,7 +2156,6 @@ mod tests {
             client_assertion_key_ref: "secret:file/client-key".into(),
             webhook_secret_ref: "secret:file/webhook".into(),
             event_source: "urn:registrystack:registry:professional:instance:pilot".into(),
-            event_type: "casework-lifecycle-v1".into(),
             trusted_root_certificates_ref: None,
             request_timeout_milliseconds: 30_000,
             connect_timeout_milliseconds: 10_000,

@@ -36,7 +36,6 @@ fn adapter(base: &str) -> BregAdapter {
             binding_generation: "generation-1".into(),
             reader_profile: "reader".into(),
             event_source: "urn:registrystack:registry:test:instance:test".into(),
-            event_type: "casework-lifecycle-v1".into(),
         },
         BaseRegistryClient::new(
             BaseRegistryClientConfig::new(base.parse().unwrap())
