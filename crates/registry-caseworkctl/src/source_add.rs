@@ -119,15 +119,8 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         "bregAuthoringPatch": authoring_patch,
         "findings": findings,
         "activation": "not_performed",
-        "next": if args.apply {
-            json!(["Review the generated BReg webhook binding and provision its secret reference. Configure the Casework source reader with the actual issuer tokenEndpoint, clientAssertionAudience, resource and scopes before activating through each product's normal path.", "Run caseworkctl doctor --runtime-config FILE after authenticated directory setup."])
-        } else {
-            json!(["Review these exact local changes, then repeat source add with --apply."])
-        }
+        "next": report_next(args.apply, &dev_clients_plan.warnings),
     });
-    if !dev_clients_plan.warnings.is_empty() {
-        report["warnings"] = json!(dev_clients_plan.warnings);
-    }
     if !args.apply {
         report["candidateRuntimeBinding"] = serde_norway::from_str(&binding)?;
         return Ok(report);
@@ -793,6 +786,24 @@ fn reader_grant(metadata: &Value, projection: &[String]) -> Result<ReaderGrant> 
         fields,
         event_field,
     })
+}
+
+/// The report's next steps. A warning leads them as a step to confirm, since
+/// the pinned report has no member of its own for warnings.
+fn report_next(apply: bool, warnings: &[String]) -> Value {
+    let steps: &[&str] = if apply {
+        &["Review the generated BReg webhook binding and provision its secret reference. Configure the Casework source reader with the actual issuer tokenEndpoint, clientAssertionAudience, resource and scopes before activating through each product's normal path.", "Run caseworkctl doctor --runtime-config FILE after authenticated directory setup."]
+    } else {
+        &["Review these exact local changes, then repeat source add with --apply."]
+    };
+    let confirmations = warnings
+        .iter()
+        .map(|warning| format!("Confirm this is intended: {warning}."));
+    Value::from(
+        confirmations
+            .chain(steps.iter().map(|step| (*step).to_owned()))
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn load_casework_policy(project: &Path) -> Result<Value> {
@@ -2691,6 +2702,21 @@ mod tests {
         .unwrap();
         assert!(rendered.contains("# keep the grant context"));
         assert_eq!(serde_norway::from_str::<Value>(&rendered).unwrap(), second);
+    }
+
+    #[test]
+    fn shared_profile_warnings_lead_the_next_steps_of_the_report() {
+        let warning = "BReg access profile reviewer also admits requester clients outside this Casework project (other); they can act on the request without Casework".to_owned();
+        for apply in [false, true] {
+            let next = report_next(apply, std::slice::from_ref(&warning));
+            let steps = next.as_array().unwrap();
+            assert!(steps[0].as_str().unwrap().contains(&warning));
+            assert_eq!(
+                steps[1..],
+                report_next(apply, &[]).as_array().unwrap()[..],
+                "the warning adds a step without replacing the usual ones"
+            );
+        }
     }
 
     #[test]
