@@ -81,6 +81,54 @@ class ReleaseSelectionTest(unittest.TestCase):
         self.assertIn("no forward state path", stderr.getvalue())
 
 
+class ProductSelectionTest(unittest.TestCase):
+    def test_a_default_run_omits_a_product_the_starting_release_did_not_ship(self) -> None:
+        products, omitted = MODULE.select_products(None, "v0.34.0", "linux-amd64", True)
+        self.assertEqual(products, ["breg", "casework", "evidence"])
+        self.assertEqual(list(omitted), ["messaging"])
+        self.assertIn("first shipped in v0.35.0", omitted["messaging"])
+
+    def test_messaging_joins_the_default_run_from_v0_35_0(self) -> None:
+        for tag in ("v0.35.0", "v0.36.2", "v1.0.0"):
+            with self.subTest(tag=tag):
+                products, omitted = MODULE.select_products(None, tag, "linux-amd64", True)
+                self.assertEqual(products, list(MODULE.PRODUCTS))
+                self.assertEqual(omitted, {})
+
+    def test_a_named_product_the_starting_release_did_not_ship_is_refused(self) -> None:
+        with self.assertRaisesRegex(Error, "messaging was first shipped in v0.35.0"):
+            MODULE.select_products(["messaging"], "v0.34.0", "linux-amd64", True)
+        self.assertEqual(
+            MODULE.select_products(["casework"], "v0.34.0", "linux-amd64", True),
+            (["casework"], {}),
+        )
+
+    def test_messaging_downloads_only_the_platforms_it_publishes(self) -> None:
+        products, omitted = MODULE.select_products(None, "v0.35.0", "macos-arm64", True)
+        self.assertNotIn("messaging", products)
+        self.assertIn("no macos-arm64 asset", omitted["messaging"])
+        with self.assertRaisesRegex(Error, "no macos-arm64 asset"):
+            MODULE.select_products(["messaging"], "v0.35.0", "macos-arm64", True)
+        self.assertEqual(
+            MODULE.select_products(["messaging"], "v0.35.0", "macos-arm64", False),
+            (["messaging"], {}),
+        )
+
+    def test_main_refuses_an_unshipped_product_before_any_download_or_container(self) -> None:
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stderr(stderr):
+            work = Path(temporary) / "work"
+            status = MODULE.main([
+                "--from-tag", "v0.33.0", "--platform", "linux-amd64",
+                "--product", "messaging",
+                "--to-bin-dir", temporary, "--work-dir", str(work),
+            ])
+            self.assertFalse(work.exists())
+        self.assertEqual(status, 1)
+        self.assertIn("messaging was first shipped in v0.35.0, so v0.33.0 holds no",
+                      stderr.getvalue())
+
+
 class AssetAuthenticationTest(unittest.TestCase):
     def test_names_one_asset_per_rehearsed_binary(self) -> None:
         linux = MODULE.asset_names("v0.33.0", "linux-amd64")
@@ -175,8 +223,19 @@ class SideTest(unittest.TestCase):
             self.assertEqual(env["EVIDENCE_BIN"], str(bin_dir / "evidence"))
             self.assertEqual(env["PATH"].split(MODULE.os.pathsep)[0], str(bin_dir))
 
+    def test_a_side_never_inherits_a_product_s_ambient_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            side = MODULE.Side("to", Path(temp), Path(temp) / "ca.pem")
+            ambient = {prefix + "SETTING": "ambient" for prefix in (
+                "BREG_", "CASEWORK_", "MESSAGING_", "REGISTRY_", "DYLD_")}
+            with unittest.mock.patch.dict(MODULE.os.environ, ambient):
+                env = side.env()
+            for name in ambient:
+                self.assertNotIn(name, env)
+
     def test_a_focused_run_needs_only_the_named_products_binaries(self) -> None:
         self.assertEqual(MODULE.product_binaries(["evidence"]), ("evidence", "evidencectl"))
+        self.assertEqual(MODULE.product_binaries(["messaging"]), ("messaging", "messagingctl"))
         self.assertEqual(MODULE.product_binaries(list(MODULE.PRODUCTS)), MODULE.BINARIES)
         assets = MODULE.asset_names("v0.33.0", "linux-amd64", ("evidence", "evidencectl"))
         self.assertEqual(sorted(assets), ["evidence", "evidencectl"])
@@ -222,7 +281,8 @@ class GateWiringTest(unittest.TestCase):
         for required in ("workflow_dispatch:", "pull_request:", "release/manifests/**",
                          "release/scripts/rehearse-upgrade.py",
                          "sigstore/cosign-installer@", "--platform linux-amd64",
-                         "--features registry-breg/runtime"):
+                         "--features registry-breg/runtime",
+                         "-p registry-messaging -p registry-messagingctl"):
             self.assertTrue(required in workflow, f"workflow lacks {required!r}")
         for refused in ("--from-bin-dir", "contents: write", "id-token: write"):
             self.assertFalse(refused in workflow, f"workflow carries {refused!r}")
