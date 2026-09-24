@@ -642,6 +642,11 @@ The promise starts at `v0.33.0`. v0.32 to v0.33 has no forward state path,
 because no adopter ran v0.32, so the script refuses to start from any earlier
 release rather than skipping the check. Scheduling state is not rehearsed.
 
+Schema and migration code refuses when it would drop rows; it never drops them
+silently. When the rehearsal reports a row loss, fix the migration so that it
+refuses with an error naming what it would lose, or keeps the rows. Do not
+accept the loss or narrow the comparison to make the run pass.
+
 This control guards against a release that loses or stops serving state its
 predecessor wrote. The release operator owns it for each release. Remove it
 only when every product with persisted state carries its own predecessor

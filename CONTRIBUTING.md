@@ -120,6 +120,10 @@ Every pull request should make the review path clear:
   signing, audit integrity, release provenance, deployment defaults, or data
   minimization as security-sensitive. These changes need explicit maintainer
   review notes, even when the maintainer is also the author.
+- Schema and migration code refuses when it would drop rows; it never drops
+  them silently. A change that would lose persisted state fails with an error
+  that names what would be lost, and the operator decides the next step. Cover
+  the refusal with a test.
 
 ## Dependency Changes
 
