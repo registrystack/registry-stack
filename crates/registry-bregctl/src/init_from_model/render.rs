@@ -1074,6 +1074,7 @@ fn readme(plan: &Plan) -> String {
     let mut out = String::new();
     let model = plan.model.display_name;
     let version = &plan.model.version;
+    let revision = &plan.model.revision;
     let _ = writeln!(out, "# {}", plan.registry_title);
     let _ = writeln!(out);
     let _ = writeln!(
@@ -1088,9 +1089,9 @@ fn readme(plan: &Plan) -> String {
     let _ = writeln!(
         out,
         "The concepts, properties, and code lists in this project are derived from {model} \
-         {version} ({}), licensed under {} ({}). The derivation selects, renames, and \
-         retypes definitions, so this project is a modified form of the model. Keep this \
-         notice with the project and with any package built from it.",
+         {version}, revision {revision} ({}), licensed under {} ({}). The derivation selects, \
+         renames, and retypes definitions, so this project is a modified form of the model. \
+         Keep this notice with the project and with any package built from it.",
         plan.model.repository, plan.model.license, plan.model.license_url
     );
     let _ = writeln!(out);
@@ -1616,6 +1617,7 @@ mod tests {
         let model = ModelFacts {
             display_name: "Test Model",
             version: "0.0.0".to_owned(),
+            revision: "0000000000000000000000000000000000synth".to_owned(),
             repository: "https://example.invalid/model".to_owned(),
             license: "Apache-2.0".to_owned(),
             license_url: "https://example.invalid/license".to_owned(),
@@ -1668,6 +1670,7 @@ mod tests {
             kind: super::super::selection::KIND.to_owned(),
             model: super::super::selection::ModelName::Publicschema,
             model_version: None,
+            model_revision: None,
             registry: super::super::selection::RegistrySelection {
                 id: plan.registry_id.clone(),
                 title: plan.registry_title.clone(),
@@ -2001,6 +2004,7 @@ mod tests {
         assert_eq!(echoed, selection);
         let readme = String::from_utf8(files["README.md"].clone()).expect("UTF-8");
         assert!(readme.contains("## Attribution"));
+        assert!(readme.contains(&plan.model.revision));
         assert!(readme.contains(&plan.model.repository));
         assert!(readme.contains(&plan.model.license_url));
         assert!(readme.contains("bregctl dev prepare-source"));

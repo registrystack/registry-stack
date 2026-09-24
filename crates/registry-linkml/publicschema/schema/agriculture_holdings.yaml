@@ -1,0 +1,706 @@
+id: https://publicschema.org/linkml/agriculture_holdings
+name: publicschema-agriculture-holdings
+title: Agricultural holdings, parcels and holders
+description: Farms, agricultural parcels, farmer registrations, agricultural holder roles and work on farms.
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+imports:
+- linkml:types
+- common
+- identity
+- vocabularies
+- value_types
+- registry
+- work
+- land
+- agriculture_operations
+classes:
+  Farm:
+    class_uri: publicschema:agri/Farm
+    title: Farm (agricultural holding)
+    description: An economic unit of agricultural production under single management. It comprises all
+      livestock kept and all land used wholly or partly for agricultural production, whatever the title,
+      legal form or size. Its land may lie in one or more separate areas that share the same means of
+      production. A farm may have no land, for example when it only keeps livestock. It is identified
+      separately from the household, from the persons, organizations or groups responsible for it, and
+      from the rights over its land. Summary fields such as the farm's area, land tenure types and livestock
+      kept do not override detailed parcel, tenure or animal records.
+    slots:
+    - name
+    - identifiers
+    - farm_area
+    - livestock_type
+    - land_tenure
+    - location
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Finca
+      label_fr: Exploitation agricole
+      description_es: Una unidad económica de producción agropecuaria bajo una gestión única. Comprende
+        todo el ganado que posee y todas las tierras utilizadas total o parcialmente para la producción
+        agropecuaria, cualquiera que sea el título, la forma jurídica o el tamaño. Sus tierras pueden
+        encontrarse en una o más áreas separadas que comparten los mismos medios de producción. Una finca
+        puede no tener tierras, por ejemplo cuando solo cría ganado. Se identifica por separado del hogar,
+        de las personas, organizaciones o grupos responsables de ella, y de los derechos sobre sus tierras.
+        Los campos de resumen, como la superficie de la finca, los tipos de tenencia de la tierra y el
+        ganado que posee, no sustituyen los registros detallados de parcelas, tenencia o animales.
+      description_fr: Une unité économique de production agricole placée sous une gestion unique. Elle
+        comprend tout le bétail détenu et toutes les terres utilisées en tout ou en partie pour la production
+        agricole, quels que soient le titre, la forme juridique ou la taille. Ses terres peuvent se trouver
+        dans une ou plusieurs zones distinctes qui partagent les mêmes moyens de production. Une exploitation
+        agricole peut ne comporter aucune terre, par exemple lorsqu'elle ne détient que du bétail. Elle
+        est identifiée séparément du ménage, des personnes, organisations ou groupes qui en sont responsables,
+        et des droits sur ses terres. Les champs synthétiques tels que la superficie de l'exploitation,
+        les types de régime foncier et le bétail détenu ne remplacent pas les enregistrements détaillés
+        des parcelles, du régime foncier ou des animaux.
+      convergence_json: '{"notes": "Low coverage. Only DHIS2 (workaround) and OpenSPP have farm data models.",
+        "system_count": 2, "total_systems": 6}'
+      bibliography_refs: '["fao-vggt", "fao-wca-2020-vol1", "fao-wca-2030", "lsms-isa"]'
+  AgriculturalParcel:
+    class_uri: publicschema:agri/AgriculturalParcel
+    title: Agricultural Parcel
+    description: An identified, delimited area of land used or usable for agricultural production, as recorded
+      by the source for a stated period. It is a land-use unit. It is not a cadastral parcel, a title unit
+      or a census parcel of one tenure type, although its boundary may coincide with any of them. Use by
+      one or more farms is recorded separately. A split or merge creates a new parcel, which names the
+      parcels it came from and closes their validity; a corrected measurement or geometry of the same land
+      keeps the parcel.
+    slots:
+    - name
+    - identifiers
+    - spatial_geometry
+    - parcel_area
+    - location
+    - land_spatial_units
+    - predecessor_parcels
+    - valid_from
+    - valid_to
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Parcela agropecuaria
+      label_fr: Parcelle agricole
+      description_es: Una superficie de tierra identificada y delimitada, utilizada o utilizable para
+        la producción agropecuaria, tal como la registra la fuente para un período determinado. Es una
+        unidad de uso de la tierra. No es una parcela catastral, una unidad de título ni una parcela censal
+        de un solo tipo de tenencia, aunque su límite pueda coincidir con cualquiera de ellos. El uso
+        por una o más fincas se registra por separado. Una división o fusión crea una nueva parcela, que
+        nombra las parcelas de las que procede y cierra su validez; una medición o geometría corregida
+        de la misma tierra conserva la parcela.
+      description_fr: Une zone de terre identifiée et délimitée, utilisée ou utilisable pour la production
+        agricole, telle qu'enregistrée par la source pour une période donnée. C'est une unité d'usage
+        des terres. Ce n'est pas une parcelle cadastrale, une unité de titre ni une parcelle de recensement
+        d'un seul type de régime foncier, bien que sa limite puisse coïncider avec l'une d'elles. L'utilisation
+        par une ou plusieurs exploitations agricoles est enregistrée séparément. Une division ou une fusion
+        crée une nouvelle parcelle, qui nomme les parcelles dont elle est issue et clôt leur validité; une
+        mesure ou une géométrie corrigée de la même terre conserve la parcelle.
+      bibliography_refs: '["fao-wca-2020-vol1", "fao-wca-2030", "unece-property-units-2004"]'
+  HoldingParcelLink:
+    class_uri: publicschema:agri/HoldingParcelLink
+    title: Holding Parcel Link
+    description: A dated statement that a farm uses all or part of an agricultural parcel. Several farms
+      may use the same parcel. The link does not by itself assert exclusive use, ownership or a legal right.
+    slots:
+    - linked_holding
+    - linked_parcel
+    - used_area
+    - parcel_tenure
+    - parcel_land_use
+    - start_date
+    - end_date
+    - evidence_assertions
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Vínculo entre finca y parcela
+      label_fr: Lien exploitation-parcelle
+      description_es: Una declaración fechada de que una finca utiliza la totalidad o parte de una parcela
+        agropecuaria. Varias fincas pueden utilizar la misma parcela. El vínculo no afirma por sí mismo
+        un uso exclusivo, la propiedad ni un derecho legal.
+      description_fr: Une déclaration datée selon laquelle une exploitation agricole utilise tout ou
+        partie d'une parcelle agricole. Plusieurs exploitations peuvent utiliser la même parcelle. Le
+        lien n'affirme pas en soi un usage exclusif, une propriété ou un droit légal.
+      bibliography_refs: '["fao-vggt", "fao-wca-2020-vol1", "fao-wca-2030"]'
+  HoldingFacilityLink:
+    class_uri: publicschema:agri/HoldingFacilityLink
+    title: Holding Facility Link
+    description: A dated statement that a farm uses an agricultural facility, such as a barn, store or livestock
+      premises, for its production. Several farms may use the same facility, and one farm may use several.
+      The link does not by itself assert ownership or operation of the facility; those are asset party roles.
+    slots:
+    - linked_holding
+    - linked_facility
+    - start_date
+    - end_date
+    - evidence_assertions
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Vínculo entre finca e instalación
+      label_fr: Lien exploitation-installation
+      description_es: Una declaración fechada de que una finca utiliza una instalación agropecuaria, como
+        un establo, un almacén o un establecimiento ganadero, para su producción. Varias fincas pueden
+        utilizar la misma instalación, y una finca puede utilizar varias. El vínculo no afirma por sí mismo
+        la propiedad ni la operación de la instalación; estas son funciones de parte sobre el activo.
+      description_fr: Une déclaration datée selon laquelle une exploitation agricole utilise une installation
+        agricole, telle qu'une grange, un entrepôt ou un établissement d'élevage, pour sa production.
+        Plusieurs exploitations peuvent utiliser la même installation, et une exploitation peut en utiliser
+        plusieurs. Le lien n'affirme pas en soi la propriété ni l'exploitation de l'installation; celles-ci
+        sont des rôles de partie sur le bien.
+      bibliography_refs: '["fao-wca-2020-vol1", "fao-wca-2030", "woah-terrestrial-2024"]'
+  FarmerRegistration:
+    class_uri: publicschema:agri/FarmerRegistration
+    title: Farmer Registration
+    description: A registration recognizing a person, organization or group as a farmer or agricultural
+      producer for a stated administrative purpose, optionally naming the farms it covers. It does not
+      by itself establish holder responsibility, land rights or program eligibility.
+    slots:
+    - registered_farms
+    slot_usage:
+      registered_subject:
+        description: The URI of the person, organization or group recognized as a farmer or agricultural
+          producer.
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Registro de agricultor
+      label_fr: Enregistrement d'agriculteur
+      description_es: Un registro que reconoce a una persona, organización o grupo como agricultor o
+        productor agropecuario para un fin administrativo determinado, que nombra opcionalmente las fincas
+        que cubre. No establece por sí mismo la responsabilidad de productor agropecuario, derechos sobre
+        la tierra ni la elegibilidad para un programa.
+      description_fr: Un enregistrement reconnaissant une personne, une organisation ou un groupe comme
+        agriculteur ou producteur agricole à une fin administrative déterminée, nommant éventuellement
+        les exploitations qu'il couvre. Il n'établit pas en soi la responsabilité d'exploitant agricole,
+        des droits sur les terres ou une éligibilité à un programme.
+      bibliography_refs: '["fao-wca-2020-vol1", "fao-wca-2030"]'
+    is_a: Registration
+  AgriculturalHolderRole:
+    class_uri: publicschema:agri/AgriculturalHolderRole
+    title: Agricultural Holder Role
+    description: The responsibility of a person, organization or group for the key decisions on resource
+      use and for management control of a farm, alone or jointly with others, during a stated period. It
+      includes bearing the technical and economic responsibility for the farm. It is distinct from daily
+      management, which may be delegated, and from ownership, employment and program entitlement. Several
+      simultaneous roles for one farm describe joint holders. Dates describe when the role is effective,
+      not when it was recorded.
+    slots:
+    - holder_farm
+    - start_date
+    - end_date
+    - identifiers
+    status: bibo:draft
+    see_also:
+    - https://www.fao.org/4/i4913e/i4913e.pdf
+    annotations:
+      source_domain: agri
+      label_es: Rol de productor agropecuario
+      label_fr: Rôle d'exploitant agricole
+      description_es: La responsabilidad de una persona, organización o grupo por las decisiones clave
+        sobre el uso de los recursos y por el control de gestión de una finca, sola o conjuntamente con
+        otras, durante un período determinado. Incluye asumir la responsabilidad técnica y económica
+        de la finca. Se distingue de la gestión diaria, que puede delegarse, y de la propiedad, el empleo
+        y el derecho a un programa. Varios roles simultáneos para una misma finca describen productores
+        conjuntos. Las fechas describen el período en que el rol es vigente, no la fecha de su registro.
+      description_fr: La responsabilité d'une personne, d'une organisation ou d'un groupe pour les décisions
+        clés sur l'utilisation des ressources et pour le contrôle de gestion d'une exploitation agricole,
+        seul ou conjointement avec d'autres, pendant une période donnée. Elle inclut le fait d'assumer
+        la responsabilité technique et économique de l'exploitation. Elle se distingue de la gestion quotidienne,
+        qui peut être déléguée, et de la propriété, de l'emploi et du droit à un programme. Plusieurs
+        rôles simultanés pour une même exploitation décrivent des exploitants conjoints. Les dates décrivent
+        la période pendant laquelle le rôle est effectif, non la date de son enregistrement.
+      bibliography_refs: '["fao-wca-2020-vol1", "fao-wca-2030"]'
+    abstract: true
+  PersonAgriculturalHolderRole:
+    class_uri: publicschema:agri/PersonAgriculturalHolderRole
+    title: Person Agricultural Holder Role
+    description: An agricultural holder role borne by one person. It does not assert ownership, registration
+      or benefit entitlement.
+    slots:
+    - holder_person
+    status: bibo:draft
+    see_also:
+    - https://www.fao.org/4/i4913e/i4913e.pdf
+    annotations:
+      source_domain: agri
+      label_es: Rol de productor agropecuario (persona)
+      label_fr: Rôle d'exploitant agricole (personne)
+      description_es: Un rol de productor agropecuario asumido por una sola persona. No afirma propiedad,
+        registro ni derecho a una prestación.
+      description_fr: Un rôle d'exploitant agricole assumé par une seule personne. Il n'affirme ni propriété,
+        ni enregistrement, ni droit à une prestation.
+      bibliography_refs: '["fao-wca-2020-vol1", "fao-wca-2030"]'
+    is_a: AgriculturalHolderRole
+  OrganizationAgriculturalHolderRole:
+    class_uri: publicschema:agri/OrganizationAgriculturalHolderRole
+    title: Organization Agricultural Holder Role
+    description: An agricultural holder role borne by one organization with legal personality, such as
+      a company, cooperative or public body. It does not assert ownership, registration or benefit entitlement.
+    slots:
+    - holder_organization
+    status: bibo:draft
+    see_also:
+    - https://www.fao.org/4/i4913e/i4913e.pdf
+    annotations:
+      source_domain: agri
+      label_es: Rol de productor agropecuario (organización)
+      label_fr: Rôle d'exploitant agricole (organisation)
+      description_es: Un rol de productor agropecuario asumido por una sola organización con personalidad
+        jurídica, como una empresa, una cooperativa o un organismo público. No afirma propiedad, registro
+        ni derecho a una prestación.
+      description_fr: Un rôle d'exploitant agricole assumé par une seule organisation dotée de la personnalité
+        juridique, telle qu'une entreprise, une coopérative ou un organisme public. Il n'affirme ni propriété,
+        ni enregistrement, ni droit à une prestation.
+      bibliography_refs: '["fao-wca-2020-vol1", "fao-wca-2030"]'
+    is_a: AgriculturalHolderRole
+  GroupAgriculturalHolderRole:
+    class_uri: publicschema:agri/GroupAgriculturalHolderRole
+    title: Group Agricultural Holder Role
+    description: An agricultural holder role borne by a group of persons acting as one holder without
+      legal personality, such as a household, clan or informal partnership. Its members need not be individually
+      recorded.
+    slots:
+    - holder_group
+    status: bibo:draft
+    see_also:
+    - https://www.fao.org/4/i4913e/i4913e.pdf
+    annotations:
+      source_domain: agri
+      label_es: Rol de productor agropecuario (grupo)
+      label_fr: Rôle d'exploitant agricole (groupe)
+      description_es: Un rol de productor agropecuario asumido por un grupo de personas que actúan como
+        un solo productor sin personalidad jurídica, como un hogar, un clan o una asociación informal.
+        No es necesario registrar a sus miembros individualmente.
+      description_fr: Un rôle d'exploitant agricole assumé par un groupe de personnes agissant comme
+        un seul exploitant sans personnalité juridique, tel qu'un ménage, un clan ou une association informelle.
+        Ses membres n'ont pas besoin d'être enregistrés individuellement.
+      bibliography_refs: '["fao-wca-2020-vol1", "fao-wca-2030"]'
+    is_a: AgriculturalHolderRole
+  HoldingWorkAssignment:
+    class_uri: publicschema:agri/HoldingWorkAssignment
+    title: Holding Work Assignment
+    description: Work performed or intended to be performed by one person on a specified Farm during an
+      optionally known period, including daily management, paid work and unpaid contributions. This may
+      stand alone when only farm participation is known. An optional WorkRelationship identifies the separate
+      economic relationship, for example with a labour agency or a contractor enterprise. Neither the assignment
+      nor its function implies holder responsibility, ownership or employment by the Farm. Classifications
+      describe this assignment; omitted values are not automatically copied from a linked relationship.
+    slots:
+    - work_person
+    - assigned_holding
+    - assignment_work_relationship
+    - start_date
+    - end_date
+    - identifiers
+    - work_functions
+    - work_form
+    - work_status
+    - work_remuneration
+    - work_seasonality
+    status: bibo:draft
+    see_also:
+    - https://webapps.ilo.org/ilostat-files/Documents/ICSE-18_manual.pdf
+    - https://unstats.un.org/UNSDWebsite/statcom/session_57/documents/BG-3g-1-Background_document_WCA_2030-E.pdf
+    annotations:
+      source_domain: agri
+      label_es: Asignación de trabajo en la finca
+      label_fr: Affectation de travail sur l'exploitation
+      description_es: Trabajo realizado o que se prevé realizar por una persona en una Farm determinada
+        durante un período eventualmente conocido, incluida la gestión diaria, el trabajo remunerado
+        y las contribuciones no remuneradas. Puede existir por sí sola cuando solo se conoce la participación
+        en la finca. Un WorkRelationship opcional identifica la relación económica distinta, por ejemplo
+        con una agencia de trabajo o una empresa contratista. Ni la asignación ni su función implican
+        la responsabilidad de productor agropecuario, la propiedad ni el empleo por la Farm. Las clasificaciones
+        describen esta asignación; los valores omitidos no se copian automáticamente de una relación
+        vinculada.
+      description_fr: Travail effectué ou destiné à être effectué par une personne sur une Farm déterminée
+        pendant une période éventuellement connue, y compris la gestion quotidienne, le travail rémunéré
+        et les contributions non rémunérées. Elle peut exister seule lorsque seule la participation à
+        l'exploitation est connue. Un WorkRelationship facultatif identifie la relation économique distincte,
+        par exemple avec une agence de travail ou une entreprise contractante. Ni l'affectation ni sa
+        fonction n'impliquent la responsabilité d'exploitant, la propriété ou l'emploi par la Farm. Les
+        classifications décrivent cette affectation; les valeurs omises ne sont pas automatiquement reprises
+        d'une relation liée.
+      bibliography_refs: '["fao-wca-2030", "ilo-icse18-manual-2023"]'
+slots:
+  holder_farm:
+    slot_uri: publicschema:agri/holder_farm
+    title: Holder farm
+    description: The farm to which this agricultural holder role applies.
+    range: Farm
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Finca correspondiente
+      label_fr: Exploitation concernée
+      description_es: La finca a la que se aplica este rol de productor agropecuario.
+      description_fr: L'exploitation à laquelle s'applique ce rôle d'exploitant agricole.
+      category: administrative
+      bibliography_refs: '["fao-wca-2020-vol1", "fao-wca-2030"]'
+  holder_person:
+    slot_uri: publicschema:agri/holder_person
+    title: Holder person
+    description: The person who holds this agricultural holder role. It is not inferred from household
+      membership, ownership or employment.
+    range: Person
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Productor agropecuario (persona)
+      label_fr: Exploitant (personne)
+      description_es: La persona que asume este rol de productor agropecuario. No se infiere de la pertenencia
+        al hogar, la propiedad ni el empleo.
+      description_fr: La personne qui assume ce rôle d'exploitant agricole. Elle n'est pas déduite de
+        l'appartenance au ménage, de la propriété ou de l'emploi.
+      category: administrative
+      sensitivity: sensitive
+      bibliography_refs: '["fao-wca-2020-vol1", "fao-wca-2030"]'
+  holder_organization:
+    slot_uri: publicschema:agri/holder_organization
+    title: Holder organization
+    description: The organization that holds this agricultural holder role. It is not inferred from membership,
+      ownership or employment.
+    range: Organization
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Productor agropecuario (organización)
+      label_fr: Exploitant (organisation)
+      description_es: La organización que asume este rol de productor agropecuario. No se infiere de
+        la pertenencia, la propiedad ni el empleo.
+      description_fr: L'organisation qui assume ce rôle d'exploitant agricole. Elle n'est pas déduite
+        de l'appartenance, de la propriété ou de l'emploi.
+      category: administrative
+      bibliography_refs: '["fao-wca-2020-vol1", "fao-wca-2030"]'
+  holder_group:
+    slot_uri: publicschema:agri/holder_group
+    title: Holder group
+    description: The group that holds this agricultural holder role. It is not inferred from membership,
+      ownership or employment.
+    range: Group
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Productor agropecuario (grupo)
+      label_fr: Exploitant (groupe)
+      description_es: El grupo que asume este rol de productor agropecuario. No se infiere de la pertenencia,
+        la propiedad ni el empleo.
+      description_fr: Le groupe qui assume ce rôle d'exploitant agricole. Il n'est pas déduit de l'appartenance,
+        de la propriété ou de l'emploi.
+      category: administrative
+      bibliography_refs: '["fao-wca-2020-vol1", "fao-wca-2030"]'
+  registered_farms:
+    slot_uri: publicschema:agri/registered_farms
+    title: Registered farms
+    description: The farms covered by this farmer registration.
+    range: Farm
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Fincas registradas
+      label_fr: Exploitations enregistrées
+      description_es: Las fincas cubiertas por este registro de agricultor.
+      description_fr: Les exploitations couvertes par cet enregistrement d'agriculteur.
+      category: administrative
+      bibliography_refs: '["fao-wca-2020-vol1", "fao-wca-2030"]'
+  assigned_holding:
+    slot_uri: publicschema:agri/assigned_holding
+    title: Assigned holding
+    description: The Farm on which this person performs or is intended to perform the assigned work. It
+      does not identify the employer or economic unit by implication.
+    range: Farm
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Finca asignada
+      label_fr: Exploitation affectée
+      description_es: La Farm en la que esta persona realiza o se prevé que realice el trabajo asignado.
+        No identifica al empleador ni a la unidad económica por implicación.
+      description_fr: La Farm sur laquelle cette personne effectue ou est destinée à effectuer le travail
+        assigné. Cela n'identifie pas l'employeur ou l'unité économique par implication.
+      category: employment
+      bibliography_refs: '["fao-wca-2030", "ilo-icse18-manual-2023"]'
+  assignment_work_relationship:
+    slot_uri: publicschema:agri/assignment_work_relationship
+    title: Assignment work relationship
+    description: The economic work relationship within which this holding assignment occurs. It must concern
+      the same person. The assignment can be recorded without this link when a separate economic relationship
+      is unknown or unnecessary.
+    range: WorkRelationship
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Relación de trabajo de la asignación
+      label_fr: Relation de travail de l'affectation
+      description_es: La relación de trabajo económica en cuyo marco se produce esta asignación en la
+        finca. Debe referirse a la misma persona. La asignación puede registrarse sin este vínculo cuando
+        una relación económica distinta es desconocida o innecesaria.
+      description_fr: La relation de travail économique dans le cadre de laquelle se déroule cette affectation
+        sur l'exploitation. Elle doit concerner la même personne. L'affectation peut être enregistrée
+        sans ce lien lorsqu'une relation économique distincte est inconnue ou inutile.
+      category: employment
+      bibliography_refs: '["fao-wca-2030", "ilo-icse18-manual-2023"]'
+  work_functions:
+    slot_uri: publicschema:agri/work_functions
+    title: Work functions
+    description: The functions performed in this work on the farm, such as daily management or harvesting,
+      each coded in a stated classification. A function does not establish agricultural holder responsibility
+      or status at work.
+    range: CodedValue
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Funciones de trabajo
+      label_fr: Fonctions de travail
+      description_es: Las funciones desempeñadas en este trabajo en la finca, como la gestión diaria
+        o la cosecha, cada una codificada en una clasificación indicada. Una función no establece la
+        responsabilidad de productor agropecuario ni la situación en el empleo.
+      description_fr: Les fonctions exercées dans ce travail sur l'exploitation, telles que la gestion
+        quotidienne ou la récolte, chacune codée dans une classification indiquée. Une fonction n'établit
+        pas la responsabilité d'exploitant agricole ni la situation dans la profession.
+      category: employment
+      bibliography_refs: '["fao-wca-2030", "ilo-icse18-manual-2023"]'
+  parcel_area:
+    slot_uri: publicschema:agri/parcel_area
+    title: Parcel area
+    description: The measured area of the agricultural parcel, with its unit of measure.
+    range: QuantityValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Superficie de la parcela
+      label_fr: Superficie de la parcelle
+      description_es: La superficie medida de la parcela agropecuaria, con su unidad de medida.
+      description_fr: La superficie mesurée de la parcelle agricole, avec son unité de mesure.
+      category: administrative
+  linked_holding:
+    slot_uri: publicschema:agri/linked_holding
+    title: Linked holding
+    description: The farm that uses the linked parcel or facility.
+    range: Farm
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Finca vinculada
+      label_fr: Exploitation liée
+      description_es: La finca que utiliza la parcela o la instalación vinculada.
+      description_fr: L'exploitation qui utilise la parcelle ou l'installation liée.
+      category: administrative
+  linked_parcel:
+    slot_uri: publicschema:agri/linked_parcel
+    title: Linked parcel
+    description: The agricultural parcel used by the farm during the relationship period.
+    range: AgriculturalParcel
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Parcela vinculada
+      label_fr: Parcelle liée
+      description_es: La parcela agropecuaria utilizada por la finca durante el período de la relación.
+      description_fr: La parcelle agricole utilisée par l'exploitation pendant la période de la relation.
+      category: administrative
+  linked_facility:
+    slot_uri: publicschema:agri/linked_facility
+    title: Linked facility
+    description: The agricultural facility used by the farm during the relationship period.
+    range: AgriculturalFacility
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Instalación vinculada
+      label_fr: Installation liée
+      description_es: La instalación agropecuaria utilizada por la finca durante el período de la relación.
+      description_fr: L'installation agricole utilisée par l'exploitation pendant la période de la relation.
+      category: administrative
+  used_area:
+    slot_uri: publicschema:agri/used_area
+    title: Used area
+    description: The area of the linked parcel that this farm uses. Areas used by different farms may overlap;
+      do not add them without an allocation rule.
+    range: QuantityValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Superficie utilizada
+      label_fr: Superficie utilisée
+      description_es: La superficie de la parcela vinculada que utiliza esta finca. Las superficies
+        utilizadas por distintas fincas pueden superponerse; no sumarlas sin una regla de asignación.
+      description_fr: La superficie de la parcelle liée que cette exploitation utilise. Les superficies
+        utilisées par différentes exploitations peuvent se chevaucher; ne pas les additionner sans règle
+        d'allocation.
+      category: administrative
+  parcel_tenure:
+    slot_uri: publicschema:agri/parcel_tenure
+    title: Parcel tenure
+    description: The arrangement under which the farm uses the linked parcel, such as ownership, rental
+      or sharecropping, as reported by the source. A farm may own one parcel and rent another. This describes
+      how the farm uses the parcel; it is not a record of land rights, which a land tenure assertion states.
+    range: LandTenure
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Tenencia de la parcela
+      label_fr: Régime foncier de la parcelle
+      description_es: El arreglo bajo el cual la finca utiliza la parcela vinculada, como la propiedad,
+        el arrendamiento o la aparcería, tal como lo informa la fuente. Una finca puede ser propietaria
+        de una parcela y arrendar otra. Esto describe cómo la finca usa la parcela; no es un registro
+        de los derechos sobre la tierra, que se expresan en una afirmación de tenencia de la tierra.
+      description_fr: L'arrangement selon lequel l'exploitation utilise la parcelle liée, tel que la
+        propriété, le fermage ou le métayage, tel que déclaré par la source. Une exploitation peut être
+        propriétaire d'une parcelle et en louer une autre. Ceci décrit la manière dont l'exploitation
+        utilise la parcelle; ce n'est pas un enregistrement des droits sur les terres, qui relèvent d'une
+        assertion de régime foncier.
+      category: agriculture
+      sensitivity: sensitive
+      bibliography_refs: '["fao-vggt", "fao-wca-2020-vol1", "fao-wca-2030"]'
+  parcel_land_use:
+    slot_uri: publicschema:agri/parcel_land_use
+    title: Parcel land use
+    description: The use the farm makes of the linked parcel, such as temporary crops, permanent crops or
+      permanent meadows and pastures, as a code from a stated scheme such as the FAO World Programme for
+      the Census of Agriculture land use classes. Where parts of the parcel have different uses, record
+      one link per part with its used area.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Uso de la tierra de la parcela
+      label_fr: Utilisation des terres de la parcelle
+      description_es: El uso que la finca hace de la parcela vinculada, como cultivos temporales, cultivos
+        permanentes o praderas y pastos permanentes, como un código de un esquema indicado, por ejemplo
+        las clases de uso de la tierra del Programa Mundial del Censo Agropecuario de la FAO. Cuando
+        distintas partes de la parcela tienen usos diferentes, registre un vínculo por parte con su superficie
+        utilizada.
+      description_fr: L'utilisation que l'exploitation fait de la parcelle liée, telle que cultures temporaires,
+        cultures permanentes ou prairies et pâturages permanents, sous forme de code d'un schéma indiqué,
+        par exemple les classes d'utilisation des terres du Programme mondial du recensement de l'agriculture
+        de la FAO. Lorsque des parties de la parcelle ont des utilisations différentes, enregistrer un
+        lien par partie avec sa superficie utilisée.
+      category: agriculture
+      bibliography_refs: '["fao-wca-2020-vol1", "fao-wca-2030"]'
+  land_spatial_units:
+    slot_uri: publicschema:agri/land_spatial_units
+    title: Land spatial units
+    description: The land administration spatial units, such as cadastral parcels, that the agricultural
+      parcel lies on, as recorded by the source. Their boundaries need not coincide. The link does not
+      make the agricultural parcel a title unit or state who holds rights in the land.
+    range: LandSpatialUnit
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Unidades espaciales de tierra
+      label_fr: Unités spatiales foncières
+      description_es: Las unidades espaciales de la administración de tierras, como las parcelas catastrales,
+        sobre las que se encuentra la parcela agropecuaria, tal como las registra la fuente. Sus límites
+        no tienen por qué coincidir. El vínculo no convierte la parcela agropecuaria en una unidad de título
+        ni indica quién tiene derechos sobre la tierra.
+      description_fr: Les unités spatiales de l'administration foncière, telles que les parcelles cadastrales,
+        sur lesquelles se trouve la parcelle agricole, telles qu'enregistrées par la source. Leurs limites
+        ne coïncident pas nécessairement. Le lien ne fait pas de la parcelle agricole une unité de titre
+        et n'indique pas qui détient des droits sur la terre.
+      category: administrative
+      bibliography_refs: '["iso-19152-1-2024", "unece-property-units-2004"]'
+  predecessor_parcels:
+    slot_uri: publicschema:agri/predecessor_parcels
+    title: Predecessor parcels
+    description: The agricultural parcels from which this parcel was formed by a split, merge or other change
+      of boundary. The predecessors keep their own identities and validity periods.
+    range: AgriculturalParcel
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Parcelas predecesoras
+      label_fr: Parcelles prédécesseures
+      description_es: Las parcelas agropecuarias a partir de las cuales se formó esta parcela por división,
+        fusión u otro cambio de límite. Las predecesoras conservan sus propias identidades y períodos de
+        validez.
+      description_fr: Les parcelles agricoles à partir desquelles cette parcelle a été formée par division,
+        fusion ou autre changement de limite. Les prédécesseures conservent leurs propres identités et
+        périodes de validité.
+      category: administrative
+      bibliography_refs: '["iso-19152-1-2024", "unece-property-units-2004"]'
+  farm_area:
+    slot_uri: publicschema:agri/farm_area
+    title: Farm area
+    description: The total area of land operated by the farm, whatever the title, as declared or measured
+      by the source, with its unit of measure. It is zero for a farm without land. It is not the sum of
+      the areas of parcels shared with other farms.
+    range: QuantityValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Superficie de la finca
+      label_fr: Superficie de l'exploitation
+      description_es: La superficie total de tierra explotada por la finca, cualquiera que sea el título,
+        tal como la declara o mide la fuente, con su unidad de medida. Es cero para una finca sin tierras.
+        No es la suma de las superficies de las parcelas compartidas con otras fincas.
+      description_fr: La superficie totale des terres exploitées par l'exploitation, quel que soit le
+        titre, telle que déclarée ou mesurée par la source, avec son unité de mesure. Elle est nulle
+        pour une exploitation sans terre. Elle n'est pas la somme des superficies des parcelles partagées
+        avec d'autres exploitations.
+      category: agriculture
+      bibliography_refs: '["fao-wca-2020-vol1", "fao-wca-2030"]'
+  land_tenure:
+    slot_uri: publicschema:agri/land_tenure
+    title: Land tenure
+    description: The kinds of arrangement under which the farm operates its land, such as ownership, rental,
+      sharecropping or use of common land. A farm may operate land under several arrangements. This describes
+      how the farm uses land; it is not a record of land rights.
+    range: LandTenure
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Tenencia de la tierra
+      label_fr: Régime foncier
+      description_es: Los tipos de arreglo bajo los cuales la finca explota sus tierras, como la propiedad,
+        el arrendamiento, la aparcería o el uso de tierras comunales. Una finca puede explotar sus tierras
+        bajo varios arreglos. Esto describe cómo la finca usa la tierra; no es un registro de los derechos
+        sobre la tierra.
+      description_fr: Les types d'arrangement selon lesquels l'exploitation exploite ses terres, tels
+        que la propriété, le fermage, le métayage ou l'usage de terres communes. Une exploitation peut
+        exploiter ses terres selon plusieurs arrangements. Ceci décrit la manière dont l'exploitation
+        utilise les terres; ce n'est pas un enregistrement des droits sur les terres.
+      category: agriculture
+      sensitivity: sensitive
+      bibliography_refs: '["fao-vggt", "fao-wca-2020-vol1", "fao-wca-2030", "lsms-isa"]'
+  livestock_type:
+    slot_uri: publicschema:agri/livestock_type
+    title: Livestock type
+    description: The kinds of livestock kept on the farm, whether or not the farm owns them.
+    range: LivestockType
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      source_domain: agri
+      label_es: Tipo de ganado
+      label_fr: Type de bétail
+      description_es: Los tipos de ganado que se mantienen en la finca, sea o no propietaria de ellos
+        la finca.
+      description_fr: Les types de bétail détenus sur l'exploitation, que l'exploitation en soit propriétaire
+        ou non.
+      category: agriculture
+      bibliography_refs: '["dhs-recode7", "fao-wca-2020-vol1", "fao-wca-2030", "lsms-isa"]'

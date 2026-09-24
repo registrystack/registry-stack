@@ -49,7 +49,12 @@ const ABSOLUTE_URI_SCHEMES: &[&str] = &["urn", "did", "mailto", "tag", "data", "
 
 /// Class keys the reader refuses because ignoring them would change the
 /// class's induced shape.
-const UNSUPPORTED_CLASS_KEYS: &[&str] = &["attributes", "slot_usage", "union_of"];
+const UNSUPPORTED_CLASS_KEYS: &[&str] = &["attributes", "union_of"];
+
+/// The keys a `slot_usage` refinement may carry. They only document the slot
+/// in the context of one class, so the reader can ignore them without changing
+/// the class's shape; any other key is refused.
+const DOCUMENTATION_SLOT_USAGE_KEYS: &[&str] = &["description", "comments", "examples", "see_also"];
 
 /// Slot keys the reader refuses because ignoring them would change the
 /// slot's range.
@@ -93,6 +98,14 @@ pub enum ReadError {
         kind: &'static str,
         owner: String,
         key: String,
+    },
+    #[error(
+        "{file}: class `{owner}` refines slot `{slot}` in `slot_usage`, but does not carry it"
+    )]
+    SlotUsageNotCarried {
+        file: String,
+        owner: String,
+        slot: String,
     },
     #[error("{file}: {kind} `{owner}`: annotation `{key}` is not a scalar")]
     AnnotationNotScalar {
@@ -168,6 +181,7 @@ pub fn read_bundle(files: &[(&str, &str)]) -> Result<Model, ReadError> {
             .unwrap_or_else(|| "string".to_owned());
         for (name, class) in &schema.classes {
             refuse_unsupported(file, "class", name, &class.rest, UNSUPPORTED_CLASS_KEYS)?;
+            refuse_shape_changing_slot_usage(file, name, &class.slot_usage)?;
             let definition = ClassDef {
                 name: name.clone(),
                 uri: definition_uri(
@@ -329,6 +343,26 @@ pub fn read_bundle(files: &[(&str, &str)]) -> Result<Model, ReadError> {
             }
         }
     }
+    // A `slot_usage` entry for a slot the class does not otherwise carry would
+    // add that slot in LinkML, so ignoring it would drop part of the shape. An
+    // inheritance cycle leaves the check to whoever walks the class, which
+    // reports the cycle.
+    for (file, schema) in &schemas {
+        for (name, class) in &schema.classes {
+            let Ok(carried) = model.induced_slots(name) else {
+                continue;
+            };
+            for slot in class.slot_usage.keys() {
+                if !carried.iter().any(|carried| &carried.name == slot) {
+                    return Err(ReadError::SlotUsageNotCarried {
+                        file: file.clone(),
+                        owner: name.clone(),
+                        slot: slot.clone(),
+                    });
+                }
+            }
+        }
+    }
     Ok(model)
 }
 
@@ -407,6 +441,26 @@ impl HasSchema for EnumDef {
     fn schema(&self) -> &str {
         &self.schema
     }
+}
+
+fn refuse_shape_changing_slot_usage(
+    file: &str,
+    owner: &str,
+    slot_usage: &BTreeMap<String, Option<BTreeMap<String, serde_norway::Value>>>,
+) -> Result<(), ReadError> {
+    for (slot, refinement) in slot_usage {
+        for key in refinement.iter().flat_map(BTreeMap::keys) {
+            if !DOCUMENTATION_SLOT_USAGE_KEYS.contains(&key.as_str()) {
+                return Err(ReadError::Unsupported {
+                    file: file.to_owned(),
+                    kind: "class",
+                    owner: owner.to_owned(),
+                    key: format!("slot_usage.{slot}.{key}"),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn refuse_unsupported(
@@ -555,6 +609,8 @@ struct RawClass {
     is_abstract: bool,
     #[serde(default)]
     slots: Vec<String>,
+    #[serde(default)]
+    slot_usage: BTreeMap<String, Option<BTreeMap<String, serde_norway::Value>>>,
     #[serde(default)]
     annotations: BTreeMap<String, serde_norway::Value>,
     #[serde(flatten)]
@@ -1014,6 +1070,37 @@ slots:
         assert_eq!(
             error.to_string(),
             "r.yaml: enum `Colours` uses `inherits`, which this reader does not support"
+        );
+    }
+
+    #[test]
+    fn documentation_only_slot_usage_reads_and_leaves_the_shape_alone() {
+        let refined = "name: r\ndefault_prefix: ex\nprefixes: {ex: https://example.org/}\nclasses:\n  Base:\n    slots: [subject]\n  Thing:\n    is_a: Base\n    description: A thing.\n    slot_usage:\n      subject:\n        description: The subject, as this class reads it.\n        comments: [Narrower than the base.]\nslots:\n  subject:\n    range: uri\n";
+        let model = read_bundle(&[("r.yaml", refined)]).expect("a description refinement reads");
+        assert_eq!(
+            model.classes["Thing"].description.as_deref(),
+            Some("A thing.")
+        );
+        let slots = model.induced_slots("Thing").expect("Thing resolves");
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[0].range, Range::Type("uri".into()));
+        assert_eq!(slots[0].description, None);
+    }
+
+    #[test]
+    fn shape_changing_slot_usage_is_refused_rather_than_dropped() {
+        let ranged = "name: r\ndefault_prefix: ex\nprefixes: {ex: https://example.org/}\nclasses:\n  Thing:\n    slots: [subject]\n    slot_usage:\n      subject:\n        description: Narrower.\n        required: true\nslots:\n  subject: {}\n";
+        let error = read_bundle(&[("r.yaml", ranged)]).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "r.yaml: class `Thing` uses `slot_usage.subject.required`, which this reader does not support"
+        );
+
+        let added = "name: r\ndefault_prefix: ex\nprefixes: {ex: https://example.org/}\nclasses:\n  Thing:\n    slot_usage:\n      subject:\n        description: Not carried.\nslots:\n  subject: {}\n";
+        let error = read_bundle(&[("r.yaml", added)]).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "r.yaml: class `Thing` refines slot `subject` in `slot_usage`, but does not carry it"
         );
     }
 

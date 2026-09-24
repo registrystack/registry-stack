@@ -144,7 +144,7 @@ struct VocabularyOption {
 
 /// Asks for a selection and returns the document the answers describe.
 pub(super) fn gather(model_name: ModelName, model: &Model) -> Result<Selection, Diagnostic> {
-    let version = resolve::model_facts(model)?.version;
+    let facts = resolve::model_facts(model)?;
     let registry = ask_registry()?;
     let mut concepts = ask_concepts(model)?;
 
@@ -192,7 +192,14 @@ pub(super) fn gather(model_name: ModelName, model: &Model) -> Result<Selection, 
         vocabulary_overrides(&options, &ask_vocabularies(&options)?)
     };
 
-    let selection = assemble(model_name, &version, registry, &entities, vocabularies);
+    let selection = assemble(
+        model_name,
+        &facts.version,
+        &facts.revision,
+        registry,
+        &entities,
+        vocabularies,
+    );
     let plan = resolve::resolve(&selection, model)?;
     if confirm_selection(&selection, unlinked_line(&plan))? {
         Ok(selection)
@@ -814,6 +821,7 @@ fn vocabulary_overrides(
 fn assemble(
     model_name: ModelName,
     model_version: &str,
+    model_revision: &str,
     registry: RegistrySelection,
     entities: &[ChosenEntity],
     vocabularies: Vec<VocabularySelection>,
@@ -823,6 +831,7 @@ fn assemble(
         kind: KIND.to_owned(),
         model: model_name,
         model_version: Some(model_version.to_owned()),
+        model_revision: Some(model_revision.to_owned()),
         registry,
         entities: entities
             .iter()
@@ -1177,9 +1186,13 @@ mod tests {
             chosen("Person", &["given_name"]),
             chosen("School", &["name"]),
         ];
+        let revision = resolve::model_facts(model())
+            .expect("the model is pinned")
+            .revision;
         let selection = assemble(
             ModelName::Publicschema,
             "0.3.0",
+            &revision,
             registry(),
             &entities,
             Vec::new(),
@@ -1200,6 +1213,7 @@ mod tests {
         let selection = assemble(
             ModelName::Publicschema,
             "0.3.0",
+            &revision,
             registry(),
             &linked,
             Vec::new(),
@@ -1295,9 +1309,13 @@ mod tests {
             chosen("Household", &["name"]),
             chosen("Family", &["name"]),
         ];
+        let revision = resolve::model_facts(model())
+            .expect("the model is pinned")
+            .revision;
         let selection = assemble(
             ModelName::Publicschema,
             "0.3.0",
+            &revision,
             registry(),
             &entities,
             vocabulary_overrides(
@@ -1308,6 +1326,7 @@ mod tests {
         assert_eq!(selection.api_version, API_VERSION);
         assert_eq!(selection.kind, KIND);
         assert_eq!(selection.model_version.as_deref(), Some("0.3.0"));
+        assert_eq!(selection.model_revision.as_deref(), Some(revision.as_str()));
         assert_eq!(selection.entities[0].id.as_deref(), Some("member"));
         assert_eq!(selection.entities[0].route.as_deref(), Some("members"));
         assert_eq!(selection.entities[0].identifier_field, None);
@@ -1351,9 +1370,13 @@ mod tests {
             },
             chosen("Family", &["name"]),
         ];
+        let revision = resolve::model_facts(model())
+            .expect("the model is pinned")
+            .revision;
         let selection = assemble(
             ModelName::Publicschema,
             "0.3.0",
+            &revision,
             registry(),
             &entities,
             Vec::new(),
@@ -1409,11 +1432,11 @@ mod tests {
                     "{} alone leaves a reference unanswered",
                     class.name
                 );
+                let facts = resolve::model_facts(model()).expect("the model is pinned");
                 let selection = assemble(
                     ModelName::Publicschema,
-                    &resolve::model_facts(model())
-                        .expect("the model is pinned")
-                        .version,
+                    &facts.version,
+                    &facts.revision,
                     registry(),
                     &entities,
                     vocabulary_overrides(

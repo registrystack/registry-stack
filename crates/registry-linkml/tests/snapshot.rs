@@ -27,7 +27,7 @@ fn the_pin_matches_the_embedded_root_schema() {
         "https://github.com/PublicSchema/publicschema.org"
     );
     assert_eq!(pin.commit.len(), 40);
-    assert_eq!(pin.files.len(), 26);
+    assert_eq!(pin.files.len(), 33);
     assert_eq!(pin.files[0], "schema/publicschema.yaml");
     assert_eq!(model.id, "https://publicschema.org/linkml/publicschema");
     assert_eq!(model.name, "publicschema");
@@ -40,11 +40,11 @@ fn the_pin_matches_the_embedded_root_schema() {
 #[test]
 fn the_snapshot_has_the_pinned_shape() {
     let model = publicschema::model().expect("the snapshot reads");
-    assert_eq!(model.classes.len(), 165);
-    assert_eq!(model.slots.len(), 676);
-    assert_eq!(model.enums.len(), 117);
+    assert_eq!(model.classes.len(), 146);
+    assert_eq!(model.slots.len(), 633);
+    assert_eq!(model.enums.len(), 132);
     let values: usize = model.enums.values().map(|e| e.values.len()).sum();
-    assert_eq!(values, 10_236);
+    assert_eq!(values, 10_301);
     let abstract_classes: Vec<&str> = model
         .classes
         .values()
@@ -55,11 +55,12 @@ fn the_snapshot_has_the_pinned_shape() {
         abstract_classes,
         [
             "Agent",
+            "AgriculturalHolderRole",
             "CivilStatusDocument",
             "Credential",
             "Event",
             "Group",
-            "HoldingOperatorRole",
+            "IdentifiedAnimalUnit",
             "Party",
             "Profile",
             "VitalEvent"
@@ -142,8 +143,8 @@ fn slot_conventions_read_from_the_snapshot() {
         convergence(slot).unwrap_or_else(|error| panic!("{error}"));
         sensitivity(slot).unwrap_or_else(|error| panic!("{error}"));
     }
-    // The draft government and agriculture classes, alongside credentials,
-    // lack some translated labels. Consumers must retain the name fallback.
+    // The credential classes lack some translated labels. Consumers must
+    // retain the name fallback.
     let mut unlabelled = Vec::new();
     for class in model.classes.values() {
         convergence(class).unwrap_or_else(|error| panic!("{error}"));
@@ -155,14 +156,15 @@ fn slot_conventions_read_from_the_snapshot() {
             unlabelled.push(class.name.as_str());
         }
     }
-    assert_eq!(unlabelled.len(), 106);
-    for name in [
-        "Credential",
-        "PublicOrganization",
-        "PersonHoldingOperatorRole",
-    ] {
-        assert!(unlabelled.contains(&name));
-    }
+    assert_eq!(
+        unlabelled,
+        [
+            "Credential",
+            "EnrollmentCredential",
+            "IdentityCredential",
+            "PaymentCredential"
+        ]
+    );
     assert!(model.slots.values().all(|slot| slot.title.is_some()));
     assert!(model.enums.values().all(|enum_| enum_.title.is_some()));
     let restricted = model
@@ -178,40 +180,46 @@ fn draft_starter_concepts_preserve_typed_holder_semantics() {
     let model = publicschema::model().expect("the snapshot reads");
     assert_eq!(
         publicschema::pin().unwrap().commit,
-        "1ea9ce333918693b29aec31068fac412e02cb8dc"
+        "bd07bda1fe9cb9eb8582cf7bc1c77367e2455e5b"
     );
     assert_eq!(
         model.classes["Farm"].uri,
         "https://publicschema.org/agri/Farm"
     );
     assert!(!model.is_subclass_of("Farm", "Group").unwrap());
-    assert!(model.classes["HoldingOperatorRole"].is_abstract);
+    assert!(model.classes["AgriculturalHolderRole"].is_abstract);
     for (role, field, target) in [
+        ("PersonAgriculturalHolderRole", "holder_person", "Person"),
         (
-            "PersonHoldingOperatorRole",
-            "holding_operator_person",
-            "Person",
-        ),
-        (
-            "OrganizationHoldingOperatorRole",
-            "holding_operator_organization",
+            "OrganizationAgriculturalHolderRole",
+            "holder_organization",
             "Organization",
         ),
-        (
-            "GroupHoldingOperatorRole",
-            "holding_operator_group",
-            "Group",
-        ),
+        ("GroupAgriculturalHolderRole", "holder_group", "Group"),
     ] {
-        assert!(model.is_subclass_of(role, "HoldingOperatorRole").unwrap());
+        assert!(model
+            .is_subclass_of(role, "AgriculturalHolderRole")
+            .unwrap());
         assert_eq!(model.slots[field].range, Range::Class(target.into()));
+        let slots = model.induced_slots(role).expect("the role resolves");
+        assert!(slots.iter().any(|slot| slot.name == "holder_farm"));
     }
+    assert_eq!(
+        model.slots["holder_farm"].range,
+        Range::Class("Farm".into())
+    );
     assert_eq!(
         model.classes["PublicOrganization"].uri,
         "https://publicschema.org/PublicOrganization"
     );
-    assert_eq!(
-        model.slots["operated_holding"].range,
-        Range::Class("Farm".into())
-    );
+    // FarmerRegistration refines an inherited slot's description through
+    // `slot_usage`; the refinement leaves the inherited shape unchanged.
+    let registration = model
+        .induced_slots("FarmerRegistration")
+        .expect("FarmerRegistration resolves");
+    let subject = registration
+        .iter()
+        .find(|slot| slot.name == "registered_subject")
+        .expect("the registered subject is inherited");
+    assert_eq!(subject.range, Range::Type("uri".into()));
 }

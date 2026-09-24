@@ -51,47 +51,7 @@ imports:
 - external/dhs
 - external/ocha_cod_ab
 - external/openimis
-- farm_operators
 classes:
-  Farm:
-    class_uri: publicschema:agri/Farm
-    title: Farm
-    description: 'An economic unit of agricultural production under single management, comprising all
-      livestock kept and all land used wholly or partly for agricultural production, without regard to
-      title, legal form, or size. Aligns with the FAO "agricultural holding" (World Census of Agriculture
-      2020). Farm records appear across agricultural registries, land administration, social protection,
-      and climate adaptation programs.
-
-      '
-    slots:
-    - name
-    - identifiers
-    - holding_operator_roles
-    - farm_area_hectares
-    - primary_crop
-    - livestock_type
-    - land_tenure
-    - location
-    status: bibo:draft
-    annotations:
-      source_domain: agri
-      label_es: Finca
-      label_fr: Exploitation agricole
-      description_es: Una unidad económica de producción agrícola bajo gestión única, que comprende todo
-        el ganado que se posee y toda la tierra utilizada total o parcialmente para la producción agrícola,
-        sin consideración del título, la forma jurídica o el tamaño. Equivale a la "explotación agrícola"
-        de la FAO (Censo Agropecuario Mundial 2020). Los registros de explotaciones agrícolas aparecen
-        en registros agrícolas, administración de tierras, protección social y programas de adaptación
-        climática.
-      description_fr: Une unité économique de production agricole sous gestion unique, comprenant tout
-        le cheptel détenu et toutes les terres utilisées en tout ou en partie à des fins de production
-        agricole, sans tenir compte du titre, de la forme juridique ou de la taille. Équivaut à l'"exploitation
-        agricole" de la FAO (Recensement mondial de l'agriculture 2020). Les données sur les exploitations
-        agricoles apparaissent dans les registres agricoles, l'administration foncière, la protection
-        sociale et les programmes d'adaptation climatique.
-      convergence_json: '{"notes": "Low coverage. Only DHIS2 (workaround) and OpenSPP have farm data models.",
-        "system_count": 2, "total_systems": 6}'
-      bibliography_refs: '["fao-vggt", "fao-wca-2020-vol1", "lsms-isa"]'
   GroupMembership:
     class_uri: publicschema:GroupMembership
     title: Group Membership
@@ -999,21 +959,6 @@ slots:
       description_fr: Une description de la raison pour laquelle le paiement a échoué, a été retourné
         ou a été rejeté.
       convergence_json: '{"system_count": 0, "total_systems": 6}'
-  farm_area_hectares:
-    slot_uri: publicschema:agri/farm_area_hectares
-    title: Farm area (hectares)
-    description: The total area of the farm in hectares.
-    range: decimal
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      source_domain: agri
-      label_es: Superficie de la explotación (hectáreas)
-      label_fr: Superficie de l'exploitation (hectares)
-      description_es: La superficie total de la explotación agrícola en hectáreas.
-      description_fr: La superficie totale de l'exploitation agricole en hectares.
-      convergence_json: '{"system_count": 1, "total_systems": 2}'
-      bibliography_refs: '["fao-wca-2020-vol1"]'
   geocodes:
     slot_uri: publicschema:geocodes
     title: Geocodes
@@ -1165,22 +1110,6 @@ slots:
       description_es: La lista de líneas de productos en esta entrega o vale.
       description_fr: La liste des articles dans cette livraison ou ce bon.
       convergence_json: '{"system_count": 0, "total_systems": 6}'
-  land_tenure:
-    slot_uri: publicschema:agri/land_tenure
-    title: Land tenure
-    description: The legal or customary tenure arrangement under which the farm's land is held.
-    range: LandTenure
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      source_domain: agri
-      label_es: Tenencia de la tierra
-      label_fr: Régime foncier
-      description_es: El régimen de tenencia legal o consuetudinario bajo el cual se mantiene la tierra
-        de la explotación.
-      description_fr: Le régime foncier légal ou coutumier sous lequel les terres agricoles sont détenues.
-      category: agriculture
-      bibliography_refs: '["fao-vggt", "lsms-isa"]'
   language_of_administration:
     slot_uri: publicschema:language_of_administration
     title: Language of administration
@@ -1242,21 +1171,6 @@ slots:
       convergence_json: '{"notes": "Not present as a separate field in any mapped system. Systems typically
         embed the level name in the location record or derive it from a country-specific configuration.",
         "system_count": 0, "total_systems": 6}'
-  livestock_type:
-    slot_uri: publicschema:agri/livestock_type
-    title: Livestock type
-    description: Types of livestock kept by the agricultural holding.
-    range: LivestockType
-    multivalued: true
-    status: bibo:draft
-    annotations:
-      source_domain: agri
-      label_es: Tipo de ganado
-      label_fr: Type de bétail
-      description_es: Tipos de ganado criados por la explotación agrícola.
-      description_fr: Types de bétail élevés par l'exploitation agricole.
-      category: agriculture
-      bibliography_refs: '["dhs-recode7", "fao-wca-2020-vol1", "lsms-isa"]'
   location_name:
     slot_uri: publicschema:location_name
     title: Location name
@@ -1401,22 +1315,6 @@ slots:
       category: location
       domain_override: crvs
       bibliography_refs: '["semic-core-person"]'
-  primary_crop:
-    slot_uri: publicschema:agri/primary_crop
-    title: Primary crop
-    description: The primary crop or agricultural activity of the farm.
-    range: string
-    multivalued: false
-    status: bibo:draft
-    annotations:
-      source_domain: agri
-      label_es: Cultivo principal
-      label_fr: Culture principale
-      description_es: El cultivo o actividad agrícola principal de la explotación agrícola.
-      description_fr: La principale culture ou activité agricole de l'exploitation.
-      convergence_json: '{"notes": "Even OpenSPP models crops as activities on a farm, not as a single
-        attribute.", "system_count": 0, "total_systems": 2}'
-      bibliography_refs: '["fao-wca-2020-vol1"]'
   publication_url:
     slot_uri: publicschema:publication_url
     title: Publication URL

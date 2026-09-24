@@ -52,13 +52,13 @@ manifestProjection:
       fields:
         - id: lot-number
           concepts:
-            - https://publicschema.org/seed_lot_identifiers
+            - https://publicschema.org/identifiers
         - id: quantity-kg
           concepts:
             - https://publicschema.org/seed_lot_quantity
         - id: produced-on
           concepts:
-            - https://publicschema.org/seed_lot_produced_on
+            - https://publicschema.org/seed_lot_production_date
         - id: variety
           relationshipRole: variety
           relationshipConceptUri: https://publicschema.org/seed_lot_varieties
@@ -74,7 +74,7 @@ manifestProjection:
       fields:
         - id: variety-denomination
           concepts:
-            - https://publicschema.org/variety_denomination
+            - https://publicschema.org/variety_denominations
 entities:
   - id: seed-lot
     primaryDataset: directory

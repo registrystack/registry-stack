@@ -1,0 +1,182 @@
+id: https://publicschema.org/linkml/environment
+name: publicschema-environment
+title: Environmental facilities and water use
+description: Environmentally regulated facilities and their activities, and water-use authorizations.
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+imports:
+- linkml:types
+- common
+- identity
+- value_types
+- registry
+- physical_assets
+- agriculture_operations
+classes:
+  EnvironmentalFacility:
+    class_uri: publicschema:environment/EnvironmentalFacility
+    title: Environmental Facility
+    description: A place where one or more activities regulated for their effect on the environment
+      are carried out, such as an industrial plant, a large livestock unit or a waste water treatment
+      works. The facility keeps its identity when its operator, permits or reporting duties change. Its
+      operator is recorded as a dated AssetPartyRole and its addresses through AssetAddressAssignment.
+      Where another register, such as an agricultural register, records the same site, each record keeps
+      its own identity and a subject match assertion states that they describe the same site.
+    slots:
+    - name
+    - identifiers
+    - spatial_geometry
+    - environmental_activities
+    status: bibo:draft
+    close_mappings:
+    - http://inspire.ec.europa.eu/featureconcept/ProductionFacility
+    annotations:
+      label_es: Instalación medioambiental
+      label_fr: Installation environnementale
+      description_es: Un lugar donde se llevan a cabo una o varias actividades reguladas por su
+        efecto en el medio ambiente, como una planta industrial, una gran unidad ganadera o una
+        planta de tratamiento de aguas residuales. La instalación conserva su identidad cuando
+        cambian su operador, sus permisos o sus obligaciones de notificación. Su operador se
+        registra como una AssetPartyRole fechada y sus direcciones mediante una AssetAddressAssignment.
+        Cuando otro registro, como un registro agropecuario, registra el mismo sitio, cada registro
+        conserva su propia identidad y una aseveración de coincidencia de sujeto indica que describen
+        el mismo sitio.
+      description_fr: Un lieu où sont exercées une ou plusieurs activités réglementées en raison de
+        leur effet sur l'environnement, par exemple une installation industrielle, une grande unité
+        d'élevage ou une station d'épuration des eaux usées. L'installation conserve son identité
+        lorsque son exploitant, ses permis ou ses obligations de déclaration changent. Son
+        exploitant est enregistré comme une AssetPartyRole datée et ses adresses par une
+        AssetAddressAssignment. Lorsqu'un autre registre, tel qu'un registre agricole, enregistre le même
+        site, chaque enregistrement conserve sa propre identité et une assertion de correspondance de
+        sujet indique qu'ils décrivent le même site.
+      source_domain: environment
+      bibliography_refs: '["eu-reg-2024-1244", "inspire-fc", "inspire-tg-pf", "us-epa-frs"]'
+      external_alignments_json: '[{"label": "ProductionFacility", "match": "close", "note": "INSPIRE defines
+        a production facility as installations on one site operated by the same natural or legal person,
+        so a change of operator can make a new facility there. This concept keeps its identity across operator
+        changes.", "uri": "http://inspire.ec.europa.eu/featureconcept/ProductionFacility", "vocabulary":
+        "INSPIRE feature concepts", "vocabulary_id": "inspire-fc"}, {"label": "Facility (Article 3(2))",
+        "match": "related", "note": "Regulation (EU) 2024/1244, which applies from 1 January 2028, defines
+        a facility by site and operator and recognises natural and legal persons as operators.", "uri":
+        "https://eur-lex.europa.eu/eli/reg/2024/1244/oj", "vocabulary": "Regulation (EU) 2024/1244", "vocabulary_id":
+        "eu-reg-2024-1244"}]'
+  WaterUseAuthorization:
+    class_uri: publicschema:environment/WaterUseAuthorization
+    title: Water Use Authorization
+    description: A permission from a competent authority to abstract or impound water from stated sources,
+      for stated purposes, within stated limits and conditions. It is not an irrigation scheme, a water
+      source or a record of how much water was actually used.
+    status: bibo:draft
+    slots:
+    - authorized_water_source
+    - authorized_water_quantity
+    - irrigation_scheme
+    see_also:
+    - https://www.gov.uk/guidance/water-management-apply-for-a-water-abstraction-or-impoundment-licence
+    is_a: Authorization
+    annotations:
+      label_es: Autorización de uso del agua
+      label_fr: Autorisation d'usage de l'eau
+      description_es: Un permiso otorgado por una autoridad competente para captar o embalsar agua
+        de fuentes indicadas, para fines indicados, dentro de límites y condiciones indicados. No es
+        un sistema de riego, ni una fuente de agua, ni un registro de la cantidad de agua
+        efectivamente utilizada.
+      description_fr: Une permission délivrée par une autorité compétente de capter ou d'endiguer de
+        l'eau à partir de sources indiquées, à des fins indiquées, dans des limites et des conditions
+        indiquées. Elle n'est ni un périmètre d'irrigation, ni une source d'eau, ni un relevé de la
+        quantité d'eau effectivement utilisée.
+      source_domain: environment
+      bibliography_refs: '["agrovoc", "eu-dir-2000-60", "uk-ea-water-abstraction-licence"]'
+      external_alignments_json: '[{"label": "Controls over abstraction and impoundment (Article 11(3)(e))",
+        "match": "related", "note": "Directive 2000/60/EC requires prior authorization of surface and groundwater
+        abstraction and impoundment.", "uri": "https://eur-lex.europa.eu/eli/dir/2000/60/oj", "vocabulary":
+        "Directive 2000/60/EC", "vocabulary_id": "eu-dir-2000-60"}, {"label": "water rights", "match": "related",
+        "uri": "http://aims.fao.org/aos/agrovoc/c_16062", "vocabulary": "AGROVOC", "vocabulary_id": "agrovoc"}]'
+slots:
+  environmental_activities:
+    slot_uri: publicschema:environment/environmental_activities
+    title: Environmental activities
+    description: The regulated activities carried out at the facility, such as intensive pig rearing
+      or waste incineration, each taken from a named activity list.
+    range: CodedValue
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Actividades medioambientales
+      label_fr: Activités environnementales
+      description_es: Las actividades reguladas ejercidas en la instalación, por ejemplo la cría
+        intensiva de cerdos o la incineración de residuos, cada una tomada de una lista de
+        actividades designada.
+      description_fr: Les activités réglementées exercées sur l'installation, par exemple l'élevage
+        intensif de porcs ou l'incinération de déchets, chacune tirée d'une liste d'activités nommée.
+      source_domain: environment
+      category: classification
+      external_alignments_json: '[{"label": "Activities (Annex I)", "match": "related", "note": "Regulation
+        (EU) 2024/1244, Annex I, lists the activities whose installations report to the Industrial Emissions
+        Portal.", "uri": "https://eur-lex.europa.eu/eli/reg/2024/1244/oj", "vocabulary": "Regulation (EU)
+        2024/1244", "vocabulary_id": "eu-reg-2024-1244"}, {"label": "NACECodeValue", "match": "related",
+        "note": "INSPIRE production facilities code their economic activity with NACE.", "uri": "http://inspire.ec.europa.eu/codelist/NACECodeValue",
+        "vocabulary": "INSPIRE code lists", "vocabulary_id": "inspire-cl"}]'
+      bibliography_refs: '["eu-reg-2024-1244", "inspire-cl", "inspire-tg-pf"]'
+  authorized_water_source:
+    slot_uri: publicschema:environment/authorized_water_source
+    title: Authorized water source
+    description: The water bodies, aquifers or intake points from which the authorization permits abstraction
+      or impoundment, each identified by URI.
+    range: uri
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Fuente de agua autorizada
+      label_fr: Source d'eau autorisée
+      description_es: Las masas de agua, los acuíferos o los puntos de toma a partir de los cuales
+        la autorización permite la captación o el embalse, cada uno identificado por un URI.
+      description_fr: Les masses d'eau, les aquifères ou les points de prélèvement à partir desquels
+        l'autorisation permet le captage ou l'endiguement, chacun identifié par un URI.
+      source_domain: environment
+      category: agriculture
+  authorized_water_quantity:
+    slot_uri: publicschema:environment/authorized_water_quantity
+    title: Authorized water quantity
+    description: A maximum amount of water the authorization allows to be taken, stated as a rate whose
+      unit carries the period, such as cubic metres per day (m3/d) or per year (m3/a). Several limits
+      can apply together, such as a daily and an annual maximum. It is not a measurement of water actually
+      taken.
+    range: QuantityValue
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Cantidad de agua autorizada
+      label_fr: Quantité d'eau autorisée
+      description_es: Una cantidad máxima de agua que la autorización permite extraer, expresada
+        como una tasa cuya unidad lleva incorporado el período, por ejemplo metros cúbicos por día
+        (m3/d) o por año (m3/a). Pueden aplicarse varios límites a la vez, por ejemplo un máximo
+        diario y un máximo anual. No es una medición del agua efectivamente extraída.
+      description_fr: Une quantité maximale d'eau que l'autorisation permet de prélever, exprimée
+        comme un débit dont l'unité porte la période, par exemple des mètres cubes par jour (m3/j)
+        ou par an (m3/an). Plusieurs limites peuvent s'appliquer ensemble, par exemple un maximum
+        journalier et un maximum annuel. Elle n'est pas une mesure de l'eau effectivement prélevée.
+      source_domain: environment
+      category: agriculture
+      bibliography_refs: '["regenstrief-ucum"]'
+  irrigation_scheme:
+    slot_uri: publicschema:agri/irrigation_scheme
+    title: Irrigation scheme
+    description: The irrigation scheme that the authorized water serves, when the authorization is tied
+      to one.
+    range: IrrigationScheme
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Sistema de riego
+      label_fr: Périmètre d'irrigation
+      description_es: El sistema de riego al que sirve el agua autorizada, cuando la autorización
+        está vinculada a uno.
+      description_fr: Le périmètre d'irrigation que dessert l'eau autorisée, lorsque l'autorisation
+        est liée à un tel périmètre.
+      source_domain: agri
+      category: agriculture

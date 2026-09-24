@@ -290,6 +290,26 @@ mod tests {
         assert!(error.message.contains("`household`"), "{}", error.message);
     }
 
+    /// The Evidence tutorial's shipped selection is only resolved against the
+    /// embedded model by the opt-in `--live` composition check, which this
+    /// workspace does not run in CI. Pin its `modelRevision` here so a
+    /// PublicSchema snapshot sync that moves the pinned commit fails this
+    /// crate's tests until the shipped file is updated too.
+    #[test]
+    fn the_shipped_evidence_organization_selection_matches_the_embedded_revision() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/evidence/organization-selection.yaml");
+        let contents = std::fs::read_to_string(&path).expect("the shipped selection reads");
+        let selection =
+            selection::Selection::parse("organization-selection.yaml", contents.as_bytes())
+                .expect("the shipped selection parses");
+        let pin = publicschema::pin().expect("the embedded model is pinned");
+        assert_eq!(
+            selection.model_revision.as_deref(),
+            Some(pin.commit.as_str())
+        );
+    }
+
     #[test]
     fn a_selection_file_is_read_within_its_bound() {
         let directory = tempfile::tempdir().expect("a temporary directory");

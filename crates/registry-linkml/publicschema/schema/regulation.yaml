@@ -1,0 +1,302 @@
+id: https://publicschema.org/linkml/regulation
+name: publicschema-regulation
+title: Compliance, regulatory action and certification
+description: Compliance assessments, regulatory actions and certifications.
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+  schema: http://schema.org/
+  gs1: https://gs1.org/voc/
+imports:
+- linkml:types
+- core
+- identity
+- value_types
+- registry
+- organizations
+classes:
+  ComplianceAssessment:
+    class_uri: publicschema:ComplianceAssessment
+    title: Compliance Assessment
+    description: A check by an authority or other body of whether a subject meets stated requirements
+      at a given time, together with the result. The subject may be a facility, vehicle, authorization
+      or other thing, and the authority is the body that carried out the check. The result applies to
+      those requirements and that time only, not to the subject's compliance in general.
+    is_a: Event
+    slots:
+    - subject_uri
+    - assessed_requirements
+    - authority
+    - assessment_date
+    - assessment_result
+    - assessment_findings
+    status: bibo:draft
+    annotations:
+      label_es: Evaluación de cumplimiento
+      label_fr: Évaluation de conformité
+      description_es: Una verificación realizada por una autoridad u otro organismo sobre si un sujeto
+        cumple los requisitos establecidos en un momento dado, junto con el resultado obtenido. El
+        sujeto puede ser una instalación, un vehículo, una autorización u otra cosa, y la autoridad
+        es el organismo que realizó la verificación. El resultado se aplica únicamente a esos requisitos
+        y a ese momento, no al cumplimiento general del sujeto.
+      description_fr: Un contrôle effectué par une autorité ou un autre organisme afin de vérifier
+        si un sujet satisfait à des exigences énoncées à un moment donné, avec le résultat obtenu.
+        Le sujet peut être une installation, un véhicule, une autorisation ou une autre chose, et l'autorité
+        est l'organisme qui a effectué le contrôle. Le résultat ne s'applique qu'à ces exigences et
+        à ce moment, et non à la conformité générale du sujet.
+      bibliography_refs: '["eu-reg-2017-625", "iso-iec-17000", "us-epa-echo"]'
+  RegulatoryAction:
+    class_uri: publicschema:RegulatoryAction
+    title: Regulatory Action
+    description: A measure an authority takes about a regulated subject, such as a warning, order, penalty,
+      suspension or withdrawal. The authority is the body taking the measure, and the legal resources
+      are the provisions it relies on. The start and end dates bound the period in which the measure has
+      effect, such as a suspension; the measure does not rewrite the validity of a registration or permission
+      it concerns. Action types and legal resources are interpreted in their jurisdiction; recording a measure
+      does not show that it is final or upheld.
+    is_a: Event
+    slots:
+    - subject_uri
+    - authority
+    - action_type
+    - legal_resources
+    - action_date
+    - start_date
+    - end_date
+    - action_description
+    status: bibo:draft
+    annotations:
+      label_es: Medida reglamentaria
+      label_fr: Mesure réglementaire
+      description_es: Una medida que una autoridad adopta respecto de un sujeto regulado, como una
+        advertencia, una orden, una sanción, una suspensión o un retiro. La autoridad es el organismo
+        que adopta la medida, y los recursos jurídicos son las disposiciones en las que se basa. Las
+        fechas de inicio y de fin delimitan el período en que la medida surte efecto, como una suspensión;
+        la medida no reescribe la vigencia de un registro o de una autorización a los que se refiere. Los
+        tipos de medida y los recursos jurídicos se interpretan según su jurisdicción; el registro
+        de una medida no demuestra que sea definitiva o confirmada.
+      description_fr: Une mesure qu'une autorité prend à l'égard d'un sujet réglementé, par exemple
+        un avertissement, une injonction, une sanction, une suspension ou un retrait. L'autorité est
+        l'organisme qui prend la mesure, et les ressources juridiques sont les dispositions sur lesquelles
+        elle s'appuie. Les dates de début et de fin délimitent la période pendant laquelle la mesure produit
+        effet, par exemple une suspension ; la mesure ne réécrit pas la validité d'un enregistrement ou
+        d'une autorisation qu'elle concerne. Les types de mesures et les ressources juridiques s'interprètent dans leur juridiction ;
+        l'enregistrement d'une mesure ne montre pas qu'elle est définitive ou confirmée.
+      bibliography_refs: '["eu-reg-2017-625", "us-epa-echo"]'
+  Certification:
+    class_uri: publicschema:Certification
+    title: Certification
+    description: A dated attestation by a certifying organization that a stated subject, such as a product,
+      process, operation, facility or person, conforms to a stated scheme within a stated scope. It is
+      distinct from the certificate document, from registration and from permission to operate. When
+      the status of one part of the scope diverges, each part is recorded as its own certification.
+    status: bibo:draft
+    slots:
+    - identifiers
+    - certified_subject
+    - certifying_organization
+    - certification_scheme
+    - certification_scope
+    - valid_from
+    - valid_to
+    close_mappings:
+    - schema:Certification
+    - gs1:CertificationDetails
+    see_also:
+    - https://agdatacommons.nal.usda.gov/articles/dataset/The_Organic_INTEGRITY_Database/24661722
+    annotations:
+      label_es: Certificación
+      label_fr: Certification
+      description_es: Una constancia fechada, emitida por una organización certificadora, de que un
+        sujeto determinado, como un producto, un proceso, una operación, una instalación o una persona,
+        cumple un esquema determinado dentro de un alcance determinado. Es distinta del documento de
+        certificado, del registro y del permiso de operar. Cuando el estado de una parte del alcance
+        difiere, cada parte se registra como su propia certificación.
+      description_fr: Une attestation datée, délivrée par une organisation certificatrice, selon laquelle
+        un sujet déterminé, tel qu'un produit, un procédé, une opération, une installation ou une personne,
+        est conforme à un référentiel déterminé dans un périmètre déterminé. Elle est distincte du
+        document de certificat, de l'enregistrement et de l'autorisation d'exploiter. Lorsque le statut
+        d'une partie du périmètre diverge, chaque partie est enregistrée comme sa propre certification.
+      bibliography_refs: '["iso-iec-17000", "iso-iec-17065-2012", "usda-integrity"]'
+slots:
+  assessed_requirements:
+    slot_uri: publicschema:assessed_requirements
+    title: Assessed requirements
+    description: The specific legal provisions, permit conditions or other requirements that the subject
+      was checked against.
+    range: uri
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Requisitos evaluados
+      label_fr: Exigences évaluées
+      description_es: Las disposiciones legales específicas, las condiciones del permiso u otros requisitos
+        con los que se verificó el sujeto.
+      description_fr: Les dispositions légales spécifiques, les conditions du permis ou les autres
+        exigences au regard desquelles le sujet a été contrôlé.
+      category: administrative
+  assessment_date:
+    slot_uri: publicschema:assessment_date
+    title: Assessment date
+    description: The date on which the assessment was carried out.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de la evaluación de cumplimiento
+      label_fr: Date de l'évaluation de conformité
+      description_es: La fecha en que se realizó la evaluación.
+      description_fr: La date à laquelle l'évaluation a été effectuée.
+      category: administrative
+  assessment_result:
+    slot_uri: publicschema:assessment_result
+    title: Assessment result
+    description: The conclusion reached, such as compliant, non-compliant or not assessed. Result codes
+      are interpreted under the assessed requirements.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Resultado de la evaluación
+      label_fr: Résultat de l'évaluation
+      description_es: La conclusión alcanzada, como conforme, no conforme o no evaluado. Los códigos
+        de resultado se interpretan en función de los requisitos evaluados.
+      description_fr: La conclusion obtenue, par exemple conforme, non conforme ou non évaluée. Les
+        codes de résultat s'interprètent au regard des exigences évaluées.
+      category: classification
+      sensitivity: sensitive
+  assessment_findings:
+    slot_uri: publicschema:assessment_findings
+    title: Assessment findings
+    description: What the assessor found, including any limits on the conclusion.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Constataciones de la evaluación
+      label_fr: Constatations de l'évaluation
+      description_es: Lo que constató el evaluador, incluidas las eventuales limitaciones de la conclusión.
+      description_fr: Ce que l'évaluateur a constaté, y compris les éventuelles limites de la conclusion.
+      category: administrative
+      sensitivity: sensitive
+  action_type:
+    slot_uri: publicschema:action_type
+    title: Action type
+    description: The kind of measure taken, such as a warning, fine, suspension or recall order.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de medida
+      label_fr: Type de mesure
+      description_es: El tipo de medida adoptada, como una advertencia, una multa, una suspensión o
+        una orden de retiro del mercado.
+      description_fr: Le type de mesure prise, par exemple un avertissement, une amende, une suspension
+        ou un ordre de rappel.
+      category: classification
+      sensitivity: sensitive
+  action_date:
+    slot_uri: publicschema:action_date
+    title: Action date
+    description: The date on which the authority took the measure, separate from the time the record
+      was entered.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de la medida
+      label_fr: Date de la mesure
+      description_es: La fecha en que la autoridad adoptó la medida, distinta del momento en que fue
+        registrada.
+      description_fr: La date à laquelle l'autorité a pris la mesure, distincte du moment où elle a
+        été enregistrée.
+      category: administrative
+  action_description:
+    slot_uri: publicschema:action_description
+    title: Action description
+    description: What the measure covers and any conditions attached to it.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Descripción de la medida
+      label_fr: Description de la mesure
+      description_es: Lo que cubre la medida y las eventuales condiciones que la acompañan.
+      description_fr: Ce que couvre la mesure et les éventuelles conditions qui y sont attachées.
+      category: administrative
+      sensitivity: sensitive
+  certified_subject:
+    slot_uri: publicschema:certified_subject
+    title: Certified subject
+    description: The URI of the product, lot, process, operation, facility, organization, group or person
+      that the certification is about.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - schema:about
+    annotations:
+      label_es: Sujeto certificado
+      label_fr: Sujet certifié
+      description_es: El URI del producto, el lote, el proceso, la operación, la instalación, la organización,
+        el grupo o la persona sobre el que trata la certificación.
+      description_fr: L'URI du produit, du lot, du procédé, de l'opération, de l'installation, de l'organisation,
+        du groupe ou de la personne sur lequel porte la certification.
+      category: administrative
+      sensitivity: sensitive
+      bibliography_refs: '["schema-org"]'
+  certifying_organization:
+    slot_uri: publicschema:certifying_organization
+    title: Certifying organization
+    description: The organization that issues the certification, such as a certification body or control
+      authority.
+    range: Organization
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - schema:issuedBy
+    annotations:
+      label_es: Organización certificadora
+      label_fr: Organisation certificatrice
+      description_es: La organización que emite la certificación, como un organismo de certificación
+        o una autoridad de control.
+      description_fr: L'organisation qui délivre la certification, par exemple un organisme de certification
+        ou une autorité de contrôle.
+      category: governance
+      bibliography_refs: '["schema-org"]'
+  certification_scheme:
+    slot_uri: publicschema:certification_scheme
+    title: Certification scheme
+    description: The URI of the certification scheme, including its edition where that affects the requirements.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Esquema de certificación
+      label_fr: Référentiel de certification
+      description_es: El URI del esquema de certificación, incluida su edición cuando esta afecta a
+        los requisitos.
+      description_fr: L'URI du référentiel de certification, y compris son édition lorsque celle-ci
+        affecte les exigences.
+      category: governance
+      bibliography_refs: '["iso-iec-17065-2012"]'
+  certification_scope:
+    slot_uri: publicschema:certification_scope
+    title: Certification scope
+    description: The activities, product categories or limitations that the certification covers, coded
+      under the scheme where possible.
+    range: CodedValue
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Alcance de la certificación
+      label_fr: Périmètre de la certification
+      description_es: Las actividades, categorías de productos o limitaciones que cubre la certificación,
+        codificadas según el esquema cuando sea posible.
+      description_fr: Les activités, catégories de produits ou limitations que couvre la certification,
+        codées selon le référentiel lorsque cela est possible.
+      category: classification
+      bibliography_refs: '["iso-iec-17065-2012"]'
