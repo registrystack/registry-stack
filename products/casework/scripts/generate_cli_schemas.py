@@ -73,6 +73,7 @@ REPORTS = {
             "packageDigest",
             "secretFileChecks",
             "sourceChecks",
+            "pinnedWork",
             "eventWiringGuidance",
         ],
         "properties": {
@@ -82,6 +83,15 @@ REPORTS = {
             "checks": {"$ref": "#/$defs/doctorChecks"},
             "secretFileChecks": OBJECT_ARRAY,
             "sourceChecks": OBJECT_ARRAY,
+            "pinnedWork": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["verdict", "conflicts"],
+                "properties": {
+                    "verdict": {"enum": ["clear", "acknowledged", "development"]},
+                    "conflicts": OBJECT_ARRAY,
+                },
+            },
             "eventWiringGuidance": STRING,
         },
         "defs": {
@@ -95,6 +105,7 @@ REPORTS = {
                     "sourceConnections",
                     "audit",
                     "database",
+                    "pinnedWork",
                     "oidcIssuer",
                     "directory",
                     "reconciliation",
@@ -108,6 +119,7 @@ REPORTS = {
                         "sourceConnections",
                         "audit",
                         "database",
+                        "pinnedWork",
                         "oidcIssuer",
                         "directory",
                         "reconciliation",

@@ -1000,6 +1000,7 @@ const DOCTOR_DATABASE_ACTION: &str = "Restore the Casework database named by dat
 const DOCTOR_DIRECTORY_ACTION: &str =
     "Authenticate as an Administrator and give every declared queue a serving team, then retry.";
 const DOCTOR_RECONCILIATION_ACTION: &str = "Restore the source named by the refusal and read the casework runtime log for the failing pass; readiness recovers after the next pass that succeeds.";
+const DOCTOR_PINNED_WORK_ACTION: &str = "Keep the earlier package active until the named work finishes, or, once you accept that it stays hidden or orphaned, set package.acknowledgeStrandedWork to the digest the refusal names, then retry.";
 const DOCTOR_AUDIT_ACTION: &str = "Give audit.path an owner-only directory this user can write, and archive an audit file that ends in an incomplete entry before starting on a fresh path, then retry.";
 
 pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
@@ -1118,6 +1119,22 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
     runtime
         .block_on(store.ready())
         .map_err(|error| database_failure(error.into()))?;
+    let dyn_adapters = adapters
+        .iter()
+        .map(|(_, adapter)| adapter as &dyn registry_casework_core::SourceAdapter)
+        .collect::<Vec<_>>();
+    let conflicts = runtime
+        .block_on(registry_casework::stranded_pinned_work(
+            &store,
+            &policy,
+            &dyn_adapters,
+        ))
+        .map_err(|error| database_failure(error.into()))?;
+    let pinned_work = doctor_pinned_work(
+        conflicts,
+        package_digest.as_deref(),
+        config.package.acknowledge_stranded_work.as_deref(),
+    )?;
     runtime
         .block_on(config.oidc_verifier(&resolver))
         .context("the configured OIDC issuer is unavailable or incompatible")?;
@@ -1165,14 +1182,45 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
             "sourceConnections": "ready",
             "audit": "ready",
             "database": "ready",
+            "pinnedWork": "ready",
             "oidcIssuer": "ready",
             "directory": "ready",
             "reconciliation": "ready"
         },
         "secretFileChecks": secret_files,
         "sourceChecks": source_checks,
+        "pinnedWork": pinned_work,
         "eventWiringGuidance": EVENT_WIRING_GUIDANCE
     }))
+}
+
+/// The doctor view of pinned work a package would strand, or the named
+/// failure when the operator has not acknowledged that exact package.
+fn doctor_pinned_work(
+    conflicts: Vec<registry_casework::StrandedWork>,
+    package_digest: Option<&str>,
+    acknowledged: Option<&str>,
+) -> Result<Value> {
+    use registry_casework::PinnedWorkVerdict;
+
+    let verdict =
+        match registry_casework::pinned_work_verdict(&conflicts, package_digest, acknowledged) {
+            PinnedWorkVerdict::Clear => "clear",
+            PinnedWorkVerdict::Acknowledged => "acknowledged",
+            PinnedWorkVerdict::Development => "development",
+            PinnedWorkVerdict::Refused => {
+                return Err(anyhow::Error::new(DoctorCheckFailure {
+                    check: "pinnedWork",
+                    // Only a packaged project is refused, so the digest is present.
+                    message: registry_casework::stranded_work_refusal(
+                        &conflicts,
+                        package_digest.unwrap_or_default(),
+                    ),
+                    action: DOCTOR_PINNED_WORK_ACTION,
+                }));
+            }
+        };
+    Ok(json!({"verdict": verdict, "conflicts": conflicts}))
 }
 
 fn reconciliation_failure_message(health: &SourceReconciliationHealth) -> String {
@@ -1730,6 +1778,43 @@ mod tests {
             }),
             "reconciliation of source professional-register failed 7 consecutive passes; no pass has succeeded"
         );
+    }
+
+    #[test]
+    fn doctor_refuses_unacknowledged_stranded_work_by_name_and_reports_the_rest() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let conflicts = vec![registry_casework::StrandedWork::QueueRemoved {
+            queue: "intake".into(),
+            reviews: 2,
+            work_items: 1,
+        }];
+
+        assert_eq!(
+            doctor_pinned_work(Vec::new(), Some(&digest), None).unwrap(),
+            json!({"verdict": "clear", "conflicts": []})
+        );
+        assert_eq!(
+            doctor_pinned_work(conflicts.clone(), Some(&digest), Some(&digest)).unwrap(),
+            json!({
+                "verdict": "acknowledged",
+                "conflicts": [{"reason": "queue-removed", "queue": "intake", "reviews": 2, "workItems": 1}]
+            })
+        );
+        assert_eq!(
+            doctor_pinned_work(conflicts.clone(), None, None).unwrap()["verdict"],
+            "development"
+        );
+
+        let error = doctor_pinned_work(conflicts, Some(&digest), None).unwrap_err();
+        let failure = error.downcast_ref::<DoctorCheckFailure>().unwrap();
+        assert_eq!(failure.check, "pinnedWork");
+        assert_eq!(
+            failure.message,
+            format!(
+                "the policy package would strand work pinned under an earlier package: 2 in-flight reviews and 1 open work item are in queue intake, which the package no longer declares. Let that work finish under the earlier package, or set package.acknowledgeStrandedWork to {digest} to activate this package anyway"
+            )
+        );
+        assert_eq!(failure.action, DOCTOR_PINNED_WORK_ACTION);
     }
 
     #[test]

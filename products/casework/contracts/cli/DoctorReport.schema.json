@@ -18,6 +18,7 @@
         "packageDigest",
         "secretFileChecks",
         "sourceChecks",
+        "pinnedWork",
         "eventWiringGuidance"
       ],
       "properties": {
@@ -58,6 +59,29 @@
           "type": "array",
           "items": {
             "type": "object"
+          }
+        },
+        "pinnedWork": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "verdict",
+            "conflicts"
+          ],
+          "properties": {
+            "verdict": {
+              "enum": [
+                "clear",
+                "acknowledged",
+                "development"
+              ]
+            },
+            "conflicts": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
           }
         },
         "eventWiringGuidance": {
@@ -149,6 +173,7 @@
         "sourceConnections",
         "audit",
         "database",
+        "pinnedWork",
         "oidcIssuer",
         "directory",
         "reconciliation"
@@ -170,6 +195,9 @@
           "const": "ready"
         },
         "database": {
+          "const": "ready"
+        },
+        "pinnedWork": {
           "const": "ready"
         },
         "oidcIssuer": {

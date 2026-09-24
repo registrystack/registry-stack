@@ -400,9 +400,52 @@ pub async fn migrate_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeErro
     Ok(())
 }
 
+/// Refuse to activate a package that strands in-flight work pinned under an
+/// earlier package, unless the operator acknowledged that exact package.
+async fn check_pinned_work(
+    store: &PostgresStore,
+    project: &CaseworkProject,
+    adapters: &[Arc<dyn SourceAdapter>],
+    package_digest: Option<&str>,
+    acknowledged: Option<&str>,
+) -> Result<(), RuntimeError> {
+    let adapters = adapters
+        .iter()
+        .map(|adapter| adapter.as_ref())
+        .collect::<Vec<_>>();
+    let conflicts = crate::stranded_pinned_work(store, project, &adapters).await?;
+    match (
+        crate::pinned_work_verdict(&conflicts, package_digest, acknowledged),
+        package_digest,
+    ) {
+        (crate::PinnedWorkVerdict::Clear, _) => Ok(()),
+        (crate::PinnedWorkVerdict::Acknowledged, _) => {
+            tracing::warn!(
+                stranded = %crate::describe_stranded_work(&conflicts),
+                "activating an acknowledged Casework policy package that strands pinned work"
+            );
+            Ok(())
+        }
+        (crate::PinnedWorkVerdict::Development, _) => {
+            tracing::warn!(
+                stranded = %crate::describe_stranded_work(&conflicts),
+                "the authored Casework policy strands work pinned under an earlier policy"
+            );
+            Ok(())
+        }
+        (crate::PinnedWorkVerdict::Refused, Some(digest)) => Err(RuntimeError::StrandedPinnedWork(
+            crate::stranded_work_refusal(&conflicts, digest),
+        )),
+        (crate::PinnedWorkVerdict::Refused, None) => Err(RuntimeError::StrandedPinnedWork(
+            crate::describe_stranded_work(&conflicts),
+        )),
+    }
+}
+
 pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
     let config = RuntimeConfig::load(path)?;
-    match config.policy_package_digest()? {
+    let package_digest = config.policy_package_digest()?;
+    match &package_digest {
         Some(digest) => tracing::info!(
             policy_package_digest = %digest,
             "verified Casework policy package"
@@ -429,9 +472,6 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         let adapter = binding
             .build_adapter(source, project_root, &secrets)
             .map_err(|_| RuntimeError::SourceConfiguration(source.id.clone()))?;
-        store
-            .register_source_generation(&source.id, adapter.binding_generation())
-            .await?;
         adapters.push(Arc::new(adapter));
     }
     if config.sources.len() != adapters.len() {
@@ -442,6 +482,20 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             .cloned()
             .unwrap_or_default();
         return Err(RuntimeError::SourceConfiguration(unmatched));
+    }
+    // Refuse before any activation step writes to the database.
+    check_pinned_work(
+        &store,
+        &project,
+        &adapters,
+        package_digest.as_deref(),
+        config.package.acknowledge_stranded_work.as_deref(),
+    )
+    .await?;
+    for adapter in &adapters {
+        store
+            .register_source_generation(adapter.source_id(), adapter.binding_generation())
+            .await?;
     }
 
     let (verifier, keys) = config.oidc_verifier(&secrets).await?;
@@ -1091,6 +1145,8 @@ pub enum RuntimeError {
     SecretConfiguration,
     #[error("the Casework source binding for source {0} is invalid")]
     SourceConfiguration(String),
+    #[error("{0}")]
+    StrandedPinnedWork(String),
     #[error("the Casework audit destination could not be initialized")]
     Audit,
     #[error("the Casework audit destination could not be initialized: {0}")]

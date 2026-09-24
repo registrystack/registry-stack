@@ -1523,6 +1523,98 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
 }
 
 #[tokio::test]
+async fn activation_preflight_counts_in_flight_reviews_a_package_would_strand() {
+    let fixture = fixture().await;
+    for index in 0..3 {
+        fixture
+            .service_v1
+            .create_review_request(
+                &fixture.producer,
+                request(
+                    &format!("record-pinned-{index}"),
+                    &format!("producer-ref-pinned-{index}"),
+                ),
+                &format!("create-pinned-{index}"),
+            )
+            .await
+            .expect("create pinned review");
+    }
+    let cancelled = request("record-pinned-cancelled", "producer-ref-pinned-cancelled");
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            cancelled.clone(),
+            "create-pinned-cancelled",
+        )
+        .await
+        .expect("create cancelled review");
+    fixture
+        .service_v1
+        .cancel_review_request(
+            &fixture.producer,
+            created.accepted.request_id,
+            ReviewCancelRequest {
+                subject: cancelled.subject,
+                reason: "no longer needed".to_owned(),
+            },
+            "cancel-pinned",
+        )
+        .await
+        .expect("cancel the fourth review");
+
+    let stranded = |candidate: CaseworkProject| {
+        let store = fixture.store.clone();
+        async move {
+            candidate.check().expect("candidate project");
+            registry_casework::stranded_pinned_work(&store, &candidate, &[])
+                .await
+                .expect("preflight")
+        }
+    };
+
+    assert!(stranded(project("1")).await.is_empty());
+
+    let mut moved_queue = project("2");
+    moved_queue.queues[0].id = "triage".to_owned();
+    for stage in &mut moved_queue.review_kinds[0].stages {
+        stage.queue = "triage".to_owned();
+    }
+    assert_eq!(
+        stranded(moved_queue).await,
+        vec![registry_casework::StrandedWork::QueueRemoved {
+            queue: "review".to_owned(),
+            reviews: 3,
+            work_items: 0,
+        }]
+    );
+
+    let mut renamed_profile = project("2");
+    renamed_profile.access_profiles[0].id = "clerk".to_owned();
+    for stage in &mut renamed_profile.review_kinds[0].stages {
+        stage.deciding_profiles = vec!["clerk".to_owned()];
+    }
+    assert_eq!(
+        stranded(renamed_profile).await,
+        vec![registry_casework::StrandedWork::ProfileRemoved {
+            profile: "staff".to_owned(),
+            reviews: 3,
+        }]
+    );
+
+    let mut edited_in_place = project("1");
+    edited_in_place.review_kinds[0].stages[1].deciding_profiles = vec!["supervisor".to_owned()];
+    assert_eq!(
+        stranded(edited_in_place).await,
+        vec![registry_casework::StrandedWork::ReviewKindChanged {
+            review_kind: "registry-correction".to_owned(),
+            version: "1".to_owned(),
+            reviews: 3,
+        }]
+    );
+}
+
+#[tokio::test]
 async fn retained_reviews_remain_bound_to_the_admitted_producer_identity() {
     let fixture = fixture().await;
     let request = request("record-producer-rebind", "producer-ref-rebind");
