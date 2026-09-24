@@ -2105,6 +2105,29 @@ pub enum FieldTypeSource {
 }
 
 impl FieldTypeSource {
+    /// Whether every value `previous` admitted is still a valid value of this
+    /// type with no change to its stored column type: the vocabulary gained
+    /// codes, or a `text` length limit rose.
+    pub fn admits_every_value_of(&self, previous: &FieldTypeSource) -> bool {
+        self.keeps_vocabulary_codes_of(previous) || self.widens_text_length_of(previous)
+    }
+
+    /// Whether this is a `text` type whose `maxLength` is higher than
+    /// `previous`'s. A `text` column bounds its length with a check, so the
+    /// stored column type stays `text`. A `string` field's `maxLength` is its
+    /// `varchar` column type, so raising it is a type change and not covered.
+    pub fn widens_text_length_of(&self, previous: &FieldTypeSource) -> bool {
+        matches!(
+            (previous, self),
+            (
+                FieldTypeSource::Text {
+                    max_length: previous_max,
+                },
+                FieldTypeSource::Text { max_length },
+            ) if max_length > previous_max
+        )
+    }
+
     /// Whether this type keeps `previous`'s vocabulary and every code it
     /// declared, possibly adding codes. A stored code of `previous` is then
     /// always a valid code of this type.

@@ -461,14 +461,12 @@ impl HistoryFieldDescriptor {
         allow_retained_plaintext: bool,
     ) -> Result<bool, HistorySchemaError> {
         self.validate()?;
-        // A revision recorded under fewer vocabulary codes stays readable:
-        // it is decoded against the codes it was recorded under, each of
-        // which the active field still declares.
+        // A revision recorded under fewer vocabulary codes or a lower text
+        // length limit stays readable: it is decoded against the type it was
+        // recorded under, every value of which the active field still admits.
         if self.id != active.id
             || (self.field_type != *active.field_type
-                && !active
-                    .field_type
-                    .keeps_vocabulary_codes_of(&self.field_type))
+                && !active.field_type.admits_every_value_of(&self.field_type))
         {
             return Ok(false);
         }
@@ -1129,6 +1127,62 @@ mod tests {
         );
         entity.stored_fields.push(status);
         entity
+    }
+
+    fn with_note_field(field_type: FieldTypeSource) -> CompiledEntity {
+        let mut entity = membership_entity();
+        let note = stored("note", "note", field_type, true, None);
+        entity.fields.insert(
+            "note".to_owned(),
+            crate::model::CompiledField {
+                pattern: None,
+                id: "note".to_owned(),
+                field_type: note.logical.field_type.clone(),
+                required: true,
+                classification: Classification::Restricted,
+                valid_time_role: None,
+                physical_name: "f_note".to_owned(),
+                encryption: None,
+            },
+        );
+        entity.stored_fields.push(note);
+        entity
+    }
+
+    #[test]
+    fn a_raised_text_limit_keeps_recorded_values_readable() {
+        let old = with_note_field(FieldTypeSource::Text { max_length: 80 });
+        let descriptor = descriptor_for(&old);
+        let widened = with_note_field(FieldTypeSource::Text { max_length: 200 });
+
+        let compatibility = descriptor
+            .compatibility_for_fields(&widened, &required(&["note"]), &required(&["note"]))
+            .expect("a raised text limit keeps every recorded value valid");
+        assert_eq!(
+            compatibility.fields["note"].field_type, old.fields["note"].field_type,
+            "a revision is decoded against the limit it was recorded under"
+        );
+
+        for (active, reason) in [
+            (
+                with_note_field(FieldTypeSource::Text { max_length: 40 }),
+                "a lowered limit could surface a value the active field refuses",
+            ),
+            (
+                with_note_field(FieldTypeSource::String {
+                    min_length: 0,
+                    max_length: 200,
+                }),
+                "a text field retyped as string is a type change",
+            ),
+        ] {
+            assert_eq!(
+                descriptor
+                    .compatibility_for_fields(&active, &required(&["note"]), &required(&[]))
+                    .expect_err(reason),
+                HistorySchemaError::IncompatibleField
+            );
+        }
     }
 
     #[test]

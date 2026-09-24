@@ -2015,18 +2015,20 @@ fn entity_permission_fields_empty(grant: &crate::contract::AccessPermissionSourc
 }
 
 /// Whether `after` differs from `before` only by vocabulary codes added to its
-/// inputs or to the fields of the entities it targets, so every request the
+/// inputs, and by fields of the entities it targets whose candidate type
+/// `target_field_admits` accepts over the previous one, so every request the
 /// previous contract accepted keeps the same meaning. An input may gain only
 /// codes new to its vocabulary in this revision: one that starts accepting a
 /// code its vocabulary already had, such as a withdrawal that starts giving,
 /// changes what the action does. Any other difference, including a fingerprint
 /// an earlier compiler derived differently, is not.
 #[cfg(feature = "runtime")]
-pub(crate) fn contract_only_adds_vocabulary_codes(
+pub(crate) fn contract_only_widens(
     (before, previous_vocabularies): (&CompiledAction, &BTreeMap<String, BTreeSet<String>>),
     previous_entities: &BTreeMap<String, CompiledEntity>,
     (after, vocabularies): (&CompiledAction, &BTreeMap<String, BTreeSet<String>>),
     entities: &BTreeMap<String, CompiledEntity>,
+    target_field_admits: fn(&FieldTypeSource, &FieldTypeSource) -> bool,
 ) -> bool {
     let inputs = after
         .inputs
@@ -2053,10 +2055,7 @@ pub(crate) fn contract_only_adds_vocabulary_codes(
             if let Some(previous) = previous_entities.get(entity_id) {
                 for (field_id, field) in &mut entity.fields {
                     if let Some(previous_field) = previous.fields.get(field_id) {
-                        if field
-                            .field_type
-                            .keeps_vocabulary_codes_of(&previous_field.field_type)
-                        {
+                        if target_field_admits(&field.field_type, &previous_field.field_type) {
                             field.field_type = previous_field.field_type.clone();
                         }
                     }

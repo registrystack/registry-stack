@@ -866,6 +866,36 @@ pub(crate) fn replace_vocabulary_check_statement(
     names: &crate::physical_names::EntityPhysicalNames,
     field: &crate::model::CompiledField,
 ) -> Option<DdlStatement> {
+    replace_inline_field_check_statement(entity, names, field, "vocabulary")
+}
+
+/// The statement that raises a stored `text` column's length check to the
+/// candidate field's `maxLength`, or `None` for an encrypted column, which
+/// stores envelopes and carries no length check. It replaces the inline check
+/// exactly as [`replace_vocabulary_check_statement`] does, under the same lock
+/// and row validation.
+#[cfg(feature = "runtime")]
+pub(crate) fn replace_length_check_statement(
+    entity: &CompiledEntity,
+    names: &crate::physical_names::EntityPhysicalNames,
+    field: &crate::model::CompiledField,
+) -> Option<DdlStatement> {
+    replace_inline_field_check_statement(entity, names, field, "length")
+}
+
+/// Replace the one inline `CHECK` over exactly this column with the candidate
+/// field's check, keeping the name PostgreSQL chose. A field pattern is a
+/// second single-column check under a compiler-assigned name, so that name is
+/// excluded beside the entity's named constraints. The block's dollar-quote
+/// tag is `breg_` followed by `purpose`, so the statement names the check it
+/// replaces wherever an operator reads it.
+#[cfg(feature = "runtime")]
+fn replace_inline_field_check_statement(
+    entity: &CompiledEntity,
+    names: &crate::physical_names::EntityPhysicalNames,
+    field: &crate::model::CompiledField,
+    purpose: &str,
+) -> Option<DdlStatement> {
     if field.encryption.is_some() {
         return None;
     }
@@ -876,16 +906,22 @@ pub(crate) fn replace_vocabulary_check_statement(
         .values()
         .cloned()
         .chain([temporal_order_constraint_name(&entity.id)])
+        .chain(
+            field
+                .pattern
+                .is_some()
+                .then(|| field_pattern_constraint_name(&entity.id, &field.id)),
+        )
         .collect::<BTreeSet<_>>()
         .iter()
         .map(|name| quote_literal(name))
         .collect::<Vec<_>>()
         .join(", ");
     Some(DdlStatement {
-        id: format!("entity.{}.field.{}.vocabulary", entity.id, field.id),
+        id: format!("entity.{}.field.{}.{purpose}", entity.id, field.id),
         kind: DdlStatementKind::Constraint,
         sql: format!(
-            "DO $breg_vocabulary$\n\
+            "DO $breg_{purpose}$\n\
              DECLARE\n\
              \x20   check_name name;\n\
              BEGIN\n\
@@ -899,7 +935,7 @@ pub(crate) fn replace_vocabulary_check_statement(
              \x20     AND c.conname <> ALL (ARRAY[{named_constraints}]::name[]);\n\
              \x20   EXECUTE format('ALTER TABLE registry_data.%I DROP CONSTRAINT %I, ADD CONSTRAINT %I CHECK (%s)', {table}, check_name, check_name, {check});\n\
              END\n\
-             $breg_vocabulary$",
+             $breg_{purpose}$",
             column = quote_literal(&field.physical_name),
             check = quote_literal(&check),
         ),

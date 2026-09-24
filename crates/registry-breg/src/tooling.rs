@@ -101,7 +101,7 @@ fn classify_change(
         // The migration stays additive, but it replaces the column check under
         // an exclusive table lock and validates every row against it. An
         // encrypted column stores envelopes and carries no check to replace.
-        Code::FieldVocabularyCodesAdded => {
+        Code::FieldVocabularyCodesAdded | Code::FieldLengthWidened => {
             let encrypted = change
                 .target
                 .entity_id
@@ -192,9 +192,10 @@ fn access_change_details(
         | Code::RecipientGroupAdded
         | Code::RecipientGroupRemoved
         | Code::RecipientGroupChanged => return recipient_details(baseline, candidate, change),
-        Code::ActionAdded | Code::ActionChanged | Code::ActionVocabularyCodesAdded => {
-            return action_details(baseline, candidate, change)
-        }
+        Code::ActionAdded
+        | Code::ActionChanged
+        | Code::ActionVocabularyCodesAdded
+        | Code::ActionTargetFieldsWidened => return action_details(baseline, candidate, change),
         _ => {}
     }
     let Some(entity) = change.target.entity_id.as_deref() else {
@@ -505,7 +506,10 @@ fn action_details(
             reason: Some(STEWARD_ISSUER.to_owned()),
         });
     }
-    if change.code == Code::ActionVocabularyCodesAdded {
+    if matches!(
+        change.code,
+        Code::ActionVocabularyCodesAdded | Code::ActionTargetFieldsWidened
+    ) {
         let Some(before) = before else {
             return details;
         };
@@ -527,6 +531,11 @@ fn action_details(
                 widened_before.insert(input.id.clone(), codes(previous));
                 widened_after.insert(input.id.clone(), codes(input));
             }
+        }
+        // A contract widened only through its target fields accepts no new
+        // input code, so there is nothing for this detail to show.
+        if change.code == Code::ActionTargetFieldsWidened && widened_after.is_empty() {
+            return details;
         }
         details.push(AccessChangeDetail {
             field: "inputCodes".into(),
@@ -775,6 +784,27 @@ mod tests {
             &baseline,
             &constrained,
             CompiledRegistryChangeCode::IndexAdded,
+            DiffClassification::LockOrRewriteRisk,
+        );
+
+        let short_note = compiled(
+            "1",
+            "internal",
+            r#",{"id":"note","type":"text","maxLength":80,"classification":"internal"}"#,
+            "",
+            "principal",
+        );
+        let long_note = compiled(
+            "1",
+            "internal",
+            r#",{"id":"note","type":"text","maxLength":200,"classification":"internal"}"#,
+            "",
+            "principal",
+        );
+        assert_class(
+            &short_note,
+            &long_note,
+            CompiledRegistryChangeCode::FieldLengthWidened,
             DiffClassification::LockOrRewriteRisk,
         );
 

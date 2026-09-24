@@ -807,6 +807,10 @@ fn vocabulary_code_additions_are_additive_and_replace_the_column_check() {
         sql.contains("'archived'") && sql.contains("DROP CONSTRAINT"),
         "the statement replaces the column check with the candidate codes: {sql}"
     );
+    assert!(
+        sql.starts_with("DO $breg_vocabulary$\n") && sql.ends_with("$breg_vocabulary$"),
+        "the vocabulary statement keeps its quoting tag: {sql}"
+    );
 
     for (candidate, reason) in [
         (
@@ -832,6 +836,68 @@ fn vocabulary_code_additions_are_additive_and_replace_the_column_check() {
             change_set_to_applicable_migration_plan(&change_set).is_err(),
             "{reason}"
         );
+    }
+}
+
+#[test]
+fn text_length_widening_is_additive_and_replaces_the_length_check() {
+    for pattern in [None, Some("^[a-z ]*$")] {
+        let previous = length_registry("text", 80, pattern);
+        let candidate = length_registry("text", 200, pattern);
+        let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+
+        assert_eq!(change_set.changes.len(), 1, "{:#?}", change_set.changes);
+        assert_change(
+            &change_set,
+            CompiledRegistryChangeClass::CompatibleAdditive,
+            CompiledRegistryChangeCode::FieldLengthWidened,
+        );
+        let plan = change_set_to_applicable_migration_plan(&change_set)
+            .expect("a raised text length limit is applicable");
+        let ids = plan
+            .statements
+            .iter()
+            .map(|statement| statement.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["entity.entry.field.note.length"]);
+        let sql = &plan.statements[0].sql;
+        assert!(
+            sql.contains("<= 200") && sql.contains("DROP CONSTRAINT"),
+            "the statement replaces the length check with the candidate limit: {sql}"
+        );
+        assert!(
+            sql.starts_with("DO $breg_length$\n") && sql.ends_with("$breg_length$"),
+            "the statement's quoting tag names the check it replaces: {sql}"
+        );
+        assert_eq!(
+            sql.contains("breg_pattern_"),
+            pattern.is_some(),
+            "a field pattern's check is excluded from the replaced check: {sql}"
+        );
+    }
+
+    for (previous, candidate, reason) in [
+        (
+            length_registry("text", 80, None),
+            length_registry("text", 40, None),
+            "a lowered text limit can strand stored values",
+        ),
+        (
+            length_registry("string", 80, None),
+            length_registry("string", 200, None),
+            "a string maxLength is its varchar column type",
+        ),
+    ] {
+        let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+        assert!(
+            change_set.changes.iter().any(|change| {
+                change.class == CompiledRegistryChangeClass::DestructiveOrIrreversible
+                    && change.code == CompiledRegistryChangeCode::FieldTypeChanged
+            }),
+            "{reason}: {:#?}",
+            change_set.changes
+        );
+        assert_eq!(change_set.migration_plan, None, "{reason}");
     }
 }
 
@@ -1436,6 +1502,51 @@ fn vocabulary_registry(vocabulary: &str, values: &[&str]) -> CompiledRegistry {
     let bytes = serde_json::to_vec(&project).expect("fixture serializes");
     let project = parse_project_json(&bytes).expect("vocabulary fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring).expect("vocabulary fixture compiles")
+}
+
+fn length_registry(field_type: &str, max_length: u32, pattern: Option<&str>) -> CompiledRegistry {
+    let mut field = serde_json::json!({
+        "id": "note",
+        "type": field_type,
+        "maxLength": max_length,
+        "required": true,
+        "classification": "internal"
+    });
+    if let Some(pattern) = pattern {
+        field["pattern"] = serde_json::json!(pattern);
+    }
+    let project = serde_json::json!({
+        "apiVersion": "registry.registrystack.org/v1alpha1",
+        "kind": "RegistryProject",
+        "registry": {
+            "id": "length-catalog",
+            "version": "1",
+            "defaultLanguage": "en",
+            "canonicalBaseIri": "https://authoring.example.test"
+        },
+        "entities": [{
+            "id": "entry",
+            "primaryDataset": "test-dataset",
+            "route": "entries",
+            "mutationMode": "mutable",
+            "fields": [field]
+        }],
+        "accessProfiles": [{
+            "id": "writer",
+            "default": true,
+            "principalClaim": "registry_principal",
+            "permissions": [{
+                "entity": "entry",
+                "operations": ["create", "get", "list", "patch"],
+                "readableFields": ["note"],
+                "writableFields": ["note"],
+                "rowBoundaries": []
+            }]
+        }]
+    });
+    let bytes = serde_json::to_vec(&project).expect("fixture serializes");
+    let project = parse_project_json(&bytes).expect("length fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring).expect("length fixture compiles")
 }
 
 fn assert_change(
