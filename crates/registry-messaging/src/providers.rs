@@ -329,6 +329,10 @@ impl MessageTransport for HttpTransport {
         self.provider.timeout().max(MINIMUM_ATTEMPT_TIMEOUT)
     }
 
+    fn rate_per_second(&self) -> Option<u32> {
+        self.provider.capabilities().rate_per_second
+    }
+
     async fn send(&self, message: &OutboundMessage) -> SendOutcome {
         // The profile as the message was accepted with: its channel, provider,
         // and sender are the persisted ones, so a later package never changes

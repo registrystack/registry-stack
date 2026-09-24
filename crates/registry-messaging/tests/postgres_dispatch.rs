@@ -52,6 +52,8 @@ struct Scripted {
     sends: Mutex<BTreeMap<Uuid, usize>>,
     delay: Duration,
     seen: Mutex<Vec<OutboundMessage>>,
+    rate: Option<u32>,
+    started: Mutex<Vec<std::time::Instant>>,
 }
 
 impl Scripted {
@@ -62,6 +64,16 @@ impl Scripted {
             sends: Mutex::new(BTreeMap::new()),
             delay: Duration::ZERO,
             seen: Mutex::new(Vec::new()),
+            rate: None,
+            started: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Accepts every send, declaring the provider's rate.
+    fn paced(rate: u32) -> Arc<Self> {
+        Arc::new(Self {
+            rate: Some(rate),
+            ..Arc::into_inner(Self::new(Script::Accepted)).unwrap()
         })
     }
 
@@ -103,7 +115,12 @@ impl MessageTransport for Scripted {
         self.timeout
     }
 
+    fn rate_per_second(&self) -> Option<u32> {
+        self.rate
+    }
+
     async fn send(&self, message: &OutboundMessage) -> SendOutcome {
+        self.started.lock().unwrap().push(std::time::Instant::now());
         *self
             .sends
             .lock()
@@ -295,6 +312,49 @@ async fn two_workers_never_send_one_message_twice() {
             .count("SELECT count(*) FROM messaging_attempts")
             .await,
         i64::try_from(ids.len()).unwrap()
+    );
+}
+
+/// A provider's `ratePerSecond` paces the sends of concurrent attempts: one
+/// starts every interval, and every message is still delivered once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paced_provider_starts_one_send_per_interval() {
+    let harness = Harness::start().await;
+    let transport = Scripted::paced(10);
+    let mut ids = Vec::new();
+    for _ in 0..6 {
+        ids.push(harness.accepted(&email_submission()).await);
+    }
+    let (dispatcher, sender) = worker_over(&harness, Arc::clone(&transport));
+    let worker = DispatchWorker::new(
+        dispatcher,
+        Arc::new(sender),
+        WorkerConfig {
+            concurrency: NonZeroUsize::new(4).unwrap(),
+            idle_poll: Duration::from_millis(50),
+        },
+    );
+    let (_stop, shutdown) = watch::channel(false);
+    assert_eq!(worker.drain(&shutdown).await, ids.len());
+    for id in &ids {
+        assert_eq!(transport.sends(*id), 1, "{id}");
+        assert_eq!(harness.state(*id).await, "delivered");
+    }
+    let mut started = transport.started.lock().unwrap().clone();
+    started.sort();
+    // Six sends at ten a second: the first slot is free, and each of the
+    // next five opens 100 ms after the one before.
+    for pair in started.windows(2) {
+        let gap = pair[1].duration_since(pair[0]);
+        assert!(gap >= Duration::from_millis(90), "{gap:?}");
+    }
+    assert!(started[5].duration_since(started[0]) >= Duration::from_millis(490));
+    // Pacing is not an attempt: each message was attempted once.
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_attempts")
+            .await,
+        6
     );
 }
 

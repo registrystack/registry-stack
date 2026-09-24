@@ -13,6 +13,7 @@
 //! #[async_trait]
 //! pub trait MessageTransport: Send + Sync {
 //!     fn attempt_timeout(&self) -> Duration { DEFAULT_ATTEMPT_TIMEOUT }
+//!     fn rate_per_second(&self) -> Option<u32> { None }
 //!     async fn send(&self, message: &OutboundMessage) -> SendOutcome;
 //! }
 //! ```
@@ -38,6 +39,17 @@
 //! [`OutboundMessage::idempotency_key`] is stable across every attempt of one
 //! generation and changes when an operator requeues the message, so a
 //! provider that deduplicates on it never delivers one generation twice.
+//!
+//! A transport that declares a `rate_per_second` is paced: each attempt
+//! waits for the provider's next send slot, in turn, before `send` is
+//! called (see [`crate::limits`]). The wait is not taken from the send's
+//! budget: the job's attempt timeout is the transport's plus
+//! [`PACING_ALLOWANCE`], at most sixty seconds, and `send` is still given
+//! only the transport's own timeout. An attempt whose slot does not open in
+//! that allowance is `Transient`, with the wait as its pause hint: nothing
+//! reached the provider. One replica runs at most eight attempts at once,
+//! so a paced attempt waits at most seven send intervals, under the
+//! allowance at every rate the package accepts.
 //!
 //! A message whose provider has no registered transport is refused
 //! permanently with the failure code `provider-unconfigured`, and a message
@@ -84,6 +96,8 @@ use thiserror::Error;
 use tokio_postgres::{Row, Transaction};
 use uuid::Uuid;
 
+use crate::http_provider::MAXIMUM_RATE_PER_SECOND;
+use crate::limits::{LimitRefusal, ProviderPacer, PACING_ALLOWANCE};
 use crate::outbox;
 use crate::store::PostgresStore;
 
@@ -181,6 +195,12 @@ pub trait MessageTransport: Send + Sync {
         DEFAULT_ATTEMPT_TIMEOUT
     }
 
+    /// The most sends per second the provider accepts, when it declares a
+    /// limit.
+    fn rate_per_second(&self) -> Option<u32> {
+        None
+    }
+
     /// Make one attempt and classify it.
     async fn send(&self, message: &OutboundMessage) -> SendOutcome;
 }
@@ -192,12 +212,15 @@ pub enum TransportRegistrationError {
     Duplicate,
     #[error("a transport's attempt timeout must be between one and sixty seconds")]
     AttemptTimeout,
+    #[error("a transport's rate must be between one and one thousand sends per second")]
+    Rate,
 }
 
 /// The transports the worker sends through, by provider id.
 #[derive(Clone, Default)]
 pub struct Transports {
     by_provider: BTreeMap<String, Arc<dyn MessageTransport>>,
+    pacers: BTreeMap<String, Arc<ProviderPacer>>,
 }
 
 impl fmt::Debug for Transports {
@@ -219,8 +242,9 @@ impl Transports {
     ///
     /// # Errors
     ///
-    /// [`TransportRegistrationError`] when the provider already has one or
-    /// the transport's attempt timeout is outside one to sixty seconds.
+    /// [`TransportRegistrationError`] when the provider already has one,
+    /// the transport's attempt timeout is outside one to sixty seconds, or
+    /// its rate is outside one to one thousand sends per second.
     pub fn insert(
         &mut self,
         provider: impl Into<String>,
@@ -229,15 +253,20 @@ impl Transports {
         if !attempt_bound().contains(transport.attempt_timeout()) {
             return Err(TransportRegistrationError::AttemptTimeout);
         }
-        match self.by_provider.entry(provider.into()) {
-            std::collections::btree_map::Entry::Occupied(_) => {
-                Err(TransportRegistrationError::Duplicate)
-            }
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(transport);
-                Ok(())
-            }
+        let provider = provider.into();
+        if self.by_provider.contains_key(&provider) {
+            return Err(TransportRegistrationError::Duplicate);
         }
+        if let Some(rate) = transport.rate_per_second() {
+            if rate > MAXIMUM_RATE_PER_SECOND {
+                return Err(TransportRegistrationError::Rate);
+            }
+            let pacer = ProviderPacer::new(&provider, rate)
+                .map_err(|_| TransportRegistrationError::Rate)?;
+            self.pacers.insert(provider.clone(), Arc::new(pacer));
+        }
+        self.by_provider.insert(provider, transport);
+        Ok(())
     }
 
     #[must_use]
@@ -250,11 +279,23 @@ impl Transports {
         self.by_provider.is_empty()
     }
 
+    /// The job's attempt timeout: the transport's, plus the pacing
+    /// allowance for a paced provider, at most sixty seconds.
     fn attempt_timeout(&self, provider: &str) -> Duration {
-        self.get(provider)
+        let send = self
+            .get(provider)
             .map_or(DEFAULT_ATTEMPT_TIMEOUT, |transport| {
                 transport.attempt_timeout()
-            })
+            });
+        if self.pacers.contains_key(provider) {
+            (send + PACING_ALLOWANCE).min(MAX_ATTEMPT_TIMEOUT)
+        } else {
+            send
+        }
+    }
+
+    fn pacer(&self, provider: &str) -> Option<&ProviderPacer> {
+        self.pacers.get(provider).map(Arc::as_ref)
     }
 }
 
@@ -868,9 +909,30 @@ impl DispatchTransport for MessageSender {
                 return Ok(transient());
             }
         };
+        if let Some(pacer) = self.transports.pacer(&job.job.provider) {
+            let Some(budget) = job.remaining_budget(SystemTime::now()) else {
+                return Ok(transient());
+            };
+            // The wait is bounded by what the budget holds beyond the send's
+            // own timeout, so pacing never shortens the send.
+            let wait = budget.saturating_sub(transport.attempt_timeout());
+            match pacer.acquire(tokio::time::Instant::now() + wait).await {
+                Ok(()) => {}
+                Err(LimitRefusal::Exceeded { retry_after }) => {
+                    return Ok(Sent {
+                        outcome: SendOutcome::Transient {
+                            retry_after: Some(retry_after),
+                        },
+                        detail: (),
+                    });
+                }
+                Err(LimitRefusal::Unavailable) => return Ok(transient()),
+            }
+        }
         let Some(budget) = job.remaining_budget(SystemTime::now()) else {
             return Ok(transient());
         };
+        let budget = budget.min(transport.attempt_timeout());
         let idempotency_key = provider_idempotency_key(job.key.id(), job.generation, &payload);
         let message = OutboundMessage {
             message_id: job.key.id(),
@@ -935,6 +997,55 @@ mod tests {
             transports.attempt_timeout("absent"),
             DEFAULT_ATTEMPT_TIMEOUT
         );
+    }
+
+    struct Paced(Duration, u32);
+
+    #[async_trait]
+    impl MessageTransport for Paced {
+        fn attempt_timeout(&self) -> Duration {
+            self.0
+        }
+
+        fn rate_per_second(&self) -> Option<u32> {
+            Some(self.1)
+        }
+
+        async fn send(&self, _message: &OutboundMessage) -> SendOutcome {
+            SendOutcome::MaybeSent
+        }
+    }
+
+    #[test]
+    fn a_paced_provider_gets_the_pacing_allowance_within_the_attempt_bound() {
+        let mut transports = Transports::new();
+        for rate in [0, MAXIMUM_RATE_PER_SECOND + 1] {
+            assert_eq!(
+                transports.insert("gateway", Arc::new(Paced(Duration::from_secs(5), rate))),
+                Err(TransportRegistrationError::Rate)
+            );
+        }
+        assert!(transports.get("gateway").is_none());
+        transports
+            .insert("gateway", Arc::new(Paced(Duration::from_secs(5), 20)))
+            .unwrap();
+        transports
+            .insert("slow-gateway", Arc::new(Paced(Duration::from_secs(55), 20)))
+            .unwrap();
+        transports
+            .insert("relay", Arc::new(Fixed(Duration::from_secs(5))))
+            .unwrap();
+        assert_eq!(
+            transports.attempt_timeout("gateway"),
+            Duration::from_secs(5) + PACING_ALLOWANCE
+        );
+        assert_eq!(
+            transports.attempt_timeout("slow-gateway"),
+            MAX_ATTEMPT_TIMEOUT
+        );
+        assert_eq!(transports.attempt_timeout("relay"), Duration::from_secs(5));
+        assert!(transports.pacer("gateway").is_some());
+        assert!(transports.pacer("relay").is_none());
     }
 
     #[test]
