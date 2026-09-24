@@ -5,7 +5,9 @@ Client-safe HTTP validation plus Axum and Tower helpers for HTTP security.
 ## What It Provides
 
 - `CorsPolicy` with explicit origin validation.
-- Restrictive CSP header generation through `CspBuilder`.
+- Restrictive CSP header generation through `CspBuilder`, including a
+  `deny_by_default` policy (`default-src 'none'`) and an optional
+  `form-action` directive for server-rendered forms.
 - `security_headers` middleware for CSP, content sniffing, referrer, and frame
   protections.
 - Conditional Cross-Origin-Resource-Policy handling.
@@ -59,6 +61,11 @@ let _ = app;
 - Keep CORS allowlists environment-specific and as narrow as possible.
 - `CspBuilder::restrictive` is the safe baseline. Extend it in application code
   only for concrete frontend needs.
+- `CspBuilder::deny_by_default` loads nothing; add only the directives a page
+  needs, for example `with_style_src(&["'self'"])`. A page with forms also sets
+  `with_form_action`, because `form-action` does not fall back to
+  `default-src`. Directive sources are static code constants; a source holding
+  whitespace, `;` or `,` is refused so it cannot add a directive.
 - Body limits reduce risk but do not replace endpoint-level validation.
 - Product crates retain ownership of their closed problem-code mappings and
   response policy. The shared envelope does not accept arbitrary extras or
