@@ -4298,6 +4298,13 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 DiagnosticArtifact::HistoryRebaseline,
                 SuggestedAction::PrepareHistoryRebaselineRequest,
             ),
+            registry_breg::migration::MigrationError::DatabaseUnavailable => (
+                "apply.database.unavailable",
+                "database",
+                "the migration database could not be reached, or another apply held the migration lock past the lock timeout, before maintenance began. Nothing was changed. Retry the same apply once the database is reachable and accepts the migration role",
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::VerifyMigrationAuthority,
+            ),
             registry_breg::migration::MigrationError::ApplyFailed => (
                 "apply.migration.failed",
                 "database",
@@ -13955,6 +13962,38 @@ fn apply_refuses_an_already_active_package_the_database_does_not_run() {
             diagnostic.message
         );
     }
+}
+
+#[cfg(test)]
+#[test]
+fn apply_reports_an_unavailable_database_before_maintenance_as_retryable() {
+    let report = apply_lifecycle_failure(ApplyLifecycleError::Apply(
+        registry_breg::migration::MigrationError::DatabaseUnavailable,
+    ));
+    let diagnostic = &report.diagnostics[0];
+    assert_eq!(diagnostic.code, "apply.database.unavailable");
+    assert_eq!(diagnostic.path, "database");
+    assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
+    assert_eq!(
+        diagnostic.suggested_action,
+        SuggestedAction::VerifyMigrationAuthority
+    );
+    for fragment in [
+        "before maintenance began",
+        "Nothing was changed",
+        "Retry the same apply once the database is reachable",
+    ] {
+        assert!(
+            diagnostic.message.contains(fragment),
+            "{fragment}: {}",
+            diagnostic.message
+        );
+    }
+    assert!(
+        !diagnostic.message.contains("reconciliation"),
+        "{}",
+        diagnostic.message
+    );
 }
 
 #[cfg(test)]

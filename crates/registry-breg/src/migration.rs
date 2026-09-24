@@ -52,6 +52,11 @@ pub enum MigrationError {
     /// restores it.
     #[error("retained history coverage does not admit a successor package")]
     HistoryCoverage,
+    /// Refused before maintenance began: the migration database could not be
+    /// reached, or another session held the apply lock past the lock timeout.
+    /// Nothing was changed, so the same apply may simply be retried.
+    #[error("the migration database was unavailable before maintenance began")]
+    DatabaseUnavailable,
     #[error("a persisted field pattern has invalid PostgreSQL syntax")]
     FieldPatternSyntax { entity_id: String, field_id: String },
     #[error("existing rows do not conform to a persisted field pattern")]
@@ -271,18 +276,18 @@ pub async fn confirm_active_package(
         timeouts.statement,
     )
     .await
-    .map_err(|_| MigrationError::ApplyFailed)?;
+    .map_err(refusal_before_maintenance)?;
     let snapshot = connection.maintenance_snapshot().await;
     connection
         .release()
         .await
-        .map_err(|_| MigrationError::ApplyFailed)?;
+        .map_err(refusal_before_maintenance)?;
     let snapshot = match snapshot {
         Ok(snapshot) => snapshot,
         Err(crate::postgres::PostgresKernelError::RegistryUnavailable) => {
             return Err(MigrationError::ActivePackageMismatch);
         }
-        Err(_) => return Err(MigrationError::ApplyFailed),
+        Err(error) => return Err(refusal_before_maintenance(error)),
     };
     if snapshot.maintenance_status != "ready"
         || snapshot.maintenance_target_revision.is_some()
@@ -291,6 +296,20 @@ pub async fn confirm_active_package(
         return Err(MigrationError::ActivePackageMismatch);
     }
     Ok(target)
+}
+
+/// Maps a failure to reach the migration database or to take the apply lock,
+/// before maintenance begins, to the refusal it is: nothing was changed, so a
+/// lost connection or an apply lock held past the lock timeout may simply be
+/// retried. Every other failure keeps its exact-target reconciliation path.
+fn refusal_before_maintenance(error: crate::postgres::PostgresKernelError) -> MigrationError {
+    match error {
+        crate::postgres::PostgresKernelError::Connection
+        | crate::postgres::PostgresKernelError::RegistryUnavailable => {
+            MigrationError::DatabaseUnavailable
+        }
+        _ => MigrationError::ApplyFailed,
+    }
 }
 
 /// Closed library request for applying one already verified package. There is
@@ -546,7 +565,7 @@ pub async fn apply_verified_package(
         request.timeouts.statement,
     )
     .await
-    .map_err(|_| MigrationError::ApplyFailed)?;
+    .map_err(refusal_before_maintenance)?;
     // Prerequisites are administrator-owned. Refuse a missing extension or
     // spatial role before the existing registry enters maintenance.
     if connection

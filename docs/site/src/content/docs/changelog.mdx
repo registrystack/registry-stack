@@ -18,6 +18,20 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- `bregctl apply` reports a migration database it could not reach, or an
+  apply lock another session held past the lock timeout, before maintenance
+  began as `apply.database.unavailable`, with the suggested action
+  `verify_migration_authority`, instead of `apply.migration.failed`. Nothing
+  was changed, so the message says to retry the same apply once the database
+  is reachable rather than to reconcile. The same holds when confirming an
+  already-active package. A failure after maintenance began still reports
+  `apply.migration.failed`. See
+  [review and apply changes](../operate/breg-changes/#troubleshooting).
+
+{/* Evidence: crates/registry-breg/src/migration.rs, MigrationError::DatabaseUnavailable and refusal_before_maintenance();
+    crates/registry-breg/tests/postgres_migration.rs, real_postgres_reports_an_unavailable_database_before_maintenance_as_unchanged;
+    crates/registry-bregctl/src/lib.rs, apply_reports_an_unavailable_database_before_maintenance_as_retryable. */}
+
 - `bregctl apply` treats the already-active package as a no-op, so a repeated
   deploy exits 0 with `activation: already_active` and changes nothing. The
   package is verified in full as the configured active package, and the
