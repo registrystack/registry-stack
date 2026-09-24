@@ -67,9 +67,11 @@ pub mod messaging {
         type_uri, AttemptOutcome, AttemptSummary, BearerToken, Channel, DirectContent,
         MessageDispatch, MessageLinks, MessageReceipt, MessageReport, MessageStatus, MessageView,
         MessagingClient, MessagingClientConfig, MessagingClientError, MessagingComplete,
-        MessagingProtocolFailure, ProblemCode, Recipient, SubmitMessageRequest, TemplateReference,
+        MessagingProtocolFailure, ProblemCode, Recipient, RenderedParts, SegmentCount, SmsEncoding,
+        SubmitMessageRequest, TemplatePreview, TemplatePreviewRequest, TemplateReference,
         TransportKind, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER, MAXIMUM_IDEMPOTENCY_KEY_BYTES,
-        MESSAGES_PATH, MESSAGE_PATH, MESSAGING_PROBLEM_TYPE_BASE, READY_PATH,
+        MESSAGES_PATH, MESSAGE_CANCEL_PATH, MESSAGE_PATH, MESSAGING_PROBLEM_TYPE_BASE, READY_PATH,
+        TEMPLATE_PREVIEW_PATH,
     };
 }
 

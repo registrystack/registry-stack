@@ -3,8 +3,10 @@
 use std::fmt;
 
 use registry_messaging_core::{
-    type_uri, MessageReceipt, MessageView, ProblemCode, SubmitMessageRequest, HEALTH_PATH,
-    IDEMPOTENCY_KEY_HEADER, MAXIMUM_IDEMPOTENCY_KEY_BYTES, MESSAGES_PATH, MESSAGE_PATH, READY_PATH,
+    type_uri, valid_identifier, valid_template_version, MessageReceipt, MessageView, ProblemCode,
+    SubmitMessageRequest, TemplatePreview, TemplatePreviewRequest, HEALTH_PATH,
+    IDEMPOTENCY_KEY_HEADER, MAXIMUM_IDEMPOTENCY_KEY_BYTES, MESSAGES_PATH, MESSAGE_CANCEL_PATH,
+    MESSAGE_PATH, READY_PATH, TEMPLATE_PREVIEW_PATH,
 };
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
@@ -138,6 +140,78 @@ impl MessagingClient {
             .get(self.url_from_constant(&path)?)
             .header(AUTHORIZATION, token.authorization_header_value())
             .header(ACCEPT, JSON_MEDIA_TYPE);
+        self.json_answer(request, StatusCode::OK).await
+    }
+
+    /// Withdraw one message that has not been dispatched, and answer its
+    /// view as the cancellation left it. A message the caller may not see
+    /// answers the typed `ProblemCode::MessageNotVisible`; one whose dispatch
+    /// already started answers `ProblemCode::MessageDispatchStarted`, and one
+    /// already final answers `ProblemCode::MessageTerminal`. The client never
+    /// retries a cancellation that lost either race.
+    ///
+    /// `message_id` is checked exactly as `message` checks it, before a
+    /// request is sent.
+    pub async fn cancel(
+        &self,
+        token: &BearerToken,
+        message_id: &str,
+    ) -> Result<MessagingComplete<MessageView>, MessagingClientError> {
+        if !is_message_id(message_id) {
+            return Err(MessagingClientError::invalid_request(
+                "the message identifier is not a lowercase hyphenated UUID",
+            ));
+        }
+        let path = MESSAGE_CANCEL_PATH.replace("{message_id}", message_id);
+        let request = self
+            .http
+            .post(self.url_from_constant(&path)?)
+            .header(AUTHORIZATION, token.authorization_header_value())
+            .header(ACCEPT, JSON_MEDIA_TYPE);
+        self.json_answer(request, StatusCode::OK).await
+    }
+
+    /// Render one template version for `request.locale` and
+    /// `request.data` without sending anything. A version the active
+    /// package does not ship answers the typed
+    /// `ProblemCode::TemplateNotFound`; data the template's schema refuses,
+    /// a locale it does not carry, and a render the runtime stopped answer
+    /// `ProblemCode::TemplateDataInvalid`,
+    /// `ProblemCode::TemplateLocaleUnavailable`, and
+    /// `ProblemCode::TemplateRenderRefused`.
+    ///
+    /// `template_id` must be a package identifier and `version` a package
+    /// version label; any other value is refused before a request is sent.
+    pub async fn preview(
+        &self,
+        token: &BearerToken,
+        template_id: &str,
+        version: &str,
+        request: &TemplatePreviewRequest,
+    ) -> Result<MessagingComplete<TemplatePreview>, MessagingClientError> {
+        if !valid_identifier(template_id) {
+            return Err(MessagingClientError::invalid_request(
+                "the template identifier is not a package identifier",
+            ));
+        }
+        if !valid_template_version(version) {
+            return Err(MessagingClientError::invalid_request(
+                "the template version is not a package version label",
+            ));
+        }
+        let body = serde_json::to_vec(request).map_err(|_| {
+            MessagingClientError::invalid_request("the preview request could not be encoded")
+        })?;
+        let path = TEMPLATE_PREVIEW_PATH
+            .replace("{template_id}", template_id)
+            .replace("{version}", version);
+        let request = self
+            .http
+            .post(self.url_from_constant(&path)?)
+            .header(AUTHORIZATION, token.authorization_header_value())
+            .header(ACCEPT, JSON_MEDIA_TYPE)
+            .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
+            .body(body);
         self.json_answer(request, StatusCode::OK).await
     }
 

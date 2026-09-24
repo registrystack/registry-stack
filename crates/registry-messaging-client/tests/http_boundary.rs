@@ -13,8 +13,9 @@ use axum::Router;
 use registry_messaging_client::{
     type_uri, BearerToken, MessageDispatch, MessageReport, MessageStatus, MessagingClient,
     MessagingClientConfig, MessagingClientError, MessagingProtocolFailure, ProblemCode, Recipient,
-    SubmitMessageRequest, TemplateReference, TransportKind, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER,
-    MESSAGES_PATH, MESSAGE_PATH, READY_PATH,
+    SmsEncoding, SubmitMessageRequest, TemplatePreviewRequest, TemplateReference, TransportKind,
+    HEALTH_PATH, IDEMPOTENCY_KEY_HEADER, MESSAGES_PATH, MESSAGE_CANCEL_PATH, MESSAGE_PATH,
+    READY_PATH, TEMPLATE_PREVIEW_PATH,
 };
 use url::Url;
 
@@ -70,6 +71,27 @@ fn message_view() -> String {
     format!(
         r#"{{"id":"{MESSAGE_ID}","status":"delivered","dispatch":"submitted","report":"delivered","reportedAt":"2026-09-25T10:00:02Z","channel":"sms","senderProfile":"reminders-sms","to":{{"phone":"redacted"}},"acceptedAt":"2026-09-25T10:00:00Z","expiresAt":"2026-09-26T10:00:00Z","updatedAt":"2026-09-25T10:00:01Z","attempts":[{{"generation":1,"attempt":1,"outcome":"accepted","startedAt":"2026-09-25T10:00:00Z","finishedAt":"2026-09-25T10:00:01Z","providerReference":true}}],"links":{{"self":"/v1/messages/{MESSAGE_ID}","cancel":"/v1/messages/{MESSAGE_ID}/cancel"}}}}"#
     )
+}
+
+/// A message view as the runtime answers a cancellation: withdrawn before
+/// any dispatch, so no attempt and no report.
+fn cancelled_view() -> String {
+    format!(
+        r#"{{"id":"{MESSAGE_ID}","status":"cancelled","dispatch":"cancelled","report":"none","channel":"sms","senderProfile":"reminders-sms","to":{{"phone":"redacted"}},"acceptedAt":"2026-09-25T10:00:00Z","expiresAt":"2026-09-26T10:00:00Z","updatedAt":"2026-09-25T10:00:01Z","attempts":[],"links":{{"self":"/v1/messages/{MESSAGE_ID}","cancel":"/v1/messages/{MESSAGE_ID}/cancel"}}}}"#
+    )
+}
+
+/// A rendered SMS template version, as the preview route answers it.
+fn template_preview() -> String {
+    r#"{"template":{"id":"appointment-reminder","version":"1"},"locale":"en","channel":"sms","packageDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","parts":{"text":"Your appointment is at 10:00."},"sms":{"encoding":"gsm7","units":29,"segments":1}}"#.to_owned()
+}
+
+/// The preview request a caller builds.
+fn preview_request() -> TemplatePreviewRequest {
+    TemplatePreviewRequest {
+        locale: "en".to_owned(),
+        data: serde_json::json!({"time": "10:00"}),
+    }
 }
 
 /// The receipt an accepted submission answers.
@@ -142,6 +164,8 @@ async fn serve(prefix: &str, fixture: &Fixture) -> (MessagingClient, tokio::task
         .route(&format!("{prefix}{READY_PATH}"), get(answer))
         .route(&message_route(prefix), get(answer))
         .route(&format!("{prefix}{MESSAGES_PATH}"), post(answer))
+        .route(&format!("{prefix}{MESSAGE_CANCEL_PATH}"), post(answer))
+        .route(&format!("{prefix}{TEMPLATE_PREVIEW_PATH}"), post(answer))
         .with_state(fixture.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -509,4 +533,227 @@ fn an_unprotected_remote_base_url_is_refused_before_any_client_exists() {
         refused,
         Err(MessagingClientError::Configuration { .. })
     ));
+}
+
+#[tokio::test]
+async fn a_cancellation_posts_no_body_and_answers_the_withdrawn_message() {
+    let fixture = Fixture::new(StatusCode::OK, Some("application/json"), &cancelled_view());
+    let (client, server) = serve("/messaging", &fixture).await;
+
+    let cancelled = client
+        .cancel(&token(), MESSAGE_ID)
+        .await
+        .expect("the cancelled message view");
+    assert_eq!(cancelled.trace_id, TRACE_ID);
+    assert_eq!(cancelled.value.id, MESSAGE_ID);
+    assert_eq!(cancelled.value.status, MessageStatus::Cancelled);
+    assert_eq!(cancelled.value.dispatch, MessageDispatch::Cancelled);
+    assert!(cancelled.value.attempts.is_empty());
+
+    let seen = fixture.seen.lock().expect("observations");
+    assert_eq!(seen.len(), 1);
+    let (path, headers, body) = &seen[0];
+    assert_eq!(path, &format!("/messaging/v1/messages/{MESSAGE_ID}/cancel"));
+    assert_eq!(headers["authorization"], format!("Bearer {TOKEN}").as_str());
+    assert_eq!(headers["accept"], "application/json");
+    assert!(!headers.contains_key(IDEMPOTENCY_KEY_HEADER));
+    assert!(body.is_empty());
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_cancellation_that_lost_the_race_is_its_typed_conflict() {
+    for code in [
+        ProblemCode::MessageDispatchStarted,
+        ProblemCode::MessageTerminal,
+    ] {
+        let (client, server) = serve("", &Fixture::problem(code)).await;
+        match client.cancel(&token(), MESSAGE_ID).await {
+            Err(MessagingClientError::Problem {
+                status: 409,
+                code: answered,
+                trace_id,
+            }) => {
+                assert_eq!(answered, code);
+                assert_eq!(trace_id.as_deref(), Some(TRACE_ID));
+            }
+            other => panic!("expected the typed {} problem, got {other:?}", code.code()),
+        }
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn a_cancellation_of_a_message_the_caller_may_not_see_is_not_visible() {
+    let (client, server) = serve("", &Fixture::problem(ProblemCode::MessageNotVisible)).await;
+    assert!(matches!(
+        client.cancel(&token(), MESSAGE_ID).await,
+        Err(MessagingClientError::Problem {
+            status: 404,
+            code: ProblemCode::MessageNotVisible,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_cancellation_answered_outside_200_is_a_protocol_failure() {
+    let fixture = Fixture::new(
+        StatusCode::ACCEPTED,
+        Some("application/json"),
+        &cancelled_view(),
+    );
+    let (client, server) = serve("", &fixture).await;
+    assert!(matches!(
+        client.cancel(&token(), MESSAGE_ID).await,
+        Err(MessagingClientError::Protocol {
+            status: 202,
+            failure: MessagingProtocolFailure::Status,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_cancellation_naming_no_message_identifier_is_refused_before_any_request() {
+    let fixture = Fixture::new(StatusCode::OK, Some("application/json"), &cancelled_view());
+    let (client, server) = serve("", &fixture).await;
+    for id in [
+        "",
+        "../ready",
+        "0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d/cancel",
+        "0F8C2A51-6D3E-4B7A-9C10-2E5F7A8B9C0D",
+    ] {
+        assert!(
+            matches!(
+                client.cancel(&token(), id).await,
+                Err(MessagingClientError::InvalidRequest { .. })
+            ),
+            "{id}"
+        );
+    }
+    assert!(fixture.seen.lock().expect("observations").is_empty());
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_preview_posts_the_locale_and_data_and_answers_the_rendered_parts() {
+    let fixture = Fixture::new(
+        StatusCode::OK,
+        Some("application/json"),
+        &template_preview(),
+    );
+    let (client, server) = serve("/messaging", &fixture).await;
+
+    let preview = client
+        .preview(&token(), "appointment-reminder", "1", &preview_request())
+        .await
+        .expect("the rendered preview");
+    assert_eq!(preview.trace_id, TRACE_ID);
+    assert_eq!(
+        preview.value.template,
+        TemplateReference {
+            id: "appointment-reminder".to_owned(),
+            version: "1".to_owned(),
+        }
+    );
+    assert_eq!(preview.value.locale, "en");
+    assert_eq!(preview.value.parts.text, "Your appointment is at 10:00.");
+    let sms = preview.value.sms.expect("an SMS segment count");
+    assert_eq!(sms.encoding, SmsEncoding::Gsm7);
+    assert_eq!(sms.segments, 1);
+
+    let seen = fixture.seen.lock().expect("observations");
+    assert_eq!(seen.len(), 1);
+    let (path, headers, body) = &seen[0];
+    assert_eq!(
+        path,
+        "/messaging/v1/templates/appointment-reminder/versions/1/preview"
+    );
+    assert_eq!(headers["authorization"], format!("Bearer {TOKEN}").as_str());
+    assert_eq!(headers["content-type"], "application/json");
+    assert_eq!(headers["accept"], "application/json");
+    let sent: TemplatePreviewRequest = serde_json::from_str(body).expect("a preview body");
+    assert_eq!(sent, preview_request());
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_template_refusal_is_its_typed_problem() {
+    for code in [
+        ProblemCode::TemplateNotFound,
+        ProblemCode::TemplateDataInvalid,
+        ProblemCode::TemplateLocaleUnavailable,
+        ProblemCode::TemplateRenderRefused,
+    ] {
+        let (client, server) = serve("", &Fixture::problem(code)).await;
+        match client
+            .preview(&token(), "appointment-reminder", "1", &preview_request())
+            .await
+        {
+            Err(MessagingClientError::Problem {
+                status,
+                code: answered,
+                trace_id,
+            }) => {
+                assert_eq!(answered, code);
+                assert_eq!(status, code.http_status());
+                assert_eq!(trace_id.as_deref(), Some(TRACE_ID));
+            }
+            other => panic!("expected the typed {} problem, got {other:?}", code.code()),
+        }
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn a_preview_outside_the_pinned_shape_is_a_protocol_failure() {
+    let unknown_member = template_preview().replacen('{', r#"{"provider":"sms-gateway","#, 1);
+    let fixture = Fixture::new(StatusCode::OK, Some("application/json"), &unknown_member);
+    let (client, server) = serve("", &fixture).await;
+    assert!(matches!(
+        client
+            .preview(&token(), "appointment-reminder", "1", &preview_request())
+            .await,
+        Err(MessagingClientError::Protocol {
+            status: 200,
+            failure: MessagingProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_template_name_outside_the_package_grammar_is_refused_before_any_request() {
+    let fixture = Fixture::new(
+        StatusCode::OK,
+        Some("application/json"),
+        &template_preview(),
+    );
+    let (client, server) = serve("", &fixture).await;
+    for (template_id, version) in [
+        ("", "1"),
+        ("../ready", "1"),
+        ("Appointment-Reminder", "1"),
+        ("appointment reminder", "1"),
+        ("appointment-reminder", ""),
+        ("appointment-reminder", "../1"),
+        ("appointment-reminder", "1..2"),
+        ("appointment-reminder", "1/preview"),
+    ] {
+        assert!(
+            matches!(
+                client
+                    .preview(&token(), template_id, version, &preview_request())
+                    .await,
+                Err(MessagingClientError::InvalidRequest { .. })
+            ),
+            "{template_id} {version}"
+        );
+    }
+    assert!(fixture.seen.lock().expect("observations").is_empty());
+    server.abort();
 }

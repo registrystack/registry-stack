@@ -13,7 +13,8 @@ use std::collections::BTreeSet;
 
 use registry_stack_client::messaging::{
     BearerToken, MessageReceipt, MessageView, MessagingClient, MessagingClientConfig,
-    MessagingClientError, MessagingComplete, SubmitMessageRequest,
+    MessagingClientError, MessagingComplete, SubmitMessageRequest, TemplatePreview,
+    TemplatePreviewRequest,
 };
 
 /// The client's public surface, read from the crate that publishes it.
@@ -30,6 +31,9 @@ async fn every_messaging_method_names_its_types(
     idempotency_key: &str,
     message_id: &str,
     submission: &SubmitMessageRequest,
+    template_id: &str,
+    version: &str,
+    preview: &TemplatePreviewRequest,
 ) -> Result<(), MessagingClientError> {
     let client: MessagingClient = MessagingClient::new(config)?;
     let _: MessagingComplete<()> = client.health().await?;
@@ -37,6 +41,9 @@ async fn every_messaging_method_names_its_types(
     let _: MessagingComplete<MessageReceipt> =
         client.submit(token, idempotency_key, submission).await?;
     let _: MessagingComplete<MessageView> = client.message(token, message_id).await?;
+    let _: MessagingComplete<MessageView> = client.cancel(token, message_id).await?;
+    let _: MessagingComplete<TemplatePreview> =
+        client.preview(token, template_id, version, preview).await?;
     Ok(())
 }
 

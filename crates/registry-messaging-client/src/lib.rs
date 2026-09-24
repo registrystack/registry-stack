@@ -16,7 +16,11 @@
 //! idempotency key, which answers the core's `MessageReceipt`, and the
 //! bearer-authorized read of one message's status, which answers the
 //! core's `MessageView`: the derived status, the dispatch state and delivery
-//! report it is derived from, and attempt summaries. It never follows
+//! report it is derived from, and attempt summaries. It also covers the
+//! bearer-authorized cancellation of one undispatched message, which answers
+//! the same `MessageView`, and the bearer-authorized preview of one template
+//! version, which answers the core's `TemplatePreview` and sends nothing. It
+//! never follows
 //! redirects or retries, reads every response under a bounded
 //! byte ceiling, and lands every failure in one named shape: a configuration
 //! defect, a transport failure, a protocol failure, or a validated product
@@ -34,8 +38,9 @@ pub use error::{MessagingClientError, MessagingProtocolFailure};
 pub use registry_messaging_core::{
     type_uri, AttemptOutcome, AttemptSummary, Channel, DirectContent, MessageDispatch,
     MessageLinks, MessageReceipt, MessageReport, MessageStatus, MessageView, ProblemCode,
-    Recipient, SubmitMessageRequest, TemplateReference, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER,
-    MAXIMUM_IDEMPOTENCY_KEY_BYTES, MESSAGES_PATH, MESSAGE_PATH, MESSAGING_PROBLEM_TYPE_BASE,
-    READY_PATH,
+    Recipient, RenderedParts, SegmentCount, SmsEncoding, SubmitMessageRequest, TemplatePreview,
+    TemplatePreviewRequest, TemplateReference, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER,
+    MAXIMUM_IDEMPOTENCY_KEY_BYTES, MESSAGES_PATH, MESSAGE_CANCEL_PATH, MESSAGE_PATH,
+    MESSAGING_PROBLEM_TYPE_BASE, READY_PATH, TEMPLATE_PREVIEW_PATH,
 };
 pub use registry_platform_httputil::client::{BearerToken, TransportKind};
