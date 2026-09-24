@@ -59,6 +59,9 @@ pub struct Application {
 struct Registry {
     addresses: BTreeMap<String, Vec<(String, Value)>>,
     applications: BTreeMap<Uuid, Application>,
+    /// Each idempotency key the stand-in has answered, with the application
+    /// it created and the creation record it replays.
+    created: BTreeMap<String, (Uuid, Value)>,
     seen: Vec<Seen>,
     next_problem: Option<(Method, BRegProblemCode)>,
 }
@@ -138,6 +141,17 @@ impl MockRegistry {
             },
         );
         identifier
+    }
+
+    /// Move an application to another request state, as a review page or
+    /// a reviewer would.
+    pub fn set_request(&self, identifier: Uuid, request: Value) {
+        self.state
+            .lock()
+            .applications
+            .get_mut(&identifier)
+            .expect("application exists")
+            .request = request;
     }
 
     pub fn applications(&self) -> BTreeMap<Uuid, Application> {
@@ -396,21 +410,28 @@ async fn create_application(
     let Some(data) = body["data"].as_object().cloned() else {
         return problem(BRegProblemCode::RequestInvalid);
     };
+    let key = header_text(&headers, "idempotency-key");
+    // A consumed key replays the response recorded when it was first
+    // answered, whatever state the application has reached since.
+    if let Some((identifier, created)) = state.lock().created.get(&key).cloned() {
+        return created_response(identifier, &created);
+    }
     let identifier = Uuid::new_v4();
     let application = Application {
         data: data.into_iter().filter(|(key, _)| key != "owner").collect(),
         revision: 1,
         request: draft_request(),
     };
-    let response = json_response(
-        StatusCode::CREATED,
-        &application_record(identifier, &application, false),
-        Some(APPLICATION_ENTITY),
-    );
-    state
-        .lock()
-        .applications
-        .insert(identifier, application.clone());
+    let created = application_record(identifier, &application, false);
+    let mut registry = state.lock();
+    registry.applications.insert(identifier, application);
+    registry.created.insert(key, (identifier, created.clone()));
+    drop(registry);
+    created_response(identifier, &created)
+}
+
+fn created_response(identifier: Uuid, created: &Value) -> Response {
+    let response = json_response(StatusCode::CREATED, created, Some(APPLICATION_ENTITY));
     let mut response = mutation(with_etag(response, 1));
     response.headers_mut().insert(
         "location",
@@ -419,6 +440,14 @@ async fn create_application(
             .expect("location"),
     );
     response
+}
+
+fn header_text(headers: &HeaderMap, name: &str) -> String {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned()
 }
 
 async fn get_application(

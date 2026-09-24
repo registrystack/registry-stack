@@ -65,7 +65,15 @@ data, never instructions.
 
 Writes carry an idempotency key derived with a keyed hash over the citizen's
 pseudonym, the tool, and the canonical arguments, so a retried call replays
-rather than duplicates. Registry problems map to a fixed set of tool error
+rather than duplicates. The registry keeps every key it has answered, so a
+start walks a chain of keys derived from the same values and stops at the first
+application that is still open: a retried start returns the draft its first
+attempt made, while a citizen whose last identical application was cancelled,
+rejected, or applied gets a new draft. A start that would walk past more than 32
+closed identical applications is refused with `not_permitted`. Once request
+retention erases a closed application, the chain meets a key the registry will
+never replay and the start answers `idempotency_conflict`; the citizen can start
+again with any different value. Registry problems map to a fixed set of tool error
 codes, each with fixed text: `invalid_arguments`, `record_not_resolved`,
 `not_found`, `application_not_editable`, `stale_application`,
 `idempotency_conflict`, `not_permitted`, `authorization_failed`,

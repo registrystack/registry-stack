@@ -239,6 +239,69 @@ async fn the_gateway_writes_only_the_citizens_own_address() {
     fixture.finish().await;
 }
 
+/// A retried start returns the draft it already created, and once the
+/// citizen cancels that draft on the review page the same values start a
+/// new application instead of replaying the closed one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_citizen_starts_again_after_cancelling_and_a_retry_reuses_the_draft() {
+    let (listener, resource) = gateway_listener().await;
+    let fixture = RealRegistry::start(&resource).await;
+    fixture.seed_citizen("B-1", CITIZEN_B).await;
+    let running = RunningGateway::start(listener, &fixture).await;
+    let client = gateway::connect(&running.resource, &fixture.chat_host_token(CITIZEN_B)).await;
+    let fields = json!({"newAddressLine": "2 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-200"});
+
+    let start = || gateway::call(&client, "start_application", fields.clone());
+    let first = start().await;
+    assert_eq!(first.is_error, Some(false), "{first:?}");
+    let first = gateway::structured(&first)["application"].clone();
+    let retried = start().await;
+    assert_eq!(retried.is_error, Some(false), "{retried:?}");
+    assert_eq!(
+        gateway::structured(&retried)["application"]["applicationId"],
+        first["applicationId"]
+    );
+
+    fixture
+        .cancel_as_citizen(
+            CITIZEN_B,
+            first["applicationId"].as_str().expect("identifier"),
+        )
+        .await;
+    let status = gateway::call(
+        &client,
+        "get_application_status",
+        json!({"applicationId": first["applicationId"]}),
+    )
+    .await;
+    assert_eq!(
+        gateway::structured(&status)["application"]["status"],
+        "cancelled"
+    );
+
+    let second = start().await;
+    assert_eq!(second.is_error, Some(false), "{second:?}");
+    let second = gateway::structured(&second)["application"].clone();
+    assert_ne!(second["applicationId"], first["applicationId"]);
+    assert_eq!(second["status"], "prepared");
+    let retried = start().await;
+    assert_eq!(retried.is_error, Some(false), "{retried:?}");
+    assert_eq!(
+        gateway::structured(&retried)["application"]["applicationId"],
+        second["applicationId"]
+    );
+    client.cancel().await.expect("client closes");
+
+    let listed = fixture.listed_requests().await;
+    let mut states: Vec<&str> = listed
+        .iter()
+        .map(|item| item["request"]["bregState"].as_str().expect("state"))
+        .collect();
+    states.sort_unstable();
+    assert_eq!(states, ["cancelled", "draft"], "{listed:?}");
+    fixture.finish().await;
+}
+
 struct RealRegistry {
     runtime_guard: tokio::sync::MutexGuard<'static, ()>,
     database: TestDatabase,
@@ -433,6 +496,63 @@ impl RealRegistry {
             .as_array()
             .cloned()
             .expect("listing has items")
+    }
+
+    /// The citizen cancels a draft on the review page, following the cancel
+    /// action the registry advertises to that profile.
+    async fn cancel_as_citizen(&self, citizen: &str, request: &str) {
+        let token = format!(
+            "Bearer {}",
+            self.server.issue_access_token(
+                REVIEW_PAGE_CLIENT,
+                citizen,
+                AUDIENCE,
+                SELF_SCOPE,
+                now() + 600,
+            )
+        );
+        let http = reqwest::Client::new();
+        let view = http
+            .get(format!(
+                "{}/v1/records/address-correction-requests/{request}?accessProfile=citizen-review",
+                self.base_url
+            ))
+            .header("authorization", &token)
+            .send()
+            .await
+            .expect("registry answers");
+        let status = view.status();
+        let view: Value = view.json().await.expect("request view is JSON");
+        assert_eq!(status, reqwest::StatusCode::OK, "{view}");
+        let cancel = view["data"]["request"]["actions"]
+            .as_array()
+            .and_then(|actions| {
+                actions
+                    .iter()
+                    .find(|action| action["operation"] == "cancel_request")
+            })
+            .unwrap_or_else(|| panic!("the review profile is offered a cancel: {view}"));
+        let response = http
+            .post(format!(
+                "{}{}",
+                self.base_url,
+                cancel["href"].as_str().expect("cancel has an href")
+            ))
+            .header("authorization", &token)
+            .header("idempotency-key", format!("cancel-{request}"))
+            .header(
+                "if-match",
+                cancel["ifMatch"]
+                    .as_str()
+                    .expect("cancel has a precondition"),
+            )
+            .json(&json!({}))
+            .send()
+            .await
+            .expect("registry answers");
+        let status = response.status();
+        let body = response.text().await.expect("cancel body");
+        assert_eq!(status, reqwest::StatusCode::OK, "{body}");
     }
 
     async fn create(&self, route: &str, key: &str, data: Value) -> String {

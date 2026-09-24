@@ -442,6 +442,84 @@ async fn a_retried_start_reuses_its_idempotency_key() {
     assert_ne!(keys[0], keys[2]);
 }
 
+fn started_identifier(value: &Value) -> Uuid {
+    assert_eq!(value["isError"], false, "{value}");
+    Uuid::parse_str(
+        value["application"]["applicationId"]
+            .as_str()
+            .expect("identifier"),
+    )
+    .expect("identifier is a UUID")
+}
+
+#[tokio::test]
+async fn a_start_after_a_closed_application_opens_a_new_one() {
+    for closed in ["cancelled", "applied"] {
+        let fixture = Fixture::start().await;
+        let caller = fixture.caller(CITIZEN_A);
+        let start = || fixture.call(&caller, START_APPLICATION, start_arguments());
+        let first = started_identifier(&start().await);
+        assert_eq!(started_identifier(&start().await), first, "{closed}");
+        assert_eq!(fixture.registry.applications().len(), 1, "{closed}");
+
+        fixture.registry.set_request(
+            first,
+            json!({"bregState": closed, "editable": false, "proposalVersion": 1}),
+        );
+        let second = start().await;
+        assert_eq!(second["application"]["status"], "prepared", "{closed}");
+        let second = started_identifier(&second);
+        assert_ne!(second, first, "{closed}");
+        assert_eq!(started_identifier(&start().await), second, "{closed}");
+        assert_eq!(fixture.registry.applications().len(), 2, "{closed}");
+    }
+}
+
+#[tokio::test]
+async fn a_retried_start_answers_with_the_drafts_current_state() {
+    let fixture = Fixture::start().await;
+    let caller = fixture.caller(CITIZEN_A);
+    let first = started_identifier(
+        &fixture
+            .call(&caller, START_APPLICATION, start_arguments())
+            .await,
+    );
+    fixture.registry.set_request(
+        first,
+        json!({"bregState": "submitted", "editable": false, "proposalVersion": 1,
+            "effectDigest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}),
+    );
+    let retried = fixture
+        .call(&caller, START_APPLICATION, start_arguments())
+        .await;
+    assert_eq!(started_identifier(&retried), first);
+    assert_eq!(retried["application"]["status"], "submitted");
+    assert_eq!(fixture.registry.applications().len(), 1);
+}
+
+#[tokio::test]
+async fn a_start_past_too_many_closed_applications_is_refused() {
+    let fixture = Fixture::start().await;
+    let caller = fixture.caller(CITIZEN_A);
+    let cancelled = json!({"bregState": "cancelled", "editable": false, "proposalVersion": 1});
+    for _ in 0..=MAX_CLOSED_REPEATS {
+        let started = fixture
+            .call(&caller, START_APPLICATION, start_arguments())
+            .await;
+        fixture
+            .registry
+            .set_request(started_identifier(&started), cancelled.clone());
+    }
+    let refused = fixture
+        .call(&caller, START_APPLICATION, start_arguments())
+        .await;
+    assert_eq!(error_code(&refused), "not_permitted");
+    assert_eq!(
+        fixture.registry.applications().len(),
+        usize::try_from(MAX_CLOSED_REPEATS + 1).expect("bound fits")
+    );
+}
+
 #[tokio::test]
 async fn prepare_review_links_the_citizens_own_application() {
     let fixture = Fixture::start().await;
