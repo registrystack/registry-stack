@@ -15,9 +15,10 @@ path = "src/main.rs"
 [features]
 default = []
 # Runs the review page against a real Base Registry Engine on a disposable
-# PostgreSQL database named by BREG_TEST_DATABASE_URL. The page itself never
-# links the registry runtime; only this test does.
-postgres-test = ["dep:registry-breg", "registry-breg/postgres-test", "registry-breg/tooling"]
+# PostgreSQL database named by BREG_TEST_DATABASE_URL. The engine is a
+# dev-dependency only: this feature enables its test features and never places
+# the runtime in the page's normal dependency graph.
+postgres-test = ["registry-breg/postgres-test", "registry-breg/tooling"]
 
 [lints]
 workspace = true
@@ -29,7 +30,6 @@ clap.workspace = true
 getrandom.workspace = true
 jsonwebtoken.workspace = true
 minijinja.workspace = true
-registry-breg = { workspace = true, optional = true }
 registry-breg-client.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-buildinfo.workspace = true
@@ -54,6 +54,7 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+registry-breg.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-authorization-server"] }
 reqwest.workspace = true

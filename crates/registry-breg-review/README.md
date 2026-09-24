@@ -137,6 +137,8 @@ BREG_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres \
   cargo test --locked -p registry-breg-review --features postgres-test --test postgres_breg
 ```
 
-Only this feature links `registry-breg`; the page itself depends on the
-registry through `registry-breg-client` alone. The Base Registry Engine
-PostgreSQL lane (`products/breg/scripts/test-postgres.sh`) runs this test.
+`registry-breg` is a dev-dependency, linked only into tests; the page itself
+depends on the registry through `registry-breg-client` alone, and
+`products/breg/scripts/check-service-dependencies.sh` fails if the runtime
+enters its normal dependency graph. The Base Registry Engine PostgreSQL lane
+(`products/breg/scripts/test-postgres.sh`) runs this test.
