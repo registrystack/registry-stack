@@ -2,7 +2,7 @@
 
 ARG SOURCE_DATE_EPOCH=0
 
-FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS runtime-root
+FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS runtime-root
 ARG SOURCE_DATE_EPOCH
 
 ADD --checksum=sha256:967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9 https://snapshot.debian.org/archive/debian/20260913T000000Z/pool/main/g/glibc/libc6_2.41-12+deb13u4_amd64.deb /workspace/runtime-packages/libc6_2.41-12+deb13u4_amd64.deb
@@ -28,7 +28,7 @@ RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
     && install -m 0644 /workspace/THIRD_PARTY_NOTICES /workspace/runtime-root/licenses/breg/THIRD_PARTY_NOTICES \
     && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
 
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c AS runtime
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97 AS runtime
 
 LABEL org.registrystack.runtime.uid="65532" \
       org.registrystack.runtime.gid="65532"
