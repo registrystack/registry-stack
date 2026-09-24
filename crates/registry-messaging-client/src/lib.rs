@@ -11,8 +11,10 @@
 //! no messaging semantics of its own: a caller matches recoverable outcomes
 //! against the core's `ProblemCode`, not a second vocabulary.
 //!
-//! The client covers the unauthenticated liveness and readiness routes and
-//! the bearer-authorized read of one message's status, which answers the
+//! The client covers the unauthenticated liveness and readiness routes, the
+//! bearer-authorized submission of one message under a caller-chosen
+//! idempotency key, which answers the core's `MessageReceipt`, and the
+//! bearer-authorized read of one message's status, which answers the
 //! core's `MessageView`: the derived status, the dispatch state and delivery
 //! report it is derived from, and attempt summaries. It never follows
 //! redirects or retries, reads every response under a bounded
@@ -30,7 +32,10 @@ pub use client::{MessagingClient, MessagingComplete};
 pub use config::MessagingClientConfig;
 pub use error::{MessagingClientError, MessagingProtocolFailure};
 pub use registry_messaging_core::{
-    type_uri, AttemptOutcome, AttemptSummary, MessageDispatch, MessageReport, MessageStatus,
-    MessageView, ProblemCode, HEALTH_PATH, MESSAGE_PATH, MESSAGING_PROBLEM_TYPE_BASE, READY_PATH,
+    type_uri, AttemptOutcome, AttemptSummary, Channel, DirectContent, MessageDispatch,
+    MessageLinks, MessageReceipt, MessageReport, MessageStatus, MessageView, ProblemCode,
+    Recipient, SubmitMessageRequest, TemplateReference, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER,
+    MAXIMUM_IDEMPOTENCY_KEY_BYTES, MESSAGES_PATH, MESSAGE_PATH, MESSAGING_PROBLEM_TYPE_BASE,
+    READY_PATH,
 };
 pub use registry_platform_httputil::client::{BearerToken, TransportKind};

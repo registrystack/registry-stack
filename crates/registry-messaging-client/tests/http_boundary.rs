@@ -8,12 +8,13 @@ use std::sync::{Arc, Mutex};
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use registry_messaging_client::{
     type_uri, BearerToken, MessageDispatch, MessageReport, MessageStatus, MessagingClient,
-    MessagingClientConfig, MessagingClientError, MessagingProtocolFailure, ProblemCode,
-    TransportKind, HEALTH_PATH, MESSAGE_PATH, READY_PATH,
+    MessagingClientConfig, MessagingClientError, MessagingProtocolFailure, ProblemCode, Recipient,
+    SubmitMessageRequest, TemplateReference, TransportKind, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER,
+    MESSAGES_PATH, MESSAGE_PATH, READY_PATH,
 };
 use url::Url;
 
@@ -21,11 +22,13 @@ const TRACEPARENT: &str = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-
 const TRACE_ID: &str = "0123456789abcdef0123456789abcdef";
 const MESSAGE_ID: &str = "0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d";
 const TOKEN: &str = "fixture-bearer-token";
+const IDEMPOTENCY_KEY: &str = "reminder-2026-09-25-0001";
 
-/// One route's canned answer, plus the record of every request it received.
+/// One route's canned answer, plus the record of every request it received:
+/// its path, its headers, and its body.
 #[derive(Clone)]
 struct Fixture {
-    seen: Arc<Mutex<Vec<(String, HeaderMap)>>>,
+    seen: Arc<Mutex<Vec<(String, HeaderMap, String)>>>,
     status: StatusCode,
     content_type: Option<&'static str>,
     body: String,
@@ -69,6 +72,31 @@ fn message_view() -> String {
     )
 }
 
+/// The receipt an accepted submission answers.
+fn message_receipt() -> String {
+    format!(
+        r#"{{"id":"{MESSAGE_ID}","status":"queued","links":{{"self":"/v1/messages/{MESSAGE_ID}","cancel":"/v1/messages/{MESSAGE_ID}/cancel"}}}}"#
+    )
+}
+
+/// A templated SMS submission, as a caller builds it.
+fn submission() -> SubmitMessageRequest {
+    SubmitMessageRequest {
+        sender_profile: "reminders-sms".to_owned(),
+        to: Recipient::Phone("+15550100".to_owned()),
+        template: Some(TemplateReference {
+            id: "appointment-reminder".to_owned(),
+            version: "1".to_owned(),
+        }),
+        locale: Some("en".to_owned()),
+        data: Some(serde_json::json!({"time": "10:00"})),
+        content: None,
+        not_before: None,
+        expires_at: None,
+        correlation_id: Some("case-42".to_owned()),
+    }
+}
+
 fn message_route(prefix: &str) -> String {
     format!("{prefix}{MESSAGE_PATH}").replace("{message_id}", "{id}")
 }
@@ -87,12 +115,17 @@ fn problem_body(code: &str, status: u16) -> String {
     )
 }
 
-async fn answer(State(fixture): State<Fixture>, uri: Uri, headers: HeaderMap) -> impl IntoResponse {
+async fn answer(
+    State(fixture): State<Fixture>,
+    uri: Uri,
+    headers: HeaderMap,
+    body: String,
+) -> impl IntoResponse {
     fixture
         .seen
         .lock()
         .expect("observations")
-        .push((uri.to_string(), headers));
+        .push((uri.to_string(), headers, body));
     let mut response = HeaderMap::new();
     if let Some(content_type) = fixture.content_type {
         response.insert("content-type", HeaderValue::from_static(content_type));
@@ -108,6 +141,7 @@ async fn serve(prefix: &str, fixture: &Fixture) -> (MessagingClient, tokio::task
         .route(&format!("{prefix}{HEALTH_PATH}"), get(answer))
         .route(&format!("{prefix}{READY_PATH}"), get(answer))
         .route(&message_route(prefix), get(answer))
+        .route(&format!("{prefix}{MESSAGES_PATH}"), post(answer))
         .with_state(fixture.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -134,11 +168,11 @@ async fn health_and_ready_answer_with_the_trace_and_send_no_credential() {
     assert_eq!(ready.trace_id, TRACE_ID);
 
     let seen = fixture.seen.lock().expect("observations");
-    let paths: Vec<&str> = seen.iter().map(|(path, _)| path.as_str()).collect();
+    let paths: Vec<&str> = seen.iter().map(|(path, _, _)| path.as_str()).collect();
     assert_eq!(paths, [HEALTH_PATH, READY_PATH]);
     assert!(seen
         .iter()
-        .all(|(_, headers)| !headers.contains_key("authorization")));
+        .all(|(_, headers, _)| !headers.contains_key("authorization")));
     server.abort();
 }
 
@@ -169,6 +203,106 @@ async fn a_message_is_read_with_its_derived_status_dispatch_state_and_report() {
         format!("Bearer {TOKEN}").as_str()
     );
     assert_eq!(seen[0].1["accept"], "application/json");
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_submission_carries_its_idempotency_key_and_answers_the_receipt() {
+    let fixture = Fixture::new(
+        StatusCode::ACCEPTED,
+        Some("application/json"),
+        &message_receipt(),
+    );
+    let (client, server) = serve("/messaging", &fixture).await;
+
+    let accepted = client
+        .submit(&token(), IDEMPOTENCY_KEY, &submission())
+        .await
+        .expect("the receipt");
+    assert_eq!(accepted.trace_id, TRACE_ID);
+    assert_eq!(accepted.value.id, MESSAGE_ID);
+    assert_eq!(accepted.value.status, MessageStatus::Queued);
+    assert_eq!(
+        accepted.value.links.self_link,
+        format!("/v1/messages/{MESSAGE_ID}")
+    );
+
+    let seen = fixture.seen.lock().expect("observations");
+    assert_eq!(seen.len(), 1);
+    let (path, headers, body) = &seen[0];
+    assert_eq!(path, "/messaging/v1/messages");
+    assert_eq!(headers["authorization"], format!("Bearer {TOKEN}").as_str());
+    assert_eq!(headers[IDEMPOTENCY_KEY_HEADER], IDEMPOTENCY_KEY);
+    assert_eq!(headers["content-type"], "application/json");
+    assert_eq!(headers["accept"], "application/json");
+    let sent: SubmitMessageRequest = serde_json::from_str(body).expect("a submission body");
+    assert_eq!(sent, submission());
+    server.abort();
+}
+
+#[tokio::test]
+async fn an_idempotency_key_outside_the_header_grammar_is_refused_before_any_request() {
+    let fixture = Fixture::new(
+        StatusCode::ACCEPTED,
+        Some("application/json"),
+        &message_receipt(),
+    );
+    let (client, server) = serve("", &fixture).await;
+    let oversized = "k".repeat(129);
+    for key in [
+        "",
+        "two words",
+        "caf\u{e9}",
+        "line\nbreak",
+        oversized.as_str(),
+    ] {
+        assert!(
+            matches!(
+                client.submit(&token(), key, &submission()).await,
+                Err(MessagingClientError::InvalidRequest { .. })
+            ),
+            "{key:?}"
+        );
+    }
+    assert!(fixture.seen.lock().expect("observations").is_empty());
+    client
+        .submit(&token(), &"k".repeat(128), &submission())
+        .await
+        .expect("the longest key the header allows");
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_reused_idempotency_key_is_the_typed_key_reused_problem() {
+    let (client, server) = serve("", &Fixture::problem(ProblemCode::IdempotencyKeyReused)).await;
+    match client
+        .submit(&token(), IDEMPOTENCY_KEY, &submission())
+        .await
+    {
+        Err(MessagingClientError::Problem {
+            status: 409,
+            code: ProblemCode::IdempotencyKeyReused,
+            trace_id,
+        }) => assert_eq!(trace_id.as_deref(), Some(TRACE_ID)),
+        other => panic!("expected the typed idempotency.key-reused problem, got {other:?}"),
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_submission_answered_outside_202_is_a_protocol_failure() {
+    let fixture = Fixture::new(StatusCode::OK, Some("application/json"), &message_receipt());
+    let (client, server) = serve("", &fixture).await;
+    assert!(matches!(
+        client
+            .submit(&token(), IDEMPOTENCY_KEY, &submission())
+            .await,
+        Err(MessagingClientError::Protocol {
+            status: 200,
+            failure: MessagingProtocolFailure::Status,
+            ..
+        })
+    ));
     server.abort();
 }
 

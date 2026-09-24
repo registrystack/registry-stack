@@ -3,7 +3,8 @@
 use std::fmt;
 
 use registry_messaging_core::{
-    type_uri, MessageView, ProblemCode, HEALTH_PATH, MESSAGE_PATH, READY_PATH,
+    type_uri, MessageReceipt, MessageView, ProblemCode, SubmitMessageRequest, HEALTH_PATH,
+    IDEMPOTENCY_KEY_HEADER, MAXIMUM_IDEMPOTENCY_KEY_BYTES, MESSAGES_PATH, MESSAGE_PATH, READY_PATH,
 };
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
@@ -15,6 +16,7 @@ use registry_platform_httputil::{
 };
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Response, StatusCode, Url};
+use serde::de::DeserializeOwned;
 
 use crate::{MessagingClientConfig, MessagingClientError, MessagingProtocolFailure};
 
@@ -77,6 +79,40 @@ impl MessagingClient {
         self.get_empty(READY_PATH).await
     }
 
+    /// Submit one message under `idempotency_key`. The runtime answers the
+    /// receipt of the accepted message; the same key and request answer the
+    /// stored receipt again, and the same key with a different request
+    /// answers the typed `ProblemCode::IdempotencyKeyReused`.
+    ///
+    /// The caller chooses the key and retries with it: the client never
+    /// invents one and never retries. A key that is empty, longer than
+    /// `MAXIMUM_IDEMPOTENCY_KEY_BYTES`, or carries a byte outside visible
+    /// ASCII is refused before a request is sent.
+    pub async fn submit(
+        &self,
+        token: &BearerToken,
+        idempotency_key: &str,
+        request: &SubmitMessageRequest,
+    ) -> Result<MessagingComplete<MessageReceipt>, MessagingClientError> {
+        if !is_idempotency_key(idempotency_key) {
+            return Err(MessagingClientError::invalid_request(
+                "the idempotency key is not 1 to 128 visible ASCII characters",
+            ));
+        }
+        let body = serde_json::to_vec(request).map_err(|_| {
+            MessagingClientError::invalid_request("the submission could not be encoded")
+        })?;
+        let request = self
+            .http
+            .post(self.url_from_constant(MESSAGES_PATH)?)
+            .header(AUTHORIZATION, token.authorization_header_value())
+            .header(ACCEPT, JSON_MEDIA_TYPE)
+            .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
+            .header(IDEMPOTENCY_KEY_HEADER, idempotency_key)
+            .body(body);
+        self.json_answer(request, StatusCode::ACCEPTED).await
+    }
+
     /// One message as the caller may see it: its derived status, the
     /// dispatch state and delivery report that status is derived from, and
     /// its attempt summaries. A message the caller may not see answers the
@@ -102,7 +138,7 @@ impl MessagingClient {
             .get(self.url_from_constant(&path)?)
             .header(AUTHORIZATION, token.authorization_header_value())
             .header(ACCEPT, JSON_MEDIA_TYPE);
-        self.get_view(request).await
+        self.json_answer(request, StatusCode::OK).await
     }
 
     fn url_from_constant(&self, path: &str) -> Result<Url, MessagingClientError> {
@@ -138,13 +174,14 @@ impl MessagingClient {
         })
     }
 
-    async fn get_view(
+    async fn json_answer<T: DeserializeOwned>(
         &self,
         request: reqwest::RequestBuilder,
-    ) -> Result<MessagingComplete<MessageView>, MessagingClientError> {
+        expected: StatusCode,
+    ) -> Result<MessagingComplete<T>, MessagingClientError> {
         let response = self.send(request).await?;
         let status = response.status();
-        if status != StatusCode::OK {
+        if status != expected {
             return Err(self.problem_or_status(response).await);
         }
         let trace_id = response_trace(status, response.headers())?;
@@ -246,6 +283,13 @@ pub(crate) fn domain_problem(
         code,
         trace_id,
     }
+}
+
+/// Whether `value` is an idempotency key the runtime accepts: 1 to
+/// `MAXIMUM_IDEMPOTENCY_KEY_BYTES` bytes of visible ASCII.
+fn is_idempotency_key(value: &str) -> bool {
+    (1..=MAXIMUM_IDEMPOTENCY_KEY_BYTES).contains(&value.len())
+        && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
 }
 
 /// Whether `value` is a UUID in the lowercase hyphenated form the runtime

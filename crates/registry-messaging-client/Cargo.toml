@@ -16,6 +16,7 @@ registry-messaging-core.workspace = true
 registry-platform-httpsec.workspace = true
 registry-platform-httputil.workspace = true
 reqwest.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 url.workspace = true
