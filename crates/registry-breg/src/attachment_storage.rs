@@ -1006,10 +1006,10 @@ mod tests {
         server.await.unwrap();
     }
 
-    /// Run against a disposable MinIO service with the synthetic credentials
-    /// above. This test creates a private bucket and enables then suspends versioning.
+    /// Run against a disposable S3-compatible service with the synthetic
+    /// credentials above. This test creates a private bucket and enables then suspends versioning.
     #[tokio::test]
-    #[ignore = "requires BREG_TEST_S3_ENDPOINT pointing to disposable MinIO"]
+    #[ignore = "requires BREG_TEST_S3_ENDPOINT pointing to a disposable S3-compatible service"]
     async fn real_s3_put_get_deduplicate_delete_and_version_refusal() {
         let endpoint =
             std::env::var("BREG_TEST_S3_ENDPOINT").expect("disposable S3 endpoint required");
