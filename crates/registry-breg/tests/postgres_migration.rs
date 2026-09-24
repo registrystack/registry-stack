@@ -123,6 +123,11 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
     assert_eq!(first_checkpoint.0, "applying");
     assert_eq!(first_checkpoint.2, 2);
     assert!(first_checkpoint.1.is_some());
+    assert_eq!(
+        reviewed_migration_history(&database).await,
+        (2, vec![2]),
+        "the committed chunk appended one revision per row it changed in one commit"
+    );
     assert_non_ready_target(&database, &active, &required_package, "applying").await;
 
     let wrong_source = backfill_source(BackfillSourceRequest {
@@ -167,6 +172,12 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
     assert_eq!(completed.0, "completed");
     assert_eq!(completed.2, 5);
     assert_all_ranks(&database, &required, 1).await;
+    assert_eq!(
+        reviewed_migration_history(&database).await,
+        (5, vec![2, 2, 1]),
+        "every chunk commit journals its own rows once, and the resumed run does not \
+         journal the committed chunk again"
+    );
     assert_ready_target(&database, &required_active).await;
 
     let ledger_before_destructive = ledger_snapshot(&database).await;
@@ -1409,6 +1420,28 @@ async fn real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse
         .expect("the reviewed plan activation accepts also rehearses");
     assert_rehearsal_database_clean(&database).await;
 
+    // Comments, a line break after UPDATE, and statement words inside a
+    // comment or a plain literal leave a chunk the journal can record.
+    let entity = &candidate.entities()["asset"];
+    let rank = &entity.fields["rank"].physical_name;
+    let commented = prepare_reviewed_candidate(
+        &active,
+        &base,
+        &target_fingerprint,
+        backfill_source_with_steps(
+            rehearsal_request("rank-commented"),
+            Some(format!(
+                "-- SPDX-License-Identifier: Apache-2.0\nUPDATE\n  registry_data.{}\n   SET {rank} = CASE WHEN 'never drop a row' = 'x' THEN 1 ELSE 1 END /* never drop a row */\n WHERE record_id = ANY($1::pg_catalog.uuid[]);\n",
+                entity.physical_table
+            )),
+            true,
+        ),
+    );
+    rehearse(&database, &base, &base_fingerprint, &commented)
+        .await
+        .expect("a commented chunk activation accepts also rehearses");
+    assert_rehearsal_database_clean(&database).await;
+
     let unconstrained = prepare_reviewed_candidate(
         &active,
         &base,
@@ -1421,8 +1454,6 @@ async fn real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse
     assert_eq!(refused, MigrationRehearsalError::FinalSchemaMismatch);
     assert_rehearsal_database_clean(&database).await;
 
-    let entity = &candidate.entities()["asset"];
-    let rank = &entity.fields["rank"].physical_name;
     let canary = "rehearsal-canary-value";
     let uncastable = prepare_reviewed_candidate(
         &active,
@@ -1459,6 +1490,36 @@ async fn real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse
     assert!(
         !rendered.contains(canary),
         "the refusal carries no value from the statement: {rendered}"
+    );
+    assert_rehearsal_database_clean(&database).await;
+
+    // The package accepts a chunk whose parsed statement is a plain UPDATE,
+    // but activation also refuses a reviewed update whose text names a
+    // refused statement word inside a dollar-quoted body, which the lexical
+    // check reads as written, before the chunk runs.
+    let metadata_writer = prepare_reviewed_candidate(
+        &active,
+        &base,
+        &target_fingerprint,
+        backfill_source_with_steps(
+            rehearsal_request("rank-dollar-quoted"),
+            Some(format!(
+                "UPDATE registry_data.{} SET {rank} = CASE WHEN $$never drop a row$$ = $$x$$ THEN 1 ELSE 1 END WHERE record_id = ANY($1::pg_catalog.uuid[])",
+                entity.physical_table
+            )),
+            true,
+        ),
+    );
+    let refused = rehearse(&database, &base, &base_fingerprint, &metadata_writer)
+        .await
+        .expect_err("a chunk activation would refuse before it runs is refused");
+    assert!(
+        matches!(
+            &refused,
+            MigrationRehearsalError::HistoryStep { migration_id, step_id, .. }
+                if migration_id == "rank-dollar-quoted" && step_id == "backfill-rank"
+        ),
+        "the refusal names the reviewed step the journal refuses: {refused:?}"
     );
     assert_rehearsal_database_clean(&database).await;
 
@@ -3900,6 +3961,42 @@ async fn seed_backfill_rows(database: &TestDatabase, registry: &CompiledRegistry
             .await
             .expect("administrator seeds a backfill row");
     }
+    // Every live row carries its journal head, as rows written through the
+    // runtime do, so a reviewed chunk can append the next revision.
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("backfill seed journal transaction starts");
+    for index in 0..count {
+        let record_id = Uuid::from_u128(index as u128 + 1);
+        let snapshot = canonical(&serde_json::json!({
+            "code": format!("c{index}"),
+            "legacy": format!("legacy-{index}"),
+        }));
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_revisions
+                     (entity_id, record_id, record_reference, record_revision,
+                      predecessor_revision, record_lifecycle, package_revision, operation_id,
+                      mutation_kind, principal_reference, request_reference, snapshot)
+                 VALUES ('asset', $1, $2, 1, NULL, 'active', $3, 'op-1',
+                         'create', 'actor:hash', 'request:hash', $4)",
+                &[
+                    &record_id,
+                    &format!("asset:{record_id}"),
+                    &active_revision,
+                    &snapshot,
+                ],
+            )
+            .await
+            .expect("backfill seed revision inserts");
+    }
+    transaction
+        .commit()
+        .await
+        .expect("backfill seed revisions commit");
+    migration_task.abort();
 }
 
 fn synthetic_backup_sql(
@@ -4209,6 +4306,43 @@ async fn assert_added_required_column(
         .expect("added column values read");
     assert_eq!(rows.len(), 5);
     assert!(rows.iter().all(|row| row.get::<_, String>(0) == expected));
+}
+
+/// The reviewed-migration history a backfill appended: how many records reached
+/// revision 2 and the member count of each reviewed-migration commit, in
+/// commit order.
+async fn reviewed_migration_history(database: &TestDatabase) -> (i64, Vec<i64>) {
+    let revised: i64 = database
+        .admin
+        .query_one(
+            "SELECT count(*)
+               FROM registry_internal.registry_revisions
+              WHERE entity_id = 'asset'
+                AND record_revision = 2
+                AND predecessor_revision = 1",
+            &[],
+        )
+        .await
+        .expect("migration revisions count")
+        .get(0);
+    let commits = database
+        .admin
+        .query(
+            "SELECT count(member.record_id)
+               FROM registry_internal.registry_revision_commits AS commit
+               JOIN registry_internal.registry_revision_commit_members AS member
+                 ON member.commit_position = commit.commit_position
+              WHERE commit.system_origin = 'breg-reviewed-migration-v1'
+              GROUP BY commit.commit_position
+              ORDER BY commit.commit_position",
+            &[],
+        )
+        .await
+        .expect("migration commits read")
+        .iter()
+        .map(|row| row.get::<_, i64>(0))
+        .collect();
+    (revised, commits)
 }
 
 async fn assert_all_ranks(database: &TestDatabase, registry: &CompiledRegistry, expected: i64) {

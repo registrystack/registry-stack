@@ -163,6 +163,23 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-evidencectl/src/source_cli.rs, diff_and_apply_refuse_a_next_fact_schema_that_drops_a_fact_a_derivation_reads;
     products/breg/evidence/tests/verify-composition.py, verify(). */}
 
+- BREAKING: a reviewed `chunked_backfill` step now appends one history
+  revision for every row each chunk changes, in the same commit as the chunk,
+  so snapshot and as-of reads agree with the backfilled rows. Its `chunkSize`
+  cap falls from 10,000 to 1,000, and its SQL must be a single `UPDATE` of the declared
+  entity that writes no record metadata and names no other statement word
+  outside comments and plain string literals. A plan outside those limits that `test` and `package`
+  used to accept is now refused, and `test` reports a journaled step whose
+  SQL the history journal refuses as
+  `migration.rehearsal.history_step_refused`. See
+  [reviewed migration files](../operate/breg-changes/#reviewed-migration-files).
+
+{/* Evidence: crates/registry-breg/src/history_migration.rs, check_reviewed_history_step();
+    crates/registry-breg/src/postgres/interlock.rs, execute_reviewed_chunk();
+    crates/registry-breg/src/migration_plan.rs, MAX_CHUNK_SIZE;
+    crates/registry-breg/tests/migration_plan.rs, reviewed_chunked_backfill_refuses_a_chunk_size_beyond_the_commit_budget;
+    crates/registry-breg/tests/postgres_migration.rs, reviewed_migration_history(). */}
+
 ## v0.34.0 beta-46
 
 - `bregctl apply` reports a migration database it could not reach, or an

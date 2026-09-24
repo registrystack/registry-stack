@@ -17,8 +17,8 @@ use crate::generated_ddl::DdlStatementKind;
 use crate::history_commit::{install_empty_history_baseline, install_history_commit_schema};
 use crate::history_migration::{
     ensure_successor_history_ready as ensure_successor_history_ready_state,
-    finish_bounded_history_update, finish_field_encryption_page_update,
-    prepare_bounded_history_update, prepare_field_encryption_page_capture,
+    finish_bounded_history_update, finish_reviewed_page_update, prepare_bounded_history_update,
+    prepare_reviewed_page_capture,
 };
 use crate::history_schema::HistorySchemaDescriptor;
 use crate::history_store::{install_history_schema_store, retain_descriptor};
@@ -175,6 +175,9 @@ struct FieldEncryptionChunkRequest<'a> {
 }
 
 struct ReviewedChunkExecutionRequest<'a> {
+    registry: &'a CompiledRegistry,
+    target_package_revision: &'a str,
+    descriptor_path: &'a str,
     step: &'a ValidatedReviewedMigrationStep,
     ledger: &'a MigrationLedgerEntry,
     ledger_step: &'a MigrationLedgerStep,
@@ -472,6 +475,9 @@ impl DedicatedApplyConnection {
                         loop {
                             let advanced = self
                                 .execute_reviewed_chunk(ReviewedChunkExecutionRequest {
+                                    registry,
+                                    target_package_revision,
+                                    descriptor_path: &migration.descriptor_path,
                                     step,
                                     ledger,
                                     ledger_step,
@@ -802,6 +808,9 @@ impl DedicatedApplyConnection {
         request: ReviewedChunkExecutionRequest<'_>,
     ) -> Result<bool> {
         let ReviewedChunkExecutionRequest {
+            registry,
+            target_package_revision,
+            descriptor_path,
             step,
             ledger,
             ledger_step,
@@ -863,14 +872,24 @@ impl DedicatedApplyConnection {
             .checked_add(selected)
             .filter(|total| *total <= max_total_rows)
             .ok_or(PostgresKernelError::RegistryUnavailable)?;
+        // Each chunk journals the rows it changed as one history commit in
+        // the chunk's own transaction, so a resumed backfill never journals a
+        // committed chunk twice.
+        let capture =
+            prepare_reviewed_page_capture(&transaction, registry, descriptor_path, step, &ids)
+                .await
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
         let affected = transaction
             .execute(&step.sql, &[&ids])
             .await
             .map_err(|_| PostgresKernelError::Connection)?;
-        set_force_row_security(&transaction, &[table.as_str().to_owned()], true).await?;
         if affected != selected {
             return Err(PostgresKernelError::RegistryUnavailable);
         }
+        finish_reviewed_page_update(&transaction, registry, target_package_revision, capture)
+            .await
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        set_force_row_security(&transaction, &[table.as_str().to_owned()], true).await?;
         let checkpoint = ids
             .last()
             .copied()
@@ -1242,15 +1261,10 @@ impl DedicatedApplyConnection {
             .filter(|total| *total <= max_total_rows)
             .ok_or(PostgresKernelError::RegistryUnavailable)?;
 
-        let capture = prepare_field_encryption_page_capture(
-            &transaction,
-            registry,
-            descriptor_path,
-            step,
-            &ids,
-        )
-        .await
-        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        let capture =
+            prepare_reviewed_page_capture(&transaction, registry, descriptor_path, step, &ids)
+                .await
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
 
         let update_sql = field_encryption_update_statement(&table, covered);
         for (row_index, record_id) in ids.iter().enumerate() {
@@ -1304,14 +1318,9 @@ impl DedicatedApplyConnection {
             }
         }
 
-        finish_field_encryption_page_update(
-            &transaction,
-            registry,
-            target_package_revision,
-            capture,
-        )
-        .await
-        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        finish_reviewed_page_update(&transaction, registry, target_package_revision, capture)
+            .await
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
         set_force_row_security(&transaction, &[table.as_str().to_owned()], true).await?;
         let checkpoint = ids
             .last()
