@@ -63,6 +63,7 @@ registry-platform-crypto.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
 registry-breg.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
 rustls.workspace = true
