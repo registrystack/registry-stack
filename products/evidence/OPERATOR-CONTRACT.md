@@ -1162,6 +1162,25 @@ the deployment's responsibility, not Evidence's; Evidence resolves its own
 configured destination and never inspects mounts. Failures name which side
 failed and no path.
 
+Adding `--without-audit-lock` checks a candidate staged beside the running
+instance it will replace, which shares its audit path and so holds the
+single-writer lock by design. The option requires
+`--require-runtime-dependencies`. The audit boundary is proved without taking
+that lock: the storage bounds and hash secret, an owner-controlled directory
+the service user can write, an existing active file and lock companion that are
+owner-only, singly linked, and writable, and the retained chain verified
+read-only under the candidate's hash secret. When a writer holds the lock, the
+complete records of its active segment are verified too, each under that secret
+and as one chain continuing the sealed history, so a chain that has never
+rotated still proves the secret; a final line without its newline is that
+writer's append in flight and is not read. The active segment is not proved
+closed: records appended after the check are left to the running writer, as
+`evidence verify-audit` leaves them. Every other dependency is proved
+as without the option, and no audit event is appended. It does not detect a
+second writer, so `serve` still refuses to start while another instance holds
+the lock; without the option, a held lock refuses the check with `another
+writer already holds the audit sink lock`.
+
 For `assuranceProfile: local`, a supervised issuer may use the exact canonical
 issuer origin `http://127.0.0.1:<non-zero-port>` only when `jwksUri` is the
 same origin plus `/.well-known/jwks.json` or `/oauth2/jwks`. Production and evidence-grade, and

@@ -64,6 +64,11 @@ async fn write_audit_event() -> Result<(), registry_platform_audit::AuditError> 
   Use `visit_stopped_segmented_audit_chain` only for a bounded, caller-owned
   projection that requires a stopped writer and the complete retained chain
   starting at sealed segment one.
+- Use `preflight_segmented_audit_sink` to check a candidate's sink beside the
+  running writer that holds its lock. It never holds that lock against a
+  running writer and appends nothing. Beside a writer it still verifies the
+  complete records of the active segment under the given hasher, so a chain
+  that has never rotated proves the candidate's secret.
 - `AuditProfile::bootstrap_or_start_empty` and
   `AuditChainProfile::bootstrap_or_start_empty` read the sink tail hash before
   new appends, which is the normal startup path for persistent sinks.

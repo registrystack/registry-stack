@@ -666,6 +666,115 @@ pub fn verify_segmented_audit_chain(
     })
 }
 
+/// Check that a writer could open this sink, without taking its writer lock,
+/// and verify the retained chain read-only.
+///
+/// This is the audit boundary of a candidate staged beside the writer it will
+/// replace, which holds the lock by design. It checks what
+/// [`DurableSegmentedAuditLog::initialize`] checks before that lock: the
+/// directory is owner-controlled and writable by the effective user, and an
+/// existing active file or lock companion is an owner-only, singly linked
+/// regular file that user can write. It then verifies the chain as
+/// [`verify_segmented_audit_chain`] does.
+///
+/// When a writer holds the lock, the summary still reports the active segment
+/// as not verified, because the writer may be appending to it. Its complete
+/// records are nonetheless verified under `hasher`, one by one and as one
+/// chain continuing the sealed history, so a chain that has never rotated
+/// still proves the hash secret. A final line without its newline is the
+/// writer's append in flight and is left unread. It appends nothing and never
+/// holds the lock against a running writer.
+pub fn preflight_segmented_audit_sink(
+    path: &Path,
+    hasher: &AuditChainHasher,
+) -> Result<SegmentedAuditSummary, AuditError> {
+    let parent = parent(path)?;
+    validate_directory(parent, DirectoryPolicy::OwnerControlled)?;
+    require_access(
+        parent,
+        rustix::fs::Access::WRITE_OK | rustix::fs::Access::EXEC_OK,
+    )?;
+    for existing in [path.to_path_buf(), lock_path(path)] {
+        match fs::symlink_metadata(&existing) {
+            Ok(metadata) => {
+                validate_owner_only_active_metadata(&metadata)?;
+                require_access(&existing, rustix::fs::Access::WRITE_OK)?;
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(AuditError::Io(error)),
+        }
+    }
+    let summary = verify_segmented_audit_chain(path, hasher)?;
+    if summary.active_verified {
+        return Ok(summary);
+    }
+    let Some(prefix) = verify_active_prefix(path, hasher)? else {
+        return Ok(summary);
+    };
+    // The writer may seal the active segment between the two reads, so the
+    // segment read here may continue a sealed one the sealed pass never saw.
+    // The join is proved only when the sealed history has not moved since.
+    if prefix.start != summary.last_hash && newest_sealed_sequence(path)? == summary.last_sequence {
+        return Err(AuditError::ChainForkDetected {
+            expected: OptionalHashHex(summary.last_hash),
+            found: OptionalHashHex(prefix.start),
+        });
+    }
+    Ok(SegmentedAuditSummary {
+        records: summary.records.saturating_add(prefix.records),
+        ..summary
+    })
+}
+
+/// The complete records a running writer's active segment held when read.
+struct ActivePrefix {
+    start: Option<[u8; 32]>,
+    records: usize,
+}
+
+/// Verify the records of the active segment up to its last complete line,
+/// without its lock. The segment is append-only, so the bytes before its
+/// length at open never change under the writer. Returns `None` when there is
+/// no active segment or it holds no complete record yet.
+fn verify_active_prefix(
+    path: &Path,
+    hasher: &AuditChainHasher,
+) -> Result<Option<ActivePrefix>, AuditError> {
+    let file = match open_read(path) {
+        Ok(file) => file,
+        Err(AuditError::Io(error)) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    validate_owner_only_active_file(&file)?;
+    let length = file.metadata().map_err(AuditError::Io)?.len();
+    let mut reader = BufReader::new(file.take(length));
+    let mut prefix: Option<ActivePrefix> = None;
+    let mut expected_previous = None;
+    while let Some(BoundedLine::Complete(line)) = read_bounded_line(&mut reader)? {
+        let (_, verification) = verify_envelope_line(line.trim_end_matches('\n'), hasher)?;
+        let prefix = prefix.get_or_insert(ActivePrefix {
+            start: verification.start_prev_hash,
+            records: 0,
+        });
+        if prefix.records > 0 && verification.start_prev_hash != expected_previous {
+            return Err(AuditError::ChainForkDetected {
+                expected: OptionalHashHex(expected_previous),
+                found: OptionalHashHex(verification.start_prev_hash),
+            });
+        }
+        prefix.records = prefix.records.saturating_add(verification.records);
+        expected_previous = verification.last_hash;
+    }
+    Ok(prefix)
+}
+
+/// Ask the kernel whether the effective user has `access` to `path`, which
+/// also answers for a read-only mount that mode bits alone would miss.
+fn require_access(path: &Path, access: rustix::fs::Access) -> Result<(), AuditError> {
+    rustix::fs::accessat(rustix::fs::CWD, path, access, rustix::fs::AtFlags::EACCESS)
+        .map_err(|error| AuditError::Io(error.into()))
+}
+
 /// Verify a complete stopped chain and pass each exact verified envelope to a
 /// bounded caller-owned collector.
 ///
@@ -863,6 +972,25 @@ fn parse_envelope_strict(line: &str) -> Result<AuditEnvelope, AuditError> {
 }
 
 fn read_bounded_jsonl_line(reader: &mut BufReader<File>) -> Result<Option<String>, AuditError> {
+    match read_bounded_line(reader)? {
+        None => Ok(None),
+        Some(BoundedLine::Complete(line)) => Ok(Some(line)),
+        Some(BoundedLine::Unfinished) => Err(AuditError::Io(io::Error::new(
+            ErrorKind::InvalidData,
+            "audit JSONL has an incomplete final record",
+        ))),
+    }
+}
+
+/// One bounded line of a JSONL audit segment.
+enum BoundedLine {
+    /// A UTF-8 line ending in its newline.
+    Complete(String),
+    /// Bytes that reached the end of input without a newline.
+    Unfinished,
+}
+
+fn read_bounded_line(reader: &mut impl BufRead) -> Result<Option<BoundedLine>, AuditError> {
     let mut line = Vec::new();
     loop {
         let available = reader.fill_buf().map_err(AuditError::Io)?;
@@ -870,10 +998,7 @@ fn read_bounded_jsonl_line(reader: &mut BufReader<File>) -> Result<Option<String
             if line.is_empty() {
                 return Ok(None);
             }
-            return Err(AuditError::Io(io::Error::new(
-                ErrorKind::InvalidData,
-                "audit JSONL has an incomplete final record",
-            )));
+            return Ok(Some(BoundedLine::Unfinished));
         }
         let take = available
             .iter()
@@ -886,12 +1011,14 @@ fn read_bounded_jsonl_line(reader: &mut BufReader<File>) -> Result<Option<String
         line.extend_from_slice(&available[..take]);
         reader.consume(take);
         if found_newline {
-            return String::from_utf8(line).map(Some).map_err(|_| {
-                AuditError::Io(io::Error::new(
-                    ErrorKind::InvalidData,
-                    "audit JSONL is not UTF-8",
-                ))
-            });
+            return String::from_utf8(line)
+                .map(|line| Some(BoundedLine::Complete(line)))
+                .map_err(|_| {
+                    AuditError::Io(io::Error::new(
+                        ErrorKind::InvalidData,
+                        "audit JSONL is not UTF-8",
+                    ))
+                });
         }
     }
 }
@@ -1390,6 +1517,163 @@ mod tests {
         assert!(!summary.active_verified);
         assert_eq!(summary.records, 0);
         assert_eq!(summary.segments, 0);
+    }
+
+    #[test]
+    fn a_preflight_beside_a_running_writer_leaves_its_lock_alone() {
+        let (_directory, path, hasher) = fixture();
+        let writer = DurableSegmentedJsonlSink::open(&path, 1_048_576).expect("writer opens");
+
+        let summary = preflight_segmented_audit_sink(&path, &hasher)
+            .expect("a usable sink passes beside its writer");
+        assert!(!summary.active_verified);
+        assert!(matches!(
+            DurableSegmentedJsonlSink::open(&path, 1_048_576),
+            Err(AuditError::SinkLocked { .. })
+        ));
+        drop(writer);
+    }
+
+    fn other_hasher() -> AuditChainHasher {
+        AuditChainHasher::keyed(
+            AuditHashSecret::new(b"fedcba9876543210fedcba9876543210".to_vec()).expect("secret"),
+        )
+    }
+
+    /// A chain that has never rotated keeps every record in the active
+    /// segment, so a preflight that skipped it beside a writer would prove
+    /// nothing about the candidate's hash secret.
+    #[tokio::test]
+    async fn a_preflight_beside_a_running_writer_proves_its_records_under_the_secret() {
+        let (_directory, path, hasher) = fixture();
+        let sink = DurableSegmentedJsonlSink::open(&path, 1_048_576).expect("writer opens");
+        let chain = ChainState::bootstrap_or_start_empty(&sink, hasher.clone())
+            .await
+            .expect("chain starts");
+        for index in 0..3 {
+            chain
+                .append(&sink, json!({"index": index}))
+                .await
+                .expect("record appends");
+        }
+
+        let summary = preflight_segmented_audit_sink(&path, &hasher)
+            .expect("the writer's own secret verifies its records");
+        assert!(!summary.active_verified);
+        assert_eq!(summary.records, 3);
+        assert!(matches!(
+            preflight_segmented_audit_sink(&path, &other_hasher()),
+            Err(AuditError::ChainVerification(_))
+        ));
+        drop(chain);
+        drop(sink);
+    }
+
+    /// An append in flight leaves a final line without its newline. The
+    /// preflight proves the complete records before it and does not call the
+    /// running writer's unfinished write corruption.
+    #[tokio::test]
+    async fn a_preflight_beside_a_running_writer_stops_at_its_unfinished_line() {
+        let (_directory, path, hasher) = fixture();
+        let sink = DurableSegmentedJsonlSink::open(&path, 1_048_576).expect("writer opens");
+        let chain = ChainState::bootstrap_or_start_empty(&sink, hasher.clone())
+            .await
+            .expect("chain starts");
+        chain
+            .append(&sink, json!({"decision": "issued"}))
+            .await
+            .expect("record appends");
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("active segment opens")
+            .write_all(b"{\"partial\":")
+            .expect("an unfinished line lands");
+
+        let summary =
+            preflight_segmented_audit_sink(&path, &hasher).expect("the complete prefix verifies");
+        assert_eq!(summary.records, 1);
+        drop(chain);
+        drop(sink);
+    }
+
+    /// The active segment must continue the sealed history it follows, even
+    /// when the preflight reads it beside a running writer.
+    #[tokio::test]
+    async fn a_preflight_beside_a_running_writer_refuses_an_active_segment_from_another_chain() {
+        let (_directory, path, hasher) = fixture();
+        {
+            let sink = DurableSegmentedJsonlSink::open(&path, 450).expect("sink opens");
+            let chain = ChainState::bootstrap_or_start_empty(&sink, hasher.clone())
+                .await
+                .expect("chain starts");
+            for index in 0..6 {
+                chain
+                    .append(&sink, json!({"index": index, "padding": "x".repeat(160)}))
+                    .await
+                    .expect("record appends");
+            }
+        }
+        assert!(!sealed_segments(&path)
+            .expect("segments enumerate")
+            .is_empty());
+        let (_elsewhere, foreign, _) = fixture();
+        {
+            let sink = DurableSegmentedJsonlSink::open(&foreign, 1_048_576).expect("sink opens");
+            let chain = ChainState::bootstrap_or_start_empty(&sink, hasher.clone())
+                .await
+                .expect("chain starts");
+            chain
+                .append(&sink, json!({"decision": "elsewhere"}))
+                .await
+                .expect("record appends");
+        }
+        fs::write(&path, fs::read(&foreign).expect("foreign chain reads"))
+            .expect("active segment replaced");
+        let writer = DurableSegmentedJsonlSink::open(&path, 1_048_576);
+        let writer = writer.expect("a writer holds the lock without verifying");
+
+        assert!(matches!(
+            preflight_segmented_audit_sink(&path, &hasher),
+            Err(AuditError::ChainForkDetected { .. })
+        ));
+        drop(writer);
+    }
+
+    type StageUnusableSink = fn(&Path);
+
+    #[test]
+    fn a_preflight_refuses_what_a_writer_could_not_open() {
+        let unusable: [(&str, StageUnusableSink); 4] = [
+            ("an active file readable beyond its owner", |path| {
+                fs::write(path, "").expect("stage active file");
+                fs::set_permissions(path, fs::Permissions::from_mode(0o644)).expect("mode");
+            }),
+            ("an active file its owner cannot write", |path| {
+                fs::write(path, "").expect("stage active file");
+                fs::set_permissions(path, fs::Permissions::from_mode(0o400)).expect("mode");
+            }),
+            ("a lock companion readable beyond its owner", |path| {
+                let lock = lock_path(path);
+                fs::write(&lock, "").expect("stage lock companion");
+                fs::set_permissions(&lock, fs::Permissions::from_mode(0o644)).expect("mode");
+            }),
+            ("a directory its owner cannot write", |path| {
+                let parent = path.parent().expect("parent");
+                fs::set_permissions(parent, fs::Permissions::from_mode(0o500)).expect("mode");
+            }),
+        ];
+        for (label, stage) in unusable {
+            let (directory, path, hasher) = fixture();
+            stage(&path);
+            let outcome = preflight_segmented_audit_sink(&path, &hasher);
+            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+                .expect("restore directory mode");
+            assert!(
+                matches!(outcome, Err(AuditError::Io(_))),
+                "{label}: the preflight accepted a sink a writer could not open"
+            );
+        }
     }
 
     #[test]

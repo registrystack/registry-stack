@@ -133,6 +133,14 @@ configured audit path, fetches the access-token issuer key set fail-closed, and 
 configured source credential. It appends no audit event in either form, so a check that fails
 leaves the chain exactly as it found it.
 
+Opening the audit path takes its single-writer lock, so a candidate that shares that path with a
+running instance is refused with `another writer already holds the audit sink lock`. To check the
+candidate before cutover without stopping that instance, add `--without-audit-lock`. The audit
+directory and files are still checked for ownership, mode, and write access, and the retained chain
+is verified read-only under the candidate's hash secret, including the records the running instance
+has already written, so a wrong audit secret is refused before cutover. The lock stays with the
+running instance, and records it appends after the check are left to it.
+
 Changing only the container runtime does not change the governed bundle, so it does not require the
 fixture suite to run again. Run fixtures again when the bundle changes.
 

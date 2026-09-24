@@ -8,6 +8,11 @@
   a key version above `latest_version`, a key version below
   `min_encryption_version`, a public key mismatch, or a failed self-test. The
   causes carry no path, provider response, or key material.
+- Add `preflight_segmented_audit_sink`, which checks that a writer could open a
+  segmented audit sink (directory and file ownership, modes, and write access)
+  and verifies the retained chain read-only, without taking the writer lock a
+  running instance holds. Beside that writer it verifies the complete records
+  of the active segment too, up to its last full line.
 
 ## v0.34.0 - 2026-09-25
 

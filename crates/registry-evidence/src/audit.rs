@@ -15,9 +15,10 @@ use std::sync::atomic::Ordering;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 pub use registry_platform_audit::segmented_audit_paths as audit_segment_paths;
 use registry_platform_audit::{
-    verify_segmented_audit_chain, visit_stopped_segmented_audit_chain, AuditChainHasher,
-    AuditEnvelope, AuditError, AuditHashSecret, AuditKeyHasher, AuditProfile,
-    AuthorizationAuditEvent, AuthorizationOutcome, DurableSegmentedAuditLog,
+    preflight_segmented_audit_sink, verify_segmented_audit_chain,
+    visit_stopped_segmented_audit_chain, AuditChainHasher, AuditEnvelope, AuditError,
+    AuditHashSecret, AuditKeyHasher, AuditProfile, AuthorizationAuditEvent, AuthorizationOutcome,
+    DurableSegmentedAuditLog,
 };
 use registry_platform_crypto::canonicalize_json;
 use registry_platform_oidc::ActorKind;
@@ -900,24 +901,8 @@ impl EvidenceAuditLog {
         master_secret: Vec<u8>,
         key_version: u32,
     ) -> Result<Self, EvidenceAuditError> {
-        if maximum_file_bytes == 0 || key_version == 0 {
-            return Err(EvidenceAuditError::Configuration);
-        }
         let path = path.into();
-        if !path.is_absolute() {
-            return Err(AuditError::Io(IoError::new(
-                ErrorKind::InvalidInput,
-                "audit path must be absolute",
-            ))
-            .into());
-        }
-        if !path.parent().is_some_and(Path::is_dir) {
-            return Err(AuditError::Io(IoError::new(
-                ErrorKind::NotFound,
-                "audit parent directory is unavailable",
-            ))
-            .into());
-        }
+        validate_audit_storage(&path, maximum_file_bytes, key_version)?;
         let profile = AuditProfile::production_from_secret_bytes(Zeroizing::new(master_secret))?;
         let chain_hasher = profile.chain_hasher();
         let key_hasher = profile.key_hasher();
@@ -929,6 +914,27 @@ impl EvidenceAuditLog {
             key_hasher,
             key_version,
         })
+    }
+
+    /// Prove everything [`Self::initialize`] proves except the writer lock,
+    /// for a candidate staged beside the running writer that holds it.
+    ///
+    /// The storage bounds, the hash secret, the directory and file modes, and
+    /// write access are checked as startup checks them, and the retained chain
+    /// is verified read-only under the candidate's secret, including the
+    /// complete records of the active segment the running writer holds.
+    /// Nothing is appended and the running writer's lock is never taken.
+    pub fn preflight(
+        path: &Path,
+        maximum_file_bytes: u64,
+        master_secret: Vec<u8>,
+        key_version: u32,
+    ) -> Result<(), EvidenceAuditError> {
+        validate_audit_storage(path, maximum_file_bytes, key_version)?;
+        let profile = AuditProfile::production_from_secret_bytes(Zeroizing::new(master_secret))?;
+        preflight_segmented_audit_sink(path, &profile.chain_hasher())
+            .map_err(map_platform_audit_error)?;
+        Ok(())
     }
 
     pub fn pseudonym(
@@ -1377,6 +1383,33 @@ pub fn verify_audit_chain(
         last_sequence: summary.last_sequence,
         active_verified: summary.active_verified,
     })
+}
+
+/// The storage checks both startup and its lock-free preflight make before
+/// touching the audit directory.
+fn validate_audit_storage(
+    path: &Path,
+    maximum_file_bytes: u64,
+    key_version: u32,
+) -> Result<(), EvidenceAuditError> {
+    if maximum_file_bytes == 0 || key_version == 0 {
+        return Err(EvidenceAuditError::Configuration);
+    }
+    if !path.is_absolute() {
+        return Err(AuditError::Io(IoError::new(
+            ErrorKind::InvalidInput,
+            "audit path must be absolute",
+        ))
+        .into());
+    }
+    if !path.parent().is_some_and(Path::is_dir) {
+        return Err(AuditError::Io(IoError::new(
+            ErrorKind::NotFound,
+            "audit parent directory is unavailable",
+        ))
+        .into());
+    }
+    Ok(())
 }
 
 fn map_platform_audit_error(error: AuditError) -> EvidenceAuditError {
@@ -3940,6 +3973,42 @@ mod tests {
         let pruned = log.storage_usage().await.expect("usage reads");
         assert_eq!(pruned.segments, rolled.segments - 1);
         assert_eq!(pruned.bytes, rolled.bytes - archived);
+    }
+
+    /// A candidate staged with the wrong hash secret beside a writer whose
+    /// chain has never rotated must be refused before cutover, not by `serve`
+    /// after the running writer has stopped.
+    #[tokio::test]
+    async fn a_preflight_beside_the_writer_refuses_a_hash_secret_its_records_do_not_verify() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let writer = EvidenceAuditLog::initialize(
+            &path,
+            1_073_741_824,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("audit initializes");
+        writer.append(event(&writer)).await.expect("event appends");
+
+        EvidenceAuditLog::preflight(
+            &path,
+            1_073_741_824,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .expect("the writer's own secret verifies beside it");
+        assert!(matches!(
+            EvidenceAuditLog::preflight(
+                &path,
+                1_073_741_824,
+                b"fedcba9876543210fedcba9876543210".to_vec(),
+                1,
+            ),
+            Err(EvidenceAuditError::Audit(AuditError::ChainVerification(_)))
+        ));
+        assert!(writer.ready().await, "the preflight disturbed the writer");
     }
 
     /// Append past the per-segment bound and prove the sealed segment and the

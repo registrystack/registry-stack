@@ -61,6 +61,10 @@ impl JwksServer {
             while !worker_stop.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // A BSD socket inherits the listener's nonblocking
+                        // mode, which would read an empty request whenever
+                        // the client's bytes had not yet arrived.
+                        let _ = stream.set_nonblocking(false);
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                         let mut request = Vec::with_capacity(1_024);
                         while request.len() < 8_192
@@ -366,6 +370,177 @@ async fn dependency_check_fails_when_an_audit_writer_already_holds_the_sink() {
         "evidence: runtime audit initialization failed: another writer already holds the audit sink lock\n"
     );
     drop(writer);
+}
+
+/// A candidate staged beside the instance it will replace shares that
+/// instance's audit path, so the writer lock is held by design. The lock-free
+/// form proves everything else the candidate's start needs and leaves the
+/// running writer untouched.
+#[tokio::test]
+async fn dependency_check_without_the_audit_lock_passes_beside_a_running_writer() {
+    use registry_evidence::audit::EvidenceAuditLog;
+
+    let key_server = JwksServer::start();
+    let deployment = Deployment::stage("all-definitions");
+    deployment.stage_acceptance_secrets();
+    deployment.point_authentication_to(key_server.origin());
+    let writer = EvidenceAuditLog::initialize(
+        deployment.path("audit.jsonl"),
+        1_073_741_824,
+        b"audit-hash-secret-32-bytes-minimum-value".to_vec(),
+        1,
+    )
+    .await
+    .expect("first audit writer initializes");
+
+    let output = deployment.check_without_audit_lock();
+
+    assert_success(
+        &output,
+        "Evidence deployment ",
+        " passed check (4 requirements)\n",
+    );
+    assert!(
+        writer.ready().await,
+        "the lock-free check disturbed the running writer"
+    );
+    drop(writer);
+}
+
+/// One audit boundary the lock-free check must still refuse, with the exact
+/// operator text, and whether a writer holds the chain while it runs.
+struct LockFreeAuditCase {
+    label: &'static str,
+    running_writer: bool,
+    break_audit: fn(&Deployment),
+    expected: &'static str,
+}
+
+/// Leaving the lock to the running writer does not leave the rest of the audit
+/// boundary unchecked: a mode, a file the candidate could not write, and a
+/// retained chain that does not verify each refuse as they would at `serve`.
+#[tokio::test]
+async fn dependency_check_without_the_audit_lock_still_refuses_an_unusable_audit_boundary() {
+    use registry_evidence::audit::EvidenceAuditLog;
+
+    const STORAGE: &str = "evidence: runtime audit initialization failed: the audit file or lock \
+                           is not owner-only or not writable, or its directory is unavailable or \
+                           not owner-controlled\n";
+    let cases = [
+        LockFreeAuditCase {
+            label: "an audit file readable beyond its owner",
+            running_writer: false,
+            break_audit: |deployment| {
+                deployment.stage_audit_chain("");
+                set_mode(&deployment.path("audit.jsonl"), 0o644);
+            },
+            expected: STORAGE,
+        },
+        LockFreeAuditCase {
+            label: "an audit file the service owner cannot write",
+            running_writer: false,
+            break_audit: |deployment| {
+                deployment.stage_audit_chain("");
+                set_mode(&deployment.path("audit.jsonl"), 0o400);
+            },
+            expected: STORAGE,
+        },
+        LockFreeAuditCase {
+            label: "a running writer's audit file made readable beyond its owner",
+            running_writer: true,
+            break_audit: |deployment| set_mode(&deployment.path("audit.jsonl"), 0o644),
+            expected: STORAGE,
+        },
+        LockFreeAuditCase {
+            label: "an audit chain that does not verify",
+            running_writer: false,
+            break_audit: |deployment| {
+                deployment.stage_audit_chain("{\"not\":\"an audit record\"}\n");
+            },
+            expected: "evidence: runtime audit initialization failed: the existing audit chain \
+                       did not verify\n",
+        },
+    ];
+
+    for case in cases {
+        let key_server = JwksServer::start();
+        let deployment = Deployment::stage("all-definitions");
+        deployment.stage_acceptance_secrets();
+        deployment.point_authentication_to(key_server.origin());
+        let writer = if case.running_writer {
+            Some(
+                EvidenceAuditLog::initialize(
+                    deployment.path("audit.jsonl"),
+                    1_073_741_824,
+                    b"audit-hash-secret-32-bytes-minimum-value".to_vec(),
+                    1,
+                )
+                .await
+                .expect("first audit writer initializes"),
+            )
+        } else {
+            None
+        };
+        (case.break_audit)(&deployment);
+        let output = deployment.check_without_audit_lock();
+        drop(writer);
+
+        assert!(
+            !output.status.success(),
+            "{}: the lock-free check accepted an unusable audit boundary",
+            case.label
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "{}: a failed dependency check wrote output",
+            case.label
+        );
+        assert_eq!(
+            std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
+            case.expected,
+            "{}: unexpected diagnostic",
+            case.label
+        );
+    }
+}
+
+#[test]
+fn dependency_check_refuses_an_audit_directory_the_candidate_could_not_write() {
+    let key_server = JwksServer::start();
+    let deployment = Deployment::stage("all-definitions");
+    deployment.stage_acceptance_secrets();
+    deployment.point_authentication_to(key_server.origin());
+    set_mode(deployment.root.path(), 0o500);
+    let output = deployment.check_without_audit_lock();
+    set_mode(deployment.root.path(), 0o700);
+
+    assert!(
+        !output.status.success(),
+        "the lock-free check accepted an audit directory it could not write"
+    );
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
+        "evidence: runtime audit initialization failed: the audit file or lock is not owner-only \
+         or not writable, or its directory is unavailable or not owner-controlled\n"
+    );
+}
+
+#[test]
+fn check_accepts_the_lock_free_form_only_with_the_dependency_check() {
+    let deployment = Deployment::stage("all-definitions");
+    deployment.stage_acceptance_secrets();
+    deployment.seal();
+    let output = invoke(
+        &deployment.path("runtime.yaml"),
+        &["check", "--without-audit-lock"],
+    );
+    deployment.unseal();
+
+    assert!(
+        !output.status.success(),
+        "the lock-free form ran without the dependency check it qualifies"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--require-runtime-dependencies"));
 }
 
 #[test]
@@ -1943,7 +2118,8 @@ fn serve_names_why_the_audit_boundary_refused_to_initialize() {
                 None
             },
             expected: "evidence: runtime audit initialization failed: the audit file or lock is \
-                       not owner-only, or its directory is unavailable or not owner-controlled\n",
+                       not owner-only or not writable, or its directory is unavailable or not \
+                       owner-controlled\n",
         },
         AuditFaultCase {
             label: "an audit chain that does not verify",
@@ -3209,6 +3385,22 @@ outboundTls:
     fn bundle_check(&self) -> Output {
         self.seal();
         let output = invoke_bundle_check(&self.path("bundle"));
+        self.unseal();
+        output
+    }
+
+    /// Run the dependency proof without taking the audit writer lock, the form
+    /// that checks a candidate beside the instance holding that lock.
+    fn check_without_audit_lock(&self) -> Output {
+        self.seal();
+        let output = invoke(
+            &self.path("runtime.yaml"),
+            &[
+                "check",
+                "--require-runtime-dependencies",
+                "--without-audit-lock",
+            ],
+        );
         self.unseal();
         output
     }

@@ -30,7 +30,7 @@ use crate::{
         EvidenceRequestBatchAuditOutcomeKind, EvidenceRequestBatchAuditPhase, ResponseProtection,
     },
     auth::{AuthenticatedContext, AuthenticationError, Authenticator},
-    bundle::{Bundle, DeploymentInputs},
+    bundle::{Bundle, DeploymentInputs, RuntimeDocument},
     config::{
         subject_binding_permits_response_format, AcquisitionConfig, AssuranceProfile,
         AuthorityKind, ConceptForm, RequirementKind, ResponseFormat, RuntimeConfig,
@@ -105,8 +105,8 @@ pub enum AuditInitializationFault {
     Configuration,
     /// The audit hash secret is missing, unreadable, or too weak.
     Secret,
-    /// The audit file or lock is not owner-only and singly linked, or its
-    /// directory is not controlled by the service owner.
+    /// The audit file or lock is not owner-only, singly linked, and writable
+    /// by the service owner, or its directory is not controlled by that owner.
     Storage,
     /// Another writer already holds the sink's single-writer lock.
     Locked,
@@ -123,7 +123,7 @@ impl AuditInitializationFault {
             Self::Configuration => "the audit storage configuration is out of range",
             Self::Secret => "the audit hash secret is unusable",
             Self::Storage => {
-                "the audit file or lock is not owner-only, or its directory is unavailable or not owner-controlled"
+                "the audit file or lock is not owner-only or not writable, or its directory is unavailable or not owner-controlled"
             }
             Self::Locked => "another writer already holds the audit sink lock",
             Self::Chain => "the existing audit chain did not verify",
@@ -512,6 +512,160 @@ impl std::fmt::Debug for EvidenceRuntime {
     }
 }
 
+/// Compile every governed source against the runtime document that binds it.
+fn build_sources(
+    bundle: &Bundle,
+    runtime_document: &RuntimeDocument,
+    secrets: &Arc<SecretResolver>,
+) -> Result<BTreeMap<String, SourceExecutor>, RuntimeInitializationError> {
+    let runtime_config = &runtime_document.config;
+    let connection_pool = crate::source::SourceConnectionPool::new(
+        &bundle.config,
+        &runtime_config.outbound_tls,
+        &runtime_document.ca_bundles,
+        Arc::clone(secrets),
+    )
+    .map_err(|_| RuntimeInitializationError::Source)?;
+    let mut sources = BTreeMap::new();
+    for (source_id, source) in bundle.config.sources.iter() {
+        let allowed_selector_sets = bundle.config.source_selector_sets(source_id);
+        // A serving deployment has a runtime document, so a statement
+        // source is compiled against the file it will actually read. The
+        // statement's strong check runs here, at startup, rather than on
+        // the first request that needs it.
+        let statement = statement_inputs(source, bundle, Some(&runtime_document.source_extracts))
+            .map_err(|_| RuntimeInitializationError::Source)?;
+        let executor = SourceExecutor::new_with_selector_sets_and_connection_pool(
+            source,
+            &allowed_selector_sets,
+            &runtime_config.outbound_tls,
+            &runtime_document.ca_bundles,
+            statement,
+            Arc::clone(secrets),
+            &connection_pool,
+        )
+        .map_err(|_| RuntimeInitializationError::Source)?;
+        sources.insert(source_id.to_owned(), executor);
+    }
+    Ok(sources)
+}
+
+/// Build the per-principal rate limiter the bundle declares.
+fn rate_limiter(bundle: &Bundle) -> Result<EvidenceRateLimiter, RuntimeInitializationError> {
+    let configured_limits = &bundle.config.rate_limits;
+    EvidenceRateLimiter::new(RateLimitConfig {
+        requests_per_principal_per_minute: u32::try_from(
+            configured_limits.requests_per_principal_per_minute,
+        )
+        .map_err(|_| RuntimeInitializationError::RateLimit)?,
+        burst_per_principal: u32::try_from(configured_limits.burst_per_principal)
+            .map_err(|_| RuntimeInitializationError::RateLimit)?,
+        failed_selector_attempts_per_principal_authority_per_minute: u32::try_from(
+            configured_limits.failed_selector_attempts_per_principal_authority_per_minute,
+        )
+        .map_err(|_| RuntimeInitializationError::RateLimit)?,
+    })
+    .map_err(|_| RuntimeInitializationError::RateLimit)
+}
+
+/// Everything startup builds from one captured deployment, with whatever its
+/// audit step produced.
+struct Startup<A> {
+    kernel: OfflineKernel,
+    runtime_config: RuntimeConfig,
+    runtime_revision: String,
+    authenticator: Arc<dyn RuntimeAuthenticator>,
+    sources: BTreeMap<String, SourceExecutor>,
+    audit: A,
+    material: ValidatedSecretMaterial,
+    rate_limiter: EvidenceRateLimiter,
+}
+
+/// The one startup sequence, shared by `serve` and by the dependency check
+/// beside a running writer, so the two cannot drift apart. They differ only in
+/// `audit_step`: `serve` opens the sink as its single writer, the lock-free
+/// check proves it without the writer lock. The step receives the configured
+/// path, size bound, validated hash secret, and hash key version.
+async fn assemble<A>(
+    deployment: DeploymentInputs,
+    authenticator_override: Option<Arc<dyn RuntimeAuthenticator>>,
+    audit_step: impl AsyncFnOnce(&Path, u64, Vec<u8>, u32) -> Result<A, RuntimeInitializationError>,
+) -> Result<Startup<A>, RuntimeInitializationError> {
+    let (bundle, runtime_document) = deployment.into_parts();
+    let runtime_config = runtime_document.config.clone();
+    let runtime_revision = runtime_document.revision().to_owned();
+    let bundle = Arc::new(bundle);
+    let kernel = OfflineKernel::compile(Arc::clone(&bundle))
+        .map_err(|_| RuntimeInitializationError::Bundle)?;
+
+    let secrets = Arc::new(
+        SecretResolver::new(
+            [SecretProvider::File],
+            &runtime_config.secret_providers.file.root,
+        )
+        .map_err(|_| RuntimeInitializationError::Secrets)?,
+    );
+
+    let material = validate_secret_material(&bundle, &runtime_config, &secrets).await?;
+    let audit = audit_step(
+        Path::new(&runtime_config.audit_storage.path),
+        runtime_config.audit_storage.maximum_file_bytes,
+        material.audit_secret.expose_secret().to_vec(),
+        bundle.config.audit.hash_key_version,
+    )
+    .await?;
+
+    let sources = build_sources(&bundle, &runtime_document, &secrets)?;
+
+    let rate_limiter = rate_limiter(&bundle)?;
+
+    let authenticator = match authenticator_override {
+        Some(authenticator) => authenticator,
+        None => Arc::new(Authenticator::from_config(
+            &bundle.config.authentication,
+            bundle.config.assurance_profile,
+        )),
+    };
+
+    Ok(Startup {
+        kernel,
+        runtime_config,
+        runtime_revision,
+        authenticator,
+        sources,
+        audit,
+        material,
+        rate_limiter,
+    })
+}
+
+/// The readiness proof both readiness and the lock-free dependency check make
+/// beyond the audit sink: the subject-binding key, the signer, and every
+/// source's credentials.
+async fn dependencies_ready(
+    bundle: &Bundle,
+    subject_binding_secret: &ProtectedSecret,
+    signer: &EvidenceSigner,
+    sources: &BTreeMap<String, SourceExecutor>,
+) -> bool {
+    if validate_subject_binding_key(
+        subject_binding_secret.expose_secret(),
+        bundle.config.subject_binding.key_version,
+        &bundle.config.service.trust_domain,
+    )
+    .is_err()
+        || !signer.ensure_ready().await
+    {
+        return false;
+    }
+    for source in sources.values() {
+        if source.credentials_ready().await.is_err() {
+            return false;
+        }
+    }
+    true
+}
+
 impl EvidenceRuntime {
     /// Capture and initialize the complete Version 1 deployment at one revision.
     pub async fn initialize(runtime_path: &Path) -> Result<Self, RuntimeInitializationError> {
@@ -553,93 +707,27 @@ impl EvidenceRuntime {
         deployment: DeploymentInputs,
         authenticator_override: Option<Arc<dyn RuntimeAuthenticator>>,
     ) -> Result<Self, RuntimeInitializationError> {
-        let (bundle, runtime_document) = deployment.into_parts();
-        let runtime_config = runtime_document.config.clone();
-        let runtime_revision = runtime_document.revision().to_owned();
-        let bundle = Arc::new(bundle);
-        let kernel = OfflineKernel::compile(Arc::clone(&bundle))
-            .map_err(|_| RuntimeInitializationError::Bundle)?;
-
-        let secrets = Arc::new(
-            SecretResolver::new(
-                [SecretProvider::File],
-                &runtime_config.secret_providers.file.root,
-            )
-            .map_err(|_| RuntimeInitializationError::Secrets)?,
-        );
-
-        let material = validate_secret_material(&bundle, &runtime_config, &secrets).await?;
-        let audit = EvidenceAuditLog::initialize(
-            &runtime_config.audit_storage.path,
-            runtime_config.audit_storage.maximum_file_bytes,
-            material.audit_secret.expose_secret().to_vec(),
-            bundle.config.audit.hash_key_version,
+        let startup = assemble(
+            deployment,
+            authenticator_override,
+            async |path, maximum_file_bytes, secret, key_version| {
+                EvidenceAuditLog::initialize(path, maximum_file_bytes, secret, key_version)
+                    .await
+                    .map_err(|error| RuntimeInitializationError::Audit((&error).into()))
+            },
         )
-        .await
-        .map_err(|error| RuntimeInitializationError::Audit((&error).into()))?;
-
-        let connection_pool = crate::source::SourceConnectionPool::new(
-            &bundle.config,
-            &runtime_config.outbound_tls,
-            &runtime_document.ca_bundles,
-            Arc::clone(&secrets),
-        )
-        .map_err(|_| RuntimeInitializationError::Source)?;
-        let mut sources = BTreeMap::new();
-        for (source_id, source) in bundle.config.sources.iter() {
-            let allowed_selector_sets = bundle.config.source_selector_sets(source_id);
-            // A serving deployment has a runtime document, so a statement
-            // source is compiled against the file it will actually read. The
-            // statement's strong check runs here, at startup, rather than on
-            // the first request that needs it.
-            let statement =
-                statement_inputs(source, &bundle, Some(&runtime_document.source_extracts))
-                    .map_err(|_| RuntimeInitializationError::Source)?;
-            let executor = SourceExecutor::new_with_selector_sets_and_connection_pool(
-                source,
-                &allowed_selector_sets,
-                &runtime_config.outbound_tls,
-                &runtime_document.ca_bundles,
-                statement,
-                Arc::clone(&secrets),
-                &connection_pool,
-            )
-            .map_err(|_| RuntimeInitializationError::Source)?;
-            sources.insert(source_id.to_owned(), executor);
-        }
-
-        let configured_limits = &bundle.config.rate_limits;
-        let rate_limiter = EvidenceRateLimiter::new(RateLimitConfig {
-            requests_per_principal_per_minute: u32::try_from(
-                configured_limits.requests_per_principal_per_minute,
-            )
-            .map_err(|_| RuntimeInitializationError::RateLimit)?,
-            burst_per_principal: u32::try_from(configured_limits.burst_per_principal)
-                .map_err(|_| RuntimeInitializationError::RateLimit)?,
-            failed_selector_attempts_per_principal_authority_per_minute: u32::try_from(
-                configured_limits.failed_selector_attempts_per_principal_authority_per_minute,
-            )
-            .map_err(|_| RuntimeInitializationError::RateLimit)?,
-        })
-        .map_err(|_| RuntimeInitializationError::RateLimit)?;
-        let rate_limiter = Arc::new(rate_limiter);
-
+        .await?;
         Ok(Self {
-            kernel,
-            runtime_config,
-            runtime_revision,
-            authenticator: authenticator_override.unwrap_or_else(|| {
-                Arc::new(Authenticator::from_config(
-                    &bundle.config.authentication,
-                    bundle.config.assurance_profile,
-                ))
-            }),
-            sources,
-            audit: Arc::new(audit),
-            signer: material.signer,
-            jwks: material.jwks,
-            subject_binding_secret: material.subject_binding_secret,
-            rate_limiter,
+            kernel: startup.kernel,
+            runtime_config: startup.runtime_config,
+            runtime_revision: startup.runtime_revision,
+            authenticator: startup.authenticator,
+            sources: startup.sources,
+            audit: Arc::new(startup.audit),
+            signer: startup.material.signer,
+            jwks: startup.material.jwks,
+            subject_binding_secret: startup.material.subject_binding_secret,
+            rate_limiter: Arc::new(startup.rate_limiter),
         })
     }
 
@@ -694,23 +782,45 @@ impl EvidenceRuntime {
     /// failure, not a diagnosis.
     pub async fn ready(&self) -> bool {
         self.authenticator.probe_key_source().await;
-        if validate_subject_binding_key(
-            self.subject_binding_secret.expose_secret(),
-            self.bundle().config.subject_binding.key_version,
-            &self.bundle().config.service.trust_domain,
+        self.audit.ready().await
+            && dependencies_ready(
+                self.bundle(),
+                &self.subject_binding_secret,
+                &self.signer,
+                &self.sources,
+            )
+            .await
+    }
+
+    /// Prove the runtime dependencies of a candidate staged beside the running
+    /// instance it will replace, without taking the audit writer lock that
+    /// instance holds.
+    ///
+    /// Everything [`Self::initialize_from`] followed by [`Self::key_source_ready`]
+    /// and [`Self::ready`] proves is proved here, in the same order, except
+    /// that the audit sink is checked by [`EvidenceAuditLog::preflight`] rather
+    /// than opened. `Ok(false)` names a dependency that is unavailable, as
+    /// readiness does. No listener is bound and no audit event is appended.
+    pub async fn check_dependencies_without_audit_lock(
+        deployment: DeploymentInputs,
+    ) -> Result<bool, RuntimeInitializationError> {
+        let startup = assemble(
+            deployment,
+            None,
+            async |path, maximum_file_bytes, secret, key_version| {
+                EvidenceAuditLog::preflight(path, maximum_file_bytes, secret, key_version)
+                    .map_err(|error| RuntimeInitializationError::Audit((&error).into()))
+            },
         )
-        .is_err()
-            || !self.signer.ensure_ready().await
-            || !self.audit.ready().await
-        {
-            return false;
-        }
-        for source in self.sources.values() {
-            if source.credentials_ready().await.is_err() {
-                return false;
-            }
-        }
-        true
+        .await?;
+        Ok(startup.authenticator.key_source_ready().await
+            && dependencies_ready(
+                startup.kernel.bundle(),
+                &startup.material.subject_binding_secret,
+                &startup.material.signer,
+                &startup.sources,
+            )
+            .await)
     }
 
     /// Fail-closed key-source check used only by an explicit deployment

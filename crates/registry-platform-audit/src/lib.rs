@@ -11,8 +11,9 @@ pub use persistent_root::{require_audit_under, PersistentRootFault};
 mod segmented_jsonl;
 #[cfg(unix)]
 pub use segmented_jsonl::{
-    segmented_audit_paths, verify_segmented_audit_chain, visit_stopped_segmented_audit_chain,
-    DurableSegmentedAuditLog, DurableSegmentedJsonlSink, SegmentedAuditSummary,
+    preflight_segmented_audit_sink, segmented_audit_paths, verify_segmented_audit_chain,
+    visit_stopped_segmented_audit_chain, DurableSegmentedAuditLog, DurableSegmentedJsonlSink,
+    SegmentedAuditSummary,
 };
 
 use std::{
