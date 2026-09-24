@@ -106,6 +106,44 @@ journeys:
             channel: self-service
             effectiveAt: "2026-09-01T00:00:00Z"
         expect: {outcome: success, status: 200}
+      # A replay records no second decision: the feed and self counts below
+      # stay at three.
+      - id: amina-retries-lost-give-response
+        action: give-person-consent
+        accessProfile: person-consent-self
+        claims: *amina_claims
+        request:
+          operation: invoke
+          idempotencyKey: amina-give
+          input:
+            link: {recordRef: amina-link}
+            subject: {recordRef: amina}
+            clause: {recordRef: food-agency-clause}
+            recipient: food-agency
+            purpose: food-assistance
+            scope: food-targeting
+            decision: given
+            channel: self-service
+            effectiveAt: "2026-09-01T00:00:00Z"
+        expect: {outcome: success, status: 200}
+      - id: reused-give-key-with-different-body-is-refused
+        action: give-person-consent
+        accessProfile: person-consent-self
+        claims: *amina_claims
+        request:
+          operation: invoke
+          idempotencyKey: amina-give
+          input:
+            link: {recordRef: amina-link}
+            subject: {recordRef: amina}
+            clause: {recordRef: food-agency-clause}
+            recipient: food-agency
+            purpose: food-assistance
+            scope: food-targeting
+            decision: given
+            channel: self-service
+            effectiveAt: "2026-09-01T01:00:00Z"
+        expect: {outcome: refusal, status: 409, problemCode: idempotency.conflict}
       - id: food-agency-reads-after-consent
         entity: person
         accessProfile: food-targeting
