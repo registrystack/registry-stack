@@ -14,4 +14,5 @@ pub mod package;
 pub mod runtime;
 #[cfg(feature = "schema")]
 pub mod schema;
+pub mod smtp;
 pub mod store;

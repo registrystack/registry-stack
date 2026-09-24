@@ -191,6 +191,10 @@ ipnet = { version = "2" }
 # already holds in memory, so neither belongs in the dependency graph.
 jsonschema = { version = "0.18", default-features = false, features = ["draft202012"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
+# Messaging SMTP only. Default features stay off: no connection pool, no
+# native-tls, no hostname lookup, and no sendmail or file transport. `tracing`
+# stays off because it logs every written line, the AUTH exchange included.
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 # Messaging templates only. Every default feature stays off: no loader, no
 # includes, macros, or built-in filters and globals, so a template reaches
 # nothing but the closed filters and tests the renderer registers. `fuel`
