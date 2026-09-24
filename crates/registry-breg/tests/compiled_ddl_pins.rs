@@ -39,7 +39,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
         ddl_sha256: "65cd1da8f932b1e8e2dcbeaae51e00fa215db0cb9b03d5ca3b45a606f8eb9f78",
-        revision: "sha256:2aa601611a8a4797797f1b345ce946e148c8396a87d5b9869ba78f98711687a9",
+        revision: "sha256:abfebf5fb0fc6813a8bf895d7247a94e6ca151b95510c9daa8779a72127c9850",
     },
     Fixture {
         name: "facility-registry-actions",

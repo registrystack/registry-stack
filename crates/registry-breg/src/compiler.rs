@@ -262,7 +262,8 @@ pub fn compile_project_with_assets(
     );
     validate_project_entity_access_profiles(project, &mut diagnostics);
     expand_project_access(project, &mut sources, &mut diagnostics);
-    resolve_vocabularies(project, &mut sources, &mut action_sources, &mut diagnostics);
+    let vocabularies =
+        resolve_vocabularies(project, &mut sources, &mut action_sources, &mut diagnostics);
     validate_entities(&project.registry.id, &sources, profile, &mut diagnostics);
     crate::access::validate_access_requirements(&sources, &mut diagnostics);
     crate::membership::validate(&sources, &mut diagnostics);
@@ -298,9 +299,14 @@ pub fn compile_project_with_assets(
         &mut entities,
     )
     .map_err(CompileFailure::from_errors)?;
-    let mut action_inventory =
-        compile_immediate_actions(&action_sources, &entities, &project.access_profiles, assets)
-            .map_err(CompileFailure::from_errors)?;
+    let mut action_inventory = compile_immediate_actions(
+        &action_sources,
+        &entities,
+        &project.access_profiles,
+        assets,
+        &vocabularies,
+    )
+    .map_err(CompileFailure::from_errors)?;
     crate::action_evidence_contracts::compile_evidence(project, assets, &mut action_inventory)
         .map_err(CompileFailure::from_errors)?;
     findings.extend(crate::access::compiled_access_findings(
@@ -2019,7 +2025,7 @@ fn resolve_vocabularies(
     entities: &mut BTreeMap<String, EntitySource>,
     actions: &mut BTreeMap<String, CollectedActionSource>,
     errors: &mut Vec<Diagnostic>,
-) {
+) -> BTreeMap<String, Vec<String>> {
     let mut vocabularies = BTreeMap::new();
     for vocabulary in &project.vocabularies {
         validate_id(&vocabulary.id, "project.vocabularies[].id", errors);
@@ -2111,6 +2117,7 @@ fn resolve_vocabularies(
             }
         }
     }
+    vocabularies
 }
 
 fn validate_entities(

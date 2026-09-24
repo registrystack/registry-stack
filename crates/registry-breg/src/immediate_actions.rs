@@ -42,6 +42,7 @@ pub(crate) fn compile_immediate_actions(
     entities: &BTreeMap<String, CompiledEntity>,
     profiles: &[ProjectAccessProfileSource],
     assets: &[crate::contract::ModuleAssetSource],
+    vocabularies: &BTreeMap<String, Vec<String>>,
 ) -> Result<CompiledActionInventory, Vec<Diagnostic>> {
     let mut errors = Vec::new();
     validate_action_permission_sources(actions, profiles, &mut errors);
@@ -91,10 +92,21 @@ pub(crate) fn compile_immediate_actions(
     if !errors.is_empty() {
         return Err(errors);
     }
+    let input_vocabularies = compiled_actions
+        .iter()
+        .flat_map(|action| &action.inputs)
+        .filter_map(|input| match &input.field_type {
+            FieldTypeSource::VocabularyCode { vocabulary, .. } => vocabularies
+                .get(vocabulary)
+                .map(|codes| (vocabulary.clone(), codes.iter().cloned().collect())),
+            _ => None,
+        })
+        .collect();
     Ok(CompiledActionInventory {
         actions: compiled_actions,
         routes,
         access,
+        input_vocabularies,
     })
 }
 
@@ -2004,13 +2016,16 @@ fn entity_permission_fields_empty(grant: &crate::contract::AccessPermissionSourc
 
 /// Whether `after` differs from `before` only by vocabulary codes added to its
 /// inputs or to the fields of the entities it targets, so every request the
-/// previous contract accepted keeps the same meaning. Any other difference,
-/// including a fingerprint an earlier compiler derived differently, is not.
+/// previous contract accepted keeps the same meaning. An input may gain only
+/// codes new to its vocabulary in this revision: one that starts accepting a
+/// code its vocabulary already had, such as a withdrawal that starts giving,
+/// changes what the action does. Any other difference, including a fingerprint
+/// an earlier compiler derived differently, is not.
 #[cfg(feature = "runtime")]
 pub(crate) fn contract_only_adds_vocabulary_codes(
-    before: &CompiledAction,
+    (before, previous_vocabularies): (&CompiledAction, &BTreeMap<String, BTreeSet<String>>),
     previous_entities: &BTreeMap<String, CompiledEntity>,
-    after: &CompiledAction,
+    (after, vocabularies): (&CompiledAction, &BTreeMap<String, BTreeSet<String>>),
     entities: &BTreeMap<String, CompiledEntity>,
 ) -> bool {
     let inputs = after
@@ -2019,10 +2034,12 @@ pub(crate) fn contract_only_adds_vocabulary_codes(
         .map(|input| {
             let mut input = input.clone();
             if let Some(previous) = before.inputs.iter().find(|other| other.id == input.id) {
-                if input
-                    .field_type
-                    .keeps_vocabulary_codes_of(&previous.field_type)
-                {
+                if input_gains_only_new_codes(
+                    &previous.field_type,
+                    &input.field_type,
+                    previous_vocabularies,
+                    vocabularies,
+                ) {
                     input.field_type = previous.field_type.clone();
                 }
             }
@@ -2056,6 +2073,39 @@ pub(crate) fn contract_only_adds_vocabulary_codes(
         (&after.requires, after.consent_issuer),
         &after.permissions,
     ) == before.contract_fingerprint
+}
+
+/// Whether an action input keeps every code it accepted and gains only codes
+/// its vocabulary did not have before. A predecessor that recorded no codes for
+/// the vocabulary cannot tell, so the input fails closed to a reviewed change.
+#[cfg(feature = "runtime")]
+fn input_gains_only_new_codes(
+    previous: &FieldTypeSource,
+    after: &FieldTypeSource,
+    previous_vocabularies: &BTreeMap<String, BTreeSet<String>>,
+    vocabularies: &BTreeMap<String, BTreeSet<String>>,
+) -> bool {
+    let (
+        FieldTypeSource::VocabularyCode {
+            vocabulary,
+            values: previous_values,
+        },
+        FieldTypeSource::VocabularyCode { values, .. },
+    ) = (previous, after)
+    else {
+        return false;
+    };
+    let (Some(previous_codes), Some(codes)) = (
+        previous_vocabularies.get(vocabulary),
+        vocabularies.get(vocabulary),
+    ) else {
+        return false;
+    };
+    after.keeps_vocabulary_codes_of(previous)
+        && values
+            .iter()
+            .filter(|value| !previous_values.contains(value))
+            .all(|value| codes.contains(value) && !previous_codes.contains(value))
 }
 
 fn contract_fingerprint(

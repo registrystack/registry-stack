@@ -503,6 +503,11 @@ pub struct CompiledActionInventory {
     pub actions: Vec<CompiledAction>,
     pub routes: Vec<CompiledActionRoute>,
     pub access: Vec<CompiledActionAccessEntry>,
+    /// Every code of each vocabulary an action input is bound to, including
+    /// codes no input accepts. A successor compares them to tell a code new to
+    /// its vocabulary from one an input only started accepting.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub input_vocabularies: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl CompiledActionInventory {

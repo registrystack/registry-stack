@@ -1690,12 +1690,12 @@ fn compare_actions(
         let (class, code) = match candidate_actions.get(id) {
             Some(after) if before.contract_fingerprint == after.contract_fingerprint => continue,
             // Every request the previous contract accepted keeps its meaning;
-            // the action only accepts the codes its fields gained.
+            // the action only accepts codes new to its vocabularies.
             Some(after)
                 if crate::immediate_actions::contract_only_adds_vocabulary_codes(
-                    before,
+                    (before, &previous.actions.input_vocabularies),
                     &previous.entities,
-                    after,
+                    (after, &candidate.actions.input_vocabularies),
                     &candidate.entities,
                 ) =>
             {
