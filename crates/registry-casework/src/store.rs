@@ -631,6 +631,16 @@ impl PostgresStore {
         {
             crate::reconcile_clock_observation(&transaction, observation, clock, Utc::now())
                 .await?;
+            // The display reference is derived through the binding's
+            // `displayReference` field, which can change without changing the
+            // binding generation or the source revision. Keep the stored copy
+            // that inbox reference lookup reads in step with the source. The
+            // item revision stays put: callers are shown the reference the
+            // source discloses to them, so the item they see has not changed.
+            transaction.execute(
+                "UPDATE casework_items SET display_reference=$4 WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3 AND erased_at IS NULL AND state NOT IN ('completed','superseded','cancelled') AND display_reference IS DISTINCT FROM $4",
+                &[&observation.subject.source_id,&observation.subject.kind,&observation.subject.id,&observation.display_reference]
+            ).await?;
             transaction.execute(
                 "UPDATE casework_subjects SET sync_pending=(wanted_revision>$4),sync_lease_until=NULL WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3",
                 &[&observation.subject.source_id,&observation.subject.kind,&observation.subject.id,&observation.ordered_revision]

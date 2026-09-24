@@ -72,6 +72,12 @@
   sources once, because their stored generation differs from the new formula;
   claims, drafts, and pending attempts on them do not carry over. Finish or
   settle source-backed work before upgrading.
+- Fix inbox reference lookup missing a work item after the binding's
+  `displayReference` changed. Changing it keeps the binding generation, so the
+  item kept the reference stored when it was first observed and a lookup by
+  the reference the source now discloses did not find it. Reconciliation now
+  refreshes the stored reference of open work items even when the source
+  revision is unchanged, without changing the item revision or history.
 - Fix `casework migrate` silently dropping hosted work. Migration 15, which
   replaces the hosted work tables with unified reviews, dropped them even
   when they still held in-flight items or retained accountability records.

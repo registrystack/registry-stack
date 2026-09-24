@@ -1052,6 +1052,80 @@ async fn returning_to_an_earlier_binding_generation_opens_a_fresh_occurrence() {
     );
 }
 
+async fn item_reference_revision_and_history(
+    client: &tokio_postgres::Client,
+    item_id: uuid::Uuid,
+) -> (Option<String>, i64, i64) {
+    let row = client
+        .query_one(
+            "SELECT i.display_reference,i.revision,(SELECT count(*) FROM casework_history h WHERE h.item_id=i.item_id) FROM casework_items i WHERE i.item_id=$1",
+            &[&item_id],
+        )
+        .await
+        .expect("read the stored item");
+    (row.get(0), row.get(1), row.get(2))
+}
+
+#[tokio::test]
+async fn an_unchanged_source_revision_refreshes_the_stored_display_reference() {
+    let (store, client, _schema) = isolated_schema("display_reference").await;
+    store.migrate().await.expect("migrate");
+    store
+        .register_source_generation("source-a", "binding-a")
+        .await
+        .expect("bind the source generation");
+    let mut observed = observation(
+        1,
+        "proposal-1",
+        OccurrenceKind::Review,
+        OccurrenceState::Open,
+    );
+    observed.display_reference = Some("REF-FIRST".to_owned());
+    let item_id = store
+        .apply_observation(&observed, "default", None)
+        .await
+        .expect("the first observation applies")
+        .expect("the first observation opens an item")
+        .item_id;
+    let (reference, revision, history) =
+        item_reference_revision_and_history(&client, item_id).await;
+    assert_eq!(reference.as_deref(), Some("REF-FIRST"));
+
+    // The same source revision and representation, read through a binding
+    // whose displayReference now names another field.
+    observed.display_reference = Some("REF-SECOND".to_owned());
+    assert!(store
+        .apply_observation(&observed, "default", None)
+        .await
+        .expect("the unchanged revision applies")
+        .is_none());
+    assert_eq!(
+        item_reference_revision_and_history(&client, item_id).await,
+        (Some("REF-SECOND".to_owned()), revision, history),
+        "the stored reference follows the source while the item revision and history stay put"
+    );
+
+    observed.display_reference = None;
+    store
+        .apply_observation(&observed, "default", None)
+        .await
+        .expect("the unchanged revision without a reference applies");
+    assert_eq!(
+        item_reference_revision_and_history(&client, item_id).await,
+        (None, revision, history),
+        "a reference the source no longer discloses is not kept"
+    );
+    let applied: i64 = client
+        .query_one(
+            "SELECT applied_revision FROM casework_subjects WHERE source_id='source-a' AND subject_kind='request-a' AND subject_id='subject-a'",
+            &[],
+        )
+        .await
+        .expect("read the subject ledger")
+        .get(0);
+    assert_eq!(applied, 1);
+}
+
 #[tokio::test]
 async fn a_database_failure_names_the_violated_constraint_without_row_data() {
     let (store, client, _schema) = isolated_schema("constraint_name").await;
