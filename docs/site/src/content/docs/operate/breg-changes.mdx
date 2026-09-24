@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-24"
+last_reviewed: "2026-09-25"
 doc_type: how-to
 persona:
   - operator
@@ -45,7 +45,10 @@ as widening or narrowing, and mixed changes are marked for review. A change to c
 recipients, or a consent-issuing action carries a `reason` when it alters who holds an existing
 consent, such as a client added to a recipient organization or a gated profile widened in place.
 The `reason` is a review aid in the diff output, not a runtime guarantee: the successor enforces
-exactly what its package declares.
+exactly what its package declares. Replacing a `batch` grant with `import`, which a successor that
+puts an entity under change control needs, removes the entity's `:batch` route, and the diff
+reports it as a route removal; an entity whose loader already held `import` keeps the same route
+when change control is added.
 
 Removing a field or an entity is not erasure. The successor drops the live column or table, but
 every revision snapshot recorded before it still holds the removed values in
@@ -262,6 +265,13 @@ active package, then confirms under the migration lock that the database records
 package, by revision digest, schema fingerprint, sequence, and deployment identity, as active with
 no maintenance pending. It exits 0 with `activation: already_active` and changes nothing. Another
 package that only shares the active sequence still refuses with `apply.package.binding_mismatch`.
+
+An activation supersedes every open import authority, because each is bound to the package
+revision it opened under: from the moment the successor is active, no chunk or new run is
+admitted under it, and an `import` run in progress stops as `blocked`. The first load or
+`bregctl import-authority` command that observes it records the supersession. Open a new
+authority under the successor to continue a load, as
+[move data in bulk](../breg-data/#load-a-governed-entity-through-an-import-window) describes.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, ApplyArgs;
     crates/registry-bregctl/src/apply_lifecycle.rs, confirm_already_active();
