@@ -4,6 +4,8 @@
 //! same dependency check without binding the public listener or sending an
 //! evidence-data request. Audit initialization may briefly create its
 //! operational lock file, but it never appends an application audit event.
+//! With `--without-audit-lock` it leaves that lock to the running instance
+//! that holds it and proves the rest of the audit destination read-only.
 
 use std::{
     io::Write as _,
@@ -43,6 +45,13 @@ pub(crate) struct DoctorArgs {
     /// Also prove that the audit destination resolves below this persistent root.
     #[arg(long, value_name = "ABSOLUTE_DIRECTORY", requires = "runtime_config")]
     require_audit_under: Option<PathBuf>,
+    /// Prove the audit destination without taking its single-writer lock.
+    ///
+    /// For a candidate staged beside the running instance it will replace,
+    /// which holds that lock. Modes, write access, and a complete final entry
+    /// are still proved, and every other dependency is proved as without it.
+    #[arg(long, requires = "runtime_config")]
+    without_audit_lock: bool,
     /// Path to the matching Evidence runtime binary.
     #[arg(long, hide = true, requires = "runtime_config")]
     evidence_bin: Option<PathBuf>,
@@ -120,7 +129,7 @@ pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
             error
         }
     })?;
-    let base = invoke_check(&evidence, &runtime_config, false, None)?;
+    let base = invoke_check(&evidence, &runtime_config, false, None, false)?;
     if !base.status.success() {
         let dependency_failure = runtime_diagnostic_is_dependency_failure(&base.stderr);
         return render_refusal(
@@ -145,6 +154,7 @@ pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
         &runtime_config,
         true,
         args.require_audit_under.as_deref(),
+        args.without_audit_lock,
     )?;
 
     if dependency.status.success() {
@@ -152,7 +162,7 @@ pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
             operation: "doctor",
             status: "ready",
             runtime_config: &runtime_config,
-            proof_boundary: "live startup dependency preflight; no public listener, evidence-data request, or application audit event was produced",
+            proof_boundary: proof_boundary(args.without_audit_lock),
             diagnostics: Vec::new(),
         };
         match format {
@@ -163,7 +173,11 @@ pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
                     "Dependency preflight passed for {}",
                     runtime_config.display()
                 );
-                println!("Proof: startup dependencies were checked without opening the public listener, sending an evidence-data request, or appending an application audit event. Audit initialization may briefly hold its operational lock.");
+                println!("Proof: startup dependencies were checked without opening the public listener, sending an evidence-data request, or appending an application audit event. {}", if args.without_audit_lock {
+                    "The audit writer lock was not taken, so a second writer is not detected. The audit destination's ownership, modes, write access, and complete final entry were checked."
+                } else {
+                    "Audit initialization may briefly hold its operational lock."
+                });
             }
         }
         return Ok(ExitCode::SUCCESS);
@@ -177,6 +191,37 @@ pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
         &dependency.stderr,
         3,
     )
+}
+
+const LOCKED_PROOF_BOUNDARY: &str = "live startup dependency preflight; no public listener, evidence-data request, or application audit event was produced";
+
+const LOCK_FREE_PROOF_BOUNDARY: &str = "live startup dependency preflight without the audit writer lock; no public listener, evidence-data request, or application audit event was produced; the audit writer lock was not taken, so a second writer is not detected";
+
+/// What a passing dependency preflight proved, for the report a consumer
+/// reads. The lock-free form proves less, and says so.
+fn proof_boundary(without_audit_lock: bool) -> &'static str {
+    if without_audit_lock {
+        LOCK_FREE_PROOF_BOUNDARY
+    } else {
+        LOCKED_PROOF_BOUNDARY
+    }
+}
+
+const DEFAULT_ACTION: &str = "Read the value-free Evidence diagnostic, correct the selected runtime artifact or dependency, and rerun doctor.";
+
+const HELD_LOCK_ACTION: &str = "Another Evidence instance holds this audit destination's writer lock. To check a candidate staged beside it, rerun doctor with --without-audit-lock; otherwise stop the other writer first.";
+
+/// The next step for a refusal. A held writer lock is the one refusal a
+/// candidate beside a running instance meets by design, so it names the
+/// lock-free form; every other refusal is corrected where the diagnostic says.
+fn suggested_action(runtime_diagnostic: &[u8]) -> &'static str {
+    if String::from_utf8_lossy(runtime_diagnostic)
+        .contains("another process holds the single-writer lock beside the audit file")
+    {
+        HELD_LOCK_ACTION
+    } else {
+        DEFAULT_ACTION
+    }
 }
 
 fn runtime_diagnostic_is_dependency_failure(diagnostic: &[u8]) -> bool {
@@ -205,6 +250,7 @@ fn invoke_check(
     runtime_config: &std::path::Path,
     dependencies: bool,
     audit_root: Option<&std::path::Path>,
+    without_audit_lock: bool,
 ) -> Result<CheckOutcome> {
     let mut stdout = tempfile::tempfile().context("creating private Evidence doctor output")?;
     let mut stderr =
@@ -222,6 +268,9 @@ fn invoke_check(
     }
     if let Some(root) = audit_root {
         command.arg("--require-audit-under").arg(root);
+    }
+    if without_audit_lock {
+        command.arg("--without-audit-lock");
     }
     let mut child = command.spawn().with_context(|| {
         format!(
@@ -302,14 +351,18 @@ fn render_refusal(
         operation: "doctor",
         status,
         runtime_config,
-        proof_boundary: "live startup dependency preflight; no public listener, evidence-data request, or application audit event was produced",
+        proof_boundary: LOCKED_PROOF_BOUNDARY,
         diagnostics: vec![Diagnostic {
             severity: "error",
             code,
             artifact: runtime_config.display().to_string(),
             path: "$",
-            message: if detail.is_empty() { "Evidence runtime check failed without a diagnostic.".to_owned() } else { detail },
-            suggested_action: "Read the value-free Evidence diagnostic, correct the selected runtime artifact or dependency, and rerun doctor.",
+            message: if detail.is_empty() {
+                "Evidence runtime check failed without a diagnostic.".to_owned()
+            } else {
+                detail
+            },
+            suggested_action: suggested_action(runtime_diagnostic),
         }],
     };
     match format {
@@ -320,9 +373,13 @@ fn render_refusal(
                 runtime_config.display()
             );
             std::io::stderr().write_all(runtime_diagnostic)?;
-            eprintln!(
-                "Next: correct the selected runtime artifact or dependency and rerun doctor."
-            );
+            if suggested_action(runtime_diagnostic) == HELD_LOCK_ACTION {
+                eprintln!("Next: {HELD_LOCK_ACTION}");
+            } else {
+                eprintln!(
+                    "Next: correct the selected runtime artifact or dependency and rerun doctor."
+                );
+            }
         }
     }
     Ok(ExitCode::from(exit))
@@ -360,7 +417,8 @@ mod tests {
         .expect("script");
         drop(script);
 
-        let outcome = invoke_check(&binary, &runtime, true, Some(root.path())).expect("preflight");
+        let outcome =
+            invoke_check(&binary, &runtime, true, Some(root.path()), false).expect("preflight");
         assert!(outcome.status.success());
         let invoked = fs::read_to_string(arguments).expect("arguments");
         assert_eq!(
@@ -374,6 +432,43 @@ mod tests {
         assert!(!invoked.contains("serve"));
         assert!(!invoked.contains("evaluate"));
         assert!(!root.path().join("audit.jsonl").exists());
+
+        let outcome = invoke_check(&binary, &runtime, true, None, true).expect("preflight");
+        assert!(outcome.status.success());
+        assert_eq!(
+            fs::read_to_string(root.path().join("arguments")).expect("arguments"),
+            format!(
+                "--runtime\n{}\ncheck\n--require-runtime-dependencies\n--without-audit-lock\n",
+                runtime.display()
+            )
+        );
+    }
+
+    /// An automated consumer reads `proofBoundary`, not the human lines, so
+    /// the lock-free form must say there what it left unproved.
+    #[test]
+    fn the_lock_free_form_states_its_own_proof_boundary() {
+        let locked = proof_boundary(false);
+        let lock_free = proof_boundary(true);
+        assert_ne!(locked, lock_free);
+        assert!(!locked.contains("lock"));
+        assert!(lock_free.contains("audit writer lock was not taken"));
+        assert!(lock_free.contains("second writer is not detected"));
+    }
+
+    #[test]
+    fn a_held_audit_lock_points_at_the_lock_free_form() {
+        assert_eq!(
+            suggested_action(
+                b"evidence: runtime audit initialization failed: another process holds the \
+                  single-writer lock beside the audit file; stop it before starting this one\n"
+            ),
+            HELD_LOCK_ACTION
+        );
+        assert_eq!(
+            suggested_action(b"evidence: runtime secret initialization failed\n"),
+            DEFAULT_ACTION
+        );
     }
 
     #[test]

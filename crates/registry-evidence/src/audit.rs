@@ -908,6 +908,24 @@ impl EvidenceAuditLog {
         })
     }
 
+    /// Prove everything [`Self::initialize`] proves except the writer lock,
+    /// for a candidate staged beside the running writer that holds it.
+    ///
+    /// The hash key and key version are checked as startup checks them, and
+    /// the destination is checked with [`AuditDestination::check_writable`]:
+    /// the directory and file modes, write access, and a complete final entry
+    /// in the active file. Nothing is appended and the running writer's lock
+    /// is never taken, so a second writer is not detected here.
+    pub fn preflight(
+        destination: &AuditDestination,
+        master_secret: Vec<u8>,
+        key_version: u32,
+    ) -> Result<(), EvidenceAuditError> {
+        identifier_key_hasher(master_secret, key_version)?;
+        destination.check_writable()?;
+        Ok(())
+    }
+
     pub fn pseudonym(
         &self,
         class: &str,
