@@ -139,10 +139,10 @@ to prevent unsafe idempotency-key reissue until accountability expiry. The
 producer and initiator identities are kept as request-bound sha256 tombstones for the
 same period, so either one still receives `410` rather than `404` for an
 expired request.
-A subject clock that a changes-requested round paused, or a superseded round
-left running, is the one clock occurrence kept past result expiry: a later round
-of the same review kind continues it, and otherwise it is deleted at the
-accountability deadline.
+A subject clock that a changes-requested round paused continues only if a later
+round of the same review kind arrives inside that result window, which moves the
+clock to the later round. Otherwise it is erased with the round, and a round
+submitted after that starts a fresh subject clock with a full deadline.
 
 ## Absence cover and explicit assignment
 
