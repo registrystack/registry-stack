@@ -46,7 +46,8 @@ use crate::migration_plan::{
 };
 use crate::model::{
     CompiledAccessInventory, CompiledActionInventory, CompiledEntity, CompiledQueryInventory,
-    CompiledQueryOperation, CompiledQueryTemporalValueKind, CompiledRouteInventory,
+    CompiledQueryOperation, CompiledQueryTemporalValueKind, CompiledRecipients,
+    CompiledRouteInventory,
 };
 use crate::physical_names::PhysicalNameInventory;
 use crate::CompiledRegistry;
@@ -216,6 +217,8 @@ pub struct CompiledRegistryMigrationBaseline {
     pub queries: CompiledQueryInventory,
     #[serde(default, skip_serializing_if = "CompiledActionInventory::is_empty")]
     pub actions: CompiledActionInventory,
+    #[serde(default, skip_serializing_if = "CompiledRecipients::is_empty")]
+    pub recipients: CompiledRecipients,
 }
 
 impl CompiledRegistryMigrationBaseline {
@@ -231,6 +234,7 @@ impl CompiledRegistryMigrationBaseline {
             access: compiled.access().clone(),
             queries: compiled.queries().clone(),
             actions: compiled.actions().clone(),
+            recipients: compiled.recipients().clone(),
         }
     }
 }
@@ -315,6 +319,13 @@ pub enum CompiledRegistryChangeCode {
     ActionRemoved,
     ActionChanged,
     ActionVocabularyCodesAdded,
+    ConsentRecordChanged,
+    RecipientOrganizationAdded,
+    RecipientOrganizationRemoved,
+    RecipientOrganizationChanged,
+    RecipientGroupAdded,
+    RecipientGroupRemoved,
+    RecipientGroupChanged,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -342,6 +353,7 @@ pub enum CompiledRegistryChangeTargetKind {
     QueryInventory,
     Event,
     Action,
+    Recipient,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1017,6 +1029,7 @@ pub fn compiled_registry_change_set_from_baseline(
     compare_routes(previous, &candidate_baseline, &mut changes);
     compare_query_inventory(previous, &candidate_baseline, &mut changes);
     compare_actions(previous, &candidate_baseline, &mut changes);
+    compare_recipients(previous, &candidate_baseline, &mut changes);
     sort_changes(&mut changes);
     changes.dedup();
 
@@ -1191,6 +1204,18 @@ fn compare_entities(
                 changes,
                 CompiledRegistryChangeClass::AccessOrDisclosureChange,
                 CompiledRegistryChangeCode::EntityAccessRequirementsChanged,
+                target(
+                    CompiledRegistryChangeTargetKind::Entity,
+                    Some(entity_id.as_str()),
+                    None,
+                ),
+            );
+        }
+        if previous_entity.consent_record != candidate_entity.consent_record {
+            push_change(
+                changes,
+                CompiledRegistryChangeClass::AccessOrDisclosureChange,
+                CompiledRegistryChangeCode::ConsentRecordChanged,
                 target(
                     CompiledRegistryChangeTargetKind::Entity,
                     Some(entity_id.as_str()),
@@ -1704,6 +1729,74 @@ fn compare_actions(
                 target(CompiledRegistryChangeTargetKind::Action, None, Some(id)),
             );
         }
+    }
+}
+
+/// Recipients are project-level runtime configuration: they change no DDL, so
+/// each change needs its own code for the diff to show it and for activation
+/// to carry it as a metadata-only plan.
+fn compare_recipients(
+    previous: &CompiledRegistryMigrationBaseline,
+    candidate: &CompiledRegistryMigrationBaseline,
+    changes: &mut Vec<CompiledRegistryChange>,
+) {
+    use CompiledRegistryChangeCode as Code;
+    compare_recipient_list(
+        &previous.recipients.organizations,
+        &candidate.recipients.organizations,
+        |organization| &organization.id,
+        [
+            Code::RecipientOrganizationAdded,
+            Code::RecipientOrganizationRemoved,
+            Code::RecipientOrganizationChanged,
+        ],
+        changes,
+    );
+    compare_recipient_list(
+        &previous.recipients.groups,
+        &candidate.recipients.groups,
+        |group| &group.id,
+        [
+            Code::RecipientGroupAdded,
+            Code::RecipientGroupRemoved,
+            Code::RecipientGroupChanged,
+        ],
+        changes,
+    );
+}
+
+fn compare_recipient_list<T: PartialEq>(
+    previous: &[T],
+    candidate: &[T],
+    id: impl Fn(&T) -> &String,
+    [added, removed, changed]: [CompiledRegistryChangeCode; 3],
+    changes: &mut Vec<CompiledRegistryChange>,
+) {
+    let before = previous
+        .iter()
+        .map(|item| (id(item), item))
+        .collect::<BTreeMap<_, _>>();
+    let after = candidate
+        .iter()
+        .map(|item| (id(item), item))
+        .collect::<BTreeMap<_, _>>();
+    for recipient in before.keys().chain(after.keys()).collect::<BTreeSet<_>>() {
+        let code = match (before.get(recipient), after.get(recipient)) {
+            (Some(left), Some(right)) if left == right => continue,
+            (Some(_), Some(_)) => changed,
+            (Some(_), None) => removed,
+            (None, _) => added,
+        };
+        push_change(
+            changes,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange,
+            code,
+            target(
+                CompiledRegistryChangeTargetKind::Recipient,
+                None,
+                Some(recipient),
+            ),
+        );
     }
 }
 
@@ -3960,6 +4053,7 @@ struct PredecessorGovernedModel {
     access: CompiledAccessInventory,
     queries: CompiledQueryInventory,
     actions: CompiledActionInventory,
+    recipients: CompiledRecipients,
 }
 
 impl PredecessorGovernedModel {
@@ -3975,6 +4069,7 @@ impl PredecessorGovernedModel {
             access: self.access.clone(),
             queries: self.queries.clone(),
             actions: self.actions.clone(),
+            recipients: self.recipients.clone(),
         }
     }
 
@@ -4045,6 +4140,13 @@ fn signed_predecessor_governed_model(
         .transpose()
         .map_err(|_| PackageError::Derivation)?
         .unwrap_or_default();
+    let recipients: CompiledRecipients = value
+        .get("recipients")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|_| PackageError::Derivation)?
+        .unwrap_or_default();
 
     let physical_names: PhysicalNameInventory =
         signed_manifest_json(manifest, loaded, PackageFileRole::PhysicalNameInventory)?;
@@ -4097,6 +4199,7 @@ fn signed_predecessor_governed_model(
         access,
         queries,
         actions,
+        recipients,
     })
 }
 

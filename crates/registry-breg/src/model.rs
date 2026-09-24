@@ -535,6 +535,10 @@ pub struct CompiledAction {
     pub maximum_targets: u16,
     pub maximum_field_mutations: u16,
     pub maximum_snapshot_bytes: u32,
+    /// Who the action creates consent rows for; absent on every action that
+    /// creates none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent_issuer: Option<crate::contract::ConsentIssuerSource>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -817,3 +817,272 @@ fn adding_a_recipient_migrates_the_issuing_action_without_review() {
         .any(|change| change.code == CompiledRegistryChangeCode::ActionChanged));
     assert!(change_set_to_applicable_migration_plan(&changes).is_err());
 }
+
+#[cfg(feature = "runtime")]
+fn change_codes(
+    before: &Value,
+    after: &Value,
+) -> (
+    registry_breg::package::CompiledRegistryChangeSet,
+    Vec<(
+        registry_breg::package::CompiledRegistryChangeCode,
+        registry_breg::package::CompiledRegistryChangeClass,
+        Option<String>,
+    )>,
+) {
+    let changes = registry_breg::package::compiled_registry_change_set(
+        &compile(before).unwrap(),
+        &compile(after).unwrap(),
+        "prior-package",
+    );
+    let codes = changes
+        .changes
+        .iter()
+        .map(|change| (change.code, change.class, change.target.member_id.clone()))
+        .collect();
+    (changes, codes)
+}
+
+#[cfg(feature = "runtime")]
+#[test]
+fn a_recipient_client_change_is_a_metadata_only_access_change() {
+    use registry_breg::package::{
+        change_set_to_applicable_migration_plan, CompiledRegistryChangeClass,
+        CompiledRegistryChangeCode, CompiledRegistryChangeTargetKind,
+    };
+    let mut added = source();
+    added["recipients"]["organizations"][2]["clients"] = json!(["ngo-beta-portal"]);
+    let (changes, codes) = change_codes(&source(), &added);
+    assert_eq!(
+        codes,
+        vec![(
+            CompiledRegistryChangeCode::RecipientOrganizationChanged,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange,
+            Some("ngo-beta".to_owned()),
+        )]
+    );
+    assert_eq!(
+        changes.changes[0].target.kind,
+        CompiledRegistryChangeTargetKind::Recipient
+    );
+    let plan = change_set_to_applicable_migration_plan(&changes).unwrap();
+    assert!(plan.statements.is_empty());
+    assert_eq!(plan.changes, changes.changes);
+}
+
+#[cfg(feature = "runtime")]
+#[test]
+fn a_group_membership_change_is_a_metadata_only_access_change() {
+    use registry_breg::package::{
+        change_set_to_applicable_migration_plan, CompiledRegistryChangeClass,
+        CompiledRegistryChangeCode,
+    };
+    let mut widened = source();
+    widened["recipients"]["groups"][0]["members"] = json!(["wfp", "ngo-alpha", "ngo-beta"]);
+    let (changes, codes) = change_codes(&source(), &widened);
+    assert_eq!(
+        codes,
+        vec![(
+            CompiledRegistryChangeCode::RecipientGroupChanged,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange,
+            Some("referral-network".to_owned()),
+        )]
+    );
+    assert!(change_set_to_applicable_migration_plan(&changes)
+        .unwrap()
+        .statements
+        .is_empty());
+}
+
+#[cfg(feature = "runtime")]
+#[test]
+fn added_and_removed_recipients_carry_their_own_codes() {
+    use registry_breg::package::CompiledRegistryChangeCode;
+    let mut added = source();
+    added["recipients"]["groups"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id": "health-network", "name": "Health network", "members": ["ngo-beta"]}));
+    let (_, codes) = change_codes(&source(), &added);
+    assert!(codes.iter().any(|(code, _, member)| {
+        *code == CompiledRegistryChangeCode::RecipientGroupAdded
+            && member.as_deref() == Some("health-network")
+    }));
+    let (_, codes) = change_codes(&added, &source());
+    assert!(codes.iter().any(|(code, _, member)| {
+        *code == CompiledRegistryChangeCode::RecipientGroupRemoved
+            && member.as_deref() == Some("health-network")
+    }));
+
+    let mut removed = source();
+    removed["recipients"]["organizations"]
+        .as_array_mut()
+        .unwrap()
+        .remove(2);
+    let (_, codes) = change_codes(&source(), &removed);
+    assert!(codes.iter().any(|(code, _, member)| {
+        *code == CompiledRegistryChangeCode::RecipientOrganizationRemoved
+            && member.as_deref() == Some("ngo-beta")
+    }));
+    let (_, codes) = change_codes(&removed, &source());
+    assert!(codes.iter().any(|(code, _, member)| {
+        *code == CompiledRegistryChangeCode::RecipientOrganizationAdded
+            && member.as_deref() == Some("ngo-beta")
+    }));
+}
+
+#[cfg(feature = "runtime")]
+#[test]
+fn a_changed_max_duration_is_a_consent_record_change() {
+    use registry_breg::package::{CompiledRegistryChangeClass, CompiledRegistryChangeCode};
+    let mut raised = source();
+    raised["entities"][CONSENT]["consentRecord"]["validity"]["maxDuration"] = json!("P730D");
+    let (_, codes) = change_codes(&source(), &raised);
+    assert_eq!(
+        codes,
+        vec![(
+            CompiledRegistryChangeCode::ConsentRecordChanged,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange,
+            None,
+        )]
+    );
+}
+
+#[cfg(feature = "runtime")]
+#[test]
+fn switching_the_consent_issuer_changes_the_action_contract() {
+    use registry_breg::package::CompiledRegistryChangeCode;
+    let before = self_issued_project();
+    let mut after = before.clone();
+    let withdraw = after["actions"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|action| action["id"] == "withdraw-consent")
+        .unwrap();
+    withdraw["consentIssuer"] = json!("steward");
+    let (_, codes) = change_codes(&before, &after);
+    assert_eq!(
+        codes
+            .iter()
+            .map(|(code, _, member)| (*code, member.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![(
+            CompiledRegistryChangeCode::ActionChanged,
+            Some("withdraw-consent")
+        )]
+    );
+    let compiled = compile(&after).unwrap();
+    let action = compiled
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "withdraw-consent")
+        .unwrap();
+    assert_eq!(
+        action.consent_issuer,
+        Some(registry_breg::contract::ConsentIssuerSource::Steward)
+    );
+}
+
+#[cfg(feature = "tooling")]
+fn package_request(
+    value: &Value,
+    sequence: u64,
+    prior_revision: Option<&str>,
+    migration_plan: registry_breg::package::PackageMigrationPlanInput,
+) -> registry_breg::package::PackageBuildRequest {
+    use registry_breg::package::{PackageBuildRequest, PackageSourceFile, SignaturePolicy};
+    let mut value = value.clone();
+    value["package"] = json!({
+        "environment": "local", "instanceId": "consent-instance",
+        "sequence": sequence, "sourceRevision": "consent-source"
+    });
+    PackageBuildRequest {
+        environment: "local".to_owned(),
+        instance_id: "consent-instance".to_owned(),
+        database_id: "consent-database".to_owned(),
+        sequence,
+        prior_revision: prior_revision.map(str::to_owned),
+        compiler_source_revision: "consent-source".to_owned(),
+        schema_fingerprint: format!("sha256:{}", "4".repeat(64)),
+        signature_policy: SignaturePolicy {
+            threshold: 0,
+            key_ids: vec![],
+        },
+        project: PackageSourceFile {
+            path: "source/registry.yaml".to_owned(),
+            bytes: serde_json::to_vec(&value).unwrap(),
+        },
+        modules: vec![],
+        fixture_journeys: PackageSourceFile {
+            path: "tests/journeys.yaml".to_owned(),
+            bytes: b"apiVersion: registry.registrystack.org/breg-journeys/v1\njourneys: []\n"
+                .to_vec(),
+        },
+        migration_plan,
+    }
+}
+
+/// A signed predecessor keeps its recipients, so a successor that only maps a
+/// new client derives a metadata-only plan from it rather than an empty one.
+#[cfg(feature = "tooling")]
+#[test]
+fn a_signed_predecessor_carries_its_recipients_into_a_metadata_only_successor() {
+    use registry_breg::package::{
+        load_predecessor_package, prepare_package, CompiledRegistryChangeCode,
+        CompiledRegistryMigrationBaseline, PackageMigrationPlanInput, PredecessorPackageContext,
+    };
+    let prepared = prepare_package(package_request(
+        &source(),
+        1,
+        None,
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    ))
+    .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    // The package writer refuses symlinked ancestors such as macOS /var.
+    let root = directory.path().canonicalize().unwrap().join("package");
+    prepared.publish_to_directory(&root, vec![]).unwrap();
+    let revision = prepared.package_revision().to_owned();
+    let predecessor = load_predecessor_package(
+        &root,
+        &PredecessorPackageContext {
+            environment: "local",
+            instance_id: "consent-instance",
+            database_id: "consent-database",
+            database_initialization_environment: "local",
+            trust_anchor: None,
+            expected_package_revision: &revision,
+            expected_sequence: 1,
+        },
+    )
+    .unwrap();
+    let baseline = predecessor.migration_baseline();
+    assert!(!baseline.recipients.is_empty());
+    assert_eq!(
+        baseline.recipients,
+        CompiledRegistryMigrationBaseline::from_compiled(&revision, prepared.registry()).recipients
+    );
+
+    let mut mapped = source();
+    mapped["recipients"]["organizations"][2]["clients"] = json!(["ngo-beta-portal"]);
+    let successor = prepare_package(package_request(
+        &mapped,
+        2,
+        Some(&revision),
+        PackageMigrationPlanInput::SuccessorFromBaseline {
+            prior_baseline: Box::new(baseline.clone()),
+        },
+    ))
+    .unwrap();
+    let plan = &successor.manifest().migration_plan;
+    assert!(plan.statements.is_empty());
+    assert_eq!(
+        plan.changes
+            .iter()
+            .map(|change| change.code)
+            .collect::<Vec<_>>(),
+        vec![CompiledRegistryChangeCode::RecipientOrganizationChanged]
+    );
+}

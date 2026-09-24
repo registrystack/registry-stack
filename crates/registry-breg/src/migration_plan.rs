@@ -1995,6 +1995,12 @@ fn covers_are_metadata_only(covers: &[ReviewedChangeCover]) -> bool {
                 | CompiledRegistryChangeCode::ActionRemoved
                 | CompiledRegistryChangeCode::ActionChanged
                 | CompiledRegistryChangeCode::ActionVocabularyCodesAdded
+                | CompiledRegistryChangeCode::RecipientOrganizationAdded
+                | CompiledRegistryChangeCode::RecipientOrganizationRemoved
+                | CompiledRegistryChangeCode::RecipientOrganizationChanged
+                | CompiledRegistryChangeCode::RecipientGroupAdded
+                | CompiledRegistryChangeCode::RecipientGroupRemoved
+                | CompiledRegistryChangeCode::RecipientGroupChanged
         )
     })
 }
@@ -2127,4 +2133,38 @@ fn digest(bytes: &[u8]) -> String {
         write!(&mut result, "{byte:02x}").expect("writing to a String cannot fail");
     }
     result
+}
+
+#[cfg(all(test, feature = "tooling"))]
+mod tests {
+    use super::*;
+
+    fn cover(code: CompiledRegistryChangeCode) -> ReviewedChangeCover {
+        ReviewedChangeCover {
+            code,
+            target: CompiledRegistryChangeTarget {
+                kind: CompiledRegistryChangeTargetKind::Recipient,
+                entity_id: None,
+                member_id: Some("recipient".to_owned()),
+            },
+        }
+    }
+
+    #[test]
+    fn recipient_changes_are_metadata_only_covers() {
+        for code in [
+            CompiledRegistryChangeCode::RecipientOrganizationAdded,
+            CompiledRegistryChangeCode::RecipientOrganizationRemoved,
+            CompiledRegistryChangeCode::RecipientOrganizationChanged,
+            CompiledRegistryChangeCode::RecipientGroupAdded,
+            CompiledRegistryChangeCode::RecipientGroupRemoved,
+            CompiledRegistryChangeCode::RecipientGroupChanged,
+        ] {
+            assert!(covers_are_metadata_only(&[cover(code)]), "{code:?}");
+        }
+        // A consent record change replaces the probe function, so it is not.
+        assert!(!covers_are_metadata_only(&[cover(
+            CompiledRegistryChangeCode::ConsentRecordChanged
+        )]));
+    }
 }

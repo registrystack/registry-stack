@@ -185,7 +185,7 @@ fn compile_action(
             entities,
             &inputs,
             (&effects, handler.as_ref()),
-            &requires,
+            (&requires, action.consent_issuer),
             &permissions,
         ),
         handler,
@@ -198,6 +198,7 @@ fn compile_action(
         maximum_targets: MAX_CHANGE_REQUEST_TARGETS,
         maximum_field_mutations: MAX_CHANGE_REQUEST_FIELD_MUTATIONS,
         maximum_snapshot_bytes: MAX_CHANGE_REQUEST_SNAPSHOT_BYTES,
+        consent_issuer: action.consent_issuer,
     })
 }
 
@@ -2052,7 +2053,7 @@ pub(crate) fn contract_only_adds_vocabulary_codes(
         &entities,
         &inputs,
         (&after.effects, after.handler.as_ref()),
-        &after.requires,
+        (&after.requires, after.consent_issuer),
         &after.permissions,
     ) == before.contract_fingerprint
 }
@@ -2065,7 +2066,10 @@ fn contract_fingerprint(
         &[CompiledActionEffect],
         Option<&crate::model::CompiledActionHandler>,
     ),
-    requires: &[CompiledActionRequirement],
+    (requires, consent_issuer): (
+        &[CompiledActionRequirement],
+        Option<crate::contract::ConsentIssuerSource>,
+    ),
     permissions: &[CompiledActionPermission],
 ) -> String {
     let target_entities = effects
@@ -2104,6 +2108,11 @@ fn contract_fingerprint(
     // Preserve existing action identities when no acceptance requirement is added.
     if !requires.is_empty() {
         payload["requires"] = json!(requires);
+    }
+    // Only actions that create consent rows carry an issuer, so every other
+    // action keeps its identity.
+    if let Some(issuer) = consent_issuer {
+        payload["consentIssuer"] = json!(issuer);
     }
     let bytes = canonicalize_json(&payload).expect("compiled immediate action canonicalizes");
     let digest = Sha256::digest(bytes);
