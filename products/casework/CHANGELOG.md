@@ -113,6 +113,12 @@
   attempt calls `POST /v1/work-items/{itemId}/attempts/{attemptId}/recover`
   while the source is reachable, and the attempt is settled only if recovery
   leaves it uncertain. Who may recover or settle is unchanged.
+- Pair several request entities of one BReg register with one Casework
+  source. A source declares up to 32 request entities; `caseworkctl source add`
+  pairs them in one pass, the imported description lists them under
+  `casework-source-description/v1alpha2`, and discovery pages through each
+  entity in declaration order. A source with one entity keeps its `v1alpha1`
+  description and its binding generation, so existing bindings do not change.
 - Fix the professional-review starter hiding every source-backed review task.
   Its `scope-correction` `displaySchema` described `record` as an object, but
   the professional-licences source discloses it as a UUID string, so every
