@@ -584,7 +584,10 @@ impl RealRegistry {
 
     /// Exchange the chat-host token the way the gateway does and return the
     /// authorization header value for the registry. Without `with_actor`
-    /// the exchange carries no actor assertion.
+    /// the exchange carries no actor assertion. The test writes the header
+    /// itself, which `clippy.toml` refuses the gateway, to present tokens the
+    /// gateway would never send.
+    #[allow(clippy::disallowed_methods)]
     async fn agent_token(&self, citizen: &str, with_actor: bool) -> String {
         let subject = self.chat_host_token(citizen);
         let expires_at = now() + 600;

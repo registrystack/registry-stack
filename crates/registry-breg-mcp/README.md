@@ -168,10 +168,14 @@ gets `429` with `Retry-After`.
 
 `clippy.toml` in this crate disallows the client methods the gateway must never
 reach: building a bearer or static token from text, swapping one onto a client,
-lifecycle actions, tombstones, batch writes, governed actions, attachments, and
-ingestion. `products/breg/scripts/check-mcp-gateway-boundary.sh` runs the lints,
-fails when an entry stops resolving, and probes the configuration against the
-real client to prove it still refuses those shapes and still allows a read.
+writing a bearer header out of a token, building an HTTP client beside the
+registry client, lifecycle actions, tombstones, batch writes, governed actions
+and their target conditions, attachments, and ingestion. It also disallows
+`BaseRegistryClientConfig::with_token_provider` everywhere but one wrapper,
+`outbound::delegated`, which takes nothing but the per-call exchange.
+`products/breg/scripts/check-mcp-gateway-boundary.sh` runs the lints, fails when
+an entry stops resolving, and probes the configuration against the real client
+with one probe per shape to prove it still refuses each and still allows a read.
 
 ## Verify
 

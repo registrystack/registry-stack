@@ -143,14 +143,28 @@ impl Outbound {
     pub(crate) fn client(&self, caller: &VerifiedCaller) -> Result<BaseRegistryClient, TokenError> {
         let authorization = self.authorization(caller)?;
         BaseRegistryClient::new(
-            BaseRegistryClientConfig::new(self.base_url.clone())
-                .with_token_provider(Arc::new(authorization))
-                .with_request_timeout(self.timeout),
+            delegated(
+                BaseRegistryClientConfig::new(self.base_url.clone()),
+                authorization,
+            )
+            .with_request_timeout(self.timeout),
         )
         .map_err(|_| TokenError::Configuration {
             reason: "the registry client could not be configured",
         })
     }
+}
+
+/// Attach the per-call exchange to a registry client configuration. This is
+/// the one place the gateway gives the client a credential: `clippy.toml`
+/// refuses `with_token_provider` everywhere else, and this function takes
+/// nothing but an exchange, so no other provider can reach the registry.
+#[allow(clippy::disallowed_methods)]
+fn delegated(
+    config: BaseRegistryClientConfig,
+    authorization: ExchangeAuthorization,
+) -> BaseRegistryClientConfig {
+    config.with_token_provider(Arc::new(authorization))
 }
 
 /// The gateway's own client identity at the token endpoint, with no resource
@@ -274,6 +288,18 @@ mod tests {
         .expect("claims")
     }
 
+    /// The exchanged token's header text, so a test can read its claims. The
+    /// gateway itself never writes a bearer header; only the registry client
+    /// does, which is why `clippy.toml` refuses this method outside tests.
+    #[allow(clippy::disallowed_methods)]
+    fn header_text(token: &registry_platform_httputil::client::BearerToken) -> String {
+        token
+            .authorization_header_value()
+            .to_str()
+            .expect("text")
+            .to_owned()
+    }
+
     #[tokio::test]
     async fn the_exchanged_token_names_the_citizen_and_the_gateway_as_actor() {
         let fixture = fixture().await;
@@ -282,14 +308,12 @@ mod tests {
             .outbound
             .authorization(&caller)
             .expect("authorization");
-        let header = authorization
-            .bearer_token()
-            .await
-            .expect("exchange succeeds")
-            .authorization_header_value()
-            .to_str()
-            .expect("text")
-            .to_owned();
+        let header = header_text(
+            &authorization
+                .bearer_token()
+                .await
+                .expect("exchange succeeds"),
+        );
         assert_ne!(header, format!("Bearer {}", caller.token()));
         let claims = claims(&header);
         assert_eq!(claims["sub"], "citizen-a");
@@ -311,7 +335,7 @@ mod tests {
             .bearer_token()
             .await
             .expect("exchange succeeds");
-        let claims = claims(token.authorization_header_value().to_str().expect("text"));
+        let claims = claims(&header_text(&token));
         assert!(claims["exp"].as_i64().expect("exp") <= expires_at);
     }
 

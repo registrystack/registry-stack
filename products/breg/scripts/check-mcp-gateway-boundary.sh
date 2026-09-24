@@ -102,6 +102,21 @@ if [[ -z "$client_library" ]]; then
   exit 1
 fi
 
+# The platform HTTP library is where the outbound client builder lives, and the
+# gateway depends on it directly, so the probes reach it by its own name too.
+platform_library=''
+for candidate in "$dependencies"/libregistry_platform_httputil-*.rlib; do
+  [[ -f "$candidate" ]] || continue
+  if [[ -z "$platform_library" || "$candidate" -nt "$platform_library" ]]; then
+    platform_library="$candidate"
+  fi
+done
+
+if [[ -z "$platform_library" ]]; then
+  printf 'No compiled registry-platform-httputil was found under target/debug/deps, so the probes cannot run.\n' >&2
+  exit 1
+fi
+
 # Each probe is one file put through `clippy-driver` directly against a copy of
 # the crate's own configuration, so what is proved here is that configuration and
 # not a restatement of it.
@@ -127,6 +142,7 @@ lint_probe() {
     --out-dir "$probe" \
     -L "dependency=$dependencies" \
     --extern "registry_breg_client=$client_library" \
+    --extern "registry_platform_httputil=$platform_library" \
     "$probe/$name.rs" >"$log" 2>&1 || true
   local compiled=0
   grep -E '^error' -- "$log" >/dev/null || compiled=$?
@@ -183,6 +199,167 @@ RUST
 
 lint_probe credential
 
+# A token provider handed to the client configuration directly. The gateway
+# attaches its exchange through one wrapper that takes nothing else, so any
+# other call would let a provider that is not the exchange reach the registry.
+cat >"$probe/provider.rs" <<'RUST'
+use std::sync::Arc;
+
+type Config = registry_breg_client::BaseRegistryClientConfig;
+
+pub fn provide(
+    config: Config,
+    provider: Arc<dyn registry_breg_client::TokenProvider>,
+) -> Config {
+    config.with_token_provider(provider)
+}
+RUST
+
+lint_probe provider
+
+# A bearer header written out of a token, and an HTTP client built beside the
+# registry client. Either would let a request reach the registry without going
+# through the client the exchange configured.
+cat >"$probe/transport.rs" <<'RUST'
+pub fn header(token: &registry_breg_client::BearerToken) -> usize {
+    token.authorization_header_value().len()
+}
+
+pub fn client(options: registry_platform_httputil::client::OutboundOptions<'_>) -> bool {
+    registry_platform_httputil::client::build_client(options).is_ok()
+}
+RUST
+
+lint_probe transport
+
+# Each write surface no tool offers, through an aliased import: tombstone,
+# batch, governed action, attachments, and ingestion.
+cat >"$probe/tombstone.rs" <<'RUST'
+use registry_breg_client::BaseRegistryClient as Registry;
+
+pub async fn tombstone(
+    registry: &Registry,
+    operation: &registry_breg_client::BRegTombstoneBinding,
+    record: registry_breg_client::Uuid,
+    etag: &registry_breg_client::BRegEtag,
+    key: &registry_breg_client::BRegIdempotencyKey,
+    format: registry_breg_client::BRegRecordFormat,
+) -> bool {
+    registry
+        .tombstone_record(operation, record, etag, key, format)
+        .await
+        .is_ok()
+}
+RUST
+
+lint_probe tombstone
+
+cat >"$probe/batch.rs" <<'RUST'
+use registry_breg_client::BaseRegistryClient as Registry;
+
+pub async fn batch(
+    registry: &Registry,
+    operation: &registry_breg_client::BRegBatchBinding,
+    request: &registry_breg_client::BRegBatchRequest,
+    key: &registry_breg_client::BRegIdempotencyKey,
+) -> bool {
+    registry.batch_records(operation, request, key).await.is_ok()
+}
+RUST
+
+lint_probe batch
+
+cat >"$probe/invoke.rs" <<'RUST'
+use registry_breg_client::BaseRegistryClient as Registry;
+
+pub async fn conditions(
+    registry: &Registry,
+    action: &registry_breg_client::BRegImmediateActionBinding,
+    request: &registry_breg_client::BRegActionTargetConditionsRequest,
+) -> bool {
+    registry
+        .action_target_conditions(action, request)
+        .await
+        .is_ok()
+}
+
+pub async fn invoke(
+    registry: &Registry,
+    action: &registry_breg_client::BRegImmediateActionBinding,
+    request: &registry_breg_client::BRegActionInvocationRequest,
+    key: &registry_breg_client::BRegIdempotencyKey,
+) -> bool {
+    registry.invoke_action(action, request, key).await.is_ok()
+}
+RUST
+
+lint_probe invoke
+
+cat >"$probe/attachments.rs" <<'RUST'
+use registry_breg_client::BaseRegistryClient as Registry;
+
+pub async fn upload(
+    registry: &Registry,
+    slot: &registry_breg_client::BRegAttachmentSlot,
+    record: registry_breg_client::Uuid,
+    etag: &registry_breg_client::BRegEtag,
+    upload: &registry_breg_client::BRegAttachmentUpload,
+    key: &registry_breg_client::BRegIdempotencyKey,
+    format: registry_breg_client::BRegRecordFormat,
+) -> bool {
+    registry
+        .upload_attachment(slot, record, etag, upload, key, format)
+        .await
+        .is_ok()
+}
+
+pub async fn delete(
+    registry: &Registry,
+    slot: &registry_breg_client::BRegAttachmentSlot,
+    record: registry_breg_client::Uuid,
+    etag: &registry_breg_client::BRegEtag,
+    key: &registry_breg_client::BRegIdempotencyKey,
+    format: registry_breg_client::BRegRecordFormat,
+) -> bool {
+    registry
+        .delete_attachment(slot, record, etag, key, format)
+        .await
+        .is_ok()
+}
+RUST
+
+lint_probe attachments
+
+cat >"$probe/ingestion.rs" <<'RUST'
+use registry_breg_client::BaseRegistryClient as Registry;
+
+pub async fn open(
+    registry: &Registry,
+    route: &str,
+    request: &registry_breg_client::BRegIngestionRunRequest,
+) -> bool {
+    registry.create_ingestion_run(route, request).await.is_ok()
+}
+
+pub async fn submit(
+    registry: &Registry,
+    route: &str,
+    run: registry_breg_client::Uuid,
+    chunk: &registry_breg_client::BRegIngestionChunk,
+) -> bool {
+    registry
+        .submit_ingestion_chunk(route, run, chunk, "profile")
+        .await
+        .is_ok()
+}
+
+pub async fn cancel(registry: &Registry, route: &str, run: registry_breg_client::Uuid) -> bool {
+    registry.cancel_ingestion_run(route, run, None).await.is_ok()
+}
+RUST
+
+lint_probe ingestion
+
 # The read the gateway makes, through the same alias shapes. A lint that refused
 # it would be argued down to nothing well before it ever caught anybody.
 cat >"$probe/read.rs" <<'RUST'
@@ -205,6 +382,18 @@ verdicts=(
   'refuses|credential|a bearer token swapped in through a type alias|disallowed method `registry_breg_client::BaseRegistryClient::with_bearer_token`'
   'refuses|credential|a static token built through a re-export|disallowed method `registry_platform_httputil::client::StaticToken::new`'
   'refuses|credential|a bearer token built through a re-export|disallowed method `registry_platform_httputil::client::BearerToken::new`'
+  'refuses|provider|a token provider handed to the client configuration|disallowed method `registry_breg_client::BaseRegistryClientConfig::with_token_provider`'
+  'refuses|transport|a bearer header written out of a token|disallowed method `registry_platform_httputil::client::BearerToken::authorization_header_value`'
+  'refuses|transport|an HTTP client built beside the registry client|disallowed method `registry_platform_httputil::client::build_client`'
+  'refuses|tombstone|a tombstone through an aliased import|disallowed method `registry_breg_client::BaseRegistryClient::tombstone_record`'
+  'refuses|batch|a batch write through an aliased import|disallowed method `registry_breg_client::BaseRegistryClient::batch_records`'
+  'refuses|invoke|a governed action target-condition read|disallowed method `registry_breg_client::BaseRegistryClient::action_target_conditions`'
+  'refuses|invoke|a governed action invocation|disallowed method `registry_breg_client::BaseRegistryClient::invoke_action`'
+  'refuses|attachments|an attachment upload|disallowed method `registry_breg_client::BaseRegistryClient::upload_attachment`'
+  'refuses|attachments|an attachment removal|disallowed method `registry_breg_client::BaseRegistryClient::delete_attachment`'
+  'refuses|ingestion|an ingestion run opened|disallowed method `registry_breg_client::BaseRegistryClient::create_ingestion_run`'
+  'refuses|ingestion|an ingestion chunk submitted|disallowed method `registry_breg_client::BaseRegistryClient::submit_ingestion_chunk`'
+  'refuses|ingestion|an ingestion run cancelled|disallowed method `registry_breg_client::BaseRegistryClient::cancel_ingestion_run`'
   'allows|read|a record read, which is what the gateway does|disallowed method `registry_breg_client::BaseRegistryClient::get_record`'
 )
 
