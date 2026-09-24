@@ -544,7 +544,17 @@ async fn registry_metadata(
     if !visible_actions.is_empty() {
         metadata["actions"] = actions::metadata(&visible_actions);
     }
-    Json(metadata).into_response()
+    // A peer that runs in lock-step with this engine release, such as a
+    // Casework source adapter, compares this header with its own release and
+    // names a mismatch instead of reporting an undecodable contract.
+    (
+        [(
+            axum::http::HeaderName::from_static("registry-engine-version"),
+            registry_platform_buildinfo::DISPLAY_VERSION,
+        )],
+        Json(metadata),
+    )
+        .into_response()
 }
 
 async fn entity_schema(

@@ -17,6 +17,7 @@ use wiremock::{
 const ID: &str = "00000000-0000-4000-8000-000000000001";
 const TRACE: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const ENGINE: &str = registry_platform_buildinfo::DISPLAY_VERSION;
 fn adapter(base: &str) -> BregAdapter {
     adapter_with_reference_config(base, None)
 }
@@ -193,6 +194,7 @@ async fn mount_metadata_revision(server: &MockServer, token: &str, profile: &str
         .and(query_param("accessProfile", profile))
         .respond_with(ResponseTemplate::new(200)
             .insert_header("traceparent", TRACE)
+            .insert_header("registry-engine-version", ENGINE)
             .set_body_json(json!({"id":"test","version":"1.0.0","revision":revision,"metadataVersion":"1","entities":[],"operations":[]})))
         .expect(1)
         .mount(server).await;
@@ -299,6 +301,7 @@ async fn mount_reader_diagnostic(
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("traceparent", TRACE)
+                .insert_header("registry-engine-version", ENGINE)
                 .set_body_json(metadata),
         )
         .expect(1)
@@ -490,6 +493,7 @@ async fn source_reader_logs_a_changed_metadata_failure_kind_behind_the_same_mess
                 .respond_with(
                     ResponseTemplate::new(200)
                         .insert_header("traceparent", TRACE)
+                        .insert_header("registry-engine-version", ENGINE)
                         .set_body_json(metadata),
                 )
                 .expect(1)
@@ -905,12 +909,16 @@ async fn captured_logs(work: impl std::future::Future<Output = ()>) -> String {
     String::from_utf8(raw).unwrap()
 }
 
-/// Assert the source reader entries, in order, as a level and an optional
-/// cause the logged error must contain.
+/// Assert the source reader failure and recovery entries, in order, as a
+/// level and an optional cause the logged error must contain. The peer
+/// engine version reported on a first matching read has its own test.
 fn assert_reader_log(raw: &str, expected: &[(&str, Option<&str>)]) {
     let entries = raw
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("structured tracing entry"))
+        .filter(|entry| {
+            entry["level"] != "INFO" || entry["fields"]["peer_engine_version"].is_null()
+        })
         .collect::<Vec<_>>();
     assert_eq!(entries.len(), expected.len(), "{raw}");
     for (entry, (level, cause)) in entries.iter().zip(expected) {
@@ -1209,4 +1217,232 @@ async fn stale_source_generation_is_refused_before_any_read_or_write() {
         .await;
     assert_eq!(result.unwrap_err(), SourceAdapterError::BindingMoved);
     assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+/// Mount the registry contract for one bearer token, reporting `engine` as
+/// the peer's engine version, or no version at all.
+async fn mount_contract(server: &MockServer, token: &str, body: Value, engine: Option<&str>) {
+    let mut response = ResponseTemplate::new(200)
+        .insert_header("traceparent", TRACE)
+        .set_body_json(body);
+    if let Some(engine) = engine {
+        response = response.insert_header("registry-engine-version", engine);
+    }
+    Mock::given(method("GET"))
+        .and(path("/v1/registry"))
+        .and(header("authorization", format!("Bearer {token}")))
+        .respond_with(response)
+        .mount(server)
+        .await;
+}
+
+async fn mount_caller_record(server: &MockServer, token: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/records/correction/{ID}")))
+        .and(header("authorization", format!("Bearer {token}")))
+        .respond_with(response(record("submitted", None)))
+        .mount(server)
+        .await;
+}
+
+fn empty_contract() -> Value {
+    json!({"id":"test","version":"1.0.0","revision":DIGEST,"metadataVersion":"1","entities":[],"operations":[]})
+}
+
+fn log_entries(raw: &str) -> Vec<Value> {
+    raw.lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("structured tracing entry"))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_breg_engine_from_another_release_is_refused_naming_both_versions() {
+    let server = MockServer::start().await;
+    let adapter = adapter(&server.uri());
+    mount_contract(&server, "reader-token", empty_contract(), Some("0.0.1")).await;
+    let logs = captured_logs(async {
+        for _ in 0..2 {
+            assert_eq!(
+                adapter.discover_active(None, 100).await.unwrap_err(),
+                SourceAdapterError::Unavailable
+            );
+        }
+    })
+    .await;
+
+    let mismatch = adapter
+        .peer_version_mismatch()
+        .expect("the mismatch is kept for doctor");
+    assert_eq!(mismatch.peer_version(), Some("0.0.1"));
+    let text = mismatch.to_string();
+    for expected in ["source", "0.0.1", ENGINE, "same release"] {
+        assert!(text.contains(expected), "{text} names {expected}");
+    }
+    let entries = log_entries(&logs);
+    assert_eq!(
+        entries.len(),
+        1,
+        "a repeated mismatch is logged once: {logs}"
+    );
+    assert_eq!(entries[0]["level"], "WARN");
+    assert_eq!(entries[0]["fields"]["source_id"], "source");
+    assert_eq!(entries[0]["fields"]["route"], "GET /v1/registry");
+    assert_eq!(entries[0]["fields"]["peer_engine_version"], "0.0.1");
+    assert_eq!(entries[0]["fields"]["casework_version"], ENGINE);
+}
+
+#[tokio::test]
+async fn a_peer_version_mismatch_explains_a_contract_that_does_not_decode() {
+    let server = MockServer::start().await;
+    let adapter = adapter(&server.uri());
+    let mut contract = empty_contract();
+    contract["entities"] = json!("not-an-array");
+    mount_contract(&server, "reader-token", contract, Some("0.0.1")).await;
+    let logs = captured_logs(async {
+        assert_eq!(
+            adapter.discover_active(None, 100).await.unwrap_err(),
+            SourceAdapterError::Unavailable
+        );
+    })
+    .await;
+
+    assert_eq!(
+        adapter
+            .peer_version_mismatch()
+            .expect("the mismatch names the cause")
+            .peer_version(),
+        Some("0.0.1")
+    );
+    let entries = log_entries(&logs);
+    assert_eq!(entries.len(), 1, "{logs}");
+    assert_eq!(entries[0]["fields"]["peer_engine_version"], "0.0.1");
+    assert_eq!(entries[0]["fields"]["metadata_error_kind"], "Shape");
+}
+
+#[tokio::test]
+async fn a_breg_engine_that_reports_no_version_is_refused_by_name() {
+    let server = MockServer::start().await;
+    let adapter = adapter(&server.uri());
+    mount_contract(&server, "reader-token", empty_contract(), None).await;
+    assert_eq!(
+        adapter.discover_active(None, 100).await.unwrap_err(),
+        SourceAdapterError::Unavailable
+    );
+
+    let mismatch = adapter
+        .peer_version_mismatch()
+        .expect("an unreported version is refused");
+    assert_eq!(mismatch.peer_version(), None);
+    let text = mismatch.to_string();
+    assert!(
+        text.contains("does not report its engine version"),
+        "{text}"
+    );
+    assert!(text.contains(ENGINE), "{text}");
+}
+
+#[tokio::test]
+async fn the_breg_engine_version_is_logged_when_first_read_and_a_mismatch_clears_on_recovery() {
+    let server = MockServer::start().await;
+    let adapter = adapter(&server.uri());
+    let logs = captured_logs(async {
+        let other = Mock::given(method("GET"))
+            .and(path("/v1/registry"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("traceparent", TRACE)
+                    .insert_header("registry-engine-version", "0.0.1")
+                    .set_body_json(empty_contract()),
+            )
+            .mount_as_scoped(&server)
+            .await;
+        assert!(adapter.discover_active(None, 100).await.is_err());
+        drop(other);
+
+        mount_reader_diagnostic(
+            &server,
+            diagnostic_metadata(&["get", "list"], &[("record", "record")]),
+            200,
+            true,
+        )
+        .await;
+        adapter.verify_reader_readiness().await.unwrap();
+    })
+    .await;
+
+    assert_eq!(adapter.peer_version_mismatch(), None);
+    let entries = log_entries(&logs);
+    let levels = entries
+        .iter()
+        .map(|entry| entry["level"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(levels, ["WARN", "INFO", "INFO"], "{logs}");
+    assert_eq!(
+        entries[2]["fields"]["peer_engine_version"], ENGINE,
+        "{logs}"
+    );
+}
+
+#[tokio::test]
+async fn a_caller_contract_failure_names_the_route_and_metadata_kind() {
+    let server = MockServer::start().await;
+    let adapter = adapter(&server.uri());
+    let mut contract = empty_contract();
+    contract["metadataVersion"] = json!("2");
+    mount_contract(&server, "alice-token", contract, Some(ENGINE)).await;
+    mount_caller_record(&server, "alice-token").await;
+    let logs = captured_logs(async {
+        for _ in 0..2 {
+            assert_eq!(
+                adapter
+                    .read_for_caller(
+                        &subject(),
+                        "reviewer",
+                        EphemeralCredential::new("alice-token")
+                    )
+                    .await
+                    .unwrap_err(),
+                SourceAdapterError::Unavailable
+            );
+        }
+    })
+    .await;
+
+    assert!(!logs.contains("alice-token"), "{logs}");
+    let entries = log_entries(&logs);
+    assert_eq!(
+        entries.len(),
+        1,
+        "a repeated caller failure is logged once: {logs}"
+    );
+    assert_eq!(entries[0]["level"], "WARN");
+    assert_eq!(entries[0]["fields"]["route"], "GET /v1/registry");
+    assert_eq!(entries[0]["fields"]["metadata_error_kind"], "Version");
+    assert_eq!(entries[0]["fields"]["credential"], "caller");
+}
+
+#[tokio::test]
+async fn a_caller_read_is_refused_when_the_engine_is_from_another_release() {
+    let server = MockServer::start().await;
+    let adapter = adapter(&server.uri());
+    mount_contract(&server, "alice-token", empty_contract(), Some("0.0.1")).await;
+    mount_caller_record(&server, "alice-token").await;
+    assert_eq!(
+        adapter
+            .read_for_caller(
+                &subject(),
+                "reviewer",
+                EphemeralCredential::new("alice-token")
+            )
+            .await
+            .unwrap_err(),
+        SourceAdapterError::Unavailable
+    );
+    assert_eq!(
+        adapter
+            .peer_version_mismatch()
+            .expect("a caller read also names the mismatch")
+            .peer_version(),
+        Some("0.0.1")
+    );
 }

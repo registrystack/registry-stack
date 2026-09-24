@@ -134,7 +134,11 @@ async fn mount_metadata(server: &MockServer, revision: &str) {
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(support::lifecycle_metadata(revision))
-                .insert_header("traceparent", TRACEPARENT),
+                .insert_header("traceparent", TRACEPARENT)
+                .insert_header(
+                    "registry-engine-version",
+                    registry_platform_buildinfo::DISPLAY_VERSION,
+                ),
         )
         .expect(1)
         .mount(server)
@@ -651,7 +655,11 @@ async fn mount_metadata_times(server: &MockServer, times: u64) {
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(support::lifecycle_metadata(REGISTRY_REVISION))
-                .insert_header("traceparent", TRACEPARENT),
+                .insert_header("traceparent", TRACEPARENT)
+                .insert_header(
+                    "registry-engine-version",
+                    registry_platform_buildinfo::DISPLAY_VERSION,
+                ),
         )
         .expect(times)
         .mount(server)

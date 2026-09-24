@@ -457,6 +457,33 @@ source-backed work before upgrading.
     crates/registry-casework/tests/postgres_transactions.rs,
     returning_to_an_earlier_binding_generation_opens_a_fresh_occurrence(). */}
 
+### Upgrade Casework and BReg in lock-step
+
+Casework and every BReg source it reads run the same release. BReg names its release in the
+`Registry-Engine-Version` header of `GET /v1/registry`, and Casework compares it with its own on
+every registry contract read. It refuses any other release, and an engine that reports no version,
+rather than guessing what an older or newer contract means: a member such as a change request's
+`effects` that one release sends and another omits must never read as empty.
+
+To upgrade, upgrade each BReg source first, then Casework, to the same release:
+
+1. Upgrade and start BReg. Until Casework matches it, Casework refuses that source's reads by name:
+   work items report a source outage, `GET /ready` fails once reconciliation keeps failing, and the
+   runtime log names both versions.
+2. Migrate and start Casework of the same release. It resumes source reads on the first matching
+   contract read, with no further step, and logs `Casework reads a BReg source on its own release`
+   with the engine version.
+
+A reverse proxy between Casework and BReg must pass the `Registry-Engine-Version` response header
+through unchanged.
+
+{/* Evidence: crates/registry-breg/src/api/mod.rs, registry_metadata();
+    crates/registry-breg-client/src/client.rs, registry_contract_and_engine_version();
+    crates/registry-casework-breg/src/lib.rs, BregAdapter::metadata() and PeerVersionMismatch;
+    crates/registry-caseworkctl/src/project.rs, source_readiness_failure();
+    crates/registry-casework-breg/tests/source_boundary.rs,
+    a_breg_engine_from_another_release_is_refused_naming_both_versions(). */}
+
 ### Upgrade from a release that chained the audit file
 
 Casework 0.34.0 and earlier kept pending audit records in the `casework_audit_outbox` table and
@@ -741,6 +768,7 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | `GET /ready` returns `503` while `GET /health` returns `200` | The audit writer stopped, PostgreSQL is failing, or a source's reconciliation is failing. Run `caseworkctl doctor`, which names the check, then read the runtime log for `audit file write failed` or the reconciliation entry, and check the audit file, its lock, the free space, and the database. |
 | `doctor` refuses at `doctor:/checks/reconciliation` | The named source's last passes failed. `source-unavailable` means the source did not answer; `source-refused` means it answered with a refusal or a response Casework cannot use; `store` and `configuration` point at the database and the binding. Repair the cause; the next pass that succeeds restores readiness. |
 | `doctor` refuses at `doctor:/checks/pinnedWork`, or startup refuses with `would strand work pinned under an earlier package` | The package removes a queue, profile, or source that in-flight work still needs, edits a pinned review kind without a new version, or changes what a source read discloses. Keep the earlier package until that work finishes, or set `package.acknowledgeStrandedWork` to the digest the refusal names. |
+| `BReg source ID runs engine version X and this Casework runs Y`, or `BReg source ID does not report its engine version` | Casework and that BReg source are on different releases, or a proxy removes the `Registry-Engine-Version` header. Upgrade the one that is behind as [the lock-step upgrade](#upgrade-casework-and-breg-in-lock-step) describes, or let the header through; source reads resume on the next matching read. |
 | `profile.not-human` on a token you believe is human | The issuer did not add the configured human-identity claim to that session. Check the claim name and value against the issuer's mapping for interactive sessions. |
 | Work items report a source outage | The bound source is unreachable or refusing the reader. Run `caseworkctl doctor`, which names the failing source, read the runtime log's `Casework source reader request to BReg failed` entry for the cause, then check that binding's base URL, token endpoint, and reader grants. |
 

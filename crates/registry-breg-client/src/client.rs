@@ -27,6 +27,9 @@ const ANY_MEDIA_TYPE: &str = "*/*";
 const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const MAXIMUM_PROBLEM_BYTES: usize = 4 * 1024;
 const MAXIMUM_LOCATION_BYTES: usize = 2_048;
+/// The response header naming the engine release that served a response.
+const BREG_ENGINE_VERSION_HEADER: &str = "registry-engine-version";
+const MAXIMUM_ENGINE_VERSION_BYTES: usize = 64;
 const X_CONTENT_TYPE_OPTIONS: reqwest::header::HeaderName =
     reqwest::header::HeaderName::from_static("x-content-type-options");
 
@@ -110,7 +113,38 @@ impl BaseRegistryClient {
         &self,
         access_profile: Option<&str>,
     ) -> Result<BRegComplete<BRegMetadata>, BaseRegistryClientError> {
-        let raw = self.registry_metadata(access_profile).await?;
+        self.registry_contract_and_engine_version(access_profile)
+            .await
+            .1
+    }
+
+    /// Retrieve Registry Metadata v1 as [`Self::registry_contract`] does, and
+    /// also return the engine version the service reported beside it.
+    ///
+    /// The version is returned even when the document then fails to decode,
+    /// so a caller that runs in lock-step with one engine release can name a
+    /// release mismatch instead of reporting a shape failure. It is `None`
+    /// when no successful response arrived, or when the response carried no
+    /// well-formed `Registry-Engine-Version` header.
+    pub async fn registry_contract_and_engine_version(
+        &self,
+        access_profile: Option<&str>,
+    ) -> (
+        Option<String>,
+        Result<BRegComplete<BRegMetadata>, BaseRegistryClientError>,
+    ) {
+        let raw = match self.registry_metadata(access_profile).await {
+            Ok(raw) => raw,
+            Err(error) => return (None, Err(error)),
+        };
+        let engine_version = raw.metadata.engine_version().map(ToOwned::to_owned);
+        (engine_version, self.bind_registry_contract(raw))
+    }
+
+    fn bind_registry_contract(
+        &self,
+        raw: BRegComplete<BRegRawDocument>,
+    ) -> Result<BRegComplete<BRegMetadata>, BaseRegistryClientError> {
         let value = BRegMetadata::from_slice(raw.value.as_bytes())
             .map_err(|error| {
                 BaseRegistryClientError::protocol_metadata(
@@ -1632,13 +1666,14 @@ impl BaseRegistryClient {
                 Some(trace_id),
             ));
         }
+        let engine_version = breg_engine_version(&headers);
         let body = self
             .transport
             .read(response, self.config.max_response_bytes.min(maximum_bytes))
             .await?;
         Ok(BRegWire {
             body,
-            metadata: BRegResponseMetadata::new(trace_id, etag),
+            metadata: BRegResponseMetadata::new(trace_id, etag).with_engine_version(engine_version),
             media_type: expected_media.to_owned(),
             link,
             status: status.as_u16(),
@@ -2355,6 +2390,24 @@ fn validate_no_store(
         BRegProtocolFailure::CachePolicy,
         trace_id,
     )
+}
+
+/// Read the single, well-formed engine version a response reported. The value
+/// only names the peer, so an absent, repeated, or malformed header is reported
+/// as no version rather than failing a response every other caller can use.
+fn breg_engine_version(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    let mut values = headers.get_all(BREG_ENGINE_VERSION_HEADER).iter();
+    let value = values.next()?.to_str().ok()?;
+    if values.next().is_some()
+        || value.is_empty()
+        || value.len() > MAXIMUM_ENGINE_VERSION_BYTES
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
+    {
+        return None;
+    }
+    Some(value.to_owned())
 }
 
 fn validate_exact_header(
