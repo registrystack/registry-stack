@@ -5049,6 +5049,7 @@ dependencies = [
  "base64 0.22.1",
  "registry-breg-client",
  "registry-casework-core",
+ "registry-platform-buildinfo",
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-hooks",

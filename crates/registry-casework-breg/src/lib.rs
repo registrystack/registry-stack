@@ -75,11 +75,71 @@ pub struct BregAdapter {
     /// The source reader failure cause last logged, so a persistent failure is
     /// reported once per change instead of once per subject read.
     reader_failure: Mutex<Option<String>>,
+    /// The caller wire-contract failure last logged, kept apart so a caller
+    /// read neither reports nor clears a source reader failure.
+    caller_failure: Mutex<Option<String>>,
+    /// The peer engine version last logged, so it is reported when first read
+    /// and whenever it changes.
+    peer_version: Mutex<Option<String>>,
+    /// The release mismatch that refused the latest contract read, if any.
+    peer_mismatch: Mutex<Option<PeerVersionMismatch>>,
+}
+
+/// A BReg source whose engine release is not this Casework's release.
+///
+/// Casework and BReg run in lock-step: the adapter reads the engine version
+/// BReg reports beside its registry contract and refuses every other release
+/// by name, because a contract from another release may omit a member such as
+/// a change request's effects, and an absent member must never read as an
+/// empty one.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PeerVersionMismatch {
+    source_id: String,
+    peer_version: Option<String>,
+}
+
+impl PeerVersionMismatch {
+    /// The Casework source whose BReg peer was refused.
+    #[must_use]
+    pub fn source_id(&self) -> &str {
+        &self.source_id
+    }
+
+    /// The engine version the peer reported, or `None` when it reported none.
+    #[must_use]
+    pub fn peer_version(&self) -> Option<&str> {
+        self.peer_version.as_deref()
+    }
+
+    /// The release this Casework adapter was built from.
+    #[must_use]
+    pub fn casework_version(&self) -> &'static str {
+        registry_platform_buildinfo::DISPLAY_VERSION
+    }
+}
+
+impl std::fmt::Display for PeerVersionMismatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let own = self.casework_version();
+        match &self.peer_version {
+            Some(peer) => write!(
+                formatter,
+                "BReg source {} runs engine version {peer} and this Casework runs {own}. Casework and BReg run in lock-step, so upgrade both to the same release",
+                self.source_id
+            ),
+            None => write!(
+                formatter,
+                "BReg source {} does not report its engine version and this Casework runs {own}. The engine predates this release, or a proxy removes its Registry-Engine-Version header. Casework and BReg run in lock-step, so upgrade both to the same release",
+                self.source_id
+            ),
+        }
+    }
 }
 
 /// The credential behind a BReg read. A source reader failure stops Casework
 /// learning about source changes, so its cause is logged. A caller's failure
-/// is that caller's own refusal and is only returned.
+/// is that caller's own refusal and is only returned, unless the registry
+/// contract itself does not decode or comes from another engine release.
 #[derive(Clone, Copy)]
 enum ReadClient<'a> {
     SourceReader,
@@ -127,6 +187,9 @@ impl BregAdapter {
             reader,
             webhook_key: Zeroizing::new(webhook_key),
             reader_failure: Mutex::new(None),
+            caller_failure: Mutex::new(None),
+            peer_version: Mutex::new(None),
+            peer_mismatch: Mutex::new(None),
         })
     }
 
@@ -283,60 +346,171 @@ impl BregAdapter {
         }
     }
 
+    /// The release mismatch that refused this source's latest contract read,
+    /// so an operator tool can name both versions instead of a generic
+    /// source failure. A contract read from the matching release clears it.
+    #[must_use]
+    pub fn peer_version_mismatch(&self) -> Option<PeerVersionMismatch> {
+        self.peer_mismatch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn failure_slot(&self, client: ReadClient<'_>) -> &Mutex<Option<String>> {
+        match client {
+            ReadClient::SourceReader => &self.reader_failure,
+            ReadClient::Caller(_) => &self.caller_failure,
+        }
+    }
+
+    /// Run `log` when `key` differs from the failure last logged for this
+    /// credential, so a persistent failure is reported once per change.
+    fn report_failure(&self, client: ReadClient<'_>, key: String, log: impl FnOnce()) {
+        let mut reported = self
+            .failure_slot(client)
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if reported.as_deref() != Some(key.as_str()) {
+            log();
+            *reported = Some(key);
+        }
+    }
+
+    fn report_success(&self, client: ReadClient<'_>) {
+        let recovered = self
+            .failure_slot(client)
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .is_some();
+        if recovered && matches!(client, ReadClient::SourceReader) {
+            tracing::info!(
+                source_id = %self.config.source_id,
+                "Casework source reader requests to BReg succeed again"
+            );
+        }
+    }
+
     /// Map a BReg read result. A source reader failure is logged when its
-    /// cause first appears or changes, and the next success logs recovery.
+    /// cause first appears or changes, and the next success logs recovery. A
+    /// caller's refusal, or an outage it meets, is that caller's own answer
+    /// and is only returned; a registry contract that does not decode is a
+    /// deployment fault whichever credential met it, so it is logged too.
     fn read_result<T>(
         &self,
         client: ReadClient<'_>,
         result: Result<T, BaseRegistryClientError>,
     ) -> Result<T, SourceAdapterError> {
-        if let ReadClient::Caller(_) = client {
-            return result.map_err(read_error);
+        let error = match result {
+            Ok(value) => {
+                // A caller only reports contract failures, so only a
+                // contract read that succeeds clears one.
+                if matches!(client, ReadClient::SourceReader) {
+                    self.report_success(client);
+                }
+                return Ok(value);
+            }
+            Err(error) => error,
+        };
+        let cause = error.to_string();
+        // Metadata decode failures of different kinds render the same
+        // message, so the kind is part of what counts as a change.
+        let key = match error.metadata_error_kind() {
+            Some(kind) => format!("{cause} ({kind:?})"),
+            None => cause.clone(),
+        };
+        // A runtime metadata decode failure only ever comes from the
+        // GET /v1/registry contract read, so the route is named here rather
+        // than threaded through every caller.
+        match (client, error.metadata_error_kind()) {
+            (ReadClient::Caller(_), None) => {}
+            (ReadClient::Caller(_), Some(kind)) => self.report_failure(client, key, || {
+                tracing::warn!(
+                    source_id = %self.config.source_id,
+                    credential = "caller",
+                    route = "GET /v1/registry",
+                    metadata_error_kind = ?kind,
+                    error = %cause,
+                    "Casework caller request to BReg failed"
+                );
+            }),
+            (ReadClient::SourceReader, Some(kind)) => self.report_failure(client, key, || {
+                tracing::warn!(
+                    source_id = %self.config.source_id,
+                    route = "GET /v1/registry",
+                    metadata_error_kind = ?kind,
+                    error = %cause,
+                    "Casework source reader request to BReg failed"
+                );
+            }),
+            (ReadClient::SourceReader, None) => self.report_failure(client, key, || {
+                tracing::warn!(
+                    source_id = %self.config.source_id,
+                    error = %cause,
+                    "Casework source reader request to BReg failed"
+                );
+            }),
         }
-        let mut reported = self
-            .reader_failure
+        Err(read_error(error))
+    }
+
+    /// Refuse a contract read from another engine release by name.
+    fn refuse_peer_version(
+        &self,
+        client: ReadClient<'_>,
+        peer_version: Option<String>,
+        metadata_error_kind: Option<BRegMetadataErrorKind>,
+    ) -> SourceAdapterError {
+        let mismatch = PeerVersionMismatch {
+            source_id: self.config.source_id.clone(),
+            peer_version,
+        };
+        let credential = match client {
+            ReadClient::SourceReader => "source reader",
+            ReadClient::Caller(_) => "caller",
+        };
+        let kind = metadata_error_kind.map(|kind| format!("{kind:?}"));
+        self.report_failure(
+            client,
+            format!("peer engine version {:?}", mismatch.peer_version),
+            || {
+                tracing::warn!(
+                    source_id = %self.config.source_id,
+                    credential,
+                    route = "GET /v1/registry",
+                    peer_engine_version = mismatch.peer_version(),
+                    casework_version = mismatch.casework_version(),
+                    metadata_error_kind = kind.as_deref(),
+                    "{mismatch}"
+                );
+            },
+        );
+        *self
+            .peer_mismatch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(mismatch);
+        SourceAdapterError::Unavailable
+    }
+
+    /// Log the peer engine version when it is first read or changes.
+    fn note_peer_version(&self, peer_version: &str) {
+        self.peer_mismatch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let mut logged = self
+            .peer_version
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        match result {
-            Ok(value) => {
-                if reported.take().is_some() {
-                    tracing::info!(
-                        source_id = %self.config.source_id,
-                        "Casework source reader requests to BReg succeed again"
-                    );
-                }
-                Ok(value)
-            }
-            Err(error) => {
-                let cause = error.to_string();
-                // Metadata decode failures of different kinds render the same
-                // message, so the kind is part of what counts as a change.
-                let key = match error.metadata_error_kind() {
-                    Some(kind) => format!("{cause} ({kind:?})"),
-                    None => cause.clone(),
-                };
-                if reported.as_deref() != Some(key.as_str()) {
-                    // A runtime metadata decode failure only ever comes from
-                    // the GET /v1/registry contract read, so the route is
-                    // named here rather than threaded through every caller.
-                    match error.metadata_error_kind() {
-                        Some(kind) => tracing::warn!(
-                            source_id = %self.config.source_id,
-                            route = "GET /v1/registry",
-                            metadata_error_kind = ?kind,
-                            error = %cause,
-                            "Casework source reader request to BReg failed"
-                        ),
-                        None => tracing::warn!(
-                            source_id = %self.config.source_id,
-                            error = %cause,
-                            "Casework source reader request to BReg failed"
-                        ),
-                    }
-                    *reported = Some(key);
-                }
-                Err(read_error(error))
-            }
+        if logged.as_deref() != Some(peer_version) {
+            tracing::info!(
+                source_id = %self.config.source_id,
+                peer_engine_version = peer_version,
+                casework_version = registry_platform_buildinfo::DISPLAY_VERSION,
+                "Casework reads a BReg source on its own release"
+            );
+            *logged = Some(peer_version.to_owned());
         }
     }
 
@@ -345,8 +519,27 @@ impl BregAdapter {
         client: ReadClient<'_>,
         profile: &str,
     ) -> Result<BRegMetadata, SourceAdapterError> {
-        let contract = self.client(client).registry_contract(Some(profile)).await;
+        let (peer_version, contract) = self
+            .client(client)
+            .registry_contract_and_engine_version(Some(profile))
+            .await;
+        let own = registry_platform_buildinfo::DISPLAY_VERSION;
+        // A contract read from another release is refused whether or not it
+        // decoded; one that reported no version is refused once it decoded,
+        // since an outage or a refusal carries no version to compare.
+        let unreported = peer_version.is_none() && contract.is_ok();
+        if unreported || peer_version.as_deref().is_some_and(|peer| peer != own) {
+            let kind = contract
+                .as_ref()
+                .err()
+                .and_then(BaseRegistryClientError::metadata_error_kind);
+            return Err(self.refuse_peer_version(client, peer_version, kind));
+        }
         let metadata = self.read_result(client, contract)?.value;
+        if matches!(client, ReadClient::Caller(_)) {
+            self.report_success(client);
+        }
+        self.note_peer_version(own);
         if metadata.registry_revision() != self.config.expected_registry_revision {
             return Err(SourceAdapterError::BindingMoved);
         }

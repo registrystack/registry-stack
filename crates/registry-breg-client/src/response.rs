@@ -87,6 +87,10 @@ pub struct BRegResponseMetadata {
     etag: Option<BRegEtag>,
     #[serde(skip_serializing_if = "Option::is_none")]
     location: Option<String>,
+    /// Kept for Rust callers that pin a peer release; language bindings do
+    /// not carry response headers.
+    #[serde(skip)]
+    engine_version: Option<String>,
 }
 
 impl BRegResponseMetadata {
@@ -95,7 +99,13 @@ impl BRegResponseMetadata {
             trace_id,
             etag,
             location: None,
+            engine_version: None,
         }
+    }
+
+    pub(crate) fn with_engine_version(mut self, engine_version: Option<String>) -> Self {
+        self.engine_version = engine_version;
+        self
     }
 
     pub(crate) fn with_location(mut self, location: String) -> Self {
@@ -120,6 +130,14 @@ impl BRegResponseMetadata {
     pub fn location(&self) -> Option<&str> {
         self.location.as_deref()
     }
+
+    /// The engine release the service reported in its
+    /// `Registry-Engine-Version` response header, when that header was present
+    /// and well formed. It describes the peer; it grants nothing.
+    #[must_use]
+    pub fn engine_version(&self) -> Option<&str> {
+        self.engine_version.as_deref()
+    }
 }
 
 impl fmt::Debug for BRegResponseMetadata {
@@ -129,6 +147,7 @@ impl fmt::Debug for BRegResponseMetadata {
             .field("trace_id", &self.trace_id)
             .field("etag", &self.etag.is_some())
             .field("location", &self.location.is_some())
+            .field("engine_version", &self.engine_version)
             .finish()
     }
 }
