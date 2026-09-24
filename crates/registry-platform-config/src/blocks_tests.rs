@@ -234,3 +234,44 @@ fn sha256_label_shape() {
     assert!(is_sha256_label(&crate::sha256_uri(b"x")));
     assert!(!is_sha256_label("sha256:"));
 }
+
+#[test]
+fn blocks_serialize_back_to_the_form_they_were_read_from() {
+    let providers: SecretProvidersConfig =
+        serde_norway::from_str("file: {root: /run/secrets}\nenvironment: {}").unwrap();
+    let package: PackageConfig = serde_norway::from_str("root: /srv/package").unwrap();
+    let listener: ListenerConfig = serde_norway::from_str("bind: \"[::1]:8080\"").unwrap();
+    let jwks: JwksSource =
+        serde_norway::from_str("kind: uri\nuri: https://issuer.example.test/jwks").unwrap();
+    assert_eq!(
+        serde_json::to_value(&providers).unwrap(),
+        serde_json::json!({"file": {"root": "/run/secrets"}, "environment": {}})
+    );
+    assert_eq!(
+        serde_json::to_value(&package).unwrap(),
+        serde_json::json!({"root": "/srv/package"})
+    );
+    assert_eq!(
+        serde_json::to_value(listener).unwrap(),
+        serde_json::json!({"bind": "[::1]:8080"})
+    );
+    assert_eq!(
+        serde_json::to_value(&jwks).unwrap(),
+        serde_json::json!({"kind": "uri", "uri": "https://issuer.example.test/jwks"})
+    );
+    assert_eq!(
+        serde_json::to_value(JwksSource::Discovery).unwrap(),
+        serde_json::json!({"kind": "discovery"})
+    );
+    for (value, text) in [
+        (serde_json::to_value(&providers).unwrap(), "providers"),
+        (serde_json::to_value(&package).unwrap(), "package"),
+    ] {
+        assert!(value.is_object(), "{text}");
+    }
+    assert_eq!(
+        serde_json::from_value::<SecretProvidersConfig>(serde_json::to_value(&providers).unwrap())
+            .unwrap(),
+        providers
+    );
+}
