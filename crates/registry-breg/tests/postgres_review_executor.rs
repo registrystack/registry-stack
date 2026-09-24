@@ -4201,6 +4201,95 @@ async fn a_result_lookup_token_outage_asks_for_attention_without_spending_the_po
 }
 
 #[tokio::test]
+async fn a_credential_outage_leaves_an_already_reconciled_review_alone() {
+    let mut database = prepare_review_database().await;
+
+    // One request under the authority already settled with a stored result.
+    let reconciled_id = Uuid::from_u128(0xab);
+    let reconciled_accepted =
+        seed_accepted_submission(&database, reconciled_id, Uuid::from_u128(0xac)).await;
+    let (endpoint, _script, server) =
+        serve_scripted_result_authority(reconciled_accepted, ScriptedLookup::Approved).await;
+    make_result_poll_due(&database.admin, reconciled_id).await;
+    assert!(poll_scripted_result(&mut database, &endpoint)
+        .await
+        .expect("available result reconciles"));
+    server.abort();
+    let reconciled_before = database
+        .admin
+        .query_one(
+            "SELECT last_error_code,next_result_poll_at
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&reconciled_id],
+        )
+        .await
+        .expect("reconciled row before the outage");
+    assert_eq!(reconciled_before.get::<_, Option<String>>(0), None);
+    let poll_at_before = reconciled_before.get::<_, chrono::DateTime<chrono::Utc>>(1);
+
+    // A second request under the same authority is accepted but never polled.
+    let due_id = Uuid::from_u128(0xad);
+    seed_accepted_submission(&database, due_id, Uuid::from_u128(0xae)).await;
+    make_result_poll_due(&database.admin, due_id).await;
+
+    // The authority's credential provider is down when the sweep runs.
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let authorities = authority_registry_with_token(
+        "casework-a",
+        "producer-a",
+        "sender",
+        "registry-a",
+        Arc::new(UnavailableToken),
+    );
+    assert!(matches!(
+        run_review_authority_once_for_test(&pool, &authorities).await,
+        Err(MutationError::Unavailable)
+    ));
+
+    let reconciled_after = database
+        .admin
+        .query_one(
+            "SELECT last_error_code,next_result_poll_at
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&reconciled_id],
+        )
+        .await
+        .expect("reconciled row after the outage");
+    assert_eq!(
+        reconciled_after.get::<_, Option<String>>(0),
+        None,
+        "a credential outage must not reopen a review that already reconciled"
+    );
+    assert_eq!(
+        reconciled_after.get::<_, chrono::DateTime<chrono::Utc>>(1),
+        poll_at_before,
+        "a reconciled review is never rescheduled by the outage sweep"
+    );
+
+    let due_after: Option<String> = database
+        .admin
+        .query_one(
+            "SELECT last_error_code
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&due_id],
+        )
+        .await
+        .expect("due row after the outage")
+        .get(0);
+    assert_eq!(
+        due_after.as_deref(),
+        Some("token-unavailable"),
+        "an unreconciled due review still surfaces the credential outage"
+    );
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test]
 async fn a_404_result_lookup_clears_a_stale_token_outage_code() {
     let mut database = prepare_review_database().await;
     let request_id = Uuid::from_u128(0xa9);

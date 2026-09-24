@@ -831,12 +831,16 @@ impl ReviewAuthorityRegistry {
                     // (pending or 404) or reconciled result clears the code.
                     client
                         .execute(
-                            "UPDATE registry_internal.registry_request_review_submissions
+                            "UPDATE registry_internal.registry_request_review_submissions s
                                 SET next_result_poll_at=transaction_timestamp()+interval '5 seconds',
                                     last_error_code=COALESCE($2,last_error_code),
                                     updated_at=transaction_timestamp()
-                              WHERE authority=$1 AND state='accepted'
-                                AND next_result_poll_at <= transaction_timestamp()",
+                              WHERE s.authority=$1 AND s.state='accepted'
+                                AND s.next_result_poll_at <= transaction_timestamp()
+                                AND NOT EXISTS (
+                                    SELECT 1 FROM registry_internal.registry_request_review_results r
+                                     WHERE (r.request_entity_id,r.request_id,r.proposal_version)
+                                           = (s.request_entity_id,s.request_id,s.proposal_version))",
                             &[&authority.authority, &outage_code],
                         )
                         .await
