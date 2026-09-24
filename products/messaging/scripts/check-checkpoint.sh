@@ -47,6 +47,7 @@ variant() {
   mkdir -p "$work/$name/package"
   cp "$starter/messaging.yaml" "$work/$name/package/messaging.yaml"
   cp -R "$starter/templates" "$work/$name/package/templates"
+  cp -R "$starter/providers" "$work/$name/package/providers"
   python3 - "$starter/runtime.example.yaml" "$work/$name" "$change" <<'PY'
 import sys
 from pathlib import Path
