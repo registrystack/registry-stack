@@ -1572,10 +1572,10 @@ fn compare_fields(
             );
         } else if candidate_field
             .field_type
-            .widens_text_length_of(&previous_field.field_type)
+            .widens_length_limits_of(&previous_field.field_type)
         {
-            // Every stored value is within the higher limit, so the change
-            // only replaces the column's length check.
+            // Every stored value is within the relaxed limit, so the change
+            // only replaces or drops the column's length check.
             push_change(
                 changes,
                 CompiledRegistryChangeClass::CompatibleAdditive,
@@ -2309,7 +2309,7 @@ fn additive_migration_plan(
                 }
                 if field
                     .field_type
-                    .widens_text_length_of(&previous_field.field_type)
+                    .widens_length_limits_of(&previous_field.field_type)
                 {
                     widened_checks.entry(entity_id.clone()).or_default().extend(
                         replace_length_check_statement(

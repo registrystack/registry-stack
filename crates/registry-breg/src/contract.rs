@@ -2107,9 +2107,35 @@ pub enum FieldTypeSource {
 impl FieldTypeSource {
     /// Whether every value `previous` admitted is still a valid value of this
     /// type with no change to its stored column type: the vocabulary gained
-    /// codes, or a `text` length limit rose.
+    /// codes, a `text` length limit rose, or a `string` minimum length fell.
     pub fn admits_every_value_of(&self, previous: &FieldTypeSource) -> bool {
-        self.keeps_vocabulary_codes_of(previous) || self.widens_text_length_of(previous)
+        self.keeps_vocabulary_codes_of(previous) || self.widens_length_limits_of(previous)
+    }
+
+    /// Whether this type only relaxes a length bound `previous` enforced with
+    /// a column check: a `text` `maxLength` rose, or a `string` `minLength`
+    /// fell under the same `maxLength`.
+    pub fn widens_length_limits_of(&self, previous: &FieldTypeSource) -> bool {
+        self.widens_text_length_of(previous) || self.lowers_string_min_length_of(previous)
+    }
+
+    /// Whether this is a `string` type with the same `maxLength` as
+    /// `previous` and a lower `minLength`. The minimum is a column check, so
+    /// the stored `varchar` column type is unchanged.
+    pub fn lowers_string_min_length_of(&self, previous: &FieldTypeSource) -> bool {
+        matches!(
+            (previous, self),
+            (
+                FieldTypeSource::String {
+                    min_length: previous_min,
+                    max_length: previous_max,
+                },
+                FieldTypeSource::String {
+                    min_length,
+                    max_length,
+                },
+            ) if max_length == previous_max && min_length < previous_min
+        )
     }
 
     /// Whether this is a `text` type whose `maxLength` is higher than
