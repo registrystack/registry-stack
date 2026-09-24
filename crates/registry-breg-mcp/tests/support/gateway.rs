@@ -105,6 +105,8 @@ impl Harness {
                 TestClient::new(GATEWAY)
                     .with_public_jwk(gateway_key.public())
                     .with_resource(AUDIENCE)
+                    // The gateway's actor token is requested for its own resource.
+                    .with_resource(resource.clone())
                     .with_actor_kind(TestActorKind::Agent)
                     .with_service_subject(ACTOR),
             )

@@ -33,6 +33,17 @@ the actor, and calls the registry with that token only. The chat host's token
 is never sent to the registry, and the `Authorization` header is removed from
 the request once verified so no later layer can forward it.
 
+The gateway's actor token comes from its own `client_credentials` grant, which
+names the gateway's resource identifier (`resourceServer.resource`) as its
+RFC 8707 `resource` and asks for no scopes. The authorization server must let
+the gateway's client request that resource, and must never issue the actor
+token with the registry's audience: an actor token the registry would accept
+is a standing registry credential the gateway holds without a citizen behind
+it. A server that ignores `resource` on this grant must not fall back to the
+registry's audience for this client either. The inbound half refuses the actor
+token even so, because the configuration keeps the gateway's own client out of
+`resourceServer.allowedClients`.
+
 The halves share no code path and no configuration section:
 `resourceServer` configures the first, `registry` and `exchange` the second.
 

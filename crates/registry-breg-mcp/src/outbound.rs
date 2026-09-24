@@ -51,8 +51,11 @@ pub(crate) struct Outbound {
     gateway_resource: String,
     timeout: Duration,
     /// The gateway's own client-credentials provider, shared so its cached
-    /// credential serves every exchange. It carries no resource or scopes, so
-    /// it is never itself a standing registry token.
+    /// credential serves every exchange. It asks for the gateway's own
+    /// resource and no scopes, so the authorization server has no reason to
+    /// default it to the registry's audience and it is never itself a
+    /// standing registry token. The inbound half refuses it too: the
+    /// configuration keeps the gateway's client out of the allowed clients.
     actor: Arc<PrivateKeyJwt>,
 }
 
@@ -68,13 +71,16 @@ impl Outbound {
         let token_endpoint = Url::parse(&exchange.token_endpoint)
             .map_err(|_| OutboundError::Url("exchange.tokenEndpoint"))?;
         let timeout = Duration::from_millis(registry.request_timeout_milliseconds);
-        let actor = PrivateKeyJwt::new(client_config(
-            &token_endpoint,
-            &exchange.client_id,
-            exchange.assertion_audience.as_deref(),
-            &key,
-            timeout,
-        ))
+        let actor = PrivateKeyJwt::new(
+            client_config(
+                &token_endpoint,
+                &exchange.client_id,
+                exchange.assertion_audience.as_deref(),
+                &key,
+                timeout,
+            )
+            .with_resource(gateway_resource),
+        )
         .map_err(OutboundError::Credential)?;
         let outbound = Self {
             base_url,
@@ -216,6 +222,7 @@ mod tests {
                 TestClient::new(GATEWAY)
                     .with_public_jwk(key.public())
                     .with_resource(AUDIENCE)
+                    .with_resource(RESOURCE)
                     .with_actor_kind(TestActorKind::Agent)
                     .with_service_subject(ACTOR),
             )
@@ -320,6 +327,21 @@ mod tests {
         assert_eq!(claims["aud"], AUDIENCE);
         assert_eq!(claims["act"]["sub"], ACTOR);
         assert_eq!(claims["registry_actor_kind"], "agent");
+    }
+
+    #[tokio::test]
+    async fn the_actor_token_is_requested_for_the_gateway_not_the_registry() {
+        let fixture = fixture().await;
+        let actor = fixture
+            .outbound
+            .actor
+            .bearer_token()
+            .await
+            .expect("the gateway obtains its actor token");
+        let claims = claims(&header_text(&actor));
+        assert_eq!(claims["sub"], ACTOR);
+        assert_eq!(claims["aud"], RESOURCE);
+        assert_ne!(claims["aud"], AUDIENCE);
     }
 
     #[tokio::test]

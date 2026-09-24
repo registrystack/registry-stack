@@ -517,6 +517,8 @@ impl RealRegistry {
                 TestClient::new(GATEWAY_CLIENT)
                     .with_public_jwk(gateway_key.public())
                     .with_resource(AUDIENCE)
+                    // The gateway's actor token is requested for its own resource.
+                    .with_resource(gateway_resource)
                     .with_actor_kind(TestActorKind::Agent)
                     .with_service_subject(GATEWAY_ACTOR),
             )
@@ -620,7 +622,7 @@ impl RealRegistry {
             .expect("context"),
             UpstreamSubjectToken::new(subject, SubjectTokenType::AccessToken, expires_at)
                 .expect("subject"),
-            with_actor.then(|| Arc::new(provider(None, &[]))),
+            with_actor.then(|| Arc::new(provider(Some(&self.gateway_resource), &[]))),
         )
         .expect("exchange configures");
         exchange

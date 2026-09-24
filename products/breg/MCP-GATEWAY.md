@@ -117,6 +117,10 @@ For this exchange to work, the authorization server must support:
 - An actor token: the server accepts an `actor_token` obtained by the
   gateway's own client-credentials grant, and folds it into the issued
   token's `act` claim as `{sub}` or `{sub, iss}`.
+- An actor token that is not a registry token: the gateway's
+  client-credentials grant names the gateway's own resource identifier as
+  its `resource`, and the server issues the actor token for that resource,
+  never with the registry's audience.
 - A bounded exchanged lifetime: the issued token's validity does not exceed
   what the gateway's own client is configured to accept, and the gateway
   clamps it rather than trusting the server to.

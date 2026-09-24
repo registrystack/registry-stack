@@ -45,6 +45,8 @@ impl Fixture {
                 TestClient::new(GATEWAY)
                     .with_public_jwk(key.public())
                     .with_resource(AUDIENCE)
+                    // The gateway's actor token is requested for its own resource.
+                    .with_resource(RESOURCE)
                     .with_actor_kind(TestActorKind::Agent)
                     .with_service_subject(ACTOR),
             )
