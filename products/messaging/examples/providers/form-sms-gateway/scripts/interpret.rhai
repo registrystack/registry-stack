@@ -13,7 +13,7 @@ fn interpret(response) {
         return #{ outcome: "transient" };
     }
     if is_map && type_of(body.code) == "i64" {
-        return #{ outcome: "permanent", code: "twilio." + body.code };
+        return #{ outcome: "permanent", code: "gateway." + body.code };
     }
     #{ outcome: "permanent", code: "http." + response.status }
 }

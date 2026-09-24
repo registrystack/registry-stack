@@ -18,7 +18,7 @@ fn receipt(request) {
     }
     let code = form.ErrorCode;
     if type_of(code) == "string" && code != "" {
-        return #{ providerReference: sid, report: report, code: "twilio." + code };
+        return #{ providerReference: sid, report: report, code: "gateway." + code };
     }
     #{ providerReference: sid, report: report }
 }

@@ -46,8 +46,8 @@ pub enum CallbackBodyEncoding {
 pub enum CallbackVerifierConfig {
     /// HMAC-SHA1 over the full external callback URL with the request's form
     /// parameters sorted by key and appended as `key` then `value` with no
-    /// delimiter, base64 in `header`. This is Twilio's `X-Twilio-Signature`
-    /// scheme exactly.
+    /// delimiter, base64 in `header`. The `form-sms-gateway` example provider
+    /// package documents the provider scheme this matches.
     HmacSha1UrlForm {
         header: String,
         #[serde(rename = "secretRef")]
@@ -286,17 +286,16 @@ mod tests {
 
     fn hmac_sha1_url_form_verifier<'a>(secret: &'a [u8]) -> ResolvedCallbackVerifier<'a> {
         ResolvedCallbackVerifier::HmacSha1UrlForm {
-            header: "X-Twilio-Signature",
+            header: "X-Callback-Signature",
             secret,
         }
     }
 
-    /// Twilio's published worked example for `X-Twilio-Signature`
-    /// (https://www.twilio.com/docs/usage/security#validating-requests):
-    /// AuthToken `12345`, this URL and these form parameters sign to exactly
-    /// this base64 tag.
+    /// The worked example a provider publishes for this scheme, cited in the
+    /// `form-sms-gateway` example provider package: secret `12345`, this URL
+    /// and these form parameters sign to exactly this base64 tag.
     #[test]
-    fn the_twilio_documentation_vector_verifies() {
+    fn the_published_url_form_vector_verifies() {
         let request = CallbackRequest {
             method: "POST",
             url: "https://example.com/myapp.php?foo=1&bar=2",
@@ -308,7 +307,7 @@ mod tests {
                 ("To", "+18005551212"),
             ],
             body: b"",
-            headers: &[("X-Twilio-Signature", "L/OH5YylLD5NRKLltdqwSvS0BnU=")],
+            headers: &[("X-Callback-Signature", "L/OH5YylLD5NRKLltdqwSvS0BnU=")],
             path_token: None,
         };
         assert_eq!(
@@ -318,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn the_twilio_vector_is_order_independent_over_the_form_parameters_given() {
+    fn the_published_url_form_vector_is_order_independent_over_the_form_parameters_given() {
         let mut request = CallbackRequest {
             method: "POST",
             url: "https://example.com/myapp.php?foo=1&bar=2",
@@ -330,7 +329,7 @@ mod tests {
                 ("CallSid", "CA1234567890ABCDE"),
             ],
             body: b"",
-            headers: &[("X-Twilio-Signature", "L/OH5YylLD5NRKLltdqwSvS0BnU=")],
+            headers: &[("X-Callback-Signature", "L/OH5YylLD5NRKLltdqwSvS0BnU=")],
             path_token: None,
         };
         assert_eq!(
@@ -338,7 +337,7 @@ mod tests {
             Ok(())
         );
         // The header lookup is case-insensitive, as HTTP header names are.
-        request.headers = &[("x-twilio-signature", "L/OH5YylLD5NRKLltdqwSvS0BnU=")];
+        request.headers = &[("x-callback-signature", "L/OH5YylLD5NRKLltdqwSvS0BnU=")];
         assert_eq!(
             verify_callback(&hmac_sha1_url_form_verifier(b"12345"), &request),
             Ok(())
@@ -358,7 +357,7 @@ mod tests {
                 ("To", "+18005551212"),
             ],
             body: b"",
-            headers: &[("X-Twilio-Signature", "L/OH5YylLD5NRKLltdqwSvS0BnU=")],
+            headers: &[("X-Callback-Signature", "L/OH5YylLD5NRKLltdqwSvS0BnU=")],
             path_token: None,
         };
         let verifier = hmac_sha1_url_form_verifier(b"12345");
@@ -400,7 +399,7 @@ mod tests {
 
         // A header value that is not base64 at all.
         let mut malformed = valid;
-        malformed.headers = &[("X-Twilio-Signature", "not base64!!")];
+        malformed.headers = &[("X-Callback-Signature", "not base64!!")];
         assert_eq!(
             verify_callback(&verifier, &malformed),
             Err(CallbackVerificationRefusal::MalformedSignature)
@@ -554,8 +553,8 @@ mod tests {
 
         let unknown_field = serde_json::from_value::<CallbackVerifierConfig>(json!({
             "kind": "hmac-sha1-url-form",
-            "header": "X-Twilio-Signature",
-            "secretRef": "secret:env/TWILIO_TOKEN",
+            "header": "X-Callback-Signature",
+            "secretRef": "secret:env/SMS_CALLBACK_TOKEN",
             "endpoint": "https://elsewhere.test"
         }));
         assert!(unknown_field.is_err());

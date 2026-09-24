@@ -1632,33 +1632,38 @@ fn a_debug_rendering_never_shows_a_credential_reference() {
 // Example packages.
 // ---------------------------------------------------------------------------
 
-const TWILIO_PACKAGE: &str =
-    include_str!("../../../../products/messaging/examples/providers/twilio/provider.yaml");
-const TWILIO_CONNECTION: &str = include_str!(
-    "../../../../products/messaging/examples/providers/twilio/connection.example.yaml"
+const FORM_SMS_PACKAGE: &str = include_str!(
+    "../../../../products/messaging/examples/providers/form-sms-gateway/provider.yaml"
 );
-const TWILIO_PREPARE: &str =
-    include_str!("../../../../products/messaging/examples/providers/twilio/scripts/prepare.rhai");
-const TWILIO_INTERPRET: &str =
-    include_str!("../../../../products/messaging/examples/providers/twilio/scripts/interpret.rhai");
-const TWILIO_RECEIPT: &str =
-    include_str!("../../../../products/messaging/examples/providers/twilio/scripts/receipt.rhai");
-const TWILIO_ACCEPTED: &str =
-    include_str!("../../../../products/messaging/examples/providers/twilio/fixtures/accepted.json");
-const TWILIO_INVALID_RECIPIENT: &str = include_str!(
-    "../../../../products/messaging/examples/providers/twilio/fixtures/invalid-recipient.json"
+const FORM_SMS_CONNECTION: &str = include_str!(
+    "../../../../products/messaging/examples/providers/form-sms-gateway/connection.example.yaml"
 );
-const TWILIO_RATE_LIMITED: &str = include_str!(
-    "../../../../products/messaging/examples/providers/twilio/fixtures/rate-limited.json"
+const FORM_SMS_PREPARE: &str = include_str!(
+    "../../../../products/messaging/examples/providers/form-sms-gateway/scripts/prepare.rhai"
 );
-const TWILIO_CALLBACK_DELIVERED: &str = include_str!(
-    "../../../../products/messaging/examples/providers/twilio/fixtures/callback-delivered.form"
+const FORM_SMS_INTERPRET: &str = include_str!(
+    "../../../../products/messaging/examples/providers/form-sms-gateway/scripts/interpret.rhai"
 );
-const TWILIO_CALLBACK_UNDELIVERED: &str = include_str!(
-    "../../../../products/messaging/examples/providers/twilio/fixtures/callback-undelivered.form"
+const FORM_SMS_RECEIPT: &str = include_str!(
+    "../../../../products/messaging/examples/providers/form-sms-gateway/scripts/receipt.rhai"
 );
-const TWILIO_CALLBACK_SENDING: &str = include_str!(
-    "../../../../products/messaging/examples/providers/twilio/fixtures/callback-sending.form"
+const FORM_SMS_ACCEPTED: &str = include_str!(
+    "../../../../products/messaging/examples/providers/form-sms-gateway/fixtures/accepted.json"
+);
+const FORM_SMS_INVALID_RECIPIENT: &str = include_str!(
+    "../../../../products/messaging/examples/providers/form-sms-gateway/fixtures/invalid-recipient.json"
+);
+const FORM_SMS_RATE_LIMITED: &str = include_str!(
+    "../../../../products/messaging/examples/providers/form-sms-gateway/fixtures/rate-limited.json"
+);
+const FORM_SMS_CALLBACK_DELIVERED: &str = include_str!(
+    "../../../../products/messaging/examples/providers/form-sms-gateway/fixtures/callback-delivered.form"
+);
+const FORM_SMS_CALLBACK_UNDELIVERED: &str = include_str!(
+    "../../../../products/messaging/examples/providers/form-sms-gateway/fixtures/callback-undelivered.form"
+);
+const FORM_SMS_CALLBACK_SENDING: &str = include_str!(
+    "../../../../products/messaging/examples/providers/form-sms-gateway/fixtures/callback-sending.form"
 );
 
 const MOCK_PACKAGE: &str =
@@ -1679,18 +1684,18 @@ const MOCK_CALLBACK_FAILED: &str = include_str!(
     "../../../../products/messaging/examples/providers/mock/fixtures/callback-failed.json"
 );
 
-const TWILIO_ACCOUNT_PATH: &str = "/2010-04-01/Accounts/AC00000000000000000000000000000000/";
+const FORM_SMS_ACCOUNT_PATH: &str = "/2010-04-01/Accounts/AC00000000000000000000000000000000/";
 
 fn json_response(status: u16, body: &str) -> ResponseTemplate {
     ResponseTemplate::new(status).set_body_raw(body.trim().as_bytes().to_vec(), "application/json")
 }
 
-async fn twilio(upstream: &MockHttpUpstream, secrets: &Secrets) -> HttpProvider {
-    let package = package(TWILIO_PACKAGE);
+async fn form_sms_gateway(upstream: &MockHttpUpstream, secrets: &Secrets) -> HttpProvider {
+    let package = package(FORM_SMS_PACKAGE);
     let mut settings: HttpProviderSettings =
-        serde_norway::from_str(TWILIO_CONNECTION).expect("example connection parses");
+        serde_norway::from_str(FORM_SMS_CONNECTION).expect("example connection parses");
     settings.base_url = format!(
-        "{}{TWILIO_ACCOUNT_PATH}",
+        "{}{FORM_SMS_ACCOUNT_PATH}",
         upstream.url().trim_end_matches('/')
     );
     settings
@@ -1698,9 +1703,9 @@ async fn twilio(upstream: &MockHttpUpstream, secrets: &Secrets) -> HttpProvider 
             "sms-gateway",
             &package,
             HttpProviderScripts {
-                prepare: TWILIO_PREPARE,
-                interpret: Some(TWILIO_INTERPRET),
-                receipt: Some(TWILIO_RECEIPT),
+                prepare: FORM_SMS_PREPARE,
+                interpret: Some(FORM_SMS_INTERPRET),
+                receipt: Some(FORM_SMS_RECEIPT),
             },
             None,
             &secrets.resolver,
@@ -1708,7 +1713,7 @@ async fn twilio(upstream: &MockHttpUpstream, secrets: &Secrets) -> HttpProvider 
         .expect("the example activates")
 }
 
-fn twilio_secrets() -> Secrets {
+fn form_sms_secrets() -> Secrets {
     secrets(&[
         ("sms-account-sid", b"AC00000000000000000000000000000000"),
         ("sms-auth-token", PASSWORD),
@@ -1716,21 +1721,21 @@ fn twilio_secrets() -> Secrets {
 }
 
 #[tokio::test]
-async fn the_twilio_example_sends_a_form_and_reads_recorded_shape_responses() {
+async fn the_form_sms_example_sends_a_form_and_reads_recorded_shape_responses() {
     use base64::Engine as _;
-    let secrets = twilio_secrets();
+    let secrets = form_sms_secrets();
     let content = content();
     let cases = [
         (
-            json_response(201, TWILIO_ACCEPTED),
+            json_response(201, FORM_SMS_ACCEPTED),
             accepted(Some("SM00000000000000000000000000000001")),
         ),
         (
-            json_response(400, TWILIO_INVALID_RECIPIENT),
-            permanent_code("twilio.21211"),
+            json_response(400, FORM_SMS_INVALID_RECIPIENT),
+            permanent_code("gateway.21211"),
         ),
         (
-            json_response(429, TWILIO_RATE_LIMITED).insert_header("retry-after", "2"),
+            json_response(429, FORM_SMS_RATE_LIMITED).insert_header("retry-after", "2"),
             SendOutcome::Transient {
                 retry_after: Some(Duration::from_secs(2)),
             },
@@ -1743,10 +1748,10 @@ async fn the_twilio_example_sends_a_form_and_reads_recorded_shape_responses() {
     for (response, expected) in cases {
         let upstream = MockHttpUpstream::start().await;
         upstream
-            .expect("POST", &format!("{TWILIO_ACCOUNT_PATH}Messages.json"))
+            .expect("POST", &format!("{FORM_SMS_ACCOUNT_PATH}Messages.json"))
             .respond(response)
             .await;
-        let provider = twilio(&upstream, &secrets).await;
+        let provider = form_sms_gateway(&upstream, &secrets).await;
 
         let sent = provider.send(&message(&content)).await;
 
@@ -1779,10 +1784,10 @@ async fn the_twilio_example_sends_a_form_and_reads_recorded_shape_responses() {
 }
 
 #[tokio::test]
-async fn the_twilio_example_refuses_an_email_before_sending() {
-    let secrets = twilio_secrets();
+async fn the_form_sms_example_refuses_an_email_before_sending() {
+    let secrets = form_sms_secrets();
     let upstream = MockHttpUpstream::start().await;
-    let provider = twilio(&upstream, &secrets).await;
+    let provider = form_sms_gateway(&upstream, &secrets).await;
     let mut content = content();
     content.profile.channel = Channel::Email;
     let mut email = message(&content);
@@ -1801,10 +1806,10 @@ fn form_callback(raw: &str) -> Vec<(String, String)> {
 }
 
 #[tokio::test]
-async fn the_twilio_example_reads_recorded_shape_status_callbacks() {
-    let secrets = twilio_secrets();
+async fn the_form_sms_example_reads_recorded_shape_status_callbacks() {
+    let secrets = form_sms_secrets();
     let upstream = MockHttpUpstream::start().await;
-    let provider = twilio(&upstream, &secrets).await;
+    let provider = form_sms_gateway(&upstream, &secrets).await;
     let read = |raw: &str| {
         let fields = form_callback(raw);
         let pairs = fields
@@ -1816,13 +1821,13 @@ async fn the_twilio_example_reads_recorded_shape_status_callbacks() {
             url: "https://messaging.example.org/v1/callbacks/sms-gateway",
             form_parameters: &pairs,
             body: raw.trim().as_bytes(),
-            headers: &[("x-twilio-signature", "not-read-by-the-script")],
+            headers: &[("x-callback-signature", "not-read-by-the-script")],
             path_token: None,
         })
     };
 
     assert_eq!(
-        read(TWILIO_CALLBACK_DELIVERED),
+        read(FORM_SMS_CALLBACK_DELIVERED),
         Ok(Some(Receipt {
             provider_reference: "SM00000000000000000000000000000001".to_owned(),
             report: DeliveryReport::Delivered,
@@ -1830,14 +1835,14 @@ async fn the_twilio_example_reads_recorded_shape_status_callbacks() {
         }))
     );
     assert_eq!(
-        read(TWILIO_CALLBACK_UNDELIVERED),
+        read(FORM_SMS_CALLBACK_UNDELIVERED),
         Ok(Some(Receipt {
             provider_reference: "SM00000000000000000000000000000001".to_owned(),
             report: DeliveryReport::Undelivered,
-            code: Some("twilio.30003".to_owned()),
+            code: Some("gateway.30003".to_owned()),
         }))
     );
-    assert_eq!(read(TWILIO_CALLBACK_SENDING), Ok(None));
+    assert_eq!(read(FORM_SMS_CALLBACK_SENDING), Ok(None));
     assert_eq!(
         read("MessageSid=SM1&MessageSid=SM2&MessageStatus=sent"),
         Err(ReceiptScriptError::DuplicateField)
