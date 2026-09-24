@@ -919,6 +919,30 @@ mod tests {
     }
 
     #[test]
+    fn a_step_the_history_journal_refuses_names_the_step_and_the_reason() {
+        let report = serde_json::to_value(crate::test_lifecycle_failure(
+            TestLifecycleError::Rehearsal(Box::new(MigrationRehearsalError::HistoryStep {
+                migration_id: "rank-backfill".into(),
+                step_id: "backfill-rank".into(),
+                reason: "history migration supports only direct reviewed UPDATE statements".into(),
+            })),
+        ))
+        .expect("rehearsal failure report serializes");
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(
+            diagnostic["code"],
+            "migration.rehearsal.history_step_refused"
+        );
+        assert_eq!(
+            diagnostic["path"],
+            "reviewedMigrations[rank-backfill].steps[backfill-rank]"
+        );
+        let message = diagnostic["message"].as_str().unwrap();
+        assert!(message.contains("cannot be journaled"), "{message}");
+        assert!(message.contains("apply would refuse"), "{message}");
+    }
+
+    #[test]
     fn a_refused_logical_reference_reports_which_reference_and_why() {
         use registry_breg::fixtures::LogicalReferenceRefusal;
 

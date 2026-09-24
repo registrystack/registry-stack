@@ -17,6 +17,7 @@ use tokio_postgres::{error::DbError, types::Type, GenericClient};
 use uuid::Uuid;
 
 use crate::generated_ddl::DdlStatementKind;
+use crate::history_migration::check_reviewed_history_step;
 use crate::migration_plan::{ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationPlan};
 use crate::model::CompiledRegistry;
 use crate::mutation::install_mutation_schema;
@@ -192,6 +193,12 @@ pub enum MigrationRehearsalError {
         migration_id: String,
         step_id: String,
         failure: PostgresFailure,
+    },
+    #[error("reviewed migration {migration_id} step {step_id} cannot be journaled: {reason}")]
+    HistoryStep {
+        migration_id: String,
+        step_id: String,
+        reason: String,
     },
     #[error(
         "the rehearsed migration does not reach the candidate schema fingerprint; activation would refuse it"
@@ -484,6 +491,25 @@ async fn rehearse_reviewed_steps(
                 step_id: step_id.clone(),
                 failure: PostgresFailure::from_error(&error),
             };
+            // Activation journals every row a bounded or chunked update
+            // changes, and refuses before the step runs when the journal
+            // cannot record it, so the rehearsal applies the same check.
+            let journaled = match &step.descriptor {
+                ReviewedMigrationStepDescriptor::TransactionalSql { affected_rows, .. } => {
+                    affected_rows.is_some()
+                }
+                ReviewedMigrationStepDescriptor::ChunkedBackfill { .. } => true,
+                ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { .. } => false,
+            };
+            if journaled {
+                check_reviewed_history_step(&migration.descriptor_path, step).map_err(|error| {
+                    MigrationRehearsalError::HistoryStep {
+                        migration_id: migration.descriptor.id.clone(),
+                        step_id: step_id.clone(),
+                        reason: error.to_string(),
+                    }
+                })?;
+            }
             let tables = objects
                 .iter()
                 .map(|object| object.table.clone())

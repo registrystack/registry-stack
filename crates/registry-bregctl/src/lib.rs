@@ -4040,6 +4040,15 @@ fn migration_rehearsal_failure(error: MigrationRehearsalError) -> FailureReport 
             format!("reviewedMigrations[{migration_id}].steps[{step_id}]"),
             SuggestedAction::CorrectPackageBuild,
         ),
+        MigrationRehearsalError::HistoryStep {
+            migration_id,
+            step_id,
+            ..
+        } => (
+            "migration.rehearsal.history_step_refused",
+            format!("reviewedMigrations[{migration_id}].steps[{step_id}]"),
+            SuggestedAction::CorrectPackageBuild,
+        ),
         MigrationRehearsalError::FinalSchemaMismatch => (
             "migration.rehearsal.schema_mismatch",
             "reviewedMigrations".to_owned(),
