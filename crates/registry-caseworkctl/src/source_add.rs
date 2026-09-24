@@ -130,12 +130,7 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         report["candidateRuntimeBinding"] = serde_norway::from_str(&binding)?;
         return Ok(report);
     }
-    let retry = format!(
-        "caseworkctl source add {} --project {} --source-id {} --apply",
-        shell_word(&registry.display().to_string()),
-        shell_word(&project.display().to_string()),
-        args.source_id,
-    );
+    let retry = retry_command(&registry, &project, &args.source_id, &args.bregctl_bin);
     require_outputs_absent_or_exact(
         &description_path,
         &description,
@@ -2253,6 +2248,24 @@ fn write_json_atomic(path: &Path, value: &Value) -> Result<()> {
     write_atomic(path, &json_file_bytes(value)?)
 }
 
+/// The exact `caseworkctl source add --apply` invocation printed as recovery
+/// after a move-aside. It carries `--bregctl-bin` only when the caller chose
+/// a bregctl other than the default, so the retry picks up the same binary
+/// this run checked and verified against.
+fn retry_command(registry: &Path, project: &Path, source_id: &str, bregctl_bin: &Path) -> String {
+    let mut retry = format!(
+        "caseworkctl source add {} --project {} --source-id {} --apply",
+        shell_word(&registry.display().to_string()),
+        shell_word(&project.display().to_string()),
+        source_id,
+    );
+    if bregctl_bin != Path::new("bregctl") {
+        retry.push_str(" --bregctl-bin ");
+        retry.push_str(&shell_word(&bregctl_bin.display().to_string()));
+    }
+    retry
+}
+
 /// Refuse an apply that would replace an existing output with different
 /// content. Both outputs are compared before either refusal is reported, so
 /// one message names every preserved file, why it differs, and the exact
@@ -2643,6 +2656,28 @@ mod tests {
     fn source_apply_recovery_quotes_paths_a_shell_would_split() {
         assert_eq!(shell_word("/work/casework"), "/work/casework");
         assert_eq!(shell_word("/my work/it's"), "'/my work/it'\\''s'");
+    }
+
+    #[test]
+    fn source_apply_retry_omits_the_default_bregctl_bin() {
+        let retry = retry_command(
+            Path::new("/registry"),
+            Path::new("/casework"),
+            "professional-licences",
+            Path::new("bregctl"),
+        );
+        assert_eq!(retry, RETRY);
+    }
+
+    #[test]
+    fn source_apply_retry_keeps_a_non_default_bregctl_bin() {
+        let retry = retry_command(
+            Path::new("/registry"),
+            Path::new("/casework"),
+            "professional-licences",
+            Path::new("/opt/my bregctl"),
+        );
+        assert_eq!(retry, format!("{RETRY} --bregctl-bin '/opt/my bregctl'"));
     }
 
     #[test]
