@@ -66,8 +66,11 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     let mut findings = check_unpaired_review_policies(
         &project,
         &authored,
-        requests[0].entity(),
-        &requests[0].authority,
+        &requests.iter().map(SelectedRequest::entity).collect(),
+        &requests
+            .iter()
+            .map(|request| request.authority.as_str())
+            .collect(),
     )?;
     let readers = requests
         .iter()
@@ -592,10 +595,10 @@ fn select_request<'a>(
     })
 }
 
-/// select_request already refuses an unresolvable review.policyId on the one
+/// select_request already refuses an unresolvable review.policyId on each
 /// BReg change-request entity this invocation is pairing. A BReg registry.yaml
-/// can declare other change-request entities that name the same review
-/// authority (the one this Casework project was just proven to own) but that
+/// can declare other change-request entities that name one of the same review
+/// authorities (the ones this Casework project was just proven to own) but that
 /// are not paired to any source: those entities pass BReg's own compile
 /// check, since it only validates that authority and policyId are well-formed
 /// identifiers, not that a bound review authority actually declares that
@@ -603,7 +606,7 @@ fn select_request<'a>(
 /// it is where that gap is caught.
 ///
 /// A sibling entity that fails this check is reported as a finding, not a
-/// refusal, unlike the paired entity's own check in select_request: pairing
+/// refusal, unlike the paired entities' own check in select_request: pairing
 /// one entity before another entity's review kind exists is ordinary
 /// incremental authoring, and more than one Casework project can legitimately
 /// share a review authority id, so an unresolved policyId here may simply
@@ -614,8 +617,8 @@ fn select_request<'a>(
 fn check_unpaired_review_policies(
     project: &Path,
     authored: &Value,
-    paired_entity: &str,
-    authority: &str,
+    paired_entities: &BTreeSet<&str>,
+    authorities: &BTreeSet<&str>,
 ) -> Result<Vec<Value>> {
     let policy = load_casework_policy(project)?;
     let review_kind_ids: BTreeSet<&str> = policy["reviewKinds"]
@@ -632,15 +635,18 @@ fn check_unpaired_review_policies(
         let Some(entity_id) = entity["id"].as_str() else {
             continue;
         };
-        if entity_id == paired_entity {
+        if paired_entities.contains(entity_id) {
             continue;
         }
         let Some(review) = entity.pointer("/changeRequest/review") else {
             continue;
         };
-        if review["authority"] != authority {
+        let Some(authority) = review["authority"]
+            .as_str()
+            .filter(|authority| authorities.contains(authority))
+        else {
             continue;
-        }
+        };
         match review.get("policyId").and_then(Value::as_str) {
             Some(policy_id) if review_kind_ids.contains(policy_id) => {}
             Some(policy_id) => findings.push(unresolved_review_policy_finding(
@@ -654,7 +660,7 @@ fn check_unpaired_review_policies(
     Ok(findings)
 }
 
-/// A finding warning that a BReg change-request entity other than the one
+/// A finding warning that a BReg change-request entity other than the ones
 /// being paired names this Casework project's review authority with a
 /// `policyId` no declared `reviewKinds[].id` matches. BReg's own compile
 /// check does not catch this, since it only validates that `policyId` is a
@@ -2406,9 +2412,13 @@ mod tests {
             {"id":"address-correction", "changeRequest":{"review":{"authority":"casework","policyId":"missing-kind"}}}
         ]});
 
-        let findings =
-            check_unpaired_review_policies(project.path(), &authored, "correction", "casework")
-                .expect("an unresolvable sibling review policy must not refuse the pairing");
+        let findings = check_unpaired_review_policies(
+            project.path(),
+            &authored,
+            &BTreeSet::from(["correction"]),
+            &BTreeSet::from(["casework"]),
+        )
+        .expect("an unresolvable sibling review policy must not refuse the pairing");
 
         let [finding] = findings.as_slice() else {
             panic!("expected exactly one finding, got {findings:?}");
@@ -2443,9 +2453,13 @@ mod tests {
             {"id":"no-policy", "changeRequest":{"review":{"authority":"casework"}}}
         ]});
 
-        let findings =
-            check_unpaired_review_policies(project.path(), &authored, "correction", "casework")
-                .expect("a non-string sibling policyId must not refuse the pairing");
+        let findings = check_unpaired_review_policies(
+            project.path(),
+            &authored,
+            &BTreeSet::from(["correction"]),
+            &BTreeSet::from(["casework"]),
+        )
+        .expect("a non-string sibling policyId must not refuse the pairing");
 
         assert!(findings.is_empty(), "{findings:?}");
     }
@@ -2465,10 +2479,48 @@ mod tests {
             {"id":"sibling-correction", "changeRequest":{"review":{"authority":"casework","policyId":"registry-correction"}}}
         ]});
 
-        let findings =
-            check_unpaired_review_policies(project.path(), &authored, "correction", "casework")
-                .unwrap();
+        let findings = check_unpaired_review_policies(
+            project.path(),
+            &authored,
+            &BTreeSet::from(["correction"]),
+            &BTreeSet::from(["casework"]),
+        )
+        .unwrap();
         assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn unpaired_casework_review_policies_scan_siblings_of_every_paired_authority() {
+        let project = tempfile::tempdir().unwrap();
+        fs::write(
+            project.path().join("casework.yaml"),
+            serde_json::to_vec(&casework_policy_with_one_review_kind()).unwrap(),
+        )
+        .unwrap();
+        let authored = json!({"entities":[
+            {"id":"correction", "changeRequest":{"review":{"authority":"casework","policyId":"registry-correction"}}},
+            {"id":"renewal", "changeRequest":{"review":{"authority":"casework-renewals","policyId":"registry-correction"}}},
+            {"id":"renewal-appeal", "changeRequest":{"review":{"authority":"casework-renewals","policyId":"missing-kind"}}}
+        ]});
+
+        let findings = check_unpaired_review_policies(
+            project.path(),
+            &authored,
+            &BTreeSet::from(["correction", "renewal"]),
+            &BTreeSet::from(["casework", "casework-renewals"]),
+        )
+        .unwrap();
+
+        let [finding] = findings.as_slice() else {
+            panic!("expected exactly one finding, got {findings:?}");
+        };
+        assert_eq!(
+            finding["path"],
+            "registry.yaml:/entities/2/changeRequest/review/policyId"
+        );
+        let message = finding["message"].as_str().unwrap();
+        assert!(message.contains("renewal-appeal"), "{message}");
+        assert!(message.contains("casework-renewals"), "{message}");
     }
 
     #[test]
