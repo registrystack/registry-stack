@@ -22,6 +22,7 @@ use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::metrics::{self, Metrics};
 use registry_breg::package::PackageError;
+use registry_breg::postgres::{advise, AdvisorySeverity, BaselineAdvisory, BaselineSettings};
 use registry_breg::runtime_config::{parse_runtime_config_with_env, RuntimeConfigError};
 use registry_breg::startup::{
     operational_log_level, with_request_timeout_and_metrics_for_test,
@@ -578,7 +579,47 @@ fn expected_operational_event(
             None,
             Some(expected_webhook_state_transition_code(code)),
         ),
+        OperationalEvent::PostgresBaselineAdvisory(advisory) => (
+            match advisory.severity() {
+                AdvisorySeverity::Warning => OperationalLogLevel::Warn,
+                AdvisorySeverity::Information => OperationalLogLevel::Info,
+            },
+            "registry_breg::postgres",
+            advisory.message(),
+            None,
+            Some(advisory.code()),
+        ),
     }
+}
+
+/// Every baseline advisory code, from settings that warn on everything and
+/// settings that could not be read at all.
+fn baseline_advisories() -> Vec<BaselineAdvisory> {
+    let warning = BaselineSettings {
+        max_connections: Some("20".to_owned()),
+        superuser_reserved_connections: Some("3".to_owned()),
+        reserved_connections: Some("1".to_owned()),
+        autovacuum: Some("off".to_owned()),
+        track_counts: Some("off".to_owned()),
+        pg_stat_statements_installed: Some(false),
+    };
+    let within_budget = BaselineSettings {
+        max_connections: Some("100".to_owned()),
+        ..warning.clone()
+    };
+    let mut advisories = advise(&warning, 9);
+    advisories.push(advise(&within_budget, 9).remove(0));
+    advisories.extend(advise(&BaselineSettings::default(), 9));
+    advisories
+}
+
+fn baseline_observed_field(advisory: &BaselineAdvisory) -> String {
+    advisory
+        .observed()
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn expected_startup_error(error: StartupError) -> &'static str {
@@ -652,6 +693,11 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
             .into_iter()
             .map(OperationalEvent::WebhookStateTransitionFailed),
     );
+    events.extend(
+        baseline_advisories()
+            .into_iter()
+            .map(OperationalEvent::PostgresBaselineAdvisory),
+    );
 
     let writer = CapturedOperationalLogs::default();
     let subscriber = tracing_subscriber::fmt()
@@ -678,6 +724,12 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
     assert_eq!(rendered.len(), events.len());
     for (event, rendered) in events.into_iter().zip(rendered) {
         let expected = event.record();
+        let observed = match &event {
+            OperationalEvent::PostgresBaselineAdvisory(advisory) => {
+                Some(baseline_observed_field(advisory))
+            }
+            _ => None,
+        };
         let (level, target, message, error, code) = expected_operational_event(event);
         assert_eq!(expected.level(), level);
         assert_eq!(expected.target(), target);
@@ -702,6 +754,9 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
         if expected.code().is_some() {
             expected_field_names.insert("code");
         }
+        if observed.is_some() {
+            expected_field_names.insert("observed");
+        }
         assert_eq!(
             fields.keys().map(String::as_str).collect::<BTreeSet<_>>(),
             expected_field_names
@@ -712,11 +767,16 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
             expected.error()
         );
         assert_eq!(fields.get("code").and_then(Value::as_str), expected.code());
+        assert_eq!(
+            fields.get("observed").and_then(Value::as_str),
+            observed.as_deref()
+        );
         assert!(matches!(
             expected.target(),
             "registry_breg::startup"
                 | "registry_breg::webhook"
                 | "registry_breg::attachment_verification"
+                | "registry_breg::postgres"
         ));
     }
 }

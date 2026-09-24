@@ -33,9 +33,10 @@ use crate::package::{
     load_package, PackageError, PackageIntent, PackageLoadContext, VerifiedPackage,
 };
 use crate::postgres::{
-    verify_catalog_identity_for_catalog, ExpectedManagedCatalog, ExpectedRegistryIdentity,
-    PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
-    PostgresSnapshotReadService, RegistryLockKey, RuntimePool, SqlIdentifier,
+    inspect_baseline, verify_catalog_identity_for_catalog, AdvisorySeverity, BaselineAdvisory,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresRecordMutationService,
+    PostgresRecordReadService, PostgresRevisionReadService, PostgresSnapshotReadService,
+    RegistryLockKey, RuntimePool, SqlIdentifier,
 };
 use crate::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 use crate::webhook::{WebhookDeliveryService, WebhookWorker};
@@ -193,6 +194,9 @@ pub enum OperationalEvent {
     AttachmentVerificationIterationFailed,
     AttachmentVerificationRetryPending,
     WebhookStateTransitionFailed(WebhookStateTransitionCode),
+    /// One PostgreSQL baseline advisory, logged once at startup. It carries a
+    /// closed code and message plus the server's observed setting counts.
+    PostgresBaselineAdvisory(BaselineAdvisory),
 }
 
 impl OperationalEvent {
@@ -255,6 +259,16 @@ impl OperationalEvent {
                 error: None,
                 code: Some(code.as_str()),
             },
+            Self::PostgresBaselineAdvisory(advisory) => OperationalLogRecord {
+                level: match advisory.severity() {
+                    AdvisorySeverity::Warning => OperationalLogLevel::Warn,
+                    AdvisorySeverity::Information => OperationalLogLevel::Info,
+                },
+                target: "registry_breg::postgres",
+                message: advisory.message(),
+                error: None,
+                code: Some(advisory.code()),
+            },
         }
     }
 
@@ -285,6 +299,23 @@ impl OperationalEvent {
             Self::WebhookWorkerIterationFailed | Self::WebhookStateTransitionFailed(_) => {
                 let code = record.code.expect("webhook warning records have a code");
                 tracing::warn!(target: "registry_breg::webhook", code, message = record.message);
+            }
+            Self::PostgresBaselineAdvisory(advisory) => {
+                let code = record.code.expect("baseline advisory records have a code");
+                let observed = advisory
+                    .observed()
+                    .iter()
+                    .map(|(name, value)| format!("{name}={value}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                match advisory.severity() {
+                    AdvisorySeverity::Warning => {
+                        tracing::warn!(target: "registry_breg::postgres", code, observed, message = record.message);
+                    }
+                    AdvisorySeverity::Information => {
+                        tracing::info!(target: "registry_breg::postgres", code, observed, message = record.message);
+                    }
+                }
             }
         }
     }
@@ -365,6 +396,7 @@ pub struct PreparedServer {
     metrics: Option<PreparedMetricsListener>,
     #[cfg(feature = "wasm")]
     wasm_runtime: Option<crate::wasm_runtime::ConfiguredWasmRuntime>,
+    postgres_advisories: Vec<BaselineAdvisory>,
     #[cfg(all(feature = "postgres-test", feature = "tooling"))]
     fixture_pool: Option<RuntimePool>,
 }
@@ -384,6 +416,22 @@ impl PreparedServer {
     #[must_use]
     pub fn bind(&self) -> SocketAddr {
         self.bind
+    }
+
+    /// The PostgreSQL baseline advisories decided while this server was
+    /// prepared. They never refused startup.
+    #[must_use]
+    pub fn postgres_advisories(&self) -> &[BaselineAdvisory] {
+        &self.postgres_advisories
+    }
+
+    /// The runtime pool the verified startup path built, so a test can check
+    /// the session settings its connections carry.
+    #[cfg(all(feature = "postgres-test", feature = "tooling"))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn runtime_pool_for_test(&self) -> Option<RuntimePool> {
+        self.fixture_pool.clone()
     }
 
     /// Return the Router and PostgreSQL pool only when both were assembled by
@@ -409,6 +457,7 @@ impl PreparedServer {
             attachment_verification_worker: None,
             review_worker: None,
             metrics: None,
+            postgres_advisories: Vec::new(),
             #[cfg(feature = "wasm")]
             wasm_runtime: None,
             #[cfg(feature = "tooling")]
@@ -433,6 +482,7 @@ impl PreparedServer {
             attachment_verification_worker: None,
             review_worker: None,
             metrics: None,
+            postgres_advisories: Vec::new(),
             #[cfg(feature = "wasm")]
             wasm_runtime: None,
             #[cfg(feature = "tooling")]
@@ -641,7 +691,7 @@ async fn prepare_verified_package_with_connection(
     package: VerifiedPackage,
     connection: crate::postgres::ConnectionConfig,
 ) -> Result<PreparedServer> {
-    let (pool, startup) = prepare_database_startup(
+    let (pool, startup, postgres_advisories) = prepare_database_startup(
         package,
         &connection,
         config.database().roles().migration(),
@@ -658,6 +708,7 @@ async fn prepare_verified_package_with_connection(
         config,
         startup,
         pool,
+        postgres_advisories,
         key_source,
         audit_profile,
         cursor_codec,
@@ -672,7 +723,7 @@ async fn prepare_verified_package_with_key_source(
     connection: crate::postgres::ConnectionConfig,
     key_source: Arc<JwksFetcher>,
 ) -> Result<PreparedServer> {
-    let (pool, startup) = prepare_database_startup(
+    let (pool, startup, postgres_advisories) = prepare_database_startup(
         package,
         &connection,
         config.database().roles().migration(),
@@ -685,6 +736,7 @@ async fn prepare_verified_package_with_key_source(
         config,
         startup,
         pool,
+        postgres_advisories,
         key_source,
         audit_profile,
         cursor_codec,
@@ -715,7 +767,7 @@ async fn prepare_database_startup(
     connection: &crate::postgres::ConnectionConfig,
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
-) -> Result<(RuntimePool, VerifiedStartup)> {
+) -> Result<(RuntimePool, VerifiedStartup, Vec<BaselineAdvisory>)> {
     let pool = connection
         .clone()
         .with_idle_in_transaction_session_timeout(SERVER_IDLE_IN_TRANSACTION_TIMEOUT)
@@ -727,14 +779,16 @@ async fn prepare_database_startup(
         .await
         .map_err(|_| StartupError::DatabaseConnection)?;
     let startup = verify_opened_startup(package, &mut client, migration_role, runtime_role).await?;
+    let advisories = inspect_baseline(&client, pool.status().max_size).await;
     drop(client);
-    Ok((pool, startup))
+    Ok((pool, startup, advisories))
 }
 
 async fn finish_prepared_server(
     config: RuntimeConfig,
     startup: VerifiedStartup,
     pool: RuntimePool,
+    postgres_advisories: Vec<BaselineAdvisory>,
     key_source: Arc<JwksFetcher>,
     audit_profile: AuditProfile,
     cursor_codec: Arc<crate::cursor::CursorCodec>,
@@ -1037,6 +1091,7 @@ async fn finish_prepared_server(
         attachment_verification_worker,
         review_worker,
         metrics,
+        postgres_advisories,
         #[cfg(feature = "wasm")]
         wasm_runtime: Some(wasm_runtime),
         #[cfg(all(feature = "postgres-test", feature = "tooling"))]
