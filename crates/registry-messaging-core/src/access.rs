@@ -389,6 +389,20 @@ pub fn authorize_submission(
     Ok(())
 }
 
+/// Decide whether `caller` may preview `template`. Preview is a sender's
+/// authoring aid: it answers only for a template the caller's profile could
+/// submit, and an operator, who submits nothing, previews nothing.
+pub fn authorize_preview(caller: &Caller, template: &str) -> Result<(), SubmissionRefusal> {
+    let profile = &caller.profile;
+    if profile.role != AccessRole::Sender {
+        return Err(SubmissionRefusal::Role);
+    }
+    if !profile.templates.iter().any(|allowed| allowed == template) {
+        return Err(SubmissionRefusal::Template);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -782,6 +796,23 @@ mod tests {
                 }
             ),
             Ok(())
+        );
+    }
+
+    /// A preview answers only for a template the caller's profile could
+    /// submit, so it is no wider than security invariant 1.
+    #[test]
+    fn a_preview_outside_the_callers_templates_is_refused() {
+        let sender = caller(sender("clinic-reminders", "clinic-backend"));
+        assert_eq!(authorize_preview(&sender, "appointment-reminder"), Ok(()));
+        assert_eq!(
+            authorize_preview(&sender, "payment-notice"),
+            Err(SubmissionRefusal::Template)
+        );
+        let operator = caller(operator("messaging-operators", "operator-console"));
+        assert_eq!(
+            authorize_preview(&operator, "appointment-reminder"),
+            Err(SubmissionRefusal::Role)
         );
     }
 

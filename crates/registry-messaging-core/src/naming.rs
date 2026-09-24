@@ -49,6 +49,9 @@ pub const MESSAGES_PATH: &str = "/v1/messages";
 /// Route template reading one message.
 pub const MESSAGE_PATH: &str = "/v1/messages/{message_id}";
 
+/// Route template rendering one template version without sending it.
+pub const TEMPLATE_PREVIEW_PATH: &str = "/v1/templates/{template_id}/versions/{version}/preview";
+
 /// Header carrying the scoped idempotency key of a mutating command.
 pub const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 
@@ -95,6 +98,10 @@ mod tests {
         assert_eq!(METRICS_PATH, "/metrics");
         assert_eq!(MESSAGES_PATH, "/v1/messages");
         assert_eq!(MESSAGE_PATH, "/v1/messages/{message_id}");
+        assert_eq!(
+            TEMPLATE_PREVIEW_PATH,
+            "/v1/templates/{template_id}/versions/{version}/preview"
+        );
         assert_eq!(IDEMPOTENCY_KEY_HEADER, "idempotency-key");
         assert_eq!(MAXIMUM_IDEMPOTENCY_KEY_BYTES, 128);
         assert_eq!(MAXIMUM_CORRELATION_ID_BYTES, 128);

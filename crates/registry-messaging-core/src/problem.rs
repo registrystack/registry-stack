@@ -23,6 +23,9 @@
 use crate::naming::MESSAGING_PROBLEM_TYPE_BASE;
 
 pub const AUTHENTICATION_REFUSED_PROBLEM: &str = "authentication.refused";
+pub const CONTENT_INVALID_PROBLEM: &str = "content.invalid";
+pub const CONTENT_TOO_LARGE_PROBLEM: &str = "content.too-large";
+pub const CONTENT_TOO_MANY_SEGMENTS_PROBLEM: &str = "content.too-many-segments";
 pub const IDEMPOTENCY_EXPIRED_PROBLEM: &str = "idempotency.expired";
 pub const IDEMPOTENCY_KEY_REUSED_PROBLEM: &str = "idempotency.key-reused";
 pub const MESSAGE_NOT_VISIBLE_PROBLEM: &str = "message.not-visible";
@@ -35,11 +38,18 @@ pub const REQUEST_NOT_FOUND_PROBLEM: &str = "request.not-found";
 pub const REQUEST_UNPROCESSABLE_PROBLEM: &str = "request.unprocessable";
 pub const REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM: &str = "request.unsupported-media-type";
 pub const SERVICE_UNAVAILABLE_PROBLEM: &str = "service.unavailable";
+pub const TEMPLATE_DATA_INVALID_PROBLEM: &str = "template.data-invalid";
+pub const TEMPLATE_LOCALE_UNAVAILABLE_PROBLEM: &str = "template.locale-unavailable";
+pub const TEMPLATE_NOT_FOUND_PROBLEM: &str = "template.not-found";
+pub const TEMPLATE_RENDER_REFUSED_PROBLEM: &str = "template.render-refused";
 
 /// Every problem code Registry Messaging can return, in code-string order.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ProblemCode {
     AuthenticationRefused,
+    ContentInvalid,
+    ContentTooLarge,
+    ContentTooManySegments,
     IdempotencyExpired,
     IdempotencyKeyReused,
     MessageNotVisible,
@@ -52,12 +62,19 @@ pub enum ProblemCode {
     RequestUnprocessable,
     RequestUnsupportedMediaType,
     ServiceUnavailable,
+    TemplateDataInvalid,
+    TemplateLocaleUnavailable,
+    TemplateNotFound,
+    TemplateRenderRefused,
 }
 
 impl ProblemCode {
     /// The complete closed vocabulary, in code-string order.
     pub const ALL: &'static [Self] = &[
         Self::AuthenticationRefused,
+        Self::ContentInvalid,
+        Self::ContentTooLarge,
+        Self::ContentTooManySegments,
         Self::IdempotencyExpired,
         Self::IdempotencyKeyReused,
         Self::MessageNotVisible,
@@ -70,12 +87,19 @@ impl ProblemCode {
         Self::RequestUnprocessable,
         Self::RequestUnsupportedMediaType,
         Self::ServiceUnavailable,
+        Self::TemplateDataInvalid,
+        Self::TemplateLocaleUnavailable,
+        Self::TemplateNotFound,
+        Self::TemplateRenderRefused,
     ];
 
     #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
             Self::AuthenticationRefused => AUTHENTICATION_REFUSED_PROBLEM,
+            Self::ContentInvalid => CONTENT_INVALID_PROBLEM,
+            Self::ContentTooLarge => CONTENT_TOO_LARGE_PROBLEM,
+            Self::ContentTooManySegments => CONTENT_TOO_MANY_SEGMENTS_PROBLEM,
             Self::IdempotencyExpired => IDEMPOTENCY_EXPIRED_PROBLEM,
             Self::IdempotencyKeyReused => IDEMPOTENCY_KEY_REUSED_PROBLEM,
             Self::MessageNotVisible => MESSAGE_NOT_VISIBLE_PROBLEM,
@@ -88,6 +112,10 @@ impl ProblemCode {
             Self::RequestUnprocessable => REQUEST_UNPROCESSABLE_PROBLEM,
             Self::RequestUnsupportedMediaType => REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM,
             Self::ServiceUnavailable => SERVICE_UNAVAILABLE_PROBLEM,
+            Self::TemplateDataInvalid => TEMPLATE_DATA_INVALID_PROBLEM,
+            Self::TemplateLocaleUnavailable => TEMPLATE_LOCALE_UNAVAILABLE_PROBLEM,
+            Self::TemplateNotFound => TEMPLATE_NOT_FOUND_PROBLEM,
+            Self::TemplateRenderRefused => TEMPLATE_RENDER_REFUSED_PROBLEM,
         }
     }
 
@@ -110,13 +138,19 @@ impl ProblemCode {
             Self::RequestInvalid => 400,
             Self::AuthenticationRefused => 401,
             Self::OperationNotAuthorized | Self::ProfileNotAuthorized => 403,
-            Self::MessageNotVisible | Self::RequestNotFound => 404,
+            Self::MessageNotVisible | Self::RequestNotFound | Self::TemplateNotFound => 404,
             Self::RequestMethodNotAllowed => 405,
             Self::IdempotencyKeyReused => 409,
             Self::IdempotencyExpired => 410,
             Self::RequestBodyTooLarge => 413,
             Self::RequestUnsupportedMediaType => 415,
-            Self::RequestUnprocessable => 422,
+            Self::ContentInvalid
+            | Self::ContentTooLarge
+            | Self::ContentTooManySegments
+            | Self::RequestUnprocessable
+            | Self::TemplateDataInvalid
+            | Self::TemplateLocaleUnavailable
+            | Self::TemplateRenderRefused => 422,
             Self::ServiceUnavailable => 503,
         }
     }
@@ -127,6 +161,9 @@ impl ProblemCode {
     pub const fn title(self) -> &'static str {
         match self {
             Self::AuthenticationRefused => "Authentication refused",
+            Self::ContentInvalid => "Content invalid for the channel",
+            Self::ContentTooLarge => "Content too large",
+            Self::ContentTooManySegments => "Too many SMS segments",
             Self::IdempotencyExpired => "Idempotency window expired",
             Self::IdempotencyKeyReused => "Idempotency key reused",
             Self::MessageNotVisible => "Message not visible",
@@ -139,6 +176,10 @@ impl ProblemCode {
             Self::RequestUnprocessable => "Request unprocessable",
             Self::RequestUnsupportedMediaType => "Unsupported media type",
             Self::ServiceUnavailable => "Messaging service unavailable",
+            Self::TemplateDataInvalid => "Template data invalid",
+            Self::TemplateLocaleUnavailable => "Template locale unavailable",
+            Self::TemplateNotFound => "Template not found",
+            Self::TemplateRenderRefused => "Template render refused",
         }
     }
 
@@ -148,6 +189,15 @@ impl ProblemCode {
         match self {
             Self::AuthenticationRefused => {
                 "The bearer credential is missing, invalid, or expired. Sign in again."
+            }
+            Self::ContentInvalid => {
+                "The content does not have the parts the channel requires, or the template's channel differs from the sender profile's."
+            }
+            Self::ContentTooLarge => {
+                "A content part exceeds the size the channel accepts. Shorten the content or the data."
+            }
+            Self::ContentTooManySegments => {
+                "The SMS text needs more segments than the sender profile allows. Shorten the text or the data."
             }
             Self::IdempotencyExpired => {
                 "The stored response for this idempotency key has expired. Reconcile the original submission before choosing a new key."
@@ -173,6 +223,18 @@ impl ProblemCode {
             Self::ServiceUnavailable => {
                 "Messaging is unavailable. Try again after the service recovers."
             }
+            Self::TemplateDataInvalid => {
+                "The data does not match the template's data schema."
+            }
+            Self::TemplateLocaleUnavailable => {
+                "The template version has no content in the requested locale. Choose one of its declared locales."
+            }
+            Self::TemplateNotFound => {
+                "No template with this identifier and version is available to the caller."
+            }
+            Self::TemplateRenderRefused => {
+                "The template could not be rendered with this data within the rendering limits."
+            }
         }
     }
 }
@@ -189,7 +251,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 13);
+        assert_eq!(ProblemCode::ALL.len(), 20);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }
@@ -271,5 +333,22 @@ mod tests {
         assert_eq!(ProblemCode::IdempotencyKeyReused.http_status(), 409);
         assert_eq!(ProblemCode::IdempotencyExpired.http_status(), 410);
         assert_eq!(ProblemCode::ServiceUnavailable.http_status(), 503);
+    }
+
+    /// Content refusals answer 422 except a template the package does not
+    /// ship, which answers 404 like any other absent resource.
+    #[test]
+    fn content_and_template_refusals_pin_their_statuses() {
+        for code in [
+            ProblemCode::ContentInvalid,
+            ProblemCode::ContentTooLarge,
+            ProblemCode::ContentTooManySegments,
+            ProblemCode::TemplateDataInvalid,
+            ProblemCode::TemplateLocaleUnavailable,
+            ProblemCode::TemplateRenderRefused,
+        ] {
+            assert_eq!(code.http_status(), 422, "{}", code.code());
+        }
+        assert_eq!(ProblemCode::TemplateNotFound.http_status(), 404);
     }
 }
