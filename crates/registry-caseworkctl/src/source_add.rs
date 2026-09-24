@@ -777,12 +777,36 @@ fn apply_breg_candidate(root: &mut Value, entity_id: &str, reader: &ReaderGrant)
         .get_mut("accessProfiles")
         .and_then(Value::as_array_mut)
         .context("BReg registry.yaml has no accessProfiles")?;
-    match profiles.iter().find(|item| item["id"] == READER_CLIENT_ID) {
-        Some(existing) if existing != &profile => {
-            bail!("BReg access profile {READER_CLIENT_ID} already exists with different content")
-        }
+    // One reader profile serves every Casework pairing on this registry; each
+    // pairing adds the permission for its own request entity.
+    match profiles
+        .iter_mut()
+        .find(|item| item["id"] == READER_CLIENT_ID)
+    {
         None => profiles.push(profile),
-        _ => {}
+        Some(existing) => {
+            let permission = profile["permissions"][0].clone();
+            let shape = |value: &Value| {
+                let mut value = value.clone();
+                value["permissions"] = json!([]);
+                value
+            };
+            if shape(existing) != shape(&profile) {
+                bail!(
+                    "BReg access profile {READER_CLIENT_ID} already exists with different content"
+                )
+            }
+            let permissions = existing["permissions"].as_array_mut().with_context(|| {
+                format!("BReg access profile {READER_CLIENT_ID} permissions must be a list")
+            })?;
+            match permissions.iter().find(|item| item["entity"] == entity_id) {
+                Some(existing) if existing != &permission => bail!(
+                    "BReg access profile {READER_CLIENT_ID} already grants {entity_id} with different content"
+                ),
+                None => permissions.push(permission),
+                _ => {}
+            }
+        }
     }
     Ok(json!([
         {"file":"registry.yaml","path":format!("/entities/{entity_id}/hooks/casework-lifecycle-v1"),"operation":"ensure_exact"},
@@ -827,17 +851,26 @@ fn render_candidate_preserving_authored_text(
                 .iter()
                 .any(|hook| hook["id"] == "casework-lifecycle-v1")
         });
-    let has_profile = parsed["accessProfiles"].as_array().is_some_and(|profiles| {
+    let profile = parsed["accessProfiles"].as_array().and_then(|profiles| {
         profiles
             .iter()
-            .any(|profile| profile["id"] == READER_CLIENT_ID)
+            .find(|profile| profile["id"] == READER_CLIENT_ID)
     });
+    let has_permission = profile
+        .and_then(|profile| profile["permissions"].as_array())
+        .is_some_and(|permissions| {
+            permissions
+                .iter()
+                .any(|permission| permission["entity"] == entity_id)
+        });
     let mut rendered = text.to_owned();
     if !has_hook {
         rendered = insert_entity_hook(&rendered, entity_id, &reader.event_field)?;
     }
-    if !has_profile {
+    if profile.is_none() {
         rendered = insert_access_profile(&rendered, entity_id, reader)?;
+    } else if !has_permission {
+        rendered = insert_reader_permission(&rendered, entity_id, reader)?;
     }
     let round_trip: Value =
         serde_norway::from_str(&rendered).context("parsing narrow BReg YAML patch")?;
@@ -891,9 +924,60 @@ fn insert_entity_hook(text: &str, entity_id: &str, event_field: &str) -> Result<
 }
 
 fn insert_access_profile(text: &str, entity_id: &str, reader: &ReaderGrant) -> Result<String> {
-    let fields = serde_json::to_string(&reader.fields)?;
-    let block = format!("  - id: {READER_CLIENT_ID}\n    default: false\n    principalClaim: {READER_PRINCIPAL_CLAIM}\n    requiredScopes: [{READER_SCOPE}]\n    requiredPurposes: [{READER_PURPOSE}]\n    permissions:\n      - entity: {entity_id}\n        operations: [get, list]\n        readableFields: {fields}\n        readableRequestFields: [review_state]\n        rowBoundaries: []\n");
+    let permission = reader_permission_yaml(6, entity_id, reader)?;
+    let block = format!("  - id: {READER_CLIENT_ID}\n    default: false\n    principalClaim: {READER_PRINCIPAL_CLAIM}\n    requiredScopes: [{READER_SCOPE}]\n    requiredPurposes: [{READER_PURPOSE}]\n    permissions:\n{permission}");
     insert_yaml_collection_items(text, "accessProfiles", "[]", &block)
+}
+
+fn reader_permission_yaml(indent: usize, entity_id: &str, reader: &ReaderGrant) -> Result<String> {
+    let fields = serde_json::to_string(&reader.fields)?;
+    let pad = " ".repeat(indent);
+    Ok(format!("{pad}- entity: {entity_id}\n{pad}  operations: [get, list]\n{pad}  readableFields: {fields}\n{pad}  readableRequestFields: [review_state]\n{pad}  rowBoundaries: []\n"))
+}
+
+/// Append this entity's permission to the block `permissions` list of an
+/// existing casework-reader profile, leaving every authored line in place.
+fn insert_reader_permission(text: &str, entity_id: &str, reader: &ReaderGrant) -> Result<String> {
+    let lines = text.split_inclusive('\n').collect::<Vec<_>>();
+    let significant = |line: &str| !line.trim().is_empty() && !line.trim_start().starts_with('#');
+    let marker = format!("- id: {READER_CLIENT_ID}");
+    let start = lines
+        .iter()
+        .position(|line| line.trim() == marker)
+        .context("narrow YAML patch could not locate the casework-reader access profile")?;
+    let item_indent = leading_spaces(lines[start]);
+    let end = (start + 1..lines.len())
+        .find(|index| significant(lines[*index]) && leading_spaces(lines[*index]) <= item_indent)
+        .unwrap_or(lines.len());
+    let key = (start + 1..end)
+        .find(|index| {
+            leading_spaces(lines[*index]) == item_indent + 2
+                && lines[*index].trim_start().starts_with("permissions:")
+        })
+        .context("narrow YAML patch could not locate the casework-reader permissions")?;
+    let value = lines[key]
+        .trim()
+        .trim_start_matches("permissions:")
+        .trim_start();
+    if !value.is_empty() && !value.starts_with('#') {
+        bail!("narrow YAML patch supports a block permissions list on the casework-reader access profile");
+    }
+    let first_item = (key + 1..end)
+        .find(|index| significant(lines[*index]))
+        .filter(|index| lines[*index].trim_start().starts_with("- "))
+        .context("narrow YAML patch could not locate the casework-reader permission items")?;
+    let sequence_indent = leading_spaces(lines[first_item]);
+    let insertion = (first_item + 1..end)
+        .find(|index| {
+            let line = lines[*index];
+            significant(line)
+                && (leading_spaces(line) < sequence_indent
+                    || (leading_spaces(line) == sequence_indent
+                        && !line.trim_start().starts_with('-')))
+        })
+        .unwrap_or(end);
+    let block = reader_permission_yaml(sequence_indent, entity_id, reader)?;
+    Ok(insert_at_line(&lines, insertion, &block))
 }
 
 fn insert_yaml_collection_items(
@@ -2322,6 +2406,66 @@ mod tests {
     fn candidate_refuses_conflicting_existing_grant() {
         let mut root = json!({"entities":[{"id":"request"}],"accessProfiles":[{"id":"casework-reader","permissions":[]}]});
         assert!(apply_breg_candidate(&mut root, "request", &record_reader(&[])).is_err());
+    }
+
+    #[test]
+    fn pairing_a_second_request_entity_extends_the_shared_reader_profile() {
+        let mut root = json!({"entities":[{"id":"request"},{"id":"transfer"}],"accessProfiles":[]});
+        apply_breg_candidate(&mut root, "request", &record_reader(&[])).unwrap();
+        let region = record_reader(&["region".to_owned()]);
+        apply_breg_candidate(&mut root, "transfer", &region).unwrap();
+        let once = root.clone();
+        apply_breg_candidate(&mut root, "transfer", &region).unwrap();
+        assert_eq!(root, once, "re-pairing an entity changes nothing");
+        let profiles = root["accessProfiles"].as_array().unwrap();
+        assert_eq!(profiles.len(), 1);
+        let entities = profiles[0]["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|permission| permission["entity"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(entities, ["request", "transfer"]);
+        assert_eq!(
+            profiles[0]["permissions"][1]["readableFields"],
+            json!(["record", "region"])
+        );
+
+        // Another grant for an entity already paired, or a reader profile of
+        // another shape, is still refused.
+        assert!(apply_breg_candidate(&mut root.clone(), "request", &region).is_err());
+        let mut scoped = once.clone();
+        scoped["accessProfiles"][0]["requiredScopes"] = json!(["other"]);
+        assert!(apply_breg_candidate(&mut scoped, "request", &record_reader(&[])).is_err());
+    }
+
+    #[test]
+    fn narrow_yaml_patch_adds_a_permission_to_an_existing_reader_profile() {
+        let input = "entities:\n  - id: request\n    route: requests\n  - id: transfer\n    route: transfers\naccessProfiles: []\n";
+        let mut first: Value = serde_norway::from_str(input).unwrap();
+        apply_breg_candidate(&mut first, "request", &record_reader(&[])).unwrap();
+        let paired = render_candidate_preserving_authored_text(
+            input.as_bytes(),
+            "request",
+            &first,
+            &record_reader(&[]),
+        )
+        .unwrap();
+        let paired = paired.replace(
+            "    permissions:\n",
+            "    permissions: # keep the grant context\n",
+        );
+        let mut second = first.clone();
+        apply_breg_candidate(&mut second, "transfer", &record_reader(&[])).unwrap();
+        let rendered = render_candidate_preserving_authored_text(
+            paired.as_bytes(),
+            "transfer",
+            &second,
+            &record_reader(&[]),
+        )
+        .unwrap();
+        assert!(rendered.contains("# keep the grant context"));
+        assert_eq!(serde_norway::from_str::<Value>(&rendered).unwrap(), second);
     }
 
     #[test]
