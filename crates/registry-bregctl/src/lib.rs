@@ -4224,8 +4224,14 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                     SuggestedAction::ReviewFieldEncryptionBackfill,
                 );
             }
-            registry_breg::migration::MigrationError::PackageBinding
-            | registry_breg::migration::MigrationError::EmptyPlan => (
+            registry_breg::migration::MigrationError::EmptyPlan => (
+                "apply.package.empty_plan",
+                "package",
+                "the successor package has nothing to apply: its migration plan has no schema statement and no reviewed migration, and it is not an access or disclosure change alone; keep the active package until the registry model changes, then build the successor from that change. Nothing was changed",
+                DiagnosticArtifact::VerifiedPackage,
+                SuggestedAction::CorrectPackageBuild,
+            ),
+            registry_breg::migration::MigrationError::PackageBinding => (
                 "apply.package.refused",
                 "package",
                 "the activation package was refused",
@@ -13742,6 +13748,33 @@ fn native_pattern_activation_diagnostics_preserve_field_and_pinned_target_recove
         assert!(diagnostic.message.contains("pinned in maintenance"));
         assert!(diagnostic.message.contains(repair));
         assert!(!diagnostic.message.contains("registry_data"));
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn apply_reports_an_empty_successor_plan_as_nothing_to_apply() {
+    let report = apply_lifecycle_failure(ApplyLifecycleError::Apply(
+        registry_breg::migration::MigrationError::EmptyPlan,
+    ));
+    let diagnostic = &report.diagnostics[0];
+    assert_eq!(diagnostic.code, "apply.package.empty_plan");
+    assert_eq!(diagnostic.path, "package");
+    assert_eq!(diagnostic.artifact, DiagnosticArtifact::VerifiedPackage);
+    assert_eq!(
+        diagnostic.suggested_action,
+        SuggestedAction::CorrectPackageBuild
+    );
+    for fragment in [
+        "nothing to apply",
+        "keep the active package",
+        "Nothing was changed",
+    ] {
+        assert!(
+            diagnostic.message.contains(fragment),
+            "{fragment}: {}",
+            diagnostic.message
+        );
     }
 }
 
