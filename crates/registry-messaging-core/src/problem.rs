@@ -28,7 +28,9 @@ pub const CONTENT_TOO_LARGE_PROBLEM: &str = "content.too-large";
 pub const CONTENT_TOO_MANY_SEGMENTS_PROBLEM: &str = "content.too-many-segments";
 pub const IDEMPOTENCY_EXPIRED_PROBLEM: &str = "idempotency.expired";
 pub const IDEMPOTENCY_KEY_REUSED_PROBLEM: &str = "idempotency.key-reused";
+pub const MESSAGE_DISPATCH_STARTED_PROBLEM: &str = "message.dispatch-started";
 pub const MESSAGE_NOT_VISIBLE_PROBLEM: &str = "message.not-visible";
+pub const MESSAGE_TERMINAL_PROBLEM: &str = "message.terminal";
 pub const OPERATION_NOT_AUTHORIZED_PROBLEM: &str = "operation.not-authorized";
 pub const PROFILE_NOT_AUTHORIZED_PROBLEM: &str = "profile.not-authorized";
 pub const REQUEST_BODY_TOO_LARGE_PROBLEM: &str = "request.body-too-large";
@@ -52,7 +54,9 @@ pub enum ProblemCode {
     ContentTooManySegments,
     IdempotencyExpired,
     IdempotencyKeyReused,
+    MessageDispatchStarted,
     MessageNotVisible,
+    MessageTerminal,
     OperationNotAuthorized,
     ProfileNotAuthorized,
     RequestBodyTooLarge,
@@ -77,7 +81,9 @@ impl ProblemCode {
         Self::ContentTooManySegments,
         Self::IdempotencyExpired,
         Self::IdempotencyKeyReused,
+        Self::MessageDispatchStarted,
         Self::MessageNotVisible,
+        Self::MessageTerminal,
         Self::OperationNotAuthorized,
         Self::ProfileNotAuthorized,
         Self::RequestBodyTooLarge,
@@ -102,7 +108,9 @@ impl ProblemCode {
             Self::ContentTooManySegments => CONTENT_TOO_MANY_SEGMENTS_PROBLEM,
             Self::IdempotencyExpired => IDEMPOTENCY_EXPIRED_PROBLEM,
             Self::IdempotencyKeyReused => IDEMPOTENCY_KEY_REUSED_PROBLEM,
+            Self::MessageDispatchStarted => MESSAGE_DISPATCH_STARTED_PROBLEM,
             Self::MessageNotVisible => MESSAGE_NOT_VISIBLE_PROBLEM,
+            Self::MessageTerminal => MESSAGE_TERMINAL_PROBLEM,
             Self::OperationNotAuthorized => OPERATION_NOT_AUTHORIZED_PROBLEM,
             Self::ProfileNotAuthorized => PROFILE_NOT_AUTHORIZED_PROBLEM,
             Self::RequestBodyTooLarge => REQUEST_BODY_TOO_LARGE_PROBLEM,
@@ -140,7 +148,9 @@ impl ProblemCode {
             Self::OperationNotAuthorized | Self::ProfileNotAuthorized => 403,
             Self::MessageNotVisible | Self::RequestNotFound | Self::TemplateNotFound => 404,
             Self::RequestMethodNotAllowed => 405,
-            Self::IdempotencyKeyReused => 409,
+            Self::IdempotencyKeyReused
+            | Self::MessageDispatchStarted
+            | Self::MessageTerminal => 409,
             Self::IdempotencyExpired => 410,
             Self::RequestBodyTooLarge => 413,
             Self::RequestUnsupportedMediaType => 415,
@@ -166,7 +176,9 @@ impl ProblemCode {
             Self::ContentTooManySegments => "Too many SMS segments",
             Self::IdempotencyExpired => "Idempotency window expired",
             Self::IdempotencyKeyReused => "Idempotency key reused",
+            Self::MessageDispatchStarted => "Message dispatch started",
             Self::MessageNotVisible => "Message not visible",
+            Self::MessageTerminal => "Message already final",
             Self::OperationNotAuthorized => "Operation not authorized",
             Self::ProfileNotAuthorized => "Profile not authorized",
             Self::RequestBodyTooLarge => "Payload too large",
@@ -205,8 +217,14 @@ impl ProblemCode {
             Self::IdempotencyKeyReused => {
                 "This idempotency key was used for a different request."
             }
+            Self::MessageDispatchStarted => {
+                "The message is being sent or has been handed to the provider, so it can no longer be cancelled."
+            }
             Self::MessageNotVisible => {
                 "No message with this identifier is visible to the caller."
+            }
+            Self::MessageTerminal => {
+                "The message has reached a final state, so it can no longer be cancelled."
             }
             Self::OperationNotAuthorized => {
                 "Your Messaging access profile does not allow this operation."
@@ -251,7 +269,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 20);
+        assert_eq!(ProblemCode::ALL.len(), 22);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }
@@ -350,5 +368,22 @@ mod tests {
             assert_eq!(code.http_status(), 422, "{}", code.code());
         }
         assert_eq!(ProblemCode::TemplateNotFound.http_status(), 404);
+    }
+
+    /// A cancel that loses to dispatch, or arrives after a final state,
+    /// answers 409 with a code that says which, so a caller knows whether
+    /// the provider may have the message.
+    #[test]
+    fn cancel_refusals_answer_conflict() {
+        assert_eq!(ProblemCode::MessageDispatchStarted.http_status(), 409);
+        assert_eq!(ProblemCode::MessageTerminal.http_status(), 409);
+        assert_eq!(
+            ProblemCode::from_code("message.dispatch-started"),
+            Some(ProblemCode::MessageDispatchStarted)
+        );
+        assert_eq!(
+            ProblemCode::from_code("message.terminal"),
+            Some(ProblemCode::MessageTerminal)
+        );
     }
 }

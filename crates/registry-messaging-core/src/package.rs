@@ -30,6 +30,31 @@ pub const MAXIMUM_TEMPLATE_VERSION_BYTES: usize = 32;
 /// The longest sender identity accepted: an RFC 5321 path.
 pub const MAXIMUM_SENDER_BYTES: usize = 254;
 
+/// Attempts one message gets when its sender profile declares no `retry`.
+pub const DEFAULT_MAXIMUM_ATTEMPTS: u8 = 5;
+
+/// The most attempts a sender profile may allow one message.
+pub const MAXIMUM_ATTEMPTS: u8 = 20;
+
+/// The first retry delay when a sender profile declares no `retry`.
+pub const DEFAULT_INITIAL_RETRY_DELAY_SECONDS: u32 = 30;
+
+/// The longest retry delay when a sender profile declares no `retry`.
+pub const DEFAULT_MAXIMUM_RETRY_DELAY_SECONDS: u32 = 3_600;
+
+/// The longest retry delay any sender profile may declare: one day.
+pub const MAXIMUM_RETRY_DELAY_SECONDS: u32 = 86_400;
+
+/// How long an accepted message may wait to be sent when neither the
+/// request nor its sender profile says otherwise: one day.
+pub const DEFAULT_EXPIRY_SECONDS: u32 = 86_400;
+
+/// The shortest default expiry a sender profile may declare.
+pub const MINIMUM_EXPIRY_SECONDS: u32 = 60;
+
+/// The longest default expiry a sender profile may declare: thirty days.
+pub const MAXIMUM_EXPIRY_SECONDS: u32 = 2_592_000;
+
 /// A delivery channel.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -74,10 +99,15 @@ impl ProviderKind {
 pub struct ProviderDeclaration {
     pub id: String,
     pub kind: ProviderKind,
+    /// The provider deduplicates submissions on the idempotency key the
+    /// runtime sends, so sending one message twice delivers it once.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub idempotent_submit: bool,
 }
 
 /// What a caller selects: a channel, the provider carrying it, the sender
-/// identity, and for SMS the most segments one message may use.
+/// identity, for SMS the most segments one message may use, and how the
+/// worker retries, holds, and expires its messages.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SenderProfile {
@@ -88,6 +118,91 @@ pub struct SenderProfile {
     pub sender: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maximum_segments: Option<u8>,
+    /// How a send that definitely failed is retried. Absent means the
+    /// defaults [`SenderProfile::retry_policy`] reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<RetryPolicy>,
+    /// What happens when a send may have reached the provider.
+    #[serde(default, skip_serializing_if = "UncertainPolicy::is_hold")]
+    pub on_uncertain: UncertainPolicy,
+    /// The operator's explicit choice that a duplicate message is better
+    /// than a missed one, which permits `onUncertain: retry` through a
+    /// provider that does not deduplicate.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub accept_duplicates: bool,
+    /// How long an accepted message may wait to be sent when its request
+    /// names no `expiresAt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_expiry_seconds: Option<u32>,
+}
+
+impl SenderProfile {
+    /// The declared retry policy, or the defaults.
+    #[must_use]
+    pub fn retry_policy(&self) -> RetryPolicy {
+        self.retry.unwrap_or(RetryPolicy {
+            maximum_attempts: DEFAULT_MAXIMUM_ATTEMPTS,
+            initial_delay_seconds: DEFAULT_INITIAL_RETRY_DELAY_SECONDS,
+            maximum_delay_seconds: DEFAULT_MAXIMUM_RETRY_DELAY_SECONDS,
+        })
+    }
+
+    /// The declared default expiry, or [`DEFAULT_EXPIRY_SECONDS`].
+    #[must_use]
+    pub fn expiry_seconds(&self) -> u32 {
+        self.default_expiry_seconds
+            .unwrap_or(DEFAULT_EXPIRY_SECONDS)
+    }
+}
+
+/// How a send that definitely failed is retried: exponential backoff that
+/// doubles from `initialDelaySeconds` up to `maximumDelaySeconds`, with
+/// jitter, until `maximumAttempts` attempts were made.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetryPolicy {
+    pub maximum_attempts: u8,
+    pub initial_delay_seconds: u32,
+    pub maximum_delay_seconds: u32,
+}
+
+impl RetryPolicy {
+    fn is_valid(self) -> bool {
+        (1..=MAXIMUM_ATTEMPTS).contains(&self.maximum_attempts)
+            && self.initial_delay_seconds >= 1
+            && (self.initial_delay_seconds..=MAXIMUM_RETRY_DELAY_SECONDS)
+                .contains(&self.maximum_delay_seconds)
+    }
+}
+
+/// What the worker does with a send that may have reached the provider.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum UncertainPolicy {
+    /// Stop the message as `unknown` until an operator settles it.
+    #[default]
+    Hold,
+    /// Send it again with the same provider idempotency key.
+    Retry,
+}
+
+impl UncertainPolicy {
+    #[must_use]
+    pub const fn is_hold(&self) -> bool {
+        matches!(self, Self::Hold)
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Hold => "hold",
+            Self::Retry => "retry",
+        }
+    }
+}
+
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// One template version the package ships, under
@@ -155,6 +270,22 @@ pub enum PackageError {
          SMS and none for email"
     )]
     InvalidMaximumSegments(String),
+    #[error(
+        "sender profile `{0}` declares an invalid retry: maximumAttempts from 1 to \
+         {MAXIMUM_ATTEMPTS}, initialDelaySeconds at least 1, and maximumDelaySeconds from \
+         initialDelaySeconds to {MAXIMUM_RETRY_DELAY_SECONDS}"
+    )]
+    InvalidRetry(String),
+    #[error(
+        "sender profile `{0}` declares defaultExpirySeconds outside {MINIMUM_EXPIRY_SECONDS} to \
+         {MAXIMUM_EXPIRY_SECONDS}"
+    )]
+    InvalidExpiry(String),
+    #[error(
+        "sender profile `{profile}` declares onUncertain: retry, but provider `{provider}` does \
+         not declare idempotentSubmit and the profile does not set acceptDuplicates"
+    )]
+    UncertainRetry { profile: String, provider: String },
     #[error("access profile `{profile}` names {kind} `{id}`, which the package does not declare")]
     UnknownReference {
         profile: String,
@@ -323,6 +454,26 @@ fn check_sender_profile(
     if !segments_valid {
         return Err(PackageError::InvalidMaximumSegments(profile.id.clone()));
     }
+    if profile.retry.is_some_and(|retry| !retry.is_valid()) {
+        return Err(PackageError::InvalidRetry(profile.id.clone()));
+    }
+    if profile
+        .default_expiry_seconds
+        .is_some_and(|seconds| !(MINIMUM_EXPIRY_SECONDS..=MAXIMUM_EXPIRY_SECONDS).contains(&seconds))
+    {
+        return Err(PackageError::InvalidExpiry(profile.id.clone()));
+    }
+    // A send that may have reached the provider is sent again only when a
+    // second send cannot deliver twice, or the operator chose duplicates.
+    if profile.on_uncertain == UncertainPolicy::Retry
+        && !provider.idempotent_submit
+        && !profile.accept_duplicates
+    {
+        return Err(PackageError::UncertainRetry {
+            profile: profile.id.clone(),
+            provider: provider.id.clone(),
+        });
+    }
     Ok(())
 }
 
@@ -345,7 +496,7 @@ pub fn valid_template_version(value: &str) -> bool {
 
 /// One address, `local@domain`, of visible ASCII without spaces or angle
 /// brackets. Display names and address lists are refused.
-fn valid_email_sender(value: &str) -> bool {
+pub(crate) fn valid_email_sender(value: &str) -> bool {
     let Some((local, domain)) = value.split_once('@') else {
         return false;
     };
@@ -360,12 +511,19 @@ fn valid_email_sender(value: &str) -> bool {
             .all(|byte| byte.is_ascii_graphic() && !matches!(byte, b'<' | b'>' | b',' | b';'))
 }
 
+/// An E.164 number: `+`, then 2 to 15 digits not starting with zero.
+pub(crate) fn valid_e164(value: &str) -> bool {
+    value.strip_prefix('+').is_some_and(|digits| {
+        (2..=15).contains(&digits.len())
+            && digits.bytes().all(|byte| byte.is_ascii_digit())
+            && !digits.starts_with('0')
+    })
+}
+
 /// An E.164 number, or an alphanumeric sender of 1 to 11 characters.
 fn valid_sms_sender(value: &str) -> bool {
-    if let Some(digits) = value.strip_prefix('+') {
-        return (2..=15).contains(&digits.len())
-            && digits.bytes().all(|byte| byte.is_ascii_digit())
-            && !digits.starts_with('0');
+    if value.starts_with('+') {
+        return valid_e164(value);
     }
     (1..=11).contains(&value.len())
         && !value.starts_with(' ')
@@ -581,6 +739,88 @@ pub(crate) mod tests {
             refusal(value),
             PackageError::InvalidMaximumSegments(_)
         ));
+    }
+
+    #[test]
+    fn a_sender_profile_carries_a_bounded_dispatch_policy() {
+        let checked = package(valid()).unwrap().check().unwrap();
+        let profile = &checked.sender_profiles["transactional"];
+        assert_eq!(
+            profile.retry_policy(),
+            RetryPolicy {
+                maximum_attempts: DEFAULT_MAXIMUM_ATTEMPTS,
+                initial_delay_seconds: DEFAULT_INITIAL_RETRY_DELAY_SECONDS,
+                maximum_delay_seconds: DEFAULT_MAXIMUM_RETRY_DELAY_SECONDS,
+            }
+        );
+        assert_eq!(profile.on_uncertain, UncertainPolicy::Hold);
+        assert!(!profile.accept_duplicates);
+        assert_eq!(profile.expiry_seconds(), DEFAULT_EXPIRY_SECONDS);
+
+        let mut value = valid();
+        value["senderProfiles"][0]["retry"] = json!({
+            "maximumAttempts": 3, "initialDelaySeconds": 10, "maximumDelaySeconds": 60
+        });
+        value["senderProfiles"][0]["defaultExpirySeconds"] = json!(3600);
+        let checked = package(value).unwrap().check().unwrap();
+        let profile = &checked.sender_profiles["transactional"];
+        assert_eq!(profile.retry_policy().maximum_attempts, 3);
+        assert_eq!(profile.expiry_seconds(), 3600);
+
+        for retry in [
+            json!({"maximumAttempts": 0, "initialDelaySeconds": 10, "maximumDelaySeconds": 60}),
+            json!({"maximumAttempts": 21, "initialDelaySeconds": 10, "maximumDelaySeconds": 60}),
+            json!({"maximumAttempts": 3, "initialDelaySeconds": 0, "maximumDelaySeconds": 60}),
+            json!({"maximumAttempts": 3, "initialDelaySeconds": 60, "maximumDelaySeconds": 10}),
+            json!({"maximumAttempts": 3, "initialDelaySeconds": 10, "maximumDelaySeconds": 86_401}),
+        ] {
+            let mut value = valid();
+            value["senderProfiles"][0]["retry"] = retry.clone();
+            assert!(
+                matches!(refusal(value), PackageError::InvalidRetry(_)),
+                "{retry}"
+            );
+        }
+        for expiry in [0, 59, MAXIMUM_EXPIRY_SECONDS + 1] {
+            let mut value = valid();
+            value["senderProfiles"][0]["defaultExpirySeconds"] = json!(expiry);
+            assert!(
+                matches!(refusal(value), PackageError::InvalidExpiry(_)),
+                "{expiry}"
+            );
+        }
+        let mut value = valid();
+        value["senderProfiles"][0]["retry"] = json!({
+            "maximumAttempts": 3, "initialDelaySeconds": 10, "maximumDelaySeconds": 60,
+            "jitter": false
+        });
+        assert!(package(value).is_err());
+        let mut value = valid();
+        value["senderProfiles"][0]["onUncertain"] = json!("resend");
+        assert!(package(value).is_err());
+    }
+
+    #[test]
+    fn retrying_an_uncertain_send_needs_provider_deduplication_or_an_explicit_choice() {
+        let mut value = valid();
+        value["senderProfiles"][1]["onUncertain"] = json!("retry");
+        assert_eq!(
+            refusal(value.clone()),
+            PackageError::UncertainRetry {
+                profile: "notices-sms".to_owned(),
+                provider: "sms-gateway".to_owned(),
+            }
+        );
+        let mut deduplicating = value.clone();
+        deduplicating["providers"][1]["idempotentSubmit"] = json!(true);
+        let checked = package(deduplicating).unwrap().check().unwrap();
+        assert_eq!(
+            checked.sender_profiles["notices-sms"].on_uncertain,
+            UncertainPolicy::Retry
+        );
+        let mut accepting = value;
+        accepting["senderProfiles"][1]["acceptDuplicates"] = json!(true);
+        assert!(package(accepting).unwrap().check().is_ok());
     }
 
     #[test]
