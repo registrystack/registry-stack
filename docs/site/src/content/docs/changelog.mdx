@@ -91,6 +91,21 @@ relevant product pages on this site rather than duplicating release notes.
   [Evidence audit](../operate/evidence-audit/), and
   [audit upgrades](../operate/retention-and-persistent-state/#upgrade-casework-and-scheduling-audit).
 
+- `evidence check --require-runtime-dependencies` and `evidence serve` name
+  the fault that stopped a Transit signer from initializing, after the
+  unchanged `evidence: runtime signing initialization failed:` prefix: no
+  answer on the Unix socket, a refused key read, a provider server error such
+  as a sealed provider, a malformed response, a key whose custody is unsafe, a
+  `keyVersion` above the key's `latest_version` or below its
+  `min_encryption_version`, a public key that is not the governed one, or a
+  failed self-test. No cause carries a path, provider response, or key
+  material. See
+  [activate the new version](../tutorials/rotate-evidence-signing-keys/#activate-the-new-version).
+
+{/* Evidence: crates/registry-evidence/src/runtime.rs, SigningInitializationFault::cause();
+    crates/registry-platform-crypto/src/lib.rs, TransitInitializationError and transit_signer_initialization_names_the_fault_it_met;
+    crates/registry-evidence/src/runtime_tests.rs, signing_initialization_faults_name_distinct_causes. */}
+
 ## v0.34.0 beta-46
 
 - `bregctl apply` reports a migration database it could not reach, or an

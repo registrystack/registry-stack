@@ -574,6 +574,103 @@ impl fmt::Debug for TransitSignerConfig {
     }
 }
 
+/// Why a Transit signer refused to initialize.
+///
+/// A socket that is not there, a key version the provider has retired, and a
+/// key version it has not created yet are unrelated faults with unrelated
+/// remedies, and from outside the process they look the same. Each cause is
+/// reported by name. None carries a provider response, a path, or key material.
+#[cfg(feature = "transit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum TransitInitializationError {
+    /// The HTTP client for the Unix socket could not be built.
+    #[error("the Transit client could not be built for the configured Unix socket")]
+    Client,
+    /// Nothing answered on the socket in time: it is missing, refused the
+    /// connection, or the provider did not respond within the timeout.
+    #[error(
+        "the Transit provider did not answer on the configured Unix socket (missing socket, refused connection, or timeout)"
+    )]
+    Unavailable,
+    /// The provider refused the key metadata read with a client-error or
+    /// other non-success status below 500: the request it was sent is one it
+    /// will not serve.
+    #[error(
+        "the Transit provider refused the key metadata read (check the token policy, mount, and key name)"
+    )]
+    Refused,
+    /// The provider answered the key metadata read with a server-error
+    /// status: it is sealed, has no active backend, or failed internally.
+    #[error(
+        "the Transit provider failed the key metadata read with a server error (for example, sealed or without an active backend)"
+    )]
+    ProviderFailed,
+    /// The provider's answer was oversized, not strict JSON, or lacked the
+    /// version fields a key read carries.
+    #[error("the Transit provider response is malformed or too large")]
+    InvalidResponse,
+    /// The key is not a non-derived, non-exportable ECDSA P-256 signing key
+    /// without plaintext backup.
+    #[error(
+        "the Transit key is not a non-derived, non-exportable ecdsa-p256 signing key without plaintext backup"
+    )]
+    Custody,
+    /// The pinned key version is above the key's `latest_version`.
+    #[error("the configured Transit key version is above the key's latest_version")]
+    KeyVersionNotCreated,
+    /// The pinned key version is below the key's `min_encryption_version`, so
+    /// the provider no longer signs with it.
+    #[error(
+        "the configured Transit key version is below the key's min_encryption_version and can no longer sign"
+    )]
+    KeyVersionRetired,
+    /// The provider holds no public key for the pinned version, or holds one
+    /// that differs from the pinned public JWK.
+    #[error(
+        "the Transit public key for the configured key version is missing or does not match the pinned public JWK"
+    )]
+    PublicKeyMismatch,
+    /// The sign-and-verify self-test did not produce a verifying signature.
+    #[error("the Transit sign-and-verify self-test failed")]
+    SelfTest,
+}
+
+/// How a single Transit request failed, before it is attributed to the
+/// operation that sent it.
+#[cfg(feature = "transit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransitRequestFault {
+    Unavailable,
+    Refused,
+    ProviderFailed,
+    InvalidResponse,
+}
+
+#[cfg(feature = "transit")]
+impl TransitRequestFault {
+    fn signing_error(self) -> SigningError {
+        match self {
+            Self::Unavailable | Self::Refused | Self::ProviderFailed => {
+                transit_error("transit provider request failed")
+            }
+            Self::InvalidResponse => transit_error("transit provider response is invalid"),
+        }
+    }
+}
+
+#[cfg(feature = "transit")]
+impl From<TransitRequestFault> for TransitInitializationError {
+    fn from(fault: TransitRequestFault) -> Self {
+        match fault {
+            TransitRequestFault::Unavailable => Self::Unavailable,
+            TransitRequestFault::Refused => Self::Refused,
+            TransitRequestFault::ProviderFailed => Self::ProviderFailed,
+            TransitRequestFault::InvalidResponse => Self::InvalidResponse,
+        }
+    }
+}
+
 /// Non-exportable ES256 signer backed by the common Vault/OpenBao Transit API.
 ///
 /// Construction validates provider custody metadata, the pinned version, and
@@ -595,8 +692,11 @@ pub struct TransitSigner {
 impl TransitSigner {
     /// Connect to Transit, validate custody and public identity metadata, and
     /// prove signing access without exporting private material.
-    pub async fn initialize(config: TransitSignerConfig) -> Result<Self, SigningError> {
-        let client = build_transit_client(&config.socket_path)?;
+    pub async fn initialize(
+        config: TransitSignerConfig,
+    ) -> Result<Self, TransitInitializationError> {
+        let client = build_transit_client(&config.socket_path)
+            .map_err(|_| TransitInitializationError::Client)?;
         let signer = Self {
             client,
             metadata_url: format!(
@@ -619,16 +719,13 @@ impl TransitSigner {
             readiness: AtomicU8::new(TRANSIT_READINESS_UNKNOWN),
         };
         let metadata = signer
-            .request_json(reqwest::Method::GET, &signer.metadata_url, None)
-            .await
-            .map_err(|_| transit_error("transit signer metadata is unavailable"))?;
-        signer
-            .validate_metadata(&metadata)
-            .map_err(|_| transit_error("transit signer metadata is invalid"))?;
+            .send_json(reqwest::Method::GET, &signer.metadata_url, None)
+            .await?;
+        signer.validate_metadata(&metadata)?;
         signer
             .sign(TRANSIT_SELF_TEST_MESSAGE)
             .await
-            .map_err(|_| transit_error("transit signer self-test failed"))?;
+            .map_err(|_| TransitInitializationError::SelfTest)?;
         Ok(signer)
     }
 
@@ -638,6 +735,17 @@ impl TransitSigner {
         url: &str,
         body: Option<&Value>,
     ) -> Result<Value, SigningError> {
+        self.send_json(method, url, body)
+            .await
+            .map_err(TransitRequestFault::signing_error)
+    }
+
+    async fn send_json(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        body: Option<&Value>,
+    ) -> Result<Value, TransitRequestFault> {
         let mut request = self
             .client
             .request(method, url)
@@ -649,19 +757,25 @@ impl TransitSigner {
         let response = request
             .send()
             .await
-            .map_err(|_| transit_error("transit provider request failed"))?;
-        if !response.status().is_success() {
-            return Err(transit_error("transit provider request failed"));
+            .map_err(|_| TransitRequestFault::Unavailable)?;
+        let status = response.status();
+        if status.is_server_error() {
+            return Err(TransitRequestFault::ProviderFailed);
         }
-        let bytes = read_bounded_transit_response(response).await?;
-        parse_json_strict(&bytes).map_err(|_| transit_error("transit provider response is invalid"))
+        if !status.is_success() {
+            return Err(TransitRequestFault::Refused);
+        }
+        let bytes = read_bounded_transit_response(response)
+            .await
+            .map_err(|_| TransitRequestFault::InvalidResponse)?;
+        parse_json_strict(&bytes).map_err(|_| TransitRequestFault::InvalidResponse)
     }
 
-    fn validate_metadata(&self, document: &Value) -> Result<(), SigningError> {
+    fn validate_metadata(&self, document: &Value) -> Result<(), TransitInitializationError> {
         let data = document
             .get("data")
             .and_then(Value::as_object)
-            .ok_or_else(|| transit_error("transit provider metadata is invalid"))?;
+            .ok_or(TransitInitializationError::InvalidResponse)?;
         let required_false = ["derived", "exportable", "allow_plaintext_backup"];
         if data.get("type").and_then(Value::as_str) != Some("ecdsa-p256")
             || data.get("supports_signing").and_then(Value::as_bool) != Some(true)
@@ -669,21 +783,24 @@ impl TransitSigner {
                 .iter()
                 .any(|field| data.get(*field).and_then(Value::as_bool) != Some(false))
         {
-            return Err(transit_error("transit provider custody is invalid"));
+            return Err(TransitInitializationError::Custody);
         }
 
         let latest_version = data
             .get("latest_version")
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok())
-            .ok_or_else(|| transit_error("transit provider version is invalid"))?;
+            .ok_or(TransitInitializationError::InvalidResponse)?;
         let minimum_signing_version = data
             .get("min_encryption_version")
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok())
-            .ok_or_else(|| transit_error("transit provider version is invalid"))?;
-        if self.key_version > latest_version || self.key_version < minimum_signing_version {
-            return Err(transit_error("transit provider version is invalid"));
+            .ok_or(TransitInitializationError::InvalidResponse)?;
+        if self.key_version > latest_version {
+            return Err(TransitInitializationError::KeyVersionNotCreated);
+        }
+        if self.key_version < minimum_signing_version {
+            return Err(TransitInitializationError::KeyVersionRetired);
         }
 
         let version = self.key_version.to_string();
@@ -694,8 +811,9 @@ impl TransitSigner {
             .and_then(Value::as_object)
             .and_then(|key| key.get("public_key"))
             .and_then(Value::as_str)
-            .ok_or_else(|| transit_error("transit provider public key is invalid"))?;
+            .ok_or(TransitInitializationError::PublicKeyMismatch)?;
         validate_transit_public_key(pem, &self.public_jwk)
+            .map_err(|_| TransitInitializationError::PublicKeyMismatch)
     }
 
     fn set_readiness(&self, readiness: KeyReadiness) {
@@ -2470,23 +2588,41 @@ mod tests {
         for field in ["derived", "exportable", "allow_plaintext_backup"] {
             let mut metadata = transit_metadata(&pem);
             metadata["data"][field] = Value::Bool(true);
-            cases.push(metadata);
+            cases.push((metadata, TransitInitializationError::Custody));
         }
         let mut wrong_type = transit_metadata(&pem);
         wrong_type["data"]["type"] = Value::String("ed25519".to_owned());
-        cases.push(wrong_type);
+        cases.push((wrong_type, TransitInitializationError::Custody));
         let mut no_signing = transit_metadata(&pem);
         no_signing["data"]["supports_signing"] = Value::Bool(false);
-        cases.push(no_signing);
+        cases.push((no_signing, TransitInitializationError::Custody));
         let mut version_too_old = transit_metadata(&pem);
         version_too_old["data"]["min_encryption_version"] = json!(8);
-        cases.push(version_too_old);
+        cases.push((
+            version_too_old,
+            TransitInitializationError::KeyVersionRetired,
+        ));
+        let mut version_too_new = transit_metadata(&pem);
+        version_too_new["data"]["latest_version"] = json!(6);
+        cases.push((
+            version_too_new,
+            TransitInitializationError::KeyVersionNotCreated,
+        ));
+        let mut version_unreadable = transit_metadata(&pem);
+        version_unreadable["data"]["latest_version"] = json!("nine");
+        cases.push((
+            version_unreadable,
+            TransitInitializationError::InvalidResponse,
+        ));
         let mut missing_version = transit_metadata(&pem);
         missing_version["data"]["keys"]
             .as_object_mut()
             .expect("keys object")
             .remove("7");
-        cases.push(missing_version);
+        cases.push((
+            missing_version,
+            TransitInitializationError::PublicKeyMismatch,
+        ));
 
         let other_scalar = [42_u8; 32];
         let other_signing = P256SigningKey::from_slice(&other_scalar).expect("second P-256 key");
@@ -2499,9 +2635,9 @@ mod tests {
                 .expect("second public PEM"),
         );
         wrong_public["data"]["latest_version"] = json!(7);
-        cases.push(wrong_public);
+        cases.push((wrong_public, TransitInitializationError::PublicKeyMismatch));
 
-        for metadata in cases {
+        for (metadata, expected) in cases {
             let replies = vec![transit_reply("GET", METADATA_PATH, None, metadata)];
             let (directory, socket_path, server) = spawn_transit_mock(replies);
             let config = TransitSignerConfig::new(
@@ -2516,9 +2652,109 @@ mod tests {
             let error = TransitSigner::initialize(config)
                 .await
                 .expect_err("unsafe Transit metadata must reject");
-            assert!(error.to_string().contains("metadata is invalid"));
+            assert_eq!(error, expected);
             server.await.expect("mock Transit server completed");
             drop(directory);
+        }
+    }
+
+    /// A socket that is not there, a provider that answers with a refusal, and
+    /// a key whose signature does not verify are three unrelated faults. Each
+    /// initialization failure names its own, so an operator restarting after a
+    /// Transit-side change can tell which one to fix.
+    #[cfg(all(unix, feature = "transit"))]
+    #[tokio::test]
+    async fn transit_signer_initialization_names_the_fault_it_met() {
+        const METADATA_PATH: &str = "/v1/transit/keys/key";
+        const SIGN_PATH: &str = "/v1/transit/sign/key/sha2-256";
+        let private = PrivateJwk::parse(P256_JWK).expect("P-256 private JWK");
+        let public = private.public();
+        let config = |socket_path: PathBuf| {
+            TransitSignerConfig::new(
+                socket_path,
+                "transit",
+                "key",
+                7,
+                public.clone(),
+                Duration::from_secs(1),
+            )
+            .expect("Transit config")
+        };
+
+        let absent = tempfile::tempdir().expect("temporary Transit directory");
+        let missing = TransitSigner::initialize(config(absent.path().join("transit.sock")))
+            .await
+            .expect_err("a missing socket must reject");
+        assert_eq!(missing, TransitInitializationError::Unavailable);
+
+        let refused = MockTransitReply {
+            method: "GET",
+            path: METADATA_PATH,
+            body: None,
+            status: 403,
+            response: br#"{"errors":["permission denied"]}"#.to_vec(),
+            delay: Duration::ZERO,
+        };
+        let (directory, socket_path, server) = spawn_transit_mock(vec![refused]);
+        let error = TransitSigner::initialize(config(socket_path))
+            .await
+            .expect_err("a refused metadata read must reject");
+        assert_eq!(error, TransitInitializationError::Refused);
+        server.await.expect("refusing mock completed");
+        drop(directory);
+
+        let failing = MockTransitReply {
+            method: "GET",
+            path: METADATA_PATH,
+            body: None,
+            status: 503,
+            response: br#"{"errors":["Vault is sealed"]}"#.to_vec(),
+            delay: Duration::ZERO,
+        };
+        let (directory, socket_path, server) = spawn_transit_mock(vec![failing]);
+        let error = TransitSigner::initialize(config(socket_path))
+            .await
+            .expect_err("a failing provider must reject");
+        assert_eq!(error, TransitInitializationError::ProviderFailed);
+        server.await.expect("failing mock completed");
+        drop(directory);
+
+        let replies = vec![
+            transit_reply(
+                "GET",
+                METADATA_PATH,
+                None,
+                transit_metadata(&p256_public_pem(&private)),
+            ),
+            transit_reply(
+                "POST",
+                SIGN_PATH,
+                Some(transit_request(TRANSIT_SELF_TEST_MESSAGE, 7)),
+                json!({"data": {"signature": "vault:v7:AAAA"}}),
+            ),
+        ];
+        let (directory, socket_path, server) = spawn_transit_mock(replies);
+        let error = TransitSigner::initialize(config(socket_path))
+            .await
+            .expect_err("a failing self-test must reject");
+        assert_eq!(error, TransitInitializationError::SelfTest);
+        server.await.expect("self-test mock completed");
+        drop(directory);
+
+        for fault in [
+            TransitInitializationError::Unavailable,
+            TransitInitializationError::Refused,
+            TransitInitializationError::ProviderFailed,
+            TransitInitializationError::InvalidResponse,
+            TransitInitializationError::Custody,
+            TransitInitializationError::KeyVersionNotCreated,
+            TransitInitializationError::KeyVersionRetired,
+            TransitInitializationError::PublicKeyMismatch,
+            TransitInitializationError::SelfTest,
+        ] {
+            let rendered = fault.to_string();
+            assert!(!rendered.contains('\n'));
+            assert!(!rendered.contains(absent.path().to_string_lossy().as_ref()));
         }
     }
 
@@ -2613,7 +2849,7 @@ mod tests {
         let timeout = TransitSigner::initialize(config)
             .await
             .expect_err("slow Transit metadata times out");
-        assert!(timeout.to_string().contains("metadata is unavailable"));
+        assert_eq!(timeout, TransitInitializationError::Unavailable);
         server.await.expect("slow mock completed");
         drop(directory);
 
@@ -2638,7 +2874,7 @@ mod tests {
         let oversized = TransitSigner::initialize(config)
             .await
             .expect_err("oversized Transit metadata rejects");
-        assert!(oversized.to_string().contains("metadata is unavailable"));
+        assert_eq!(oversized, TransitInitializationError::InvalidResponse);
         server.await.expect("oversized mock completed");
         drop(directory);
     }

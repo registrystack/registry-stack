@@ -40,7 +40,7 @@ use registry_evidence::{
     rhai_runtime::{DerivedConceptValue, DerivedValue},
     runtime::{
         source_failure_problem, validate_secret_material, AuditInitializationFault,
-        EvidenceRuntime, RuntimeInitializationError,
+        EvidenceRuntime, RuntimeInitializationError, SigningInitializationFault,
     },
     secrets::{SecretProvider, SecretResolver},
     selector::{
@@ -107,10 +107,15 @@ enum CommandError {
     StaleExtracts(Vec<String>),
     /// The audit boundary refused, with the value-free cause it reported.
     ///
-    /// It is the one startup boundary that separates its causes, because an
-    /// out-of-range destination, a permission bit, and a second writer holding
-    /// the destination lock have nothing in common but the moment they fail.
+    /// It separates its causes because an out-of-range destination, a
+    /// permission bit, and a second writer holding the destination lock have
+    /// nothing in common but the moment they fail.
     Audit(&'static str, AuditInitializationFault),
+    /// The signing boundary refused, with the value-free cause it reported.
+    ///
+    /// A missing Transit socket, a retired key version, and a key that is not
+    /// the governed one each need a different fix, so each names itself.
+    Signing(SigningInitializationFault),
     /// The configured audit destination was not proven persistent.
     ///
     /// The fault names the side that failed and nothing else. Neither the
@@ -132,6 +137,9 @@ impl fmt::Display for CommandError {
                 sources.join(", ")
             ),
             Self::Audit(message, fault) => write!(formatter, "{message}: {fault}"),
+            Self::Signing(fault) => {
+                write!(formatter, "runtime signing initialization failed: {fault}")
+            }
             Self::AuditRoot(fault) => write!(formatter, "audit destination check failed: {fault}"),
             Self::Service(reason) => write!(formatter, "service failed: {reason}"),
         }
@@ -521,9 +529,7 @@ fn runtime_initialization_error(error: RuntimeInitializationError) -> CommandErr
         RuntimeInitializationError::Audit(fault) => {
             CommandError::Audit("runtime audit initialization failed", fault)
         }
-        RuntimeInitializationError::Signing => {
-            CliError("runtime signing initialization failed").into()
-        }
+        RuntimeInitializationError::Signing(fault) => CommandError::Signing(fault),
         RuntimeInitializationError::Source => {
             CliError("runtime source initialization failed").into()
         }
