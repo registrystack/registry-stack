@@ -6401,6 +6401,7 @@ dependencies = [
  "registry-casework-client",
  "registry-discovery-client",
  "registry-evidence-client",
+ "registry-messaging-client",
  "registry-platform-httputil",
  "registry-record",
  "registry-relay-client",
