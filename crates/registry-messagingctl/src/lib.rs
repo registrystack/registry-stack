@@ -13,11 +13,16 @@
 //! - `apply` compares the package with the database's package ledger, and
 //!   with `--apply` records it as the package the runtime serves after its
 //!   next restart.
+//! - `messages list` and `messages show` read accepted messages with the
+//!   recipient masked; `messages retry`, `settle`, and `cancel` report what
+//!   the action would do to one message, and with `--apply` do it. Each
+//!   applied action writes its audit record into the outbox the running
+//!   runtime publishes.
 //!
 //! Exit codes: 0 when the command succeeds, 1 when the configuration,
-//! package, or preview is refused, 2 for a usage error, and 3 when a file,
-//! secret, or database could not be reached or the report could not be
-//! written.
+//! package, preview, or message action is refused, 2 for a usage error, and
+//! 3 when a file, secret, or database could not be reached or the report
+//! could not be written.
 
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Read as _};
@@ -27,10 +32,14 @@ use std::process::ExitCode;
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use registry_messaging::config::{RuntimeConfig, RuntimeConfigError};
 use registry_messaging::http::preview_json;
+use registry_messaging::messages::{
+    MessageStore, MessageStoreError, OperatorAction, OperatorActionReport, SettleOutcome,
+};
 use registry_messaging::package::{load_package, LoadedPackage};
-use registry_messaging::runtime::{apply_package, PackageChange, RuntimeError};
-use registry_messaging_core::{ContentRefusal, TemplatePreviewRequest};
+use registry_messaging::runtime::{apply_package, message_store, PackageChange, RuntimeError};
+use registry_messaging_core::{ContentRefusal, MessageStatus, TemplatePreviewRequest};
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 mod starter;
 
@@ -60,6 +69,100 @@ enum Command {
     /// Compare the package with the package ledger, and record it with
     /// --apply.
     Apply(ApplyArgs),
+    /// Read accepted messages, and retry, settle, or cancel one.
+    #[command(subcommand)]
+    Messages(MessagesCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum MessagesCommand {
+    /// List messages, newest first, with the recipient never shown.
+    List(ListArgs),
+    /// Show one message with its recipient masked, and its attempts.
+    Show(MessageArgs),
+    /// Queue a failed message again under a new generation, with --apply.
+    Retry(ActionArgs),
+    /// Settle a message whose outcome is unknown, with --apply.
+    Settle(SettleArgs),
+    /// Cancel a queued message, with --apply.
+    Cancel(ActionArgs),
+}
+
+#[derive(Debug, Args)]
+struct ListArgs {
+    /// Absolute path to the runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+    /// Only messages with this status.
+    #[arg(long, value_enum, value_name = "STATUS")]
+    status: Option<StatusFilter>,
+    /// The most messages to list.
+    #[arg(long, value_name = "COUNT", default_value_t = 50,
+          value_parser = clap::value_parser!(i64).range(1..=MAXIMUM_LIST_LIMIT))]
+    limit: i64,
+}
+
+#[derive(Debug, Args)]
+struct MessageArgs {
+    /// Absolute path to the runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+    /// The message id the runtime returned on acceptance.
+    #[arg(value_name = "MESSAGE_ID")]
+    message: Uuid,
+}
+
+#[derive(Debug, Args)]
+struct ActionArgs {
+    #[command(flatten)]
+    target: MessageArgs,
+    /// Change the message. Without it, only report what would change.
+    #[arg(long)]
+    apply: bool,
+}
+
+#[derive(Debug, Args)]
+struct SettleArgs {
+    #[command(flatten)]
+    action: ActionArgs,
+    /// Whether the provider took the message: sent makes it submitted,
+    /// not-sent queues it again under a new generation.
+    #[arg(long, value_enum, value_name = "OUTCOME")]
+    outcome: SettleArg,
+}
+
+/// A message status `messages list` filters on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum StatusFilter {
+    Queued,
+    Sending,
+    Submitted,
+    Delivered,
+    Failed,
+    Expired,
+    Cancelled,
+    Unknown,
+}
+
+impl From<StatusFilter> for MessageStatus {
+    fn from(filter: StatusFilter) -> Self {
+        match filter {
+            StatusFilter::Queued => Self::Queued,
+            StatusFilter::Sending => Self::Sending,
+            StatusFilter::Submitted => Self::Submitted,
+            StatusFilter::Delivered => Self::Delivered,
+            StatusFilter::Failed => Self::Failed,
+            StatusFilter::Expired => Self::Expired,
+            StatusFilter::Cancelled => Self::Cancelled,
+            StatusFilter::Unknown => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum SettleArg {
+    Sent,
+    NotSent,
 }
 
 #[derive(Debug, Args)]
@@ -130,6 +233,9 @@ const OPERATIONAL_FAILURE_EXIT: u8 = 3;
 /// The largest template data file `preview` reads.
 const MAXIMUM_DATA_BYTES: u64 = 1024 * 1024;
 
+/// The most messages one `messages list` reports.
+const MAXIMUM_LIST_LIMIT: i64 = 500;
+
 /// The clap command tree, for the generated CLI reference.
 #[must_use]
 pub fn command() -> clap::Command {
@@ -159,6 +265,9 @@ enum View {
     Check,
     Preview,
     Apply,
+    MessageList,
+    MessageShow,
+    MessageAction,
 }
 
 impl Outcome {
@@ -235,6 +344,7 @@ where
         Command::Check(args) => check(&args.source),
         Command::Preview(args) => preview(&args),
         Command::Apply(args) => apply(&args.runtime_config, args.apply),
+        Command::Messages(command) => messages(&command),
     };
     finish(&outcome, cli.format, stdout, stderr)
 }
@@ -475,24 +585,29 @@ fn preview_refusal(refusal: &ContentRefusal) -> Outcome {
     outcome
 }
 
-fn apply(path: &Path, record: bool) -> Outcome {
-    let config = match RuntimeConfig::load(path) {
-        Ok(config) => config,
-        Err(error) => return config_refusal(&error),
-    };
-    let runtime = match tokio::runtime::Builder::new_current_thread()
+/// A single-threaded async runtime for one database command.
+fn async_runtime() -> Result<tokio::runtime::Runtime, Outcome> {
+    tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-    {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            return Outcome::refused(
+        .map_err(|error| {
+            Outcome::refused(
                 OPERATIONAL_FAILURE_EXIT,
                 "runtime.unavailable",
                 "/",
                 format!("the async runtime could not start: {error}"),
             )
-        }
+        })
+}
+
+fn apply(path: &Path, record: bool) -> Outcome {
+    let config = match RuntimeConfig::load(path) {
+        Ok(config) => config,
+        Err(error) => return config_refusal(&error),
+    };
+    let runtime = match async_runtime() {
+        Ok(runtime) => runtime,
+        Err(refused) => return refused,
     };
     match runtime.block_on(apply_package(&config, record)) {
         Ok(applied) => Outcome::new(
@@ -508,11 +623,162 @@ fn apply(path: &Path, record: bool) -> Outcome {
             View::Apply,
         ),
         Err(RuntimeError::Config(error)) => config_refusal(&error),
+        Err(error) => database_unavailable(&error),
+    }
+}
+
+fn messages(command: &MessagesCommand) -> Outcome {
+    let path = match command {
+        MessagesCommand::List(args) => &args.runtime_config,
+        MessagesCommand::Show(args) => &args.runtime_config,
+        MessagesCommand::Retry(args) | MessagesCommand::Cancel(args) => &args.target.runtime_config,
+        MessagesCommand::Settle(args) => &args.action.target.runtime_config,
+    };
+    let config = match RuntimeConfig::load(path) {
+        Ok(config) => config,
+        Err(error) => return config_refusal(&error),
+    };
+    let runtime = match async_runtime() {
+        Ok(runtime) => runtime,
+        Err(refused) => return refused,
+    };
+    runtime.block_on(async {
+        let store = match message_store(&config).await {
+            Ok(store) => store,
+            Err(RuntimeError::Config(error)) => return config_refusal(&error),
+            Err(error) => return database_unavailable(&error),
+        };
+        match command {
+            MessagesCommand::List(args) => list(&store, args).await,
+            MessagesCommand::Show(args) => show(&store, args.message).await,
+            MessagesCommand::Retry(args) => {
+                act(&store, &args.target, OperatorAction::Retry, args.apply).await
+            }
+            MessagesCommand::Cancel(args) => {
+                act(&store, &args.target, OperatorAction::Cancel, args.apply).await
+            }
+            MessagesCommand::Settle(args) => {
+                let outcome = match args.outcome {
+                    SettleArg::Sent => SettleOutcome::Sent,
+                    SettleArg::NotSent => SettleOutcome::NotSent,
+                };
+                act(
+                    &store,
+                    &args.action.target,
+                    OperatorAction::Settle(outcome),
+                    args.action.apply,
+                )
+                .await
+            }
+        }
+    })
+}
+
+fn database_unavailable(error: &dyn std::fmt::Display) -> Outcome {
+    Outcome::refused(
+        OPERATIONAL_FAILURE_EXIT,
+        "database.unavailable",
+        "database",
+        error.to_string(),
+    )
+}
+
+fn message_not_found(message: Uuid) -> Outcome {
+    Outcome::refused(
+        REFUSAL_EXIT,
+        "message.not-found",
+        "MESSAGE_ID",
+        format!("no message {message} exists"),
+    )
+}
+
+async fn list(store: &MessageStore, args: &ListArgs) -> Outcome {
+    match store.list(args.status.map(Into::into), args.limit).await {
+        Ok(messages) => Outcome::new(json!({"ok": true, "messages": messages}), View::MessageList),
+        Err(error) => database_unavailable(&error),
+    }
+}
+
+async fn show(store: &MessageStore, message: Uuid) -> Outcome {
+    match store.read(message).await {
+        Ok(Some(stored)) => Outcome::new(
+            json!({
+                "ok": true,
+                "message": stored.view,
+                "accessProfile": stored.access_profile,
+                "generation": stored.generation,
+                "attempt": stored.attempt,
+            }),
+            View::MessageShow,
+        ),
+        Ok(None) => message_not_found(message),
+        Err(error) => database_unavailable(&error),
+    }
+}
+
+/// Report, and with `apply` do, one operator action. An action the message
+/// is not in the state for is refused, applied or not, so a preview that
+/// exits 0 is one `--apply` would carry out.
+async fn act(
+    store: &MessageStore,
+    target: &MessageArgs,
+    action: OperatorAction,
+    apply: bool,
+) -> Outcome {
+    let report = match store.operate(target.message, action, apply).await {
+        Ok(Some(report)) => report,
+        Ok(None) => return message_not_found(target.message),
+        Err(MessageStoreError::Refused) => {
+            return Outcome::refused(
+                REFUSAL_EXIT,
+                "message.changed",
+                "MESSAGE_ID",
+                format!(
+                    "message {} changed before the {} could be applied; show it and try again",
+                    target.message,
+                    action.as_str()
+                ),
+            )
+        }
+        Err(error) => return database_unavailable(&error),
+    };
+    if !report.eligible {
+        return Outcome::refused(
+            REFUSAL_EXIT,
+            "message.not-eligible",
+            "MESSAGE_ID",
+            format!(
+                "message {} is {}; {} applies only to a {} message",
+                target.message,
+                report.status.as_str(),
+                action.as_str(),
+                eligible_status(action).as_str()
+            ),
+        );
+    }
+    action_outcome(&report)
+}
+
+/// The one status an action applies to, as `messages show` reports it.
+const fn eligible_status(action: OperatorAction) -> MessageStatus {
+    match action {
+        OperatorAction::Retry => MessageStatus::Failed,
+        OperatorAction::Settle(_) => MessageStatus::Unknown,
+        OperatorAction::Cancel => MessageStatus::Queued,
+    }
+}
+
+fn action_outcome(report: &OperatorActionReport) -> Outcome {
+    match serde_json::to_value(report) {
+        Ok(mut value) => {
+            value["ok"] = json!(true);
+            Outcome::new(value, View::MessageAction)
+        }
         Err(error) => Outcome::refused(
             OPERATIONAL_FAILURE_EXIT,
-            "database.unavailable",
-            "database",
-            error.to_string(),
+            "output.failed",
+            "/",
+            format!("the report could not be serialized: {error}"),
         ),
     }
 }
@@ -581,6 +847,9 @@ fn render_human(
         View::Check => render_check(report, stdout),
         View::Preview => render_preview(report, stdout),
         View::Apply => render_apply(report, stdout),
+        View::MessageList => render_message_list(report, stdout),
+        View::MessageShow => render_message_show(report, stdout),
+        View::MessageAction => render_message_action(report, stdout),
     }
 }
 
@@ -694,6 +963,115 @@ fn render_apply(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
         "activate: run again with --apply to record this package"
     };
     writeln!(stdout, "change: {change}")
+}
+
+fn render_message_list(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    let messages = report["messages"].as_array().map_or(&[][..], Vec::as_slice);
+    if messages.is_empty() {
+        return writeln!(stdout, "no messages");
+    }
+    for message in messages {
+        writeln!(
+            stdout,
+            "{} {} {} {} generation {} attempt {} accepted {} updated {}",
+            text(&message["id"]),
+            text(&message["status"]),
+            text(&message["channel"]),
+            text(&message["senderProfile"]),
+            message["generation"],
+            message["attempt"],
+            text(&message["acceptedAt"]),
+            text(&message["updatedAt"])
+        )?;
+    }
+    Ok(())
+}
+
+fn render_message_show(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    let message = &report["message"];
+    writeln!(stdout, "message: {}", text(&message["id"]))?;
+    writeln!(
+        stdout,
+        "status: {} (report {})",
+        text(&message["status"]),
+        text(&message["report"])
+    )?;
+    writeln!(
+        stdout,
+        "channel: {} via {}",
+        text(&message["channel"]),
+        text(&message["senderProfile"])
+    )?;
+    // The view masks the contact; only its kind is printed.
+    for kind in message["to"]
+        .as_object()
+        .into_iter()
+        .flat_map(|to| to.keys())
+    {
+        writeln!(stdout, "to: {kind} (redacted)")?;
+    }
+    if let Some(template) = message["template"].as_object() {
+        writeln!(
+            stdout,
+            "template: {} {}",
+            template.get("id").map_or("", text),
+            template.get("version").map_or("", text)
+        )?;
+    }
+    if let Some(correlation) = message["correlationId"].as_str() {
+        writeln!(stdout, "correlation id: {correlation}")?;
+    }
+    writeln!(stdout, "access profile: {}", text(&report["accessProfile"]))?;
+    writeln!(
+        stdout,
+        "generation: {} attempt: {}",
+        report["generation"], report["attempt"]
+    )?;
+    writeln!(stdout, "accepted: {}", text(&message["acceptedAt"]))?;
+    if let Some(not_before) = message["notBefore"].as_str() {
+        writeln!(stdout, "not before: {not_before}")?;
+    }
+    writeln!(stdout, "expires: {}", text(&message["expiresAt"]))?;
+    writeln!(stdout, "updated: {}", text(&message["updatedAt"]))?;
+    for attempt in message["attempts"].as_array().into_iter().flatten() {
+        writeln!(
+            stdout,
+            "attempt {}.{}: {} started {}{}",
+            attempt["generation"],
+            attempt["attempt"],
+            text(&attempt["outcome"]),
+            text(&attempt["startedAt"]),
+            attempt["finishedAt"]
+                .as_str()
+                .map_or_else(String::new, |finished| format!(" finished {finished}"))
+        )?;
+    }
+    Ok(())
+}
+
+fn render_message_action(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    let action = match report["outcome"].as_str() {
+        Some(outcome) => format!("{} {outcome}", text(&report["action"])),
+        None => text(&report["action"]).to_owned(),
+    };
+    writeln!(
+        stdout,
+        "{action} {}: {} -> {}",
+        text(&report["id"]),
+        text(&report["status"]),
+        text(&report["nextStatus"])
+    )?;
+    if report["applied"] == json!(true) {
+        match report["nextGeneration"].as_i64() {
+            Some(generation) => writeln!(stdout, "applied: queued as generation {generation}"),
+            None => writeln!(stdout, "applied"),
+        }
+    } else {
+        writeln!(
+            stdout,
+            "preview: run again with --apply to change the message"
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1200,5 +1578,47 @@ audit:
         ]);
         assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT), "{report}");
         assert_eq!(report["diagnostics"][0]["code"], "database.unavailable");
+    }
+
+    #[test]
+    fn messages_arguments_are_checked_before_any_database() {
+        let id = "0b0b8f1c-7a7e-4c43-9d7e-0f3c5d9a1e2b";
+        let cases: [&[&str]; 5] = [
+            &["messages", "show", "not-a-uuid"],
+            &["messages", "settle", id],
+            &["messages", "settle", id, "--outcome", "maybe"],
+            &["messages", "list", "--limit", "0"],
+            &["messages", "list", "--status", "lost"],
+        ];
+        for case in cases {
+            let mut args: Vec<&OsStr> = case.iter().map(OsStr::new).collect();
+            args.extend([
+                OsStr::new("--runtime-config"),
+                OsStr::new("/etc/messaging/runtime.yaml"),
+            ]);
+            let (exit, report) = json_run(&args);
+            assert_eq!(exit, ExitCode::from(USAGE_EXIT), "{case:?}");
+            assert_eq!(report["diagnostics"][0]["code"], "usage.invalid");
+        }
+    }
+
+    #[test]
+    fn messages_without_a_database_credential_is_an_operational_failure() {
+        let (root, path) = project("");
+        let document = runtime(root.path(), "").replace(
+            "secret:env/MESSAGING_RUNTIME_URL",
+            "secret:env/MESSAGINGCTL_TEST_UNSET_RUNTIME_URL",
+        );
+        std::fs::write(&path, document).unwrap();
+        for command in [
+            vec!["messages", "list"],
+            vec!["messages", "cancel", "0b0b8f1c-7a7e-4c43-9d7e-0f3c5d9a1e2b"],
+        ] {
+            let mut args: Vec<&OsStr> = command.iter().map(OsStr::new).collect();
+            args.extend([OsStr::new("--runtime-config"), path.as_os_str()]);
+            let (exit, report) = json_run(&args);
+            assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT), "{report}");
+            assert_eq!(report["diagnostics"][0]["code"], "database.unavailable");
+        }
     }
 }

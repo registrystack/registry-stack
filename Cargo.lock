@@ -5776,14 +5776,29 @@ dependencies = [
 name = "registry-messagingctl"
 version = "0.34.0"
 dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "chrono",
  "clap",
+ "jsonwebtoken",
  "registry-messaging",
  "registry-messaging-core",
+ "registry-platform-audit",
  "registry-platform-buildinfo",
+ "registry-platform-dispatch",
+ "registry-platform-oidc",
+ "registry-platform-testing",
  "serde",
  "serde_json",
+ "serde_norway",
  "tempfile",
  "tokio",
+ "tokio-postgres",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]

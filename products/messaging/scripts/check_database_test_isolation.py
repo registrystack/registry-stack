@@ -16,6 +16,7 @@ DATABASE_SUITES = {
         "postgres_migrate",
         "postgres_package",
     },
+    "registry-messagingctl": {"postgres_messages_cli"},
 }
 
 

@@ -113,6 +113,11 @@ mod tests {
             "messagingctl check",
             "messagingctl preview",
             "messagingctl apply",
+            "messagingctl messages list",
+            "messagingctl messages show",
+            "messagingctl messages retry",
+            "messagingctl messages settle",
+            "messagingctl messages cancel",
         ] {
             assert!(!find_command(&catalog.binaries, invocation).usage.is_empty());
         }

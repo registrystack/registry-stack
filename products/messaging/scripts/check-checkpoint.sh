@@ -183,4 +183,29 @@ expect_refusal metrics-on-public-socket metricsListener.bind
 expect_refusal pinned-digest package.expectedDigest
 expect_refusal unadmitted-client authentication.oidc.allowedClients
 
+# messages checks its arguments before any database, and a database it cannot
+# reach is an operational failure, never an empty list.
+status=0
+"$messagingctl_bin" --format json messages show not-a-message-id \
+  --runtime-config "$work/starter/runtime.yaml" >/dev/null 2>&1 || status=$?
+if [[ "$status" -ne 2 ]]; then
+  printf 'messagingctl messages show exited %s for a malformed id, expected 2\n' "$status" >&2
+  exit 1
+fi
+status=0
+report=$("$messagingctl_bin" --format json messages list \
+  --runtime-config "$work/starter/runtime.yaml") || status=$?
+if [[ "$status" -ne 3 ]]; then
+  printf 'messagingctl messages list exited %s without a database, expected 3\n' "$status" >&2
+  exit 1
+fi
+python3 - "$report" <<'PY'
+import json
+import sys
+
+report = json.loads(sys.argv[1])
+assert report["ok"] is False, report
+assert report["diagnostics"][0]["code"] == "database.unavailable", report
+PY
+
 printf 'Messaging product contracts and offline configuration checks passed.\n'
