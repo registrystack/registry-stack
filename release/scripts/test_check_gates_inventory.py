@@ -839,17 +839,17 @@ class GateInventoryTest(unittest.TestCase):
                 "Casework product checkpoint wrapper",
             ),
             (
-                "cargo test --locked --profile ci -p registry-casework --features postgres-test --test postgres_transactions",
+                "cargo test --locked -p registry-casework --features postgres-test --test postgres_transactions",
                 "true # Casework transactions disabled",
                 "Casework claim, reconciliation, and attempt suite",
             ),
             (
-                "cargo test --locked --profile ci -p registry-casework --features postgres-test --test service_visibility",
+                "cargo test --locked -p registry-casework --features postgres-test --test service_visibility",
                 "true # Casework visibility disabled",
                 "Casework caller visibility suite",
             ),
             (
-                "cargo test --locked --profile ci -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres",
+                "cargo test --locked -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres",
                 "true # Casework assignment and routing suites disabled",
                 "Casework assignment and source routing suites",
             ),
@@ -864,22 +864,22 @@ class GateInventoryTest(unittest.TestCase):
                 "Casework persisted source clock result assertion",
             ),
             (
-                "cargo test --locked --profile ci -p registry-casework --features postgres-test --test inbox_ordering_postgres",
+                "cargo test --locked -p registry-casework --features postgres-test --test inbox_ordering_postgres",
                 "true # Casework inbox ordering disabled",
                 "Casework inbox ordering suite",
             ),
             (
-                "cargo test --locked --profile ci -p registry-casework --features postgres-test --test source_retention_postgres",
+                "cargo test --locked -p registry-casework --features postgres-test --test source_retention_postgres",
                 "true # Casework source retention disabled",
                 "Casework source retention suite",
             ),
             (
-                "cargo test --locked --profile ci -p registry-casework --features postgres-test\n          --test review_postgres\n          --test review_http\n          --test review_payment_fixture_postgres\n          --test breg_review_journey",
+                "cargo test --locked -p registry-casework --features postgres-test\n          --test review_postgres\n          --test review_http\n          --test review_payment_fixture_postgres\n          --test breg_review_journey",
                 "true # Casework governed review suites disabled",
                 "Casework governed review persistence, HTTP, payment, and BReg suites",
             ),
             (
-                "cargo test --locked --profile ci -p registry-casework --features postgres-test --test review_migration_postgres",
+                "cargo test --locked -p registry-casework --features postgres-test --test review_migration_postgres",
                 "true # Casework governed review schema upgrades disabled",
                 "Casework governed review schema upgrade suite",
             ),
@@ -887,6 +887,16 @@ class GateInventoryTest(unittest.TestCase):
                 "registry-breg-client-py registry-casework-client-py",
                 "registry-breg-client-py",
                 "Casework Python client binding coverage",
+            ),
+            (
+                "approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid",
+                "approved_casework_tasks",
+                "Casework task approval through Evidence, BReg, and Scheduling",
+            ),
+            (
+                "source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer",
+                "source_backed_dev",
+                "Casework task approval on the source-backed local issuer",
             ),
         ):
             with self.subTest(gate=gate):
@@ -969,17 +979,17 @@ class GateInventoryTest(unittest.TestCase):
                 "Scheduling product checkpoint wrapper",
             ),
             (
-                "cargo test --locked --profile ci -p registry-scheduling --features postgres-test --test postgres_commitments",
+                "cargo test --locked -p registry-scheduling --features postgres-test --test postgres_commitments",
                 "true # Scheduling commitment ledger disabled",
                 "Scheduling commitment ledger suite",
             ),
             (
-                "cargo test --locked --profile ci -p registry-schedulingctl --features postgres-test --test records_apply_postgres",
+                "cargo test --locked -p registry-schedulingctl --features postgres-test --test records_apply_postgres",
                 "true # Scheduling record application disabled",
                 "Scheduling authoring record application suite",
             ),
             (
-                "cargo test --locked --profile ci -p registry-schedulingctl --features postgres-test --test intents_postgres",
+                "cargo test --locked -p registry-schedulingctl --features postgres-test --test intents_postgres",
                 "true # Scheduling delivery intent reads disabled",
                 "Scheduling delivery intent suite",
             ),
@@ -1345,6 +1355,15 @@ class GateInventoryTest(unittest.TestCase):
         text = self.workflow.replace("--fail-under-lines 80", "--summary-only")
         self.assertIn("Platform coverage threshold", self.module.missing_gates(text))
 
+    def test_missing_platform_assurance_path_filter_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "platform_assurance: ${{ steps.filter.outputs.platform_assurance }}",
+            "platform_assurance: ${{ steps.filter.outputs.platform }}",
+        )
+        self.assertIn(
+            "Platform assurance path filter", self.module.missing_gates(text)
+        )
+
     def test_missing_secret_scan_redaction_is_reported(self) -> None:
         text = self.workflow.replace("--redact", "--verbose")
         self.assertIn("Gitleaks redaction", self.module.missing_gates(text))
@@ -1417,8 +1436,8 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_missing_manifest_profile_validation_is_reported(self) -> None:
         text = self.workflow.replace(
-            "cargo run --locked --profile ci -p registry-manifest-cli -- validate-profiles profiles",
-            "cargo run --locked --profile ci -p registry-manifest-cli -- skip-profile-validation",
+            "cargo run --locked -p registry-manifest-cli -- validate-profiles profiles",
+            "cargo run --locked -p registry-manifest-cli -- skip-profile-validation",
         )
         self.assertIn("Manifest profile validation", self.module.missing_gates(text))
 

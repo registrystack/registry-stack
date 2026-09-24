@@ -29,16 +29,20 @@ export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
 export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
 
+# Every registry-breg target here builds against one of two feature sets, so
+# the crate compiles at most twice per run instead of once per target group.
+# The runtime set leaves out postgres-test because runtime_config and
+# startup_http select different tests when it is on. test-attachment-s3.sh
+# uses the same two sets, so a later S3 step reuses these builds.
 if [[ "$lane" == all || "$lane" == postgres ]]; then
-  cargo test --locked -p registry-breg --features runtime \
+  cargo test --locked -p registry-breg --features runtime,tooling,schema \
     --test http_auth \
     --test http_read_only \
     --test runtime_config \
     --test startup_http \
-    --test startup_ordering
-  cargo test --locked -p registry-breg --features runtime,tooling \
+    --test startup_ordering \
     --test fixture_tooling
-  cargo test --locked -p registry-breg --features postgres-test \
+  cargo test --locked -p registry-breg --features postgres-test,tooling,schema \
     --test postgres_kernel \
     --test postgres_compiled_schema \
     --test postgres_partial_unique \
@@ -83,8 +87,7 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_pilot_acceptance \
     --test postgres_rhai_planner \
     --test postgres_tombstone_revision \
-    --test postgres_startup
-  cargo test --locked -p registry-breg --features postgres-test,tooling \
+    --test postgres_startup \
     --test postgres_history_migration \
     --test postgres_immediate_action_examples \
     --test postgres_immediate_action_activation \
@@ -112,12 +115,13 @@ print(binaries[0])
 ')
   [[ -x "$evidence_binary" ]] || { printf '%s\n' 'Built Evidence executable is unavailable.' >&2; exit 2; }
   export BREG_TEST_EVIDENCE_BINARY="$evidence_binary"
-  uv run --no-project --with PyYAML==6.0.2 cargo test --locked -p registry-breg --features postgres-test,tooling \
+  uv run --no-project --with PyYAML==6.0.2 cargo test --locked -p registry-breg --features postgres-test,tooling,schema \
     --test postgres_action_evidence \
     --test postgres_action_evidence_targets \
     --test postgres_action_evidence_retention
 fi
 
 if [[ "$lane" == all || "$lane" == immediate-actions ]]; then
-  cargo test --locked -p registry-breg --features postgres-test --test postgres_immediate_actions
+  cargo test --locked -p registry-breg --features postgres-test,tooling,schema \
+    --test postgres_immediate_actions
 fi

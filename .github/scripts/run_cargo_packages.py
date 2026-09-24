@@ -26,7 +26,7 @@ def package_args(raw_packages: str) -> list[str]:
 
 
 def command_args(command: str, packages: list[str], all_features: bool) -> list[str]:
-    args = ["cargo", command, "--locked", "--profile", "ci"]
+    args = ["cargo", command, "--locked"]
     if command == "clippy":
         args.append("--all-targets")
     args.extend(packages)

@@ -85,13 +85,13 @@ Run these from the repository root. In managed worktrees set
 `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`, and
 `CARGO_PROFILE_TEST_DEBUG=0`, as the root guidance requires.
 
-Any Rust change. CI builds this shard without `--all-features`, per
-`.github/scripts/run_cargo_packages.py`:
+Any Rust change. CI builds this shard in the default dev and test profiles
+without `--all-features`, per `.github/scripts/run_cargo_packages.py`:
 
 ```sh
 cargo fmt --check
-cargo clippy --locked --profile ci --all-targets -p registry-breg -p registry-bregctl -- -D warnings
-cargo test --locked --profile ci -p registry-breg -p registry-bregctl
+cargo clippy --locked --all-targets -p registry-breg -p registry-bregctl -- -D warnings
+cargo test --locked -p registry-breg -p registry-bregctl
 ```
 
 Add the `registry-breg-client*` packages when the change reaches the clients.
@@ -124,20 +124,20 @@ Native development lifecycle change. The test owns a PostgreSQL container, so
 it needs Docker:
 
 ```sh
-cargo test --locked --profile ci -p registry-bregctl --test dev_lifecycle -- --ignored
+cargo test --locked -p registry-bregctl --test dev_lifecycle -- --ignored --test-threads=1
 ```
 
 Evidence export change. The proof drives the three native binaries over
 `products/breg/evidence/` offline and starts no container:
 
 ```sh
-CARGO_TARGET_DIR=target/breg-evidence-composition cargo build --locked --profile ci \
+cargo build --locked \
   -p registry-bregctl -p registry-evidence -p registry-evidencectl --bins
 uv run --no-project --with PyYAML==6.0.2 python \
   products/breg/evidence/tests/verify-composition.py \
-  --bregctl target/breg-evidence-composition/ci/bregctl \
-  --evidencectl target/breg-evidence-composition/ci/evidencectl \
-  --evidence target/breg-evidence-composition/ci/evidence
+  --bregctl target/debug/bregctl \
+  --evidencectl target/debug/evidencectl \
+  --evidence target/debug/evidence
 ```
 
 CLI surface or configuration schema change. The docs generators read public

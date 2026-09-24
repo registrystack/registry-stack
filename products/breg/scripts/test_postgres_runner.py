@@ -107,10 +107,10 @@ class PostgresRunnerTests(unittest.TestCase):
         self.assertEqual(default, explicit)
         self.assertEqual(expected, self.inventory(ordinary) + self.inventory(actions))
         self.assertFalse(self.inventory(ordinary) & self.inventory(actions))
-        self.assertEqual(6, len(ordinary))
-        self.assertEqual(7, len(default))
+        self.assertEqual(4, len(ordinary))
+        self.assertEqual(5, len(default))
         self.assertEqual([shlex.split(
-            "test --locked -p registry-breg --features postgres-test --test postgres_immediate_actions"
+            "test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_immediate_actions"
         )], actions)
 
     def test_real_evidence_build_precedes_proof_and_is_absent_from_action_lane(self):
@@ -161,7 +161,7 @@ class PostgresRunnerTests(unittest.TestCase):
             source.replace("--test http_auth", '--test "http_auth'),
             source.replace("--test http_auth", "--test http_auth --test http_auth"),
             source.replace("--test http_auth", "--test http_auth selected_test"),
-            source.replace("--features runtime ", "--features runtime,tooling ", 1),
+            source.replace("--features runtime,tooling,schema ", "--features postgres-test,tooling,schema ", 1),
         ):
             with self.subTest(changed=changed[:40]), tempfile.TemporaryDirectory() as directory:
                 candidate = Path(directory) / "runner.sh"

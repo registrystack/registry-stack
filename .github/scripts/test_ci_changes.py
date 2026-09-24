@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
 import re
 import subprocess
 import sys
@@ -31,8 +32,10 @@ from ci_changes import (
     STACK_CLIENT_PACKAGES,
     SECURITY_WORKFLOW_GATES,
     SHARDS,
+    LockChange,
     Workspace,
     classify,
+    lock_change,
 )
 from run_cargo_packages import command_args, package_args
 from ci_event_routing import select_event, selection_outputs
@@ -279,8 +282,10 @@ class CiChangesTest(unittest.TestCase):
             "scheduling-contracts": (
                 "needs.changes.outputs.scheduling_contracts == 'true'"
             ),
-            "platform-fuzz": "needs.changes.outputs.platform == 'true'",
-            "platform-coverage": "needs.changes.outputs.platform == 'true'",
+            "platform-fuzz": "needs.changes.outputs.platform_assurance == 'true'",
+            "platform-coverage": (
+                "needs.changes.outputs.platform_assurance == 'true'"
+            ),
             "rust-quality": "needs.changes.outputs.rust == 'true'",
             "rust-tests": "needs.changes.outputs.rust == 'true'",
             "relay-client-contracts": (
@@ -1185,7 +1190,9 @@ class CiChangesTest(unittest.TestCase):
         outputs = classify(self.workspace, (".github/workflows/ci.yml",))
         self.assertCountEqual(outputs["rust_packages"], self.workspace.package_names)
         self.assertTrue(outputs["docs"])
-        self.assertTrue(outputs["docs_archives"])
+        # The workflow does not alter archived bytes; the nightly full sweep
+        # replays the archive job's own recipe.
+        self.assertFalse(outputs["docs_archives"])
         self.assertTrue(outputs["editors"])
 
     def test_casework_postgres_job_names_existing_integration_test_targets(self) -> None:
@@ -1417,6 +1424,37 @@ class CiChangesTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["breg_contracts"])
 
+    def test_casework_task_approval_journey_runs_wherever_its_inputs_change(
+        self,
+    ) -> None:
+        # The casework-postgres job owns the stock-issuer task approval
+        # journey through Evidence, BReg, and Scheduling. It must run on every
+        # change that selects the BReg product gate and on every change to the
+        # Scheduling runtime whose probe example the journey builds.
+        paths = [f"{root}/src/lib.rs" for root in self.workspace.roots.values()]
+        paths.extend(
+            (
+                "products/registry-record/schema/registry-record-v1.schema.json",
+                "crates/registry-casework/src/task_grants.rs",
+                "crates/registry-casework-core/src/task_grant.rs",
+                "crates/registry-thunderid-tooling/src/local.rs",
+                "crates/registry-scheduling/examples/scheduling-auth-probe.rs",
+                "crates/registry-scheduling-core/src/lib.rs",
+            )
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                if outputs["breg_contracts"] or (
+                    "registry-scheduling" in outputs["rust_packages"]
+                ):
+                    self.assertTrue(outputs["casework_postgres"])
+        scheduling = classify(
+            self.workspace,
+            ("crates/registry-scheduling/examples/scheduling-auth-probe.rs",),
+        )
+        self.assertTrue(scheduling["casework_postgres"])
+
     def test_issuer_tooling_change_runs_the_replacement_journeys(self) -> None:
         outputs = classify(self.workspace, ("crates/registry-thunderid-tooling/src/local.rs",))
         self.assertIn("registry-thunderid-tooling", outputs["rust_packages"])
@@ -1569,6 +1607,7 @@ class CiChangesTest(unittest.TestCase):
             "release/scripts/zig-glibc-compiler",
             "release/scripts/assemble-registry-client-wheel.py",
             "release/scripts/smoke-registry-client-package.js",
+            "release/scripts/smoke-registry-client-package.mjs",
             "release/scripts/sync-registry-client-node.py",
             "crates/registry-stack-client-node/native.js",
             "crates/registry-stack-client-node/npm/linux-x64-gnu/index.js",
@@ -2152,6 +2191,385 @@ on:
         )
         self.assertFalse(outputs["release_tool"])
 
+def edit_lock_package(text: str, name: str, **fields: str) -> str:
+    """Return the lockfile with one uniquely named package's fields replaced."""
+
+    blocks = text.split("\n[[package]]\n")
+    matched = [
+        index for index, block in enumerate(blocks)
+        if block.startswith(f'name = "{name}"\n')
+    ]
+    if len(matched) != 1:
+        raise AssertionError(f"expected one locked {name}, found {len(matched)}")
+    block = blocks[matched[0]]
+    for field, value in fields.items():
+        block, count = re.subn(
+            rf'^{field} = "[^"]*"$', f'{field} = "{value}"', block, flags=re.MULTILINE
+        )
+        if count != 1:
+            raise AssertionError(f"locked {name} has no single {field}")
+    blocks[matched[0]] = block
+    return "\n[[package]]\n".join(blocks)
+
+
+def bump_lock_package(text: str, name: str, version: str) -> str:
+    """Model a lock-only upgrade: a new version with a new registry checksum."""
+
+    return edit_lock_package(text, name, version=version, checksum="0" * 64)
+
+
+class LockfileSelectionTest(unittest.TestCase):
+    """A Cargo.lock-only change routes through the packages it can reach."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        metadata = subprocess.run(
+            ("cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        cls.workspace = Workspace(json.loads(metadata.stdout))
+        cls.lock = Path("Cargo.lock").read_text(encoding="utf-8")
+
+    def change(self, head: str | None, base: str | None = None) -> LockChange:
+        return lock_change(self.lock if base is None else base, head, self.workspace)
+
+    def assert_full(self, outputs: dict[str, Any]) -> None:
+        self.assertEqual(outputs["rust_packages"], sorted(self.workspace.package_names))
+
+    def test_lock_only_leaf_bump_selects_only_its_consumers(self) -> None:
+        change = self.change(bump_lock_package(self.lock, "pdf-writer", "0.15.1"))
+        self.assertEqual(change.members, frozenset({"registry-render"}))
+        self.assertFalse(change.native)
+
+        outputs = classify(self.workspace, ("Cargo.lock",), lock_change=change)
+        expected = sorted(self.workspace.affected_packages({"registry-render"}))
+        self.assertEqual(outputs["rust_packages"], expected)
+        self.assertLess(len(expected), len(self.workspace.package_names))
+        self.assertFalse(outputs["platform"])
+        self.assertFalse(outputs["platform_hygiene"])
+        self.assertFalse(outputs["docs_archives"])
+        self.assertFalse(outputs["breg_contracts"])
+        # The release helper validates workspace versions in the lock, and the
+        # release source model binds the exact lock bytes.
+        self.assertTrue(outputs["release_tool"])
+        self.assertTrue(outputs["release_source_proof"])
+
+    def test_lock_selection_follows_build_and_dev_edges_to_every_consumer(
+        self,
+    ) -> None:
+        # tree-sitter-yaml compiles C, so it is proven by the full sweep; its
+        # pure-Rust companion rhai reaches five members through normal edges.
+        change = self.change(bump_lock_package(self.lock, "rhai", "1.26.2"))
+        self.assertEqual(
+            change.members,
+            frozenset(
+                {
+                    "registry-breg",
+                    "registry-evidence",
+                    "registry-evidence-authoring",
+                    "registry-evidencectl",
+                    "registry-platform-script",
+                }
+            ),
+        )
+        outputs = classify(self.workspace, ("Cargo.lock",), lock_change=change)
+        self.assertTrue(outputs["platform"])
+        self.assertTrue(outputs["breg_contracts"])
+        self.assertTrue(outputs["evidence_contracts"])
+
+    def test_sys_bump_forces_full(self) -> None:
+        change = self.change(bump_lock_package(self.lock, "libsqlite3-sys", "0.38.3"))
+        self.assertIsNone(change.members)
+        self.assertTrue(change.native)
+        self.assertIn("libsqlite3-sys", change.reason)
+        self.assert_full(classify(self.workspace, ("Cargo.lock",), lock_change=change))
+
+    def test_links_and_c_compiling_bumps_force_full(self) -> None:
+        for name, version in (
+            ("ring", "0.17.15"),
+            ("aws-lc-rs", "1.18.2"),
+            ("tree-sitter-yaml", "0.7.3"),
+        ):
+            with self.subTest(package=name):
+                change = self.change(bump_lock_package(self.lock, name, version))
+                self.assertIsNone(change.members)
+                self.assertTrue(change.native)
+                self.assert_full(
+                    classify(self.workspace, ("Cargo.lock",), lock_change=change)
+                )
+
+    def test_widely_used_bump_forces_full(self) -> None:
+        # Widely used proc-macros and their syntax toolchain reach most of the
+        # workspace; so does any other crate past the threshold.
+        for name, version in (("itoa", "1.0.19"), ("serde_derive", "9.9.9")):
+            with self.subTest(package=name):
+                change = self.change(bump_lock_package(self.lock, name, version))
+                self.assertIsNone(change.members)
+                self.assertFalse(change.native)
+                self.assert_full(
+                    classify(self.workspace, ("Cargo.lock",), lock_change=change)
+                )
+
+    def test_toolchain_and_shared_build_inputs_stay_full(self) -> None:
+        change = self.change(bump_lock_package(self.lock, "pdf-writer", "0.15.1"))
+        for other in (
+            "rust-toolchain.toml",
+            "rust-toolchain",
+            "Cargo.toml",
+            ".cargo/config.toml",
+            "clippy.toml",
+            "deny.toml",
+            "rustfmt.toml",
+            ".github/workflows/ci.yml",
+        ):
+            with self.subTest(path=other):
+                self.assert_full(
+                    classify(
+                        self.workspace, ("Cargo.lock", other), lock_change=change
+                    )
+                )
+
+    def test_parse_failure_forces_full(self) -> None:
+        for head in (
+            "[[package]\nname = ",
+            "version = 4\n",
+            self.lock.replace('\n "bitflags",\n', '\n "no-such-package",\n', 1),
+            None,
+        ):
+            with self.subTest(head=None if head is None else head[:24]):
+                change = self.change(head)
+                self.assertIsNone(change.members)
+                self.assertTrue(change.native)
+                self.assertIn("Cargo.lock", change.reason)
+                self.assert_full(
+                    classify(self.workspace, ("Cargo.lock",), lock_change=change)
+                )
+
+    def test_git_source_change_forces_full(self) -> None:
+        head = edit_lock_package(
+            self.lock,
+            "pdf-writer",
+            source="git+https://example.invalid/pdf-writer?rev=0#0",
+        )
+        change = self.change(head)
+        self.assertIsNone(change.members)
+        self.assertIn("git", change.reason)
+
+    def test_lock_format_change_forces_full(self) -> None:
+        change = self.change(self.lock.replace("\nversion = 4\n", "\nversion = 3\n", 1))
+        self.assertIsNone(change.members)
+
+    def test_change_reaching_no_member_forces_full(self) -> None:
+        orphan = (
+            '\n[[package]]\nname = "unreferenced-crate"\nversion = "1.0.0"\n'
+            'source = "registry+https://github.com/rust-lang/crates.io-index"\n'
+            f'checksum = "{"1" * 64}"\n'
+        )
+        change = self.change(self.lock + orphan)
+        self.assertIsNone(change.members)
+        self.assertIn("no workspace member", change.reason)
+
+    def test_unchanged_lock_text_forces_full(self) -> None:
+        change = self.change(self.lock + "\n")
+        self.assertIsNone(change.members)
+
+    def test_lock_without_an_analysis_stays_full(self) -> None:
+        self.assert_full(classify(self.workspace, ("Cargo.lock",)))
+
+    def test_pull_request_native_lock_change_selects_linux_release_proof(
+        self,
+    ) -> None:
+        native = self.change(bump_lock_package(self.lock, "libsqlite3-sys", "0.38.3"))
+        leaf = self.change(bump_lock_package(self.lock, "pdf-writer", "0.15.1"))
+        for change, expected in ((native, True), (leaf, False), (None, True)):
+            with self.subTest(change=None if change is None else change.reason):
+                outputs = classify(
+                    self.workspace,
+                    ("Cargo.lock",),
+                    pull_request=True,
+                    lock_change=change,
+                )
+                self.assertEqual(outputs["release_linux_node_clients"], expected)
+
+
+class EventScopedSelectionTest(unittest.TestCase):
+    """Broad assurance runs on the merge queue, main, and the nightly sweep."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        metadata = subprocess.run(
+            ("cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        cls.workspace = Workspace(json.loads(metadata.stdout))
+
+    def test_platform_assurance_waits_for_the_merge_queue(self) -> None:
+        for path in (
+            "crates/registry-platform-crypto/src/lib.rs",
+            "products/platform/fuzz/fuzz_targets/sqlite_statement.rs",
+            "products/platform/scripts/run-fuzz-smoke.sh",
+        ):
+            with self.subTest(path=path):
+                reviewed = classify(self.workspace, (path,), pull_request=True)
+                self.assertTrue(reviewed["platform"])
+                self.assertFalse(reviewed["platform_assurance"])
+                queued = classify(self.workspace, (path,))
+                self.assertTrue(queued["platform"])
+                self.assertTrue(queued["platform_assurance"])
+        swept = classify(self.workspace, (), pull_request=True, full_sweep=True)
+        self.assertTrue(swept["platform_assurance"])
+        unrelated = classify(self.workspace, ("README.md",))
+        self.assertFalse(unrelated["platform_assurance"])
+
+    def test_pull_request_linux_release_proof_follows_recipe_inputs(self) -> None:
+        for path in (
+            ".cargo/config.toml",
+            "rust-toolchain",
+            "rust-toolchain.toml",
+            "release/glibc-floor.env",
+            "release/requirements/maturin-1.9.6.txt",
+            "release/scripts/build-linux-node-client",
+            "release/scripts/build-linux-python-client",
+            "release/scripts/zig-glibc-compiler",
+            "release/scripts/smoke-discovery-client-package.js",
+            "release/scripts/smoke-evidence-client-package.js",
+            "release/scripts/smoke-relay-client-package.js",
+            "release/scripts/smoke-registry-client-package.js",
+            "release/scripts/smoke-registry-client-package.mjs",
+            "crates/registry-discovery-client-node/Cargo.toml",
+            "crates/registry-discovery-client-node/build.rs",
+            "crates/registry-discovery-client-node/index.js",
+            "crates/registry-discovery-client-node/package.json",
+            "crates/registry-discovery-client-node/package-lock.json",
+            "crates/registry-discovery-client-node/scripts/normalize-napi-loader.js",
+            "crates/registry-evidence-client-node/npm/linux-x64-gnu/package.json",
+            "crates/registry-relay-client-node/build.rs",
+            "crates/registry-breg-client-node/Cargo.toml",
+            "crates/registry-casework-client-node/package-lock.json",
+            "crates/registry-evidence-client-py/Cargo.toml",
+            "crates/registry-evidence-client-py/build.rs",
+            "crates/registry-evidence-client-py/pyproject.toml",
+            "crates/registry-stack-client-node/native.js",
+            "crates/registry-stack-client-node/package.json",
+            "crates/registry-stack-client-node/package-lock.json",
+            "crates/registry-stack-client-node/npm/linux-arm64-gnu/index.js",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,), pull_request=True)[
+                        "release_linux_node_clients"
+                    ]
+                )
+
+    def test_pull_request_skips_linux_release_proof_for_non_recipe_inputs(
+        self,
+    ) -> None:
+        # Each of these still selects the proof on the merge queue and main,
+        # and the native binding job still builds and tests every affected
+        # binding on the pull request.
+        for path in (
+            ".github/workflows/ci.yml",
+            ".github/scripts/ci_changes.py",
+            ".github/scripts/ci_event_routing.py",
+            ".github/workflows/release-candidate.yml",
+            ".github/workflows/release-rehearsal.yml",
+            "Cargo.toml",
+            "release/scripts/assemble-registry-client-wheel.py",
+            "release/scripts/sync-registry-client-node.py",
+            "release/scripts/test_build_linux_node_client.py",
+            "release/scripts/test_build_linux_python_client.py",
+            "release/scripts/test_zig_glibc_compiler.py",
+            "crates/registry-discovery-client-node/src/lib.rs",
+            "crates/registry-evidence-client/src/client.rs",
+            "crates/registry-evidence-client-py/src/lib.rs",
+            "crates/registry-platform-httputil/src/lib.rs",
+            "crates/registry-stack-client-node/index.js",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(
+                    classify(self.workspace, (path,), pull_request=True)[
+                        "release_linux_node_clients"
+                    ]
+                )
+                self.assertTrue(
+                    classify(self.workspace, (path,))["release_linux_node_clients"]
+                )
+        self.assertTrue(
+            classify(self.workspace, (), pull_request=True, full_sweep=True)[
+                "release_linux_node_clients"
+            ]
+        )
+
+    def test_archives_ignore_the_workflow_and_cargo_manifests(self) -> None:
+        for paths in (
+            (".github/workflows/ci.yml",),
+            ("Cargo.lock",),
+            ("Cargo.toml",),
+            ("Cargo.lock", "Cargo.toml", ".github/workflows/ci.yml"),
+        ):
+            for pull_request in (True, False):
+                with self.subTest(paths=paths, pull_request=pull_request):
+                    outputs = classify(
+                        self.workspace, paths, pull_request=pull_request
+                    )
+                    self.assertFalse(outputs["docs_archives"])
+        self.assertTrue(classify(self.workspace, (), full_sweep=True)["docs_archives"])
+
+    def test_every_archive_recipe_import_selects_archive_verification(self) -> None:
+        # The archive-specific commands `check:archives` and
+        # `check:archive-lock` run after the current-site build the docs job
+        # already proves. Everything they import is an archive input.
+        site = Path("docs/site")
+        entries = [
+            site / "scripts" / name
+            for name in (
+                "apply-archive-seo.mjs",
+                "archive-lock.mjs",
+                "assemble-archives.mjs",
+                "check-built-links.mjs",
+                "check-llms.mjs",
+                "check-seo.mjs",
+            )
+        ]
+        imports = re.compile(
+            r"""(?:from\s*|import\(\s*|import\s+)['"](\.{1,2}/[^'"]+)['"]"""
+        )
+        seen: set[Path] = set()
+        pending = list(entries)
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            for relative in imports.findall(current.read_text(encoding="utf-8")):
+                target = Path(
+                    os.path.normpath(current.parent / relative)
+                )
+                self.assertTrue(target.is_file(), f"{current} imports {target}")
+                pending.append(target)
+        self.assertGreater(len(seen), len(entries))
+        for path in sorted(seen):
+            with self.subTest(path=path.as_posix()):
+                for pull_request in (True, False):
+                    self.assertTrue(
+                        classify(
+                            self.workspace,
+                            (path.as_posix(),),
+                            pull_request=pull_request,
+                        )["docs_archives"]
+                    )
+        # check-llms reads this module's source text rather than importing it.
+        self.assertTrue(
+            classify(self.workspace, ("docs/site/src/lib/page-markdown.ts",))[
+                "docs_archives"
+            ]
+        )
+
+
 class RunCargoPackagesTest(unittest.TestCase):
     def test_builds_a_direct_cargo_argument_vector(self) -> None:
         packages = package_args('["registry-relay-v2","registry-evidence"]')
@@ -2161,8 +2579,6 @@ class RunCargoPackagesTest(unittest.TestCase):
                 "cargo",
                 "test",
                 "--locked",
-                "--profile",
-                "ci",
                 "-p",
                 "registry-relay-v2",
                 "-p",

@@ -214,11 +214,11 @@ class BRegProductCatalogTests(unittest.TestCase):
     ) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
         pilot = (
-            "cargo test --locked -p registry-breg --features postgres-test "
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
             "--test postgres_pilot_acceptance"
         )
         rhai = (
-            "cargo test --locked -p registry-breg --features postgres-test "
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
             "--test postgres_rhai_planner"
         )
         self.assertEqual(commands.index(pilot) + 1, commands.index(rhai))
@@ -228,11 +228,11 @@ class BRegProductCatalogTests(unittest.TestCase):
     ) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
         partial_unique = (
-            "cargo test --locked -p registry-breg --features postgres-test "
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
             "--test postgres_partial_unique"
         )
         constraint_races = (
-            "cargo test --locked -p registry-breg --features postgres-test "
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
             "--test postgres_constraint_races"
         )
         self.assertEqual(
@@ -244,9 +244,9 @@ class BRegProductCatalogTests(unittest.TestCase):
         self,
     ) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
-        package = "cargo test --locked -p registry-breg --features postgres-test,tooling --test postgres_package"
+        package = "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_package"
         migration = (
-            "cargo test --locked -p registry-breg --features postgres-test,tooling "
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
             "--test postgres_migration"
         )
         self.assertEqual(commands.index(package) + 1, commands.index(migration))
@@ -254,11 +254,11 @@ class BRegProductCatalogTests(unittest.TestCase):
     def test_postgres_webhook_outbox_follows_mutation_in_the_owned_gate(self) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
         immediate_activation = (
-            "cargo test --locked -p registry-breg --features postgres-test,tooling "
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
             "--test postgres_immediate_action_activation"
         )
         webhook_outbox = (
-            "cargo test --locked -p registry-breg --features postgres-test "
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
             "--test postgres_webhook_outbox"
         )
         self.assertEqual(
@@ -269,25 +269,25 @@ class BRegProductCatalogTests(unittest.TestCase):
         self,
     ) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
-        mutation = "cargo test --locked -p registry-breg --features postgres-test --test postgres_mutation"
+        mutation = "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_mutation"
         mutation_logical_names = (
-            "cargo test --locked -p registry-breg --features postgres-test "
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
             "--test postgres_mutation_logical_names"
         )
         immediate_actions = (
-            "cargo test --locked -p registry-breg --features postgres-test "
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
             "--test postgres_immediate_actions"
         )
         immediate_examples = (
-            "cargo test --locked -p registry-breg --features postgres-test,tooling "
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
             "--test postgres_immediate_action_examples"
         )
         immediate_activation = (
-            "cargo test --locked -p registry-breg --features postgres-test,tooling "
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
             "--test postgres_immediate_action_activation"
         )
         webhook_outbox = (
-            "cargo test --locked -p registry-breg --features postgres-test "
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
             "--test postgres_webhook_outbox"
         )
         self.assertEqual(
@@ -312,11 +312,11 @@ class BRegProductCatalogTests(unittest.TestCase):
     ) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
         webhook_outbox = (
-            "cargo test --locked -p registry-breg --features postgres-test "
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
             "--test postgres_webhook_outbox"
         )
         webhook_delivery = (
-            "cargo test --locked -p registry-breg --features postgres-test "
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
             "--test postgres_webhook_delivery"
         )
         self.assertEqual(
@@ -325,13 +325,13 @@ class BRegProductCatalogTests(unittest.TestCase):
 
     def test_postgres_data_journeys_follow_batch_in_the_owned_gate(self) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
-        batch = "cargo test --locked -p registry-breg --features postgres-test --test postgres_batch"
+        batch = "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_batch"
         facility = (
-            "cargo test --locked -p registry-breg --features postgres-test "
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
             "--test postgres_data_facility"
         )
         export = (
-            "cargo test --locked -p registry-breg --features postgres-test "
+            "cargo test --locked -p registry-breg --features postgres-test,tooling,schema "
             "--test postgres_data_export"
         )
         self.assertEqual(commands.index(batch) + 1, commands.index(facility))

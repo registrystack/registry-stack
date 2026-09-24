@@ -45,6 +45,7 @@ jobs:
   changes:
     name: Changed paths
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     outputs:
       archive_base_ref: ${{ steps.filter.outputs.archive_base_ref }}
       archive_comparison_required: ${{ steps.filter.outputs.archive_comparison_required }}
@@ -52,6 +53,7 @@ jobs:
       rust_matrix: ${{ steps.filter.outputs.rust_matrix }}
       rust_packages: ${{ steps.filter.outputs.rust_packages }}
       platform: ${{ steps.filter.outputs.platform }}
+      platform_assurance: ${{ steps.filter.outputs.platform_assurance }}
       platform_hygiene: ${{ steps.filter.outputs.platform_hygiene }}
       discovery_contracts: ${{ steps.filter.outputs.discovery_contracts }}
       relay_v2_contracts: ${{ steps.filter.outputs.relay_v2_contracts }}
@@ -153,6 +155,7 @@ jobs:
   secrets:
     name: Secret scan
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -187,6 +190,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -208,8 +212,9 @@ jobs:
     needs:
       - changes
       - rust-policy
-    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.platform == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.platform_assurance == 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -262,6 +267,7 @@ jobs:
       - platform-coverage
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       actions: read
       contents: read
@@ -289,6 +295,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.platform_hygiene == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -304,7 +311,7 @@ jobs:
     needs:
       - changes
       - rust-policy
-    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.platform == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.platform_assurance == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
@@ -362,6 +369,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -465,7 +473,7 @@ jobs:
       - name: Validate Manifest profiles
         if: matrix.name == 'manifest'
         working-directory: products/manifest
-        run: cargo run --locked --profile ci -p registry-manifest-cli -- validate-profiles profiles
+        run: cargo run --locked -p registry-manifest-cli -- validate-profiles profiles
 
       - name: Report disk usage
         if: always()
@@ -653,15 +661,15 @@ jobs:
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build the Casework authoring tool
-        run: cargo build --locked --profile ci -p registry-caseworkctl
+        run: cargo build --locked -p registry-caseworkctl
       - name: Verify Casework product contracts and offline authoring journeys
         env:
-          CASEWORKCTL_BIN: ${{ github.workspace }}/target/ci/caseworkctl
+          CASEWORKCTL_BIN: ${{ github.workspace }}/target/debug/caseworkctl
         run: products/casework/scripts/check-checkpoint.sh
       - name: Verify claims, reconciliation, and durable attempts
         env:
           CASEWORK_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
-        run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test postgres_transactions
+        run: cargo test --locked -p registry-casework --features postgres-test --test postgres_transactions
       - name: Verify caseworkctl db migrate reports a migration refusal
         # An inexact name filter that selects nothing still exits 0, so the
         # step names the test exactly and fails unless it reports one pass.
@@ -670,7 +678,7 @@ jobs:
           CASEWORK_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
         run: |
           set -euo pipefail
-          cargo test --locked --profile ci -p registry-caseworkctl --features postgres-test --lib \
+          cargo test --locked -p registry-caseworkctl --features postgres-test --lib \
             -- --exact cli_contract_tests::db_migrate_reports_a_schema_newer_than_this_binary_with_its_own_refusal \
             | tee "${RUNNER_TEMP}/caseworkctl-migrate.log"
           grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/caseworkctl-migrate.log"
@@ -681,7 +689,7 @@ jobs:
       - name: Verify caller visibility and bounded source reads
         env:
           CASEWORK_VISIBILITY_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_visibility
-        run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test service_visibility
+        run: cargo test --locked -p registry-casework --features postgres-test --test service_visibility
       - name: Create isolated Casework test databases
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
@@ -695,7 +703,7 @@ jobs:
         env:
           CASEWORK_ASSIGNMENT_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_review
           CASEWORK_ROUTING_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_review
-        run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres
+        run: cargo test --locked -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres
       - name: Verify persisted source clocks, restart, and recompute
         # An inexact name filter that selects nothing still exits 0, so the
         # step names the test exactly and fails unless it reports one pass.
@@ -704,24 +712,24 @@ jobs:
           CASEWORK_CLOCK_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_clocks
         run: |
           set -euo pipefail
-          cargo test --locked --profile ci -p registry-casework --features postgres-test --lib \
+          cargo test --locked -p registry-casework --features postgres-test --lib \
             -- --exact clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget \
             | tee "${RUNNER_TEMP}/casework-clocks.log"
           grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/casework-clocks.log"
       - name: Verify effective-due inbox ordering and exact source selection
         env:
           CASEWORK_INBOX_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_inbox_ordering
-        run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test inbox_ordering_postgres
+        run: cargo test --locked -p registry-casework --features postgres-test --test inbox_ordering_postgres
       - name: Verify source erasure, replay authority, and restart
         env:
           CASEWORK_SOURCE_RETENTION_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_source_retention
-        run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test source_retention_postgres
+        run: cargo test --locked -p registry-casework --features postgres-test --test source_retention_postgres
       - name: Verify governed review persistence, HTTP, and source integration
         env:
           CASEWORK_REVIEW_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_review
           BREG_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_review
         run: >-
-          cargo test --locked --profile ci -p registry-casework --features postgres-test
+          cargo test --locked -p registry-casework --features postgres-test
           --test review_postgres
           --test review_http
           --test review_payment_fixture_postgres
@@ -729,7 +737,30 @@ jobs:
       - name: Verify governed review schema upgrades
         env:
           CASEWORK_REVIEW_MIGRATION_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_review_migration
-        run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test review_migration_postgres
+        run: cargo test --locked -p registry-casework --features postgres-test --test review_migration_postgres
+      - name: Create isolated task approval database
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_task_approval
+      - name: Casework task approval through stock issuer to Evidence, BReg, and Scheduling
+        shell: bash
+        env:
+          CASEWORK_ASSIGNMENT_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_task_approval
+          BREG_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_task_approval
+        run: |
+          set -euo pipefail
+          cargo build --locked -p registry-scheduling \
+            --example scheduling-auth-probe
+          SCHEDULING_AUTH_PROBE_BIN="${GITHUB_WORKSPACE}/target/debug/examples/scheduling-auth-probe" \
+            cargo test --locked -p registry-casework \
+              --features postgres-test --lib \
+              approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid \
+              -- --ignored
+          cargo build --locked -p registry-casework -p registry-caseworkctl
+          cargo test --locked -p registry-casework \
+            --features postgres-test --lib \
+            source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer \
+            -- --ignored
 
   scheduling-contracts:
     name: Scheduling product contracts
@@ -787,15 +818,15 @@ jobs:
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build the Scheduling authoring tool
-        run: cargo build --locked --profile ci -p registry-schedulingctl
+        run: cargo build --locked -p registry-schedulingctl
       - name: Verify Scheduling product contracts and offline authoring journeys
         env:
-          SCHEDULINGCTL_BIN: ${{ github.workspace }}/target/ci/schedulingctl
+          SCHEDULINGCTL_BIN: ${{ github.workspace }}/target/debug/schedulingctl
         run: products/scheduling/scripts/check-checkpoint.sh
       - name: Verify commitment ledger transactions
         env:
           SCHEDULING_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/scheduling
-        run: cargo test --locked --profile ci -p registry-scheduling --features postgres-test --test postgres_commitments
+        run: cargo test --locked -p registry-scheduling --features postgres-test --test postgres_commitments
       - name: Create isolated authoring-apply test database
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
@@ -803,7 +834,7 @@ jobs:
       - name: Verify offline authoring record application
         env:
           SCHEDULING_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/scheduling_records_apply
-        run: cargo test --locked --profile ci -p registry-schedulingctl --features postgres-test --test records_apply_postgres
+        run: cargo test --locked -p registry-schedulingctl --features postgres-test --test records_apply_postgres
       - name: Create isolated delivery-intent test database
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
@@ -811,7 +842,7 @@ jobs:
       - name: Verify undelivered delivery intent reads
         env:
           SCHEDULING_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/scheduling_intents
-        run: cargo test --locked --profile ci -p registry-schedulingctl --features postgres-test --test intents_postgres
+        run: cargo test --locked -p registry-schedulingctl --features postgres-test --test intents_postgres
 
   breg-contracts:
     name: Base Registry Engine product contracts (${{ matrix.lane }})
@@ -888,25 +919,6 @@ jobs:
           BREG_POSTGRES_LANE: ${{ matrix.lane }}
         run: products/breg/scripts/test-postgres.sh --lane "$BREG_POSTGRES_LANE"
 
-      - name: Casework task approval through stock issuer to Evidence, BReg, and Scheduling
-        if: matrix.lane == 'postgres'
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo build --locked --profile ci -p registry-scheduling \
-            --example scheduling-auth-probe
-          SCHEDULING_AUTH_PROBE_BIN="${GITHUB_WORKSPACE}/target/ci/examples/scheduling-auth-probe" \
-          CASEWORK_ASSIGNMENT_TEST_DATABASE_URL="${BREG_TEST_DATABASE_URL}" \
-            cargo test --locked --profile ci -p registry-casework \
-              --features postgres-test --lib \
-              approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid \
-              -- --ignored
-          cargo build --locked --profile ci -p registry-casework -p registry-caseworkctl
-          cargo test --locked --profile ci -p registry-casework \
-            --features postgres-test --lib \
-            source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer \
-            -- --ignored
-
       - name: Base Registry Engine PostgreSQL TLS proof
         if: matrix.lane == 'contracts'
         run: products/breg/scripts/test-postgres-tls.sh
@@ -916,7 +928,7 @@ jobs:
         env:
           BREG_TEST_DATABASE_URL: ${{ env.BREG_TEST_TLS_DATABASE_URL }}
           SSL_CERT_FILE: ${{ env.BREG_TEST_TLS_CA_PEM_PATH }}
-        run: cargo test --locked --profile ci -p registry-bregctl --features wasm --test wasm_test_lifecycle -- --ignored --exact
+        run: cargo test --locked -p registry-bregctl --features wasm --test wasm_test_lifecycle -- --ignored --exact
 
       - name: Base Registry Engine S3 attachment lifecycle
         if: matrix.lane == 'postgres'
@@ -982,21 +994,21 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Platform WASM executor wat suite
-        run: cargo test --locked --profile ci -p registry-platform-script --features wasm --test wasm_executor_wat
+        run: cargo test --locked -p registry-platform-script --features wasm --test wasm_executor_wat
 
       - name: Base Registry Engine WASM admission, runtime, and parity suites
-        run: cargo test --locked --profile ci -p registry-breg --features runtime,wasm --lib --test wasm_handler_admission
+        run: cargo test --locked -p registry-breg --features runtime,wasm --lib --test wasm_handler_admission
 
       - name: Base Registry Engine WASM refusal suite
-        run: cargo test --locked --profile ci -p registry-breg --no-default-features --features runtime,tooling --test immediate_action_compiler
+        run: cargo test --locked -p registry-breg --no-default-features --features runtime,tooling --test immediate_action_compiler
 
       - name: Base Registry Engine tooling WASM suites
-        run: cargo test --locked --profile ci -p registry-bregctl --features wasm
+        run: cargo test --locked -p registry-bregctl --features wasm
 
       - name: Base Registry Engine WASM handler PostgreSQL journeys
         env:
           BREG_TEST_DATABASE_URL: postgresql://breg:breg_test@localhost:${{ job.services.postgres.ports['5432'] }}/breg
-        run: cargo test --locked --profile ci -p registry-breg --features postgres-test,tooling,wasm --test postgres_wasm_action_handlers
+        run: cargo test --locked -p registry-breg --features postgres-test,tooling,wasm --test postgres_wasm_action_handlers
 
   identifiers:
     name: Public identifier catalog
@@ -1045,6 +1057,7 @@ jobs:
       - scheduling-postgres
       - scheduling-contracts
     runs-on: ubuntu-slim
+    timeout-minutes: 5
     env:
       RUST_JOB_RESULTS: ${{ toJSON(needs) }}
     steps:
@@ -1074,6 +1087,7 @@ jobs:
       - rust-policy
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.release_tool == 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -1210,6 +1224,7 @@ jobs:
       - release-tool
     if: ${{ always() }}
     runs-on: ubuntu-slim
+    timeout-minutes: 5
     steps:
       - name: Report path-gated result
         env:
@@ -1235,6 +1250,7 @@ jobs:
       - rust-policy
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.release_source_proof == 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -1257,6 +1273,7 @@ jobs:
       - release-source-proof
     if: ${{ always() }}
     runs-on: ubuntu-slim
+    timeout-minutes: 5
     steps:
       - name: Report path-gated result
         env:
@@ -1320,19 +1337,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CARGO_TARGET_DIR="target/evidence-tutorial-source" \
-            cargo build --locked --profile ci \
+          cargo build --locked \
             -p registry-evidence -p registry-evidencectl \
             -p registry-evidence-oid4vci
-          CARGO_TARGET_DIR="target/evidence-tutorial-source" \
-            cargo test --locked --profile ci \
+          cargo test --locked \
             -p registry-evidence-oid4vci --test inji_interoperability --no-run
-          test_binary=$(find target/evidence-tutorial-source/ci/deps \
+          test_binary=$(find target/debug/deps \
             -maxdepth 1 -type f -perm -111 -name 'inji_interoperability-*' \
             -printf '%T@ %p\n' | sort -nr | sed -n '1s/^[^ ]* //p')
           [[ -n "$test_binary" ]]
           cp "$test_binary" \
-            target/evidence-tutorial-source/ci/inji-oid4vci-interop-test
+            target/debug/inji-oid4vci-interop-test
 
       - name: Assemble the client package the application tutorial imports
         shell: bash
@@ -1378,21 +1393,20 @@ jobs:
       - name: Test the exact local Evidence lifecycle
         shell: bash
         env:
-          EVIDENCE_BIN: ${{ github.workspace }}/target/evidence-tutorial-source/ci/evidence
+          EVIDENCE_BIN: ${{ github.workspace }}/target/debug/evidence
         run: |
           set -euo pipefail
-          CARGO_TARGET_DIR="target/evidence-tutorial-source" \
-            cargo test --locked --profile ci \
+          cargo test --locked \
             -p registry-evidencectl --test dev_lifecycle -- \
             --ignored --test-threads=1
 
       - name: Execute the Evidence tutorials with the stock issuer
         shell: bash
         env:
-          EVIDENCE_BIN: ${{ github.workspace }}/target/evidence-tutorial-source/ci/evidence
-          EVIDENCECTL_BIN: ${{ github.workspace }}/target/evidence-tutorial-source/ci/evidencectl
-          EVIDENCE_OID4VCI_BIN: ${{ github.workspace }}/target/evidence-tutorial-source/ci/evidence-oid4vci
-          EVIDENCE_OID4VCI_INTEROP_TEST_BIN: ${{ github.workspace }}/target/evidence-tutorial-source/ci/inji-oid4vci-interop-test
+          EVIDENCE_BIN: ${{ github.workspace }}/target/debug/evidence
+          EVIDENCECTL_BIN: ${{ github.workspace }}/target/debug/evidencectl
+          EVIDENCE_OID4VCI_BIN: ${{ github.workspace }}/target/debug/evidence-oid4vci
+          EVIDENCE_OID4VCI_INTEROP_TEST_BIN: ${{ github.workspace }}/target/debug/inji-oid4vci-interop-test
         run: |
           set -euo pipefail
           REGISTRY_CLIENT_PY_WHEEL="${GITHUB_WORKSPACE}/${TUTORIAL_CLIENT_WHEEL#/work/}" \
@@ -1444,8 +1458,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CARGO_TARGET_DIR="target/breg-tutorial-source" \
-            cargo build --locked --profile ci \
+          cargo build --locked \
             -p registry-breg --features registry-breg/runtime \
             -p registry-bregctl --bins
 
@@ -1455,35 +1468,33 @@ jobs:
           set -euo pipefail
           # Each retained lifecycle owns PostgreSQL, ThunderID and BREG.
           # Run complete sessions serially on the bounded CI runner.
-          CARGO_TARGET_DIR="target/breg-tutorial-source" \
-            cargo test --locked --profile ci -p registry-bregctl \
+          cargo test --locked -p registry-bregctl \
             --test dev_lifecycle -- --ignored --test-threads=1
 
       - name: Verify authored request attachment lifecycle
         run: >-
           python3 products/breg/scripts/test-request-attachments.py
-          --bin-dir target/breg-tutorial-source/ci
+          --bin-dir target/debug
 
       - name: Verify asynchronous attachment quarantine lifecycle
         run: >-
           uv run --no-project --with PyYAML==6.0.2
           python3 products/breg/scripts/test-request-attachments.py
-          --bin-dir target/breg-tutorial-source/ci --verification
+          --bin-dir target/debug --verification
 
       - name: Verify retained example recovery after process exit
         shell: bash
         run: |
           set -euo pipefail
-          CARGO_TARGET_DIR="target/breg-tutorial-source" \
-            cargo test --locked --profile ci -p registry-bregctl --lib \
+          cargo test --locked -p registry-bregctl --lib \
             dev::examples::tests::native_create_and_apply_recover_after_process_exit_without_duplicate_revisions \
             -- --ignored --exact
 
       - name: Execute the Base Registry Engine tutorial from a reader directory
         shell: bash
         env:
-          BREG_BIN: ${{ github.workspace }}/target/breg-tutorial-source/ci/breg
-          BREGCTL_BIN: ${{ github.workspace }}/target/breg-tutorial-source/ci/bregctl
+          BREG_BIN: ${{ github.workspace }}/target/debug/breg
+          BREGCTL_BIN: ${{ github.workspace }}/target/debug/bregctl
         run: |
           set -euo pipefail
           # This replay does not run in a clean read-only container the way the
@@ -1548,34 +1559,37 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CARGO_TARGET_DIR="target/casework-tutorial-source" \
-            cargo build --locked --profile ci \
+          cargo build --locked \
             -p registry-casework -p registry-caseworkctl \
             -p registry-breg --features registry-breg/runtime \
             -p registry-bregctl --bins
-
-      - name: Verify the retained local development lifecycle
-        shell: bash
-        run: |
-          set -euo pipefail
-          # The retained session owns a PostgreSQL container of its own, so
-          # this test stays in the Docker-backed job. The lifecycle also drives
-          # the unified Node and Python Casework facades; the maintained script
-          # builds those candidate bindings and names them for the test.
-          products/casework/scripts/check-review-journeys.sh
+          # The review examples below run Cargo in this same target directory
+          # with other feature sets, which replaces the binaries in
+          # target/debug. Keep the exact toolset under test apart.
+          mkdir -p target/casework-tutorial-bin
+          cp target/debug/casework target/debug/caseworkctl \
+            target/debug/breg target/debug/bregctl \
+            target/casework-tutorial-bin/
 
       - name: Verify BReg, payment, and standalone review examples
         env:
           CASEWORK_REVIEW_EXAMPLES_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
+          # The examples end with the retained local development lifecycle.
+          # The retained session owns a PostgreSQL container of its own, so
+          # this test stays in the Docker-backed job. The lifecycle also drives
+          # the unified Node and Python Casework facades; the maintained script
+          # builds those candidate bindings and names them for the test.
+          CASEWORK_BIN: ${{ github.workspace }}/target/casework-tutorial-bin/casework
+          CASEWORKCTL_BIN: ${{ github.workspace }}/target/casework-tutorial-bin/caseworkctl
         run: products/casework/scripts/check-review-examples.sh
 
       - name: Execute the Registry Casework tutorial from a reader directory
         shell: bash
         env:
-          CASEWORK_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/casework
-          CASEWORKCTL_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/caseworkctl
-          BREG_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/breg
-          BREGCTL_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/bregctl
+          CASEWORK_BIN: ${{ github.workspace }}/target/casework-tutorial-bin/casework
+          CASEWORKCTL_BIN: ${{ github.workspace }}/target/casework-tutorial-bin/caseworkctl
+          BREG_BIN: ${{ github.workspace }}/target/casework-tutorial-bin/breg
+          BREGCTL_BIN: ${{ github.workspace }}/target/casework-tutorial-bin/bregctl
         run: |
           set -euo pipefail
           # The tutorial passes no port flags, and this runner listens on none
@@ -1624,8 +1638,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CARGO_TARGET_DIR="target/breg-evidence-composition" \
-            cargo build --locked --profile ci \
+          cargo build --locked \
             -p registry-bregctl -p registry-evidence -p registry-evidencectl \
             --bins
 
@@ -1635,9 +1648,9 @@ jobs:
           set -euo pipefail
           uv run --no-project --with PyYAML==6.0.2 python \
             products/breg/evidence/tests/verify-composition.py \
-            --bregctl "$GITHUB_WORKSPACE/target/breg-evidence-composition/ci/bregctl" \
-            --evidencectl "$GITHUB_WORKSPACE/target/breg-evidence-composition/ci/evidencectl" \
-            --evidence "$GITHUB_WORKSPACE/target/breg-evidence-composition/ci/evidence"
+            --bregctl "$GITHUB_WORKSPACE/target/debug/bregctl" \
+            --evidencectl "$GITHUB_WORKSPACE/target/debug/evidencectl" \
+            --evidence "$GITHUB_WORKSPACE/target/debug/evidence"
 
   evidence-anchors:
     # The documentation anchors cite source across the whole workspace, so this check
@@ -1668,6 +1681,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -1721,6 +1735,7 @@ jobs:
       - docs-archives
     if: ${{ always() }}
     runs-on: ubuntu-slim
+    timeout-minutes: 5
     steps:
       - name: Report path-gated result
         env:
@@ -1756,6 +1771,7 @@ jobs:
       - rust-policy
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.docs_archives == 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -1807,6 +1823,7 @@ jobs:
       - rust-policy
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.editors == 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -1846,6 +1863,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.client_bindings == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -1867,6 +1885,13 @@ jobs:
             crates/registry-breg-client-node/package-lock.json
             crates/registry-casework-client-node/package-lock.json
             crates/registry-stack-client-node/package-lock.json
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build and test Node bindings
         shell: bash
@@ -2068,6 +2093,7 @@ jobs:
       - client-bindings
       - release-linux-node-clients
     runs-on: ubuntu-slim
+    timeout-minutes: 5
     env:
       CI_JOB_RESULTS: ${{ toJSON(needs) }}
     steps:

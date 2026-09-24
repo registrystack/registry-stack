@@ -11,7 +11,7 @@ from pathlib import Path
 import subprocess
 from typing import Any
 
-from ci_changes import Workspace, classify, write_github_outputs
+from ci_changes import LockChange, Workspace, classify, lock_change, write_github_outputs
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,12 @@ class EventSelection:
     archive_base_ref: str
     archive_comparison_required: bool
     reason: str
+    # Review defers broad assurance to the merge queue, main and the nightly
+    # sweep; every other event keeps it.
+    pull_request: bool = False
+    # Cargo.lock at the base and head commits when it changed; None marks a
+    # side where it is absent or unreadable, which selects the complete matrix.
+    lock_texts: tuple[str | None, str | None] | None = None
 
 
 def commit_ref(repo: Path, ref: str) -> str:
@@ -31,6 +37,13 @@ def commit_ref(repo: Path, ref: str) -> str:
         cwd=repo, capture_output=True, text=True,
     )
     return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def file_at(repo: Path, commit: str, path: str) -> str | None:
+    result = subprocess.run(
+        ["git", "show", f"{commit}:{path}"], cwd=repo, capture_output=True, text=True,
+    )
+    return result.stdout if result.returncode == 0 else None
 
 
 def select_event(
@@ -75,11 +88,31 @@ def select_event(
     if result.returncode != 0:
         return EventSelection((), True, base_commit, True, "failed event comparison")
     paths = tuple(path for path in result.stdout.split("\0") if path)
-    return EventSelection(paths, False, base_commit, True, "affected event paths")
+    lock_texts = (
+        (file_at(repo, base_commit, "Cargo.lock"), file_at(repo, head_commit, "Cargo.lock"))
+        if "Cargo.lock" in paths
+        else None
+    )
+    return EventSelection(
+        paths, False, base_commit, True, "affected event paths",
+        pull_request=event_name == "pull_request", lock_texts=lock_texts,
+    )
+
+
+def selection_lock_change(
+    workspace: Workspace, selection: EventSelection
+) -> LockChange | None:
+    if selection.lock_texts is None:
+        return None
+    return lock_change(*selection.lock_texts, workspace)
 
 
 def selection_outputs(workspace: Workspace, selection: EventSelection) -> dict[str, Any]:
-    outputs = classify(workspace, selection.paths, full_sweep=selection.full_sweep)
+    outputs = classify(
+        workspace, selection.paths, full_sweep=selection.full_sweep,
+        pull_request=selection.pull_request,
+        lock_change=selection_lock_change(workspace, selection),
+    )
     outputs.update(
         archive_base_ref=selection.archive_base_ref,
         archive_comparison_required=selection.archive_comparison_required,
@@ -94,10 +127,13 @@ def main() -> None:
     args = parser.parse_args()
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
     selection = select_event(Path.cwd(), os.environ["GITHUB_EVENT_NAME"], event, os.environ["GITHUB_SHA"])
-    metadata = json.loads(args.metadata.read_text(encoding="utf-8"))
-    outputs = selection_outputs(Workspace(metadata), selection)
+    workspace = Workspace(json.loads(args.metadata.read_text(encoding="utf-8")))
+    outputs = selection_outputs(workspace, selection)
     write_github_outputs(args.github_output, outputs)
     print(f"CI selection: {selection.reason}; changed paths: {len(selection.paths)}")
+    if (change := selection_lock_change(workspace, selection)) is not None:
+        routed = "complete matrix" if change.members is None else "affected packages"
+        print(f"Cargo.lock selection: {routed}; {change.reason}")
     print(json.dumps(outputs, indent=2, sort_keys=True))
 
 
