@@ -734,6 +734,16 @@ impl SourceAdapter for BregAdapter {
             .map(|entry| &entry.routing_metadata)
     }
 
+    fn caller_disclosure_fields(&self, entity: &str) -> Option<Vec<String>> {
+        self.request_entry(entity).ok().map(|entry| {
+            entry
+                .context_projection
+                .iter()
+                .map(|field| field.api_name.clone())
+                .collect()
+        })
+    }
+
     async fn verify_transition(
         &self,
         request: EventRequest,

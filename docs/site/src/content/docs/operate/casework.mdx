@@ -373,6 +373,45 @@ source ids exactly. The sixth reports a secret provider root the resolver cannot
     crates/registry-casework/src/runtime.rs, serve_from_path() and RuntimeError;
     crates/registry-casework/src/main.rs. */}
 
+## Refuse a package that strands pinned work
+
+A review request pins its kind's policy when it is admitted: the stages, their queues, the
+profiles that decide them, and the display schema reviewers read against. An open work item keeps
+the queue it was routed to. A later package can remove one of those queues or profiles, change a
+kind's content without changing its version, or change a source read so that the pinned display
+schema no longer accepts it. Each of those would leave in-flight work that no team serves, that no
+reviewer can decide, or whose context every reviewer is refused.
+
+After it connects to the database and before it registers any source generation, the runtime
+compares the package it is about to activate with the work the database retains and refuses a
+package that would strand any of it. The refusal names each conflict with its counts, never a
+subject:
+
+```text
+casework: the policy package would strand work pinned under an earlier package: 3 in-flight reviews and 2 open work items are in queue intake, which the package no longer declares. Let that work finish under the earlier package, or set package.acknowledgeStrandedWork to sha256:9b2e… to activate this package anyway
+```
+
+The other conflicts read the same way: an access profile the package no longer declares, a review
+kind version declared with different content, a removed source for source-context reviews, and a
+field a source read would add to, or drop from, what the pinned display schema allows. Give a
+changed review kind a new version rather than editing one that work still pins. Keep the earlier
+package active until the named work finishes; if the work may stay hidden or orphaned, set
+`package.acknowledgeStrandedWork` to the digest the refusal names. The acknowledgement admits only
+that package, so the next package is compared afresh.
+
+To preview the comparison before a restart, point `caseworkctl doctor` at a runtime file whose
+`package.root` holds the next package. Its `pinnedWork` check fails with the same sentence, and its
+report lists the conflicts it found under `pinnedWork.conflicts` with the verdict `clear`,
+`acknowledged`, or `development`. A development-loopback project with no manifest has no digest to
+acknowledge; the runtime logs the conflicts and starts.
+
+{/* Evidence: crates/registry-casework/src/pinned_work.rs, stranded_pinned_work(),
+    pinned_work_verdict(), and stranded_work_refusal();
+    crates/registry-casework/src/runtime.rs, check_pinned_work() and serve_from_path();
+    crates/registry-caseworkctl/src/project.rs, doctor_pinned_work();
+    crates/registry-casework/tests/review_postgres.rs,
+    activation_preflight_counts_in_flight_reviews_a_package_would_strand(). */}
+
 ## Migrate and serve
 
 Apply the migrations with the migration credential, from the operator host:
@@ -610,7 +649,9 @@ caseworkctl doctor --runtime-config /etc/registry-casework/runtime.yaml
 
 It checks the configuration, the exact imported source descriptions, each source connection and its
 reader grants, that the audit destination is writable by the user running it, the database and its
-schema version, the OIDC issuer, directory readiness, and each source's reconciliation health, and it
+schema version, the in-flight work the package would strand (see
+[Refuse a package that strands pinned work](#refuse-a-package-that-strands-pinned-work)), the OIDC
+issuer, directory readiness, and each source's reconciliation health, and it
 stops at the first one that refuses. A refusal carries the code `casework.doctor.check-failed`,
 names the check in its `path` (for example `doctor:/checks/database`), says what failed, and
 suggests the next step. It never echoes a connection string or a source response. Run it as the
@@ -699,6 +740,7 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | `caseworkctl doctor` stops at `the Casework audit destination is not writable by this user` | Run `doctor` as the runtime user, and fix the audit directory's owner and mode, or the audit file's, as the message names. |
 | `GET /ready` returns `503` while `GET /health` returns `200` | The audit writer stopped, PostgreSQL is failing, or a source's reconciliation is failing. Run `caseworkctl doctor`, which names the check, then read the runtime log for `audit file write failed` or the reconciliation entry, and check the audit file, its lock, the free space, and the database. |
 | `doctor` refuses at `doctor:/checks/reconciliation` | The named source's last passes failed. `source-unavailable` means the source did not answer; `source-refused` means it answered with a refusal or a response Casework cannot use; `store` and `configuration` point at the database and the binding. Repair the cause; the next pass that succeeds restores readiness. |
+| `doctor` refuses at `doctor:/checks/pinnedWork`, or startup refuses with `would strand work pinned under an earlier package` | The package removes a queue, profile, or source that in-flight work still needs, edits a pinned review kind without a new version, or changes what a source read discloses. Keep the earlier package until that work finishes, or set `package.acknowledgeStrandedWork` to the digest the refusal names. |
 | `profile.not-human` on a token you believe is human | The issuer did not add the configured human-identity claim to that session. Check the claim name and value against the issuer's mapping for interactive sessions. |
 | Work items report a source outage | The bound source is unreachable or refusing the reader. Run `caseworkctl doctor`, which names the failing source, read the runtime log's `Casework source reader request to BReg failed` entry for the cause, then check that binding's base URL, token endpoint, and reader grants. |
 
