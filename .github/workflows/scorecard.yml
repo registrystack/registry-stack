@@ -28,3 +28,7 @@ jobs:
           results_file: scorecard-results.sarif
           results_format: sarif
           publish_results: true
+          # Fine-grained PAT (Administration: read-only). With only
+          # GITHUB_TOKEN, Scorecard cannot query check suites and falls back
+          # to the first page of check runs, which misses CodeQL on our PRs.
+          repo_token: ${{ secrets.SCORECARD_TOKEN }}
