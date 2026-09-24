@@ -22,6 +22,12 @@ The two services are separate processes with separate configuration and
 separate credentials. No single process ever holds both prepare authority
 and submit authority.
 
+Adopter documentation lives on the docs site:
+
+- [Run a citizen chat assistant locally](../../docs/site/src/content/docs/tutorials/first-citizen-mcp.mdx)
+- [Configure the citizen chat assistant](../../docs/site/src/content/docs/configure/breg-mcp.mdx)
+- [Operate the citizen chat assistant](../../docs/site/src/content/docs/operate/breg-mcp.mdx)
+
 ## Journey
 
 ```text
