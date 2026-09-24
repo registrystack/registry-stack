@@ -653,10 +653,11 @@ jobs:
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build the Casework authoring tool
-        run: cargo build --locked --profile ci -p registry-caseworkctl
+        run: cargo build --locked --profile ci -p registry-caseworkctl -p registry-bregctl
       - name: Verify Casework product contracts and offline authoring journeys
         env:
           CASEWORKCTL_BIN: ${{ github.workspace }}/target/ci/caseworkctl
+          BREGCTL_BIN: ${{ github.workspace }}/target/ci/bregctl
         run: products/casework/scripts/check-checkpoint.sh
       - name: Verify claims, reconciliation, and durable attempts
         env:

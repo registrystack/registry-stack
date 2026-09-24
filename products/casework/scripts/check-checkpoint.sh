@@ -9,6 +9,13 @@ if [ -z "${CASEWORKCTL_BIN:-}" ]; then
 else
   caseworkctl_bin=$CASEWORKCTL_BIN
 fi
+prepare_bregctl_runtime=0
+if [ -z "${BREGCTL_BIN:-}" ]; then
+  bregctl_bin="$repo_root/target/debug/bregctl"
+  prepare_bregctl_runtime=1
+else
+  bregctl_bin=$BREGCTL_BIN
+fi
 . "$repo_root/scripts/cargo-runtime-library-path.sh"
 
 cd "$repo_root"
@@ -22,8 +29,12 @@ if [ ! -x "$caseworkctl_bin" ]; then
   echo "build caseworkctl first or set CASEWORKCTL_BIN" >&2
   exit 2
 fi
-if [ "$prepare_caseworkctl_runtime" -eq 1 ]; then
-  registry_prepare_cargo_runtime "$repo_root" --locked -p registry-caseworkctl
+if [ ! -x "$bregctl_bin" ]; then
+  echo "build bregctl first or set BREGCTL_BIN" >&2
+  exit 2
+fi
+if [ "$prepare_caseworkctl_runtime" -eq 1 ] || [ "$prepare_bregctl_runtime" -eq 1 ]; then
+  registry_prepare_cargo_runtime "$repo_root" --locked -p registry-caseworkctl -p registry-bregctl
 fi
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/casework-checkpoint.XXXXXX")
@@ -76,4 +87,24 @@ if dry_run["policyDigest"] != packaged["policyDigest"]:
 if dry_run["files"] != packaged["files"]:
     sys.exit("dry-run files do not match the written package's files")
 PY
+
+# A two-entity BReg pairing: `source add` must give each paired request
+# entity its own lifecycle hook (`casework-lifecycle-v1-<entity>`), since BReg
+# hook identifiers are unique across a registry. If both entities shared one
+# bare hook id, the pairing regresses and applying it leaves a registry
+# `bregctl check` refuses with `event.id.registry_duplicate`.
+source_add_registry="$work/source-add-registry"
+mkdir -p "$source_add_registry"
+cp "$repo_root/products/breg/starters/public-organizations/core/registry.yaml" \
+  "$source_add_registry/registry.yaml"
+source_add_registry=$(CDPATH= cd -- "$source_add_registry" && pwd -P)
+source_add_project="$work/source-add-casework"
+mkdir -p "$source_add_project"
+cp "$repo_root/products/casework/fixtures/source-add-public-organizations/casework.yaml" \
+  "$source_add_project/casework.yaml"
+"$caseworkctl_bin" source add "$source_add_registry" \
+  --project "$source_add_project" --source-id public-organizations --apply \
+  --bregctl-bin "$bregctl_bin" >/dev/null
+"$bregctl_bin" check "$source_add_registry" >/dev/null
+
 echo "Casework product contracts and offline authoring journey passed."

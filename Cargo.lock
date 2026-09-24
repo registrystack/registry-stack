@@ -5154,7 +5154,6 @@ dependencies = [
  "p256",
  "rcgen",
  "regex",
- "registry-bregctl",
  "registry-casework",
  "registry-casework-breg",
  "registry-casework-core",
