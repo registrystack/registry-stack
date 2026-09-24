@@ -2047,6 +2047,18 @@ pub async fn reconcile_result(
     if persisted != 1 {
         return Err(MutationError::PreconditionFailed);
     }
+    // The recorded result settles the review, so an error an earlier lookup
+    // or delivery left on the submission no longer calls for operator
+    // attention. A later failure on this row records its own code again.
+    transaction
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET last_error_code=NULL,updated_at=transaction_timestamp()
+              WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3",
+            &[&entity_id, &request_id, &version],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
     transaction
         .execute(
             "UPDATE registry_internal.registry_request_review_completions
@@ -3590,6 +3602,139 @@ mod tests {
                 json!("ready"),
                 "read_projection must agree with settled_outcome about the same approval"
             );
+        }
+
+        #[tokio::test]
+        async fn a_reconciled_result_clears_the_lookup_failure_it_outlived_from_the_projection() {
+            let mut database = TestDatabase::create(2).await;
+            database
+                .admin
+                .batch_execute(
+                    "CREATE TABLE registry_internal.registry_request_proposals (
+                         request_entity_id text NOT NULL,
+                         request_id uuid NOT NULL,
+                         proposal_version bigint NOT NULL,
+                         PRIMARY KEY (request_entity_id,request_id,proposal_version)
+                     );",
+                )
+                .await
+                .expect("proposal parent table");
+            install_review_storage_for_test(&database.admin, &database.runtime_role)
+                .await
+                .expect("review storage");
+
+            let request_entity_id = "requests";
+            let request_id = Uuid::new_v4();
+            let digest = registry_review_client::ContentDigest::parse(DIGEST).expect("digest");
+            let accepted = ReviewRequestAccepted {
+                request_id: Uuid::new_v4(),
+                subject: SubjectBinding {
+                    source: "registry-a".to_owned(),
+                    subject_type: "change-request".to_owned(),
+                    id: request_id.to_string(),
+                    version: "1".to_owned(),
+                    digest: digest.clone(),
+                },
+                policy: registry_review_client::PolicyBinding {
+                    id: "request-review".to_owned(),
+                    version: "1".to_owned(),
+                    digest: digest.clone(),
+                },
+                submission_digest: digest,
+            };
+            database
+                .admin
+                .execute(
+                    "INSERT INTO registry_internal.registry_request_proposals VALUES ($1,$2,1)",
+                    &[&request_entity_id, &request_id],
+                )
+                .await
+                .expect("proposal");
+            database
+                .admin
+                .execute(
+                    "INSERT INTO registry_internal.registry_request_review_submissions
+                 (request_entity_id,request_id,proposal_version,proposal_digest,job_id,authority,
+                  producer_id,policy_id,idempotency_key,create_request,expected_submission_digest,
+                  on_approved_mode,executor,state,accepted_binding)
+                 VALUES ($1,$2,1,$3,$4,'casework-main','registry-producer','request-review',
+                         'submission-key','{}'::jsonb,$3::text,'manual',NULL,'accepted',$5)",
+                    &[
+                        &request_entity_id,
+                        &request_id,
+                        &DIGEST,
+                        &Uuid::new_v4(),
+                        &serde_json::to_value(&accepted).expect("accepted binding"),
+                    ],
+                )
+                .await
+                .expect("submission");
+            let workflow = required_review_proposal();
+            let proposal = workflow.current_proposal().expect("frozen proposal");
+
+            // One result lookup fails at the transport layer.
+            let unreachable = ReviewClient::new(registry_review_client::ReviewClientConfig::new(
+                "http://127.0.0.1:9/".parse().expect("unroutable endpoint"),
+            ))
+            .expect("review client");
+            assert!(matches!(
+                poll_one_result(
+                    &mut database.admin,
+                    "casework-main",
+                    &unreachable,
+                    "producer-profile",
+                    &BearerToken::new("token").expect("token"),
+                    30,
+                )
+                .await,
+                Err(MutationError::Unavailable)
+            ));
+            let transaction = database.admin.transaction().await.expect("transaction");
+            let failed =
+                read_projection(&transaction, request_entity_id, request_id, proposal, true)
+                    .await
+                    .expect("projection query")
+                    .expect("projection row");
+            assert_eq!(
+                failed["recovery"],
+                json!({"state":"operatorAttention","code":"result-lookup-uncertain"})
+            );
+            transaction.rollback().await.expect("rollback");
+
+            // A later delivery reconciles the terminal result.
+            let result = ReviewResult {
+                result_id: Uuid::new_v4(),
+                request_id: accepted.request_id,
+                subject: accepted.subject.clone(),
+                policy: accepted.policy.clone(),
+                submission_digest: accepted.submission_digest.clone(),
+                status: registry_review_client::ReviewResultStatus::Approved,
+                outcome: None,
+                result: None,
+                completed_at: Utc::now(),
+                available_until: Utc::now() + chrono::Duration::days(1),
+            };
+            let transaction = database.admin.transaction().await.expect("transaction");
+            reconcile_result(&transaction, "casework-main", &accepted, &result)
+                .await
+                .expect("reconcile the result");
+            transaction.commit().await.expect("commit");
+
+            let transaction = database.admin.transaction().await.expect("transaction");
+            let settled =
+                read_projection(&transaction, request_entity_id, request_id, proposal, true)
+                    .await
+                    .expect("projection query")
+                    .expect("projection row");
+            assert_eq!(settled["result"]["state"], json!("approved"));
+            assert_eq!(
+                settled["recovery"],
+                json!({"state":"none"}),
+                "a settled review must not keep asking the operator to act on a lookup \
+                 failure its reconciled result outlived"
+            );
+            transaction.rollback().await.expect("rollback");
+            database.cleanup().await;
         }
     }
 }

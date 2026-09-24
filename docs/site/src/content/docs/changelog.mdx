@@ -18,6 +18,15 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- BReg clears a submission's recorded error when it reconciles the terminal
+  review result, so the review projection of a settled review reports
+  `recovery.state: none` instead of `operatorAttention` for a result lookup
+  that failed before the result arrived. See
+  [operate Base Registry Engine](../operate/breg/).
+
+{/* Evidence: crates/registry-breg/src/review_store.rs, reconcile_result and read_projection;
+    crates/registry-breg/src/review_store.rs, a_reconciled_result_clears_the_lookup_failure_it_outlived_from_the_projection. */}
+
 - BREAKING: Base Registry Engine (BReg) drops the `superseded` change-request
   state, which no transition ever wrote. A request is `draft`, `submitted`, `cancelled`, or
   `applied`; the `bregState` enum in generated OpenAPI and the Rust, Node.js,
