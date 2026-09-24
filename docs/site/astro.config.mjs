@@ -67,6 +67,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
   const hasCasework = Boolean(selectedDocset.products?.['registry-casework']);
   const hasScheduling = Boolean(selectedDocset.products?.['registry-scheduling']);
   const hasRender = Boolean(selectedDocset.products?.['registry-render']);
+  const hasMessaging = Boolean(selectedDocset.products?.['registry-messaging']);
   const currentDocset = docsets.docsets.find((entry) => entry.id === docsets.current);
   if (!currentDocset) throw new Error(`current docs docset "${docsets.current}" not found`);
   /** @param {string} path */
@@ -87,6 +88,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
     hasCasework,
     hasScheduling,
     hasRender,
+    hasMessaging,
     internalRedirect,
     currentDocsetRedirect,
   };
@@ -101,6 +103,7 @@ const {
   hasCasework,
   hasScheduling,
   hasRender,
+  hasMessaging,
   internalRedirect,
   currentDocsetRedirect,
 } = resolveDocsetBuildContext(docsetsManifest);
@@ -587,6 +590,13 @@ export default defineConfig({
             { label: 'Render your first document', slug: 'tutorials/first-render-document' },
             { label: 'How Render stays byte-stable', slug: 'explanation/render-determinism' },
             { label: 'Run serve mode', slug: 'operate/registry-render' },
+          ],
+        }] : []),
+        ...(hasMessaging ? [{
+          label: 'Registry Messaging',
+          collapsed: true,
+          items: [
+            { label: 'Overview', slug: 'start/messaging' },
           ],
         }] : []),
         {

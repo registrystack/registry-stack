@@ -63,6 +63,9 @@ docsets:
       registry-render:
         version: v0.34.0
         ref: v0.34.0
+      registry-messaging:
+        version: main source (unreleased)
+        ref: HEAD
   - id: v0.33.0
     label: v0.33.0
     path: /v/0.33.0/

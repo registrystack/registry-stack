@@ -90,6 +90,7 @@ const sidebarFactory = new Function(
   'hasCasework',
   'hasScheduling',
   'hasRender',
+  'hasMessaging',
   `return [${sidebarSource}];`,
 );
 const sidebarArguments = [
@@ -102,7 +103,7 @@ const sidebarArguments = [
   generatedAPI,
   flattenSidebarGroups,
 ];
-const sidebar = sidebarFactory(...sidebarArguments, true, true, true);
+const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true);
 
 function section(label) {
   const group = sidebar.find((item) => item.label === label);
@@ -216,6 +217,7 @@ test('uses the product navigation in its published order', () => {
     'Registry Casework',
     'Registry Scheduling',
     'Registry Render',
+    'Registry Messaging',
     'Registry Discovery',
     'Operations',
     'Design',
@@ -228,30 +230,33 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     current: 'latest',
     released: 'v0.29.0',
     docsets: [
-      { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/', products: { 'registry-casework': { ref: 'HEAD' }, 'registry-scheduling': { ref: 'HEAD' }, 'registry-render': { ref: 'HEAD' } } },
+      { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/', products: { 'registry-casework': { ref: 'HEAD' }, 'registry-scheduling': { ref: 'HEAD' }, 'registry-render': { ref: 'HEAD' }, 'registry-messaging': { ref: 'HEAD' } } },
       { id: 'v0.29.0', status: 'archived', availability: 'released', path: '/v/0.29.0/', products: {} },
       { id: 'v0.30.0', status: 'archived', availability: 'candidate', path: '/v/0.30.0/', products: { 'registry-casework': { ref: 'v0.30.0' } } },
     ],
   };
-  for (const [id, env, hasCasework, hasScheduling, hasRender] of [
-    ['latest', {}, true, true, true],
-    ['v0.29.0', {}, false, false, false],
-    ['v0.30.0', {}, true, false, false],
-    ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true, false, false],
+  for (const [id, env, hasCasework, hasScheduling, hasRender, hasMessaging] of [
+    ['latest', {}, true, true, true, true],
+    ['v0.29.0', {}, false, false, false, false],
+    ['v0.30.0', {}, true, false, false, false],
+    ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true, false, false, false],
   ]) {
     const context = resolveDocsetBuildContext(docsets, { DOCS_DOCSET: id, ...env });
     assert.equal(context.hasCasework, hasCasework, id);
     assert.equal(context.hasScheduling, hasScheduling, id);
     assert.equal(context.hasRender, hasRender, id);
+    assert.equal(context.hasMessaging, hasMessaging, id);
     const docsetSidebar = sidebarFactory(
       ...sidebarArguments,
       context.hasCasework,
       context.hasScheduling,
       context.hasRender,
+      context.hasMessaging,
     );
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Casework'), hasCasework, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Scheduling'), hasScheduling, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Render'), hasRender, id);
+    assert.equal(docsetSidebar.some((item) => item.label === 'Registry Messaging'), hasMessaging, id);
     assert.equal(new Function('hasCasework', 'hasScheduling', 'caseworkOpenApiSchema', 'schedulingOpenApiSchema', `return ${apiConfigSource};`)
       (context.hasCasework, context.hasScheduling, caseworkOpenApiSchema, schedulingOpenApiSchema).length,
       1 + Number(hasCasework) + Number(hasScheduling), id);
@@ -352,6 +357,7 @@ test('uses the formal product names for top-level sections', () => {
     'Registry Casework',
     'Registry Scheduling',
     'Registry Render',
+    'Registry Messaging',
     'Registry Discovery',
   ]) {
     assert.ok(topLevelSection(sidebarSource, product), `could not isolate ${product}`);
@@ -386,6 +392,7 @@ test('publishes one overview route for every section that has one', () => {
     ['Base Registry Engine', "slug: 'start/breg-quickstart'"],
     ['Registry Casework', "slug: 'start/casework'"],
     ['Registry Render', "slug: 'start/registry-render'"],
+    ['Registry Messaging', "slug: 'start/messaging'"],
     ['Operations', "slug: 'operate/advanced'"],
     ['Reference', "slug: 'reference'"],
   ]) {
