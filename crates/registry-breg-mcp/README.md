@@ -148,7 +148,11 @@ key is a private JWK. Plain HTTP is accepted only with
 
 The endpoint is served at `/mcp` over streamable HTTP, stateless, with JSON
 responses. Requests whose `Host` is not the resource's authority, and any
-request carrying an `Origin` header, are refused. `/health` reports the process
+request carrying an `Origin` header, are refused with `403` before the token
+is verified or a rate limit is charged. A `Host` that omits the port names the
+scheme's default one, so for `https://gateway.example.test/mcp` both
+`gateway.example.test` and `gateway.example.test:443` are accepted, and the
+same host on another port is not. `/health` reports the process
 is up; `/ready` reports whether the audit log is writable.
 
 Each tool call is audited twice, before any registry call and after it, to a

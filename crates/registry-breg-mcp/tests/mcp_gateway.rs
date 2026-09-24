@@ -464,6 +464,60 @@ async fn a_foreign_host_or_any_origin_is_refused() {
     assert!(harness.registry.seen().is_empty());
 }
 
+#[tokio::test]
+async fn a_wrong_host_or_any_origin_is_refused_before_authentication() {
+    // One call per citizen and per client: a refusal that reached the
+    // resource server would spend the only allowance there is.
+    let harness = Harness::start(Limits {
+        per_citizen_burst: 1,
+        per_client_burst: 1,
+    })
+    .await;
+    let token = harness.token(CITIZEN_A);
+    let client = reqwest::Client::new();
+    let probes = [
+        (Some(token.as_str()), header::HOST, "attacker.example.test"),
+        (
+            Some(token.as_str()),
+            header::ORIGIN,
+            "https://attacker.example.test",
+        ),
+        (
+            Some(token.as_str()),
+            header::ORIGIN,
+            harness.origin.as_str(),
+        ),
+        // Without a token, or with one that does not verify, the refusal is
+        // still the Host or Origin one: nothing was verified.
+        (None, header::HOST, "attacker.example.test"),
+        (Some("not-a-token"), header::HOST, "attacker.example.test"),
+        (None, header::ORIGIN, "https://attacker.example.test"),
+    ];
+    for (bearer, name, value) in probes {
+        let mut request = client
+            .post(&harness.resource)
+            .header(header::ACCEPT, "application/json, text/event-stream")
+            .header(name.clone(), value)
+            .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}));
+        if let Some(bearer) = bearer {
+            request = request.bearer_auth(bearer);
+        }
+        let response = request.send().await.expect("the gateway answers");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{name}: {value}");
+        assert!(
+            !response.headers().contains_key(header::WWW_AUTHENTICATE),
+            "{name}: {value}"
+        );
+    }
+    assert_eq!(harness.exchanges(), 0);
+    assert!(harness.registry.seen().is_empty());
+    // Neither the citizen's allowance nor the chat host's was spent.
+    assert_eq!(
+        post_mcp(&harness, Some(&token)).await.status(),
+        StatusCode::OK
+    );
+}
+
 /// The `sub` claim of a bearer credential the registry received. Only the
 /// claim is read; the token itself is never printed.
 fn subject_of(authorization: &str) -> String {
