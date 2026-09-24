@@ -231,12 +231,12 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
     // decision entity binds does not exist and the project cannot compile.
     assert_eq!(explanation["compiles"], false);
     assert!(report.get("revision").is_none(), "{report}");
+    // The first step is the one that makes the project compile, with the
+    // exact line to add.
     let steps = report["nextSteps"].as_array().expect("next steps");
+    let first = steps[0].as_str().unwrap();
     assert!(
-        steps.iter().any(|step| step
-            .as_str()
-            .unwrap()
-            .contains("requireConsent: [{record: person-consent-decision, on: id}]")),
+        first.starts_with("the project compiles once a read permission requires consent: under a profile's '- entity: person' permission, add 'requireConsent: [{record: person-consent-decision, on: id}]'"),
         "{steps:?}"
     );
     assert_eq!(
@@ -277,6 +277,16 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
             "{profile} is appended"
         );
     }
+
+    // Checking before that step is refused with the same instruction.
+    let ungated = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert!(!ungated.status.success(), "{ungated:?}");
+    let refusal = String::from_utf8(ungated.stdout.clone()).expect("utf-8 report");
+    assert!(refusal.contains("consent.require.unused"), "{refusal}");
+    assert!(
+        refusal.contains("add 'requireConsent: [{record: person-consent-decision, on: id}]' to a permission that reads person rows"),
+        "{refusal}"
+    );
 
     let gated = require_consent(
         &source,

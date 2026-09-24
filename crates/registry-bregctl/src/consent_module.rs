@@ -659,14 +659,16 @@ fn explanation(plan: &Plan, subject: &str, compiles: bool) -> Value {
 
 fn next_steps(project_path: &Path, plan: &Plan, subject: &str, compiles: bool) -> Vec<String> {
     let (_, own) = &plan.requirements[0];
-    let mut steps = vec![format!(
-        "add 'requireConsent: [{own}]' to each permission that reads {subject} rows only with consent; a permission on an entity that references {subject} uses the field it references by, as listed under requireConsent in this report"
-    )];
-    if !compiles {
-        steps.push(
-            "the project compiles once a profile requires consent: the decision's scope field uses registry-consent-scopes, which lists the profiles that require consent".to_owned(),
-        );
-    }
+    let require = format!(
+        "under a profile's '- entity: {subject}' permission, add 'requireConsent: [{own}]', and do the same on each permission that reads {subject} rows only with consent; a permission on an entity that references {subject} uses the field it references by, as listed under requireConsent in this report"
+    );
+    // Until a profile requires consent, the decision's scope field binds
+    // registry-consent-scopes, which is empty, so this step comes first.
+    let mut steps = vec![if compiles {
+        require
+    } else {
+        format!("the project compiles once a read permission requires consent: {require}")
+    }];
     steps.push(format!("run 'bregctl check {}'", project_path.display()));
     steps.push(format!(
         "publish a privacy notice and its clauses through {subject}-consent-steward before subjects decide; provision principal links through {subject}-consent-link-steward only after identity proofing, because an active link lets its principal act as the subject"

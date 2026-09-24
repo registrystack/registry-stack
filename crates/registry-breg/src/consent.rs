@@ -107,6 +107,35 @@ pub(crate) fn synthesized_vocabularies(
     vocabularies
 }
 
+/// The refusal for a scope bound to `registry-consent-scopes` while no
+/// profile requires consent: it names the `requireConsent` step that gives
+/// the vocabulary its codes.
+pub(crate) fn unused_record_message(entities: &BTreeMap<String, EntitySource>) -> String {
+    let record = entities.values().find_map(|entity| {
+        let record = entity.consent_record.as_ref()?;
+        let subject = entity
+            .fields
+            .iter()
+            .find(|field| field.id == record.subject)
+            .and_then(|field| match &field.field_type {
+                FieldTypeSource::Reference { target, .. } => Some(target.as_str()),
+                _ => None,
+            });
+        Some((entity.id.as_str(), subject))
+    });
+    let (record, subject) = match record {
+        Some((record, Some(subject))) => (record, format!("{subject} rows")),
+        Some((record, None)) => (record, "the consent subject's rows".to_owned()),
+        None => (
+            "<consent record entity>",
+            "the consent subject's rows".to_owned(),
+        ),
+    };
+    format!(
+        "registry-consent-scopes lists the profiles that require consent, and no profile does yet: add 'requireConsent: [{{record: {record}, on: id}}]' to a permission that reads {subject}, or list a former gated profile id under retiredConsentScopes"
+    )
+}
+
 pub(crate) fn is_reserved_vocabulary(id: &str) -> bool {
     id == RECIPIENTS_VOCABULARY || id == SCOPES_VOCABULARY
 }

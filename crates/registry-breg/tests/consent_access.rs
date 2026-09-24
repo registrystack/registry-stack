@@ -280,6 +280,38 @@ fn consent_vocabularies_are_reserved() {
 }
 
 #[test]
+fn a_consent_record_no_profile_requires_names_the_require_consent_step() {
+    let mut value = source();
+    value["retiredConsentScopes"] = json!([]);
+    for profile in value["accessProfiles"].as_array_mut().unwrap() {
+        for permission in profile["permissions"].as_array_mut().unwrap() {
+            permission.as_object_mut().unwrap().remove("requireConsent");
+        }
+    }
+    let failure = compile(&value).expect_err("an unused consent record is refused");
+    let unused = failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "consent.require.unused")
+        .collect::<Vec<_>>();
+    // The record's scope field and the issuing action's scope input.
+    assert_eq!(unused.len(), 2, "{:?}", failure.diagnostics());
+    for diagnostic in unused {
+        assert!(
+            diagnostic
+                .message
+                .contains("add 'requireConsent: [{record: consent-decision, on: id}]' to a permission that reads person rows"),
+            "{}",
+            diagnostic.message
+        );
+    }
+    assert!(!failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code.ends_with("vocabulary.unknown")));
+}
+
+#[test]
 fn consent_actions_declare_an_issuer() {
     let mut value = source();
     value["actions"][0]

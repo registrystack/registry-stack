@@ -2055,6 +2055,9 @@ fn resolve_vocabularies(
     for (id, values) in crate::consent::synthesized_vocabularies(project, entities) {
         vocabularies.insert(id.to_owned(), values);
     }
+    // The scope vocabulary lists the profiles that require consent, so until
+    // one does, a consent record's scope has nothing to resolve to.
+    let unused_consent = crate::consent::unused_record_message(entities);
     for entity in entities.values_mut() {
         for field in &mut entity.fields {
             if let FieldTypeSource::VocabularyCode { vocabulary, values } = &mut field.field_type {
@@ -2068,6 +2071,12 @@ fn resolve_vocabularies(
                 if values.is_empty() {
                     if let Some(resolved) = vocabularies.get(vocabulary) {
                         *values = resolved.clone();
+                    } else if vocabulary == crate::consent::SCOPES_VOCABULARY {
+                        errors.push(Diagnostic::error(
+                            "consent.require.unused",
+                            "entities[].fields[].vocabulary",
+                            &unused_consent,
+                        ));
                     } else {
                         errors.push(Diagnostic::error(
                             "field.vocabulary.unknown",
@@ -2085,6 +2094,12 @@ fn resolve_vocabularies(
                 if values.is_empty() {
                     if let Some(resolved) = vocabularies.get(vocabulary) {
                         *values = resolved.clone();
+                    } else if vocabulary == crate::consent::SCOPES_VOCABULARY {
+                        errors.push(Diagnostic::error(
+                            "consent.require.unused",
+                            "actions[].inputs[].vocabulary",
+                            &unused_consent,
+                        ));
                     } else {
                         errors.push(Diagnostic::error(
                             "action.input.vocabulary.unknown",
