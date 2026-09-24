@@ -155,8 +155,9 @@ pub struct JobPolicy {
     pub maximum_attempts: i16,
     pub retry: RetrySchedule,
     pub on_uncertain: UncertainOutcome,
-    /// The instant after which the job must not be sent. A retry that would
-    /// fall at or after it expires the job instead.
+    /// The instant after which the job must not be sent. A claim at or after
+    /// it expires the job instead of leasing it, and a retry that would fall
+    /// at or after it expires the job instead.
     pub expires_at: Option<SystemTime>,
 }
 

@@ -17,8 +17,9 @@ The pure half is always compiled:
   maximum attempt count, a `RetrySchedule` (`Frozen` delays used exactly, or
   an exponential `Backoff` with optional equal `Jitter` that honours a
   receiver's `Retry-After` up to its maximum), an `UncertainOutcome` (`Retry`
-  or `Hold`), and an optional expiry instant. A retry that would fall at or
-  after the expiry expires the job instead.
+  or `Hold`), and an optional expiry instant. A claim that finds the job past
+  its expiry expires it instead of leasing it, and a retry that would fall at
+  or after the expiry expires the job instead.
 - `AttemptTimeoutBound` is the range of attempt timeouts one consumer accepts,
   at most `MAX_ATTEMPT_TIMEOUT` (60 seconds). A claimed job whose captured
   timeout falls outside it is refused before it is leased.

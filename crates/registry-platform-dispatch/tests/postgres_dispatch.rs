@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use registry_platform_dispatch::postgres::{
-    enqueue, AttemptAudit, CancelOutcome, ClaimRefusal, Columns, Decoded, DispatchConfig,
+    enqueue, AttemptAudit, CancelOutcome, Claim, ClaimRefusal, Columns, Decoded, DispatchConfig,
     DispatchConnection, DispatchEvent, DispatchOutcome, DispatchSql, DispatchStore,
     DispatchTransport, DispatchWorker, Dispatcher, ExpirySql, JobKey, JobState, JobTable,
     LeasedJob, SelectSql, TargetAction, TransitionAudit, TransitionCode, WorkerConfig,
@@ -190,6 +190,8 @@ impl DispatchStore for TestStore {
     ) -> Result<(), DispatchError> {
         Ok(())
     }
+
+    fn claim_record(&self, _job: &TestJob) {}
 
     fn decode_claim(&self, row: &Row, first: usize) -> Result<Decoded<TestJob>, ClaimRefusal> {
         let policy = decode_policy(row, first).map_err(|_| ClaimRefusal::Unavailable)?;
@@ -627,6 +629,7 @@ async fn the_attempt_is_committed_and_audited_before_egress() {
         .claim()
         .await
         .expect("the claim succeeds")
+        .leased()
         .expect("one job is due");
     // Another connection sees the lease and the attempt audit before any
     // send happens: both committed with the claim.
@@ -677,11 +680,15 @@ async fn a_lapsed_lease_on_a_hold_job_is_unknown_and_never_retried() {
         .claim()
         .await
         .expect("claim")
+        .leased()
         .expect("one job is due");
     lapse_lease(&harness, &key).await;
     // The next claim reaps the lapsed lease. The provider may have accepted
     // the send, so the job is held as unknown rather than sent again.
-    assert!(dispatcher.claim().await.expect("claim").is_none());
+    assert!(matches!(
+        dispatcher.claim().await.expect("claim"),
+        Claim::Idle
+    ));
     let reaped = state_row(&harness, &key).await;
     assert_eq!(reaped.state, "unknown");
     assert_eq!(reaped.attempt, 1);
@@ -718,9 +725,17 @@ async fn a_lapsed_lease_on_a_retry_job_is_rescheduled() {
     .await;
     let dispatcher = dispatcher(&harness);
 
-    let _stalled = dispatcher.claim().await.expect("claim").expect("due");
+    let _stalled = dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due");
     lapse_lease(&harness, &key).await;
-    assert!(dispatcher.claim().await.expect("claim").is_none());
+    assert!(matches!(
+        dispatcher.claim().await.expect("claim"),
+        Claim::Idle
+    ));
     let reaped = state_row(&harness, &key).await;
     assert_eq!(reaped.state, "pending");
     assert_eq!(scheduled_delay_ms(&harness, &key).await, 1_000);
@@ -800,6 +815,7 @@ async fn equal_jitter_keeps_every_retry_inside_its_bounds() {
         .claim()
         .await
         .expect("claim")
+        .leased()
         .expect("the steady job is due again");
     assert_eq!(second.key, steady);
     assert_eq!(
@@ -998,7 +1014,10 @@ async fn cancel_first_wins_over_a_later_claim() {
         dispatcher.cancel(&key).await.expect("cancel"),
         CancelOutcome::Cancelled
     );
-    assert!(dispatcher.claim().await.expect("claim").is_none());
+    assert!(matches!(
+        dispatcher.claim().await.expect("claim"),
+        Claim::Idle
+    ));
     assert_eq!(state_row(&harness, &key).await.state, "cancelled");
     assert_eq!(
         audit_trail(&harness, &key).await,
@@ -1011,7 +1030,12 @@ async fn a_claimed_job_can_no_longer_be_cancelled() {
     let harness = harness().await;
     let key = enqueue_message(&harness, &Message::default()).await;
     let dispatcher = dispatcher(&harness);
-    let job = dispatcher.claim().await.expect("claim").expect("due");
+    let job = dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due");
     assert_eq!(
         dispatcher.cancel(&key).await.expect("cancel"),
         CancelOutcome::NotCancellable(JobState::Leased)
@@ -1044,7 +1068,7 @@ async fn a_cancel_racing_a_claim_never_lets_both_win() {
             tokio::spawn(async move { claimer.claim().await }),
             tokio::spawn(async move { canceller.cancel(&cancel_key).await }),
         );
-        let claimed = claimed.expect("claim task").expect("claim");
+        let claimed = claimed.expect("claim task").expect("claim").leased();
         let cancelled = cancelled.expect("cancel task").expect("cancel");
         match (claimed, cancelled) {
             (Some(job), CancelOutcome::NotCancellable(JobState::Leased)) => {
@@ -1084,13 +1108,17 @@ async fn a_job_is_not_claimed_before_its_not_before_instant() {
     )
     .await;
     let dispatcher = dispatcher(&harness);
-    assert!(dispatcher.claim().await.expect("claim").is_none());
+    assert!(matches!(
+        dispatcher.claim().await.expect("claim"),
+        Claim::Idle
+    ));
     assert_eq!(state_row(&harness, &key).await.state, "pending");
     tokio::time::sleep(Duration::from_millis(1_700)).await;
     let job = dispatcher
         .claim()
         .await
         .expect("claim")
+        .leased()
         .expect("the job is due once its instant passes");
     assert_eq!(job.key, key);
 }
@@ -1198,11 +1226,24 @@ async fn a_stale_fence_cannot_write_after_the_lease_is_reclaimed() {
     )
     .await;
     let dispatcher = dispatcher(&harness);
-    let stale = dispatcher.claim().await.expect("claim").expect("due");
+    let stale = dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due");
     lapse_lease(&harness, &key).await;
-    assert!(dispatcher.claim().await.expect("reap").is_none());
+    assert!(matches!(
+        dispatcher.claim().await.expect("reap"),
+        Claim::Idle
+    ));
     make_due(&harness, &key).await;
-    let current = dispatcher.claim().await.expect("claim").expect("due again");
+    let current = dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due again");
     assert_eq!(current.attempt, 2);
     assert_ne!(current.lease_token, stale.lease_token);
 
@@ -1250,9 +1291,17 @@ async fn a_stale_fence_cannot_write_over_an_unknown_job() {
     let harness = harness().await;
     let key = enqueue_message(&harness, &Message::default()).await;
     let dispatcher = dispatcher(&harness);
-    let stale = dispatcher.claim().await.expect("claim").expect("due");
+    let stale = dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due");
     lapse_lease(&harness, &key).await;
-    assert!(dispatcher.claim().await.expect("reap").is_none());
+    assert!(matches!(
+        dispatcher.claim().await.expect("reap"),
+        Claim::Idle
+    ));
     assert_eq!(
         dispatcher
             .finish(
@@ -1276,7 +1325,12 @@ async fn operator_replay_bumps_the_generation_and_refuses_a_stale_replay() {
     let transport = ScriptedTransport::new(|_| SendOutcome::Permanent {
         code: FailureCode::new("recipient.rejected").expect("bounded code"),
     });
-    let first = dispatcher.claim().await.expect("claim").expect("due");
+    let first = dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due");
     let first_key = idempotency_key(
         b"dispatch-test-v1",
         &[
@@ -1303,7 +1357,12 @@ async fn operator_replay_bumps_the_generation_and_refuses_a_stale_replay() {
         ("pending", 2, 0)
     );
 
-    let second = dispatcher.claim().await.expect("claim").expect("due");
+    let second = dispatcher
+        .claim()
+        .await
+        .expect("claim")
+        .leased()
+        .expect("due");
     assert_eq!((second.generation, second.attempt), (2, 1));
     let second_key = idempotency_key(
         b"dispatch-test-v1",
@@ -1383,6 +1442,126 @@ async fn an_undispatched_job_expires_without_being_sent() {
         audit_trail(&harness, &key).await,
         vec!["expired:expired:g1:a0"]
     );
+    assert_eq!(expiry_events(&harness), 1);
+}
+
+/// A consumer whose claim selection has no expiry predicate and which runs
+/// no expiry sweep: only the captured policy says when a job expires.
+fn unguarded_dispatcher(harness: &Harness) -> Dispatcher<TestStore> {
+    Dispatcher::new(
+        TestStore {
+            url: harness.url.clone(),
+            schema: harness.schema.clone(),
+            events: Arc::clone(&harness.events),
+        },
+        DispatchConfig {
+            table: harness.table.clone(),
+            sql: DispatchSql {
+                claim: SelectSql {
+                    columns: CLAIM_COLUMNS,
+                    joins: MESSAGE_JOIN,
+                    predicate: "TRUE",
+                },
+                expiry: None,
+                ..dispatch_sql()
+            },
+            attempt_timeout: AttemptTimeoutBound::new(
+                Duration::from_millis(100),
+                Duration::from_secs(60),
+            )
+            .expect("the consumer's bound is within the core ceiling"),
+            replayable: &[JobState::DeadLettered, JobState::Unknown],
+        },
+    )
+    .expect("the consumer's configuration is valid")
+}
+
+fn expiry_events(harness: &Harness) -> usize {
+    harness
+        .events
+        .lock()
+        .expect("events lock")
+        .iter()
+        .filter(|event| **event == DispatchEvent::JobExpired)
+        .count()
+}
+
+#[tokio::test]
+async fn a_job_past_its_policy_expiry_is_expired_at_claim_and_never_sent() {
+    let harness = harness().await;
+    let key = enqueue_message(
+        &harness,
+        &Message {
+            expires_in_ms: -1_000,
+            ..Message::default()
+        },
+    )
+    .await;
+    let dispatcher = unguarded_dispatcher(&harness);
+    let transport = ScriptedTransport::new(|_| accepted());
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::Expired),
+        "the core expires the job its consumer's selection let through"
+    );
+    assert!(transport.sends().is_empty());
+    let row = state_row(&harness, &key).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("expired", 0));
+    assert_eq!(
+        audit_trail(&harness, &key).await,
+        vec!["expired:expired:g1:a0"]
+    );
+    assert_eq!(expiry_events(&harness), 1);
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::Idle)
+    );
+    assert!(transport.sends().is_empty());
+}
+
+#[tokio::test]
+async fn a_scheduled_retry_past_its_policy_expiry_is_expired_at_claim() {
+    let harness = harness().await;
+    let key = enqueue_message(&harness, &Message::default()).await;
+    let dispatcher = unguarded_dispatcher(&harness);
+    let transport = ScriptedTransport::new(|_| transient());
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::RetryScheduled)
+    );
+    harness
+        .admin
+        .execute(
+            &format!(
+                "UPDATE {}.test_messages
+                    SET expires_at = transaction_timestamp() - interval '1 second'
+                  WHERE message_id = $1",
+                harness.schema
+            ),
+            &[&key.id()],
+        )
+        .await
+        .expect("the message expires");
+    make_due(&harness, &key).await;
+    assert_eq!(
+        dispatcher.dispatch_once(&transport).await,
+        Ok(DispatchOutcome::Expired)
+    );
+    assert_eq!(
+        transport.sends().len(),
+        1,
+        "only the first attempt was sent"
+    );
+    let row = state_row(&harness, &key).await;
+    assert_eq!((row.state.as_str(), row.attempt), ("expired", 1));
+    assert_eq!(
+        audit_trail(&harness, &key).await,
+        vec![
+            "attempt_started:leased:g1:a1",
+            "attempt_finished:retry_pending:g1:a1",
+            "expired:expired:g1:a1"
+        ]
+    );
 }
 
 #[tokio::test]
@@ -1426,6 +1605,7 @@ async fn sixty_seconds_is_an_accepted_attempt_timeout() {
         .claim()
         .await
         .expect("claim")
+        .leased()
         .expect("due");
     assert_eq!(job.policy.attempt_timeout, Duration::from_secs(60));
     let lease = harness

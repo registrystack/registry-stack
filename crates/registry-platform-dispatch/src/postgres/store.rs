@@ -210,6 +210,9 @@ pub enum DispatchEvent {
     IterationFailed,
     /// One claim-path transition refused.
     TransitionFailed(TransitionCode),
+    /// One job expired undispatched, reported after its transition
+    /// committed.
+    JobExpired,
 }
 
 /// Everything product-owned the core's transactions need.
@@ -236,6 +239,10 @@ pub trait DispatchStore: Send + Sync + 'static {
 
     /// Decode the claim columns from index `first`.
     fn decode_claim(&self, row: &Row, first: usize) -> Result<Decoded<Self::Job>, ClaimRefusal>;
+
+    /// The audit record of a claimed job, used when the claim expires it
+    /// instead of leasing it.
+    fn claim_record(&self, job: &Self::Job) -> Self::Record;
 
     /// Decode the lapsed-lease columns from index `first`.
     fn decode_lapsed(

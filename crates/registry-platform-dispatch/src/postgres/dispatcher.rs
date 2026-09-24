@@ -47,6 +47,30 @@ pub enum DispatchOutcome {
     Expired,
 }
 
+/// What one claim did.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Claim<J> {
+    /// No job was due.
+    Idle,
+    /// A job is leased and its attempt audit committed: the caller may send
+    /// it.
+    Leased(LeasedJob<J>),
+    /// The due job's captured policy had expired, so the claim expired it
+    /// instead of leasing it. Nothing may be sent.
+    Expired,
+}
+
+impl<J> Claim<J> {
+    /// The leased job, when the claim leased one.
+    #[must_use]
+    pub fn leased(self) -> Option<LeasedJob<J>> {
+        match self {
+            Self::Leased(job) => Some(job),
+            Self::Idle | Self::Expired => None,
+        }
+    }
+}
+
 /// What a cancellation did.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum CancelOutcome {
@@ -101,9 +125,20 @@ impl Next {
 struct Statements {
     claim: String,
     lease: String,
+    /// Expires a claimed pending job whose captured policy has expired.
+    expire_claimed: String,
     lapsed: String,
     expiry: Option<(String, String)>,
     target: String,
+}
+
+/// One locked job an expiry transition is about to take.
+struct Expiring<'a, R> {
+    key: &'a JobKey,
+    generation: i64,
+    attempt: i16,
+    from: JobState,
+    record: &'a R,
 }
 
 struct Inner<S> {
@@ -187,8 +222,10 @@ impl<S: DispatchStore> Dispatcher<S> {
     where
         T: DispatchTransport<Job = S::Job, Detail = S::Detail> + ?Sized,
     {
-        let Some(job) = self.claim().await? else {
-            return Ok(DispatchOutcome::Idle);
+        let job = match self.claim().await? {
+            Claim::Idle => return Ok(DispatchOutcome::Idle),
+            Claim::Expired => return Ok(DispatchOutcome::Expired),
+            Claim::Leased(job) => job,
         };
         let sent = transport.send(&job).await?;
         self.finish(&job, sent).await
@@ -198,13 +235,15 @@ impl<S: DispatchStore> Dispatcher<S> {
     ///
     /// The claim transaction first recovers at most one lapsed lease and
     /// expires at most one undispatched job, so both make progress on every
-    /// poll. The returned job is committed as leased: the caller may send it.
+    /// poll. A due job whose captured policy has expired is expired here,
+    /// whatever the consumer's claim selection says, and is never leased. A
+    /// leased job is committed as leased: the caller may send it.
     ///
     /// # Errors
     ///
     /// [`DispatchError::Unavailable`] on any refusal. Refusals an operator
     /// must see are reported through [`DispatchStore::operational_event`].
-    pub async fn claim(&self) -> Result<Option<LeasedJob<S::Job>>, DispatchError> {
+    pub async fn claim(&self) -> Result<Claim<S::Job>, DispatchError> {
         let store = &self.inner.store;
         let mut client = store.connection().await?;
         let transaction = client.transaction().await?;
@@ -216,7 +255,7 @@ impl<S: DispatchStore> Dispatcher<S> {
             self.refused(TransitionCode::ClaimRecoveryFailed);
             return Err(DispatchError::Unavailable);
         }
-        self.expire_one(&transaction).await?;
+        let swept = self.expire_one(&transaction).await?;
         let row = transaction
             .query_opt(&self.inner.statements.claim, &[])
             .await
@@ -226,7 +265,8 @@ impl<S: DispatchStore> Dispatcher<S> {
             })?;
         let Some(row) = row else {
             transaction.commit().await?;
-            return Ok(None);
+            self.expired(swept);
+            return Ok(Claim::Idle);
         };
         let key = read_key(&row)?;
         let generation = row.try_get::<_, i64>(2)?;
@@ -239,6 +279,28 @@ impl<S: DispatchStore> Dispatcher<S> {
                 return Err(DispatchError::Unavailable);
             }
         };
+        if let Some(expires_at) = decoded.policy.expires_at {
+            if expires_at <= database_now(&transaction).await? {
+                let record = store.claim_record(&decoded.job);
+                self.expire_locked(
+                    &transaction,
+                    &Expiring {
+                        key: &key,
+                        generation,
+                        attempt: prior_attempt,
+                        from: JobState::Pending,
+                        record: &record,
+                    },
+                    &self.inner.statements.expire_claimed,
+                    &[&key.id(), &key.part(), &generation, &prior_attempt],
+                )
+                .await?;
+                transaction.commit().await?;
+                self.expired(swept);
+                self.expired(true);
+                return Ok(Claim::Expired);
+            }
+        }
         let attempt = prior_attempt
             .checked_add(1)
             .filter(|attempt| *attempt <= decoded.policy.maximum_attempts)
@@ -294,7 +356,8 @@ impl<S: DispatchStore> Dispatcher<S> {
             self.refused(TransitionCode::ClaimCommitFailed);
             DispatchError::Unavailable
         })?;
-        Ok(Some(job))
+        self.expired(swept);
+        Ok(Claim::Leased(job))
     }
 
     /// Record what one send of a leased job did, under its fence.
@@ -670,40 +733,76 @@ impl<S: DispatchStore> Dispatcher<S> {
     }
 
     /// Expire at most one undispatched job whose consumer selection says it
-    /// has expired.
-    async fn expire_one(&self, transaction: &Transaction<'_>) -> Result<(), DispatchError> {
+    /// has expired, and report whether one was.
+    async fn expire_one(&self, transaction: &Transaction<'_>) -> Result<bool, DispatchError> {
         let Some((select, update)) = &self.inner.statements.expiry else {
-            return Ok(());
+            return Ok(false);
         };
-        let store = &self.inner.store;
         let Some(row) = transaction.query_opt(select, &[]).await? else {
-            return Ok(());
+            return Ok(false);
         };
         let key = read_key(&row)?;
         let generation = row.try_get::<_, i64>(2)?;
         let attempt = row.try_get::<_, i16>(3)?;
         let from =
             JobState::parse(&row.try_get::<_, String>(4)?).ok_or(DispatchError::Unavailable)?;
-        let record = store.decode_expired(&row, 5)?;
+        let record = self.inner.store.decode_expired(&row, 5)?;
+        self.expire_locked(
+            transaction,
+            &Expiring {
+                key: &key,
+                generation,
+                attempt,
+                from,
+                record: &record,
+            },
+            update,
+            &[&key.id(), &key.part(), &generation],
+        )
+        .await?;
+        Ok(true)
+    }
+
+    /// Audit, write, and finish one expiry of a job this transaction holds
+    /// locked. `update` must change exactly that job's row.
+    async fn expire_locked(
+        &self,
+        transaction: &Transaction<'_>,
+        expiring: &Expiring<'_, S::Record>,
+        update: &str,
+        values: &[&(dyn ToSql + Sync)],
+    ) -> Result<(), DispatchError> {
+        let store = &self.inner.store;
         store
             .record_transition_audit(
                 transaction,
                 TransitionAudit {
-                    key: &key,
-                    generation,
-                    attempt,
-                    record: &record,
-                    transition: Transition::Expired { from },
+                    key: expiring.key,
+                    generation: expiring.generation,
+                    attempt: expiring.attempt,
+                    record: expiring.record,
+                    transition: Transition::Expired {
+                        from: expiring.from,
+                    },
                 },
             )
             .await?;
-        let changed = transaction
-            .execute(update, &[&key.id(), &key.part(), &generation])
-            .await?;
+        let changed = transaction.execute(update, values).await?;
         if changed != 1 {
             return Err(DispatchError::Unavailable);
         }
-        store.after_expired(transaction, &key, &record).await
+        store
+            .after_expired(transaction, expiring.key, expiring.record)
+            .await
+    }
+
+    /// Report a committed expiry.
+    fn expired(&self, committed: bool) {
+        if committed {
+            self.inner
+                .store
+                .operational_event(DispatchEvent::JobExpired);
+        }
     }
 
     /// Write one lease-ending transition under `fence`, with the consumer's
@@ -918,6 +1017,18 @@ fn render_statements(table: &JobTable, sql: &DispatchSql) -> Result<Statements, 
                 AND generation = $3
                 AND state = 'pending'
                 AND attempt = $4"
+        ),
+        expire_claimed: format!(
+            "UPDATE {qualified}
+                SET state = 'expired',
+                    next_attempt_at = NULL,
+                    expired_at = transaction_timestamp(),
+                    updated_at = transaction_timestamp()
+              WHERE {id} = $1
+                AND {part} = $2
+                AND generation = $3
+                AND attempt = $4
+                AND state = 'pending'"
         ),
         lapsed: format!(
             "SELECT state.{id}, state.{part}, state.generation, state.attempt,

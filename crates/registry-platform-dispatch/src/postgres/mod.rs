@@ -20,7 +20,7 @@ mod table;
 mod worker;
 
 pub use dispatcher::{
-    CancelOutcome, DispatchConfig, DispatchOutcome, Dispatcher, LeasedReadError,
+    CancelOutcome, Claim, DispatchConfig, DispatchOutcome, Dispatcher, LeasedReadError,
     LEASE_FINALIZATION_ALLOWANCE,
 };
 pub use sql::{Columns, DispatchSql, ExpirySql, SelectSql};

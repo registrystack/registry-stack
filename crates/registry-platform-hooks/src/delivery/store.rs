@@ -265,6 +265,12 @@ impl<S: DeliverySeams> DispatchStore for HookStore<S> {
         Ok(self.seams.verify_transaction(transaction).await?)
     }
 
+    fn claim_record(&self, job: &HookJob) -> HookRecord {
+        HookRecord {
+            package_revision: job.package_revision.clone(),
+        }
+    }
+
     fn decode_claim(&self, row: &Row, first: usize) -> Result<Decoded<HookJob>, ClaimRefusal> {
         let deployed_attempt_timeout_ms = row
             .try_get::<_, i64>(first)
@@ -431,6 +437,9 @@ impl<S: DeliverySeams> DispatchStore for HookStore<S> {
             DispatchEvent::TransitionFailed(code) => {
                 DeliveryOperationalEvent::TransitionFailed(transition_code(code))
             }
+            // The hook operational vocabulary reports failures only; an
+            // expiry is recorded by its delivery audit.
+            DispatchEvent::JobExpired => return,
         });
     }
 
