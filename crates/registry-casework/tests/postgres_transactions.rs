@@ -1577,6 +1577,84 @@ async fn retrying_an_audit_publication_preserves_its_original_timestamp() {
     assert_eq!(retried_at, published_at);
 }
 
+#[tokio::test]
+async fn a_resubmitted_proposal_supersedes_the_earlier_application_item() {
+    let (store, client, _schema) = isolated_schema("casework_resubmission").await;
+    store.migrate().await.expect("migrate");
+    let admin = actor("admin", CaseworkRole::Administrator, "administrator");
+    let holder = actor("officer-1", CaseworkRole::Staff, "staff");
+    let supervisor = actor("supervisor", CaseworkRole::Supervisor, "supervisor");
+    store
+        .bootstrap_directory(
+            &admin,
+            0,
+            &BootstrapDirectoryRequest {
+                team_id: "team-a".to_owned(),
+                staff: vec![holder.principal.clone()],
+                supervisors: vec![supervisor.principal.clone()],
+                queue_id: "default".to_owned(),
+            },
+            "bootstrap-resubmission",
+        )
+        .await
+        .expect("authorized bootstrap");
+    let first = store
+        .apply_observation(
+            &observation(
+                1,
+                "proposal-1",
+                OccurrenceKind::Application,
+                OccurrenceState::Open,
+            ),
+            "default",
+            None,
+        )
+        .await
+        .expect("first proposal observation")
+        .expect("first proposal opens an application item");
+    store
+        .claim(
+            &holder,
+            first.item_id,
+            first.revision,
+            "claim-first-proposal",
+        )
+        .await
+        .expect("holder claims the first proposal");
+
+    let resubmitted = store
+        .apply_observation(
+            &observation(
+                2,
+                "proposal-2",
+                OccurrenceKind::Application,
+                OccurrenceState::WaitingApplication,
+            ),
+            "default",
+            None,
+        )
+        .await
+        .expect("resubmitted proposal observation")
+        .expect("resubmitted proposal opens its own application item");
+    assert_ne!(resubmitted.item_id, first.item_id);
+
+    let earlier = store.item(first.item_id).await.expect("earlier item");
+    assert_eq!(earlier.state, OccurrenceState::Superseded);
+    assert_eq!(earlier.holder, None);
+    assert_eq!(earlier.binding.version, "proposal-1");
+    let active: i64 = client
+        .query_one(
+            "SELECT count(*) FROM casework_items WHERE source_id='source-a' AND subject_kind='request-a' AND subject_id='subject-a' AND state NOT IN ('completed','superseded','cancelled')",
+            &[],
+        )
+        .await
+        .expect("count active items")
+        .get(0);
+    assert_eq!(active, 1, "one proposal leaves one application item");
+    let current = store.item(resubmitted.item_id).await.expect("current item");
+    assert_eq!(current.state, OccurrenceState::WaitingApplication);
+}
+
 const SETTLEMENT_REASON: &str =
     "The source refused the saved evidence version; the registrar confirmed no change was made.";
 const SETTLEMENT_DECIDED_BY: &str = "Registrar duty officer, ticket OPS-4411";

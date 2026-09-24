@@ -698,7 +698,13 @@ impl PostgresStore {
                         now,
                     )
                     .await?;
-                } else if !is_match && item.occurrence_kind == OccurrenceKind::Review {
+                } else if !is_match
+                    && (item.occurrence_kind == OccurrenceKind::Review
+                        || observation.occurrence_kind == OccurrenceKind::Application)
+                {
+                    // A source request has one current proposal, so an
+                    // application observation of another proposal replaces
+                    // the earlier proposal's application occurrence.
                     update_observed_item(
                         &transaction,
                         &item,

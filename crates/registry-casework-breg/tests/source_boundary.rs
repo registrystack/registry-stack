@@ -514,21 +514,38 @@ async fn authoritative_read_retains_representation_etag_at_unchanged_record_revi
             .read_authoritative(&subject())
             .await
             .unwrap();
-        assert_eq!(
-            serde_json::to_value(&observation).unwrap()["representationEtag"],
-            etag
-        );
         observations.push(observation);
     }
     assert_eq!(
         observations[0].ordered_revision,
         observations[1].ordered_revision
     );
+    assert_ne!(
+        observations[0].representation_etag,
+        observations[1].representation_etag
+    );
     assert_eq!(observations[0].binding, observations[1].binding);
     let first = serde_json::to_value(&observations[0]).unwrap();
     assert!(first.get("submittedAt").is_none());
     assert!(first.get("stageEnteredAt").is_none());
     assert_eq!(observations[0].review_timing, None);
+}
+
+#[tokio::test]
+async fn review_settlement_changes_the_representation_etag_at_an_unchanged_record_etag() {
+    // Base Registry's record ETag covers the record revision, not the request
+    // extension, so a review settlement alone leaves it unchanged.
+    let mut etags = Vec::new();
+    for application_state in ["awaitingReview", "awaitingReview", "ready"] {
+        let server = MockServer::start().await;
+        let mut representation = record("submitted", None);
+        representation["data"]["request"]["review"] = review_status(application_state);
+        let observation = authoritative(&server, representation).await;
+        assert_eq!(observation.ordered_revision, 2);
+        etags.push(observation.representation_etag);
+    }
+    assert_eq!(etags[0], etags[1]);
+    assert_ne!(etags[1], etags[2]);
 }
 
 #[tokio::test]
