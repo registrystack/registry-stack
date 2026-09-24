@@ -5189,6 +5189,8 @@ dependencies = [
  "registry-evidence",
  "registry-evidence-oid4vci",
  "registry-evidencectl",
+ "registry-messaging",
+ "registry-messagingctl",
  "registry-relay-v2",
  "registry-relayctl",
  "registry-render",
