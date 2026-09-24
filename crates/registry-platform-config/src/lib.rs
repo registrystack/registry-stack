@@ -1,83 +1,45 @@
-//! Governed runtime configuration verification contracts.
+//! Shared runtime configuration for Registry Stack runtimes.
+//!
+//! [`RuntimeConfigLoader`] reads an operator `runtime.yaml` under one set of
+//! file, parsing and environment-substitution rules; the [`blocks`] types are
+//! the configuration sections every runtime spells the same way; and
+//! [`SecretResolver`] resolves the `secret:env/NAME` and `secret:file/name`
+//! references those sections carry. Each product still owns and validates the
+//! rest of its configuration contract.
 
+pub mod blocks;
+mod loader;
+#[cfg(feature = "schema")]
+pub mod schema;
 mod secrets;
 
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+pub use blocks::{
+    describe_secret_failure, is_sha256_label, ConfigBlockError, ConfigBlockErrorKind,
+    DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig, JwksSource,
+    ListenerBind, ListenerConfig, ListenerNetworkExposure, PackageConfig, PackageDigestMismatch,
+    PrivateListenerConfig, SecretProvidersConfig, TlsTermination,
+};
+pub use loader::{
+    contains_environment_expression, reject_environment_expressions_in_authored_yaml,
+    LoadedRuntimeConfig, RemovedKey, RuntimeConfigError, RuntimeConfigErrorKind,
+    RuntimeConfigLoader, RuntimeEnvelope, DEFAULT_MAX_RUNTIME_CONFIG_BYTES,
+    MAX_RUNTIME_CONFIG_PATH_BYTES,
+};
 pub use secrets::{
     ProtectedSecret, SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
 };
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct DeprecatedConfigField {
-    path: Vec<String>,
-    replacement: Option<String>,
-    message: Option<String>,
-}
-
-impl DeprecatedConfigField {
-    pub fn renamed(path: impl Into<String>, replacement: impl Into<String>) -> Self {
-        Self {
-            path: split_config_path(path),
-            replacement: Some(replacement.into()),
-            message: None,
-        }
-    }
-
-    pub fn removed(path: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            path: split_config_path(path),
-            replacement: None,
-            message: Some(message.into()),
-        }
-    }
-
-    pub fn path(&self) -> String {
-        self.path.join(".")
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, thiserror::Error)]
-#[error("{message}")]
-pub struct DeprecatedConfigFieldError {
-    field: String,
-    message: String,
-}
-
-impl DeprecatedConfigFieldError {
-    pub fn field(&self) -> &str {
-        &self.field
-    }
-}
-
-pub fn reject_deprecated_config_fields(
-    root: &Value,
-    fields: &[DeprecatedConfigField],
-) -> Result<(), DeprecatedConfigFieldError> {
-    for field in fields {
-        if config_value_at_path(root, &field.path).is_some() {
-            let field_path = field.path();
-            let message = if let Some(replacement) = &field.replacement {
-                format!("{field_path} has been renamed; use {replacement}")
-            } else if let Some(message) = &field.message {
-                format!("{field_path} has been removed; {message}")
-            } else {
-                format!("{field_path} has been removed")
-            };
-            return Err(DeprecatedConfigFieldError {
-                field: field_path,
-                message,
-            });
-        }
-    }
-    Ok(())
-}
 
 #[derive(Debug, Clone, Eq, PartialEq, thiserror::Error)]
 #[error("{0}")]
 pub struct ConfigEnvExpansionError(String);
 
+/// Expand `${VAR}` expressions in configuration text before it is parsed.
+///
+/// Runtimes read `runtime.yaml` through [`RuntimeConfigLoader`], which
+/// substitutes after parsing instead; this text-level form remains only for
+/// runtimes that have not moved to the loader yet.
 pub fn expand_config_env_vars(raw: &str) -> Result<String, ConfigEnvExpansionError> {
     expand_config_env_vars_with(raw, |name| std::env::var(name).ok())
 }
@@ -110,22 +72,6 @@ pub fn expand_config_env_vars_with(
     }
     expanded.push_str(rest);
     Ok(expanded)
-}
-
-fn split_config_path(path: impl Into<String>) -> Vec<String> {
-    path.into()
-        .split('.')
-        .filter(|segment| !segment.is_empty())
-        .map(ToString::to_string)
-        .collect()
-}
-
-fn config_value_at_path<'a>(root: &'a Value, path: &[String]) -> Option<&'a Value> {
-    let mut current = root;
-    for segment in path {
-        current = current.get(segment)?;
-    }
-    Some(current)
 }
 
 fn resolve_config_env_expression(
@@ -260,8 +206,81 @@ fn valid_env_key(key: &str) -> bool {
         && chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
+/// The `sha256:` label of `bytes`: `sha256:` followed by 64 lowercase hex
+/// digits.
+#[must_use]
 pub fn sha256_uri(bytes: &[u8]) -> String {
     format!("sha256:{}", hex_lower(&Sha256::digest(bytes)))
+}
+
+/// Keep the parts of a serde refusal an operator acts on, the member, the
+/// reason and the location, while the refused value stays out of the message.
+///
+/// serde reports the offending value inside an `invalid type:` or an
+/// `invalid value:` clause. Only the shape word that opens such a clause
+/// survives, so the message still says a string arrived where a number was
+/// required without repeating the string. A runtime configuration names
+/// secret references, database URLs and destinations, and a startup refusal
+/// is written to the operator's log.
+#[must_use]
+pub fn redact_refused_values(message: &str) -> String {
+    const CLAUSES: [&str; 2] = ["invalid type: ", "invalid value: "];
+    let mut redacted = String::with_capacity(message.len());
+    let mut rest = message;
+    loop {
+        let Some((start, len)) = CLAUSES
+            .iter()
+            .filter_map(|clause| rest.find(clause).map(|start| (start, clause.len())))
+            .min_by_key(|(start, _)| *start)
+        else {
+            redacted.push_str(rest);
+            return redacted;
+        };
+        let opened = start + len;
+        redacted.push_str(&rest[..opened]);
+        let (shape, tail) = split_refused_value(&rest[opened..]);
+        redacted.push_str(shape);
+        rest = tail;
+    }
+}
+
+/// Split the text after a clause marker into the shape word serde names and
+/// the remainder that follows the refused value.
+///
+/// serde renders the value with `Debug`, so it opens with a quote or a
+/// backtick and may hold the comma that would otherwise end the clause.
+fn split_refused_value(clause: &str) -> (&str, &str) {
+    let bytes = clause.as_bytes();
+    let mut index = 0;
+    let mut shape_end = None;
+    while index < bytes.len() {
+        match bytes[index] {
+            delimiter @ (b'"' | b'`') => {
+                shape_end.get_or_insert(index);
+                index = skip_delimited(bytes, index, delimiter);
+            }
+            b',' => break,
+            _ => index += 1,
+        }
+    }
+    let shape_end = shape_end.unwrap_or(index);
+    (clause[..shape_end].trim_end(), &clause[index..])
+}
+
+/// Return the offset just past the delimited run that opens at `open`.
+///
+/// A delimiter inside a `Debug` rendering arrives escaped, so it does not end
+/// the run.
+fn skip_delimited(bytes: &[u8], open: usize, delimiter: u8) -> usize {
+    let mut index = open + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            byte if byte == delimiter => return index + 1,
+            _ => index += 1,
+        }
+    }
+    bytes.len()
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -277,53 +296,6 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn deprecated_config_field_detector_names_replacement() {
-        let root = json!({
-            "auth": {
-                "oidc": {
-                    "audience": ["registry-service"]
-                }
-            }
-        });
-
-        let err = reject_deprecated_config_fields(
-            &root,
-            &[DeprecatedConfigField::renamed(
-                "auth.oidc.audience",
-                "auth.oidc.audiences",
-            )],
-        )
-        .expect_err("deprecated field is rejected");
-
-        assert_eq!(err.field(), "auth.oidc.audience");
-        assert!(err.to_string().contains("auth.oidc.audiences"));
-    }
-
-    #[test]
-    fn deprecated_config_field_detector_names_removal_rationale() {
-        let root = json!({
-            "server": {
-                "cors": {
-                    "allow_credentials": true
-                }
-            }
-        });
-
-        let err = reject_deprecated_config_fields(
-            &root,
-            &[DeprecatedConfigField::removed(
-                "server.cors.allow_credentials",
-                "credentials are always disabled",
-            )],
-        )
-        .expect_err("removed field is rejected");
-
-        assert_eq!(err.field(), "server.cors.allow_credentials");
-        assert!(err.to_string().contains("credentials are always disabled"));
-    }
 
     #[test]
     fn config_env_expansion_distinguishes_unset_empty_and_whitespace_values() {
@@ -518,5 +490,24 @@ mod tests {
             assert!(err.contains("VALUE"));
             assert!(!err.contains(value));
         }
+    }
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::redact_refused_values;
+
+    #[test]
+    fn refused_values_are_reduced_to_their_shape() {
+        assert_eq!(
+            redact_refused_values(
+                "invalid type: string \"DO_NOT_DISCLOSE, still\", expected u16 at line 1"
+            ),
+            "invalid type: string, expected u16 at line 1"
+        );
+        assert_eq!(
+            redact_refused_values("invalid value: integer `70000`, expected u16"),
+            "invalid value: integer, expected u16"
+        );
     }
 }
