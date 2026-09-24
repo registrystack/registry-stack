@@ -165,6 +165,17 @@ fn listener_bind_is_an_ip_socket_address() {
             .contains("listener.bind must be host:port"));
     }
     assert!(serde_norway::from_str::<ListenerConfig>("address: 127.0.0.1:1").is_err());
+
+    let padded = |port: &str| {
+        let width = MAX_LISTENER_BIND_CHARACTERS - "127.0.0.1:".len();
+        format!("bind: \"127.0.0.1:{port:0>width$}\"")
+    };
+    serde_norway::from_str::<ListenerConfig>(&padded("80")).expect("bound length");
+    let overlong = padded("80").replacen(":0", ":00", 1);
+    let error = serde_norway::from_str::<ListenerConfig>(&overlong).expect_err("overlong bind");
+    assert!(error
+        .to_string()
+        .contains("listener.bind must be host:port"));
 }
 
 #[test]
