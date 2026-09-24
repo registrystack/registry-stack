@@ -1168,6 +1168,20 @@ class CiChangesTest(unittest.TestCase):
                 self.assertTrue(outputs["platform"])
                 self.assertTrue(outputs["platform_hygiene"])
 
+    def test_dispatch_changes_select_the_job_running_its_postgres_suite(self) -> None:
+        # The dispatch core's PostgreSQL suite runs in the Scheduling
+        # PostgreSQL job, whose service database it borrows. A dispatch
+        # change must schedule that job whether or not a Scheduling crate
+        # happens to depend on dispatch.
+        for path in (
+            "crates/registry-platform-dispatch/src/postgres/dispatcher.rs",
+            "crates/registry-platform-dispatch/tests/postgres_dispatch.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertIn("registry-platform-dispatch", outputs["rust_packages"])
+                self.assertTrue(outputs["scheduling_postgres"])
+
     def test_platform_changes_select_relay_client_reverse_dependents(self) -> None:
         # The Relay SDK deliberately reuses the shared bounded outbound and
         # OAuth primitives. A platform change can therefore alter its wire

@@ -1292,7 +1292,11 @@ def classify(
         "casework_postgres": bool(affected & CASEWORK_PACKAGES)
         or breg_contracts
         or "registry-scheduling" in affected,
-        "scheduling_postgres": bool(affected & SCHEDULING_PACKAGES),
+        # The Scheduling PostgreSQL job also runs the dispatch core's suite
+        # against its service database.
+        "scheduling_postgres": bool(
+            affected & (SCHEDULING_PACKAGES | {"registry-platform-dispatch"})
+        ),
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,
         "docs": docs,
