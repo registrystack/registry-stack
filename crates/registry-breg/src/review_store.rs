@@ -827,8 +827,8 @@ impl ReviewAuthorityRegistry {
                     // healed outage resumes polling. Only a credential outage
                     // is authority-wide, so only it records operator attention
                     // on every due row; a failed lookup already recorded its
-                    // code on the one row it claimed. A later pending answer
-                    // or reconciled result clears the code.
+                    // code on the one row it claimed. A later answered lookup
+                    // (pending or 404) or reconciled result clears the code.
                     client
                         .execute(
                             "UPDATE registry_internal.registry_request_review_submissions
@@ -2212,11 +2212,13 @@ pub async fn poll_one_result(
             // one, so it spends the give-up budget like a failed lookup. The
             // lease fence keeps a worker that lost its claim (expired lease,
             // reclaimed row) from republishing a backoff over the new
-            // holder's schedule.
+            // holder's schedule. The lookup itself answered, so it clears the
+            // lookup error a previous failure or credential outage recorded.
             client
                 .execute(
                     "UPDATE registry_internal.registry_request_review_submissions
                         SET result_poll_attempts=LEAST(result_poll_attempts+1,1000),
+                            last_error_code=NULL,
                             next_result_poll_at=transaction_timestamp()+
                               (LEAST(60,5*LEAST(result_poll_attempts+1,1000)) * interval '1 second'),
                             updated_at=transaction_timestamp()
