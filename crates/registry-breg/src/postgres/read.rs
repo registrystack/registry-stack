@@ -59,7 +59,7 @@ const MAX_SPATIAL_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const REQUEST_REVIEW_OUTCOME_SQL: &str = "(SELECT CASE
         WHEN review_result.status IS NULL THEN 'pending'
         WHEN review_result.status = 'approved'
-         AND review_result.available_until <= statement_timestamp() THEN 'approvedExpired'
+         AND review_result.available_until <= transaction_timestamp() THEN 'approvedExpired'
         WHEN review_result.status = 'changes_requested' THEN 'changesRequested'
         ELSE review_result.status END
    FROM registry_internal.registry_request_review_submissions AS review_submission

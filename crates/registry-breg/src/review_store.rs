@@ -2763,7 +2763,7 @@ pub(crate) async fn settled_outcome(
 ) -> Result<Option<SettledReviewOutcome>, MutationError> {
     let row = client
         .query_opt(
-            "SELECT status, available_until <= statement_timestamp()
+            "SELECT status, available_until <= transaction_timestamp()
                FROM registry_internal.registry_request_review_results
               WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3",
             &[
@@ -2812,7 +2812,7 @@ pub(crate) async fn read_projection(
                     j.attempt_count,
                     to_char(j.next_attempt_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
                     j.receipt_recovered,
-                    r.available_until <= statement_timestamp()
+                    r.available_until <= transaction_timestamp()
                FROM registry_internal.registry_request_review_submissions s
                LEFT JOIN registry_internal.registry_request_review_results r
                  USING (request_entity_id,request_id,proposal_version)
@@ -3394,6 +3394,202 @@ mod tests {
                 decode_application_receipt(&job, &serde_json::to_vec(&substituted).unwrap()),
                 Err(ApplicationExchangeError::InvalidResponse)
             ));
+        }
+    }
+
+    // Both settled_outcome and read_projection decide the same thing (has this
+    // approval passed its available_until) and must agree even when a slow
+    // earlier statement in the same transaction has let wall-clock time move
+    // on. pg_sleep before the approval's available_until deterministically
+    // separates transaction_timestamp() (fixed at BEGIN) from
+    // statement_timestamp() (advances per statement) without racing exact
+    // statement boundaries.
+    #[cfg(feature = "postgres-test")]
+    mod transaction_instant_tests {
+        use registry_platform_canonical_json::canonicalize_json;
+        use serde_json::json;
+        use uuid::Uuid;
+
+        use super::*;
+        use crate::contract::Operation;
+        use crate::model::CompiledChangeRequestReviewRequirement;
+        use crate::request_workflow::{
+            ContractFingerprint, EffectId, EntityId, FieldId, FieldValue, FrozenPlannerKind,
+            FrozenPlanningBinding, PackageFingerprint, PreparedEffect, PreparedFieldChange,
+            PreparedProposal, PreparedTarget, RecordId, RecordRevision, RequestKey,
+            RequestWorkflow, StateRevision, TrustedActorRef, TrustedTimestamp,
+            TrustedTransitionContext,
+        };
+
+        #[allow(dead_code)]
+        mod postgres_harness {
+            use crate as registry_breg;
+            include!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/support/postgres_harness.rs"
+            ));
+        }
+        use postgres_harness::TestDatabase;
+
+        const DIGEST: &str =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+        // A proposal with a required review, detached from the fixture rows
+        // below: settled_outcome and read_projection take the request
+        // entity id, request id, and proposal version as explicit
+        // parameters, so only proposal.version(), .review_requirement(), and
+        // .on_approved() need to line up with the inserted rows.
+        fn required_review_proposal() -> RequestWorkflow {
+            let effect = PreparedEffect::new(
+                EffectId::new("patch-placement").expect("effect id"),
+                Operation::Patch,
+                PreparedTarget::existing(
+                    EntityId::new("asset-placement").expect("entity id"),
+                    RecordId::new("placement-1").expect("record id"),
+                    RecordRevision::new(3).expect("record revision"),
+                ),
+                vec![PreparedFieldChange::set(
+                    FieldId::new("site").expect("field id"),
+                    FieldValue::present(json!("site-a")),
+                    json!("site-b"),
+                )
+                .expect("field change")],
+            )
+            .expect("effect");
+            let snapshot_bytes = canonicalize_json(
+                &serde_json::to_value(std::slice::from_ref(&effect)).expect("effect serializes"),
+            )
+            .expect("effect canonicalizes")
+            .len();
+            let proposal = PreparedProposal::new_with_binding(
+                RecordRevision::new(7).expect("record revision"),
+                ContractFingerprint::new("sha256:contract").expect("contract fingerprint"),
+                PackageFingerprint::new("sha256:package").expect("package fingerprint"),
+                CompiledChangeRequestReview::Required(CompiledChangeRequestReviewRequirement {
+                    authority: "casework-main".to_owned(),
+                    policy_id: "request-review".to_owned(),
+                }),
+                FrozenPlanningBinding::new(
+                    FrozenPlannerKind::Declarative,
+                    "registry.change-request-plan/v1",
+                    None,
+                )
+                .expect("planning binding"),
+                vec![effect],
+                snapshot_bytes,
+            )
+            .expect("proposal");
+            let workflow = RequestWorkflow::new_draft(
+                RequestKey::new(
+                    EntityId::new("placement-correction-request").expect("entity id"),
+                    RecordId::new("request-1").expect("record id"),
+                ),
+                TrustedActorRef::from_verified_context("submitter").expect("owner"),
+                StateRevision::new(1).expect("state revision"),
+            );
+            let context = TrustedTransitionContext::from_verified_context(
+                TrustedActorRef::from_verified_context("submitter").expect("actor"),
+                TrustedTimestamp::from_server_clock("2026-09-19T00:00:00Z").expect("timestamp"),
+            );
+            workflow
+                .submit(context, proposal)
+                .expect("submit")
+                .into_workflow()
+        }
+
+        #[tokio::test]
+        async fn settled_outcome_and_read_projection_judge_expiry_at_one_instant() {
+            let mut database = TestDatabase::create(2).await;
+            database
+                .admin
+                .batch_execute(
+                    "CREATE TABLE registry_internal.registry_request_proposals (
+                         request_entity_id text NOT NULL,
+                         request_id uuid NOT NULL,
+                         proposal_version bigint NOT NULL,
+                         PRIMARY KEY (request_entity_id,request_id,proposal_version)
+                     );",
+                )
+                .await
+                .expect("proposal parent table");
+            install_review_storage_for_test(&database.admin, &database.runtime_role)
+                .await
+                .expect("review storage");
+
+            let request_entity_id = "requests";
+            let request_id = Uuid::new_v4();
+            let result_id = Uuid::new_v4();
+            database
+                .admin
+                .execute(
+                    "INSERT INTO registry_internal.registry_request_proposals VALUES ($1,$2,1)",
+                    &[&request_entity_id, &request_id],
+                )
+                .await
+                .expect("proposal");
+            database
+                .admin
+                .execute(
+                    "INSERT INTO registry_internal.registry_request_review_submissions
+                 (request_entity_id,request_id,proposal_version,proposal_digest,job_id,authority,
+                  producer_id,policy_id,idempotency_key,create_request,expected_submission_digest,
+                  on_approved_mode,executor,state,accepted_binding)
+                 VALUES ($1,$2,1,$3,$4,'casework-main','registry-producer','request-review',
+                         'submission-key','{}'::jsonb,$3::text,'manual',NULL,'accepted',$5)",
+                    &[
+                        &request_entity_id,
+                        &request_id,
+                        &DIGEST,
+                        &Uuid::new_v4(),
+                        &json!({"requestId": Uuid::new_v4()}),
+                    ],
+                )
+                .await
+                .expect("submission");
+
+            let transaction = database.admin.transaction().await.expect("transaction");
+            transaction
+                .batch_execute("SELECT pg_sleep(0.3)")
+                .await
+                .expect("sleep past the approval's halfway point");
+            transaction
+                .execute(
+                    "INSERT INTO registry_internal.registry_request_review_results
+                 (request_entity_id,request_id,proposal_version,authority,result_id,result,
+                  status,completed_at,available_until)
+                 VALUES ($1,$2,1,'casework-main',$3,'{}'::jsonb,'approved',
+                         transaction_timestamp(),
+                         transaction_timestamp() + interval '150 milliseconds')",
+                    &[&request_entity_id, &request_id, &result_id],
+                )
+                .await
+                .expect("result");
+
+            let workflow = required_review_proposal();
+            let proposal = workflow.current_proposal().expect("frozen proposal");
+
+            let outcome = settled_outcome(&transaction, request_entity_id, request_id, 1)
+                .await
+                .expect("settled outcome query")
+                .expect("settled outcome row");
+            let projection =
+                read_projection(&transaction, request_entity_id, request_id, proposal, true)
+                    .await
+                    .expect("projection query")
+                    .expect("projection row");
+
+            assert_eq!(
+                outcome,
+                SettledReviewOutcome::Approved { expired: false },
+                "an approval that has not reached its available_until at the transaction's \
+                 own instant must not be judged expired just because an earlier statement \
+                 in the same transaction ran slowly"
+            );
+            assert_eq!(
+                projection["application"]["state"],
+                json!("ready"),
+                "read_projection must agree with settled_outcome about the same approval"
+            );
         }
     }
 }
