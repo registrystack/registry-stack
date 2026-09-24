@@ -1052,6 +1052,43 @@ async fn returning_to_an_earlier_binding_generation_opens_a_fresh_occurrence() {
     );
 }
 
+fn queue_project(queue: &str) -> registry_casework_core::CaseworkProject {
+    serde_json::from_value(serde_json::json!({
+        "apiVersion": registry_casework_core::CASEWORK_API_VERSION,
+        "kind": registry_casework_core::CASEWORK_KIND,
+        "casework": {"id": "pinned", "version": "1"},
+        "accessProfiles": [{"id": "staff", "principalClaim": "sub", "requiredScopes": [], "role": "staff"}],
+        "queues": [{"id": queue, "label": "Queue"}]
+    }))
+    .expect("queue project")
+}
+
+#[tokio::test]
+async fn activation_preflight_counts_open_work_items_in_a_removed_queue() {
+    let (store, _client, _schema) = isolated_schema("pinned_queue").await;
+    store.migrate().await.expect("migrate");
+    // The first item is superseded by the second, so only one stays open.
+    observe_open_in_generation(&store, "binding-a").await;
+    observe_open_in_generation(&store, "binding-b").await;
+
+    let kept = registry_casework::stranded_pinned_work(&store, &queue_project("default"), &[])
+        .await
+        .expect("preflight with the queue kept");
+    assert!(kept.is_empty(), "{kept:?}");
+
+    let removed = registry_casework::stranded_pinned_work(&store, &queue_project("triage"), &[])
+        .await
+        .expect("preflight with the queue removed");
+    assert_eq!(
+        removed,
+        vec![registry_casework::StrandedWork::QueueRemoved {
+            queue: "default".to_owned(),
+            reviews: 0,
+            work_items: 1,
+        }]
+    );
+}
+
 async fn item_reference_revision_and_history(
     client: &tokio_postgres::Client,
     item_id: uuid::Uuid,

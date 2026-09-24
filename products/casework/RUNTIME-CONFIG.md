@@ -27,6 +27,25 @@ Set it to the digest printed by `caseworkctl package` for the package you
 reviewed, so that replacing the files under `package.root` cannot change the
 policy a restart loads.
 
+`package.acknowledgeStrandedWork` is optional and takes the same digest form.
+Before it registers any source generation, the runtime compares the package it
+is about to activate with the in-flight work retained in the database. Review
+requests still under review pinned their kind's policy when they were
+admitted, and open work items keep the queue they were routed to. The runtime
+refuses a package that removes a queue or access profile that work still
+needs, that declares a pinned review kind version with different content, that
+removes the source of a source-context review, or whose source read would
+disclose a field the pinned display schema does not declare or omit one it
+requires. The refusal names each conflict with its counts and the package
+digest. Let that work finish under the earlier package, or set
+`package.acknowledgeStrandedWork` to that exact digest to activate the package
+anyway; the acknowledgement admits only the package it names, so it never
+carries over to a later one. A development-loopback project without a manifest
+has no digest to acknowledge, so the runtime logs the conflicts and starts.
+`caseworkctl doctor` runs the same comparison as its `pinnedWork` check, so
+pointing it at a runtime file whose `package.root` holds the next package
+previews the refusal before a restart.
+
 `listener` is required. `listener.bind` is one numeric socket address, including
 bracketed IPv6 forms, and defaults to `127.0.0.1:8100` when omitted from the
 listener block. `listener.tlsTermination` is required. Use

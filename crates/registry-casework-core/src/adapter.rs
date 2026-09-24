@@ -224,6 +224,14 @@ pub trait SourceAdapter: Send + Sync {
         None
     }
 
+    /// The keys a caller read of one request entity may place in
+    /// `CallerSubjectView::disclosed`. Activation compares them with the
+    /// display schemas pinned by in-flight reviews. `None` means the adapter
+    /// does not declare them, and that comparison is skipped for the entity.
+    fn caller_disclosure_fields(&self, _entity: &str) -> Option<Vec<String>> {
+        None
+    }
+
     async fn verify_transition(
         &self,
         request: EventRequest,

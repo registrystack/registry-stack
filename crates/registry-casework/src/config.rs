@@ -538,6 +538,12 @@ pub struct RuntimePackageConfig {
     /// directory with no manifest, is refused before the runtime starts.
     #[serde(default)]
     pub expected_policy_digest: Option<String>,
+    /// The `policyDigest` of a package the operator has accepted will strand
+    /// in-flight work pinned under an earlier package. Startup and `doctor`
+    /// refuse such a package unless this names its exact digest, so an
+    /// acknowledgement never carries over to a later package.
+    #[serde(default)]
+    pub acknowledge_stranded_work: Option<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -786,6 +792,14 @@ impl RuntimeConfig {
             && package_digest.is_none()
         {
             return Err(RuntimeConfigError::ProductionPolicyPackageRequired);
+        }
+        if self
+            .package
+            .acknowledge_stranded_work
+            .as_deref()
+            .is_some_and(|acknowledged| !valid_policy_digest(acknowledged))
+        {
+            return Err(RuntimeConfigError::InvalidStrandedWorkAcknowledgement);
         }
         if let Some(expected) = &self.package.expected_policy_digest {
             if !valid_policy_digest(expected) {
@@ -1835,6 +1849,40 @@ reviewProducers:
     }
 
     #[test]
+    fn a_stranded_work_acknowledgement_names_one_package_digest() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        let manifest = write_package(&package);
+        let operator = root.path().join("operator.yaml");
+        let write = |acknowledged: &str| {
+            let mut document = operator_value(&package, "operator-controlled-upstream");
+            document["package"]["acknowledgeStrandedWork"] = serde_json::json!(acknowledged);
+            std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+        };
+
+        write(&manifest.policy_digest);
+        let config = RuntimeConfig::load(&operator).expect("a digest acknowledgement loads");
+        assert_eq!(
+            config.package.acknowledge_stranded_work.as_deref(),
+            Some(manifest.policy_digest.as_str())
+        );
+
+        for malformed in ["yes", "sha256:ABC"] {
+            write(malformed);
+            let error = RuntimeConfig::load(&operator).expect_err("a malformed digest is refused");
+            assert!(
+                matches!(
+                    error,
+                    RuntimeConfigError::InvalidStrandedWorkAcknowledgement
+                ),
+                "{malformed}: {error:?}"
+            );
+            assert_eq!(error.path(), "package.acknowledgeStrandedWork");
+        }
+    }
+
+    #[test]
     fn source_context_review_namespaces_require_activated_adapters() {
         let root = tempfile::tempdir().unwrap();
         let package = root.path().join("source-context");
@@ -2335,6 +2383,10 @@ pub enum RuntimeConfigError {
         expected: String,
         actual: Option<String>,
     },
+    #[error(
+        "package.acknowledgeStrandedWork must be sha256: followed by 64 lowercase hexadecimal digits"
+    )]
+    InvalidStrandedWorkAcknowledgement,
     #[error("an imported source description does not match the exact configured source policy")]
     SourceDescription,
     #[error("the Casework runtime configuration is invalid")]
@@ -2396,6 +2448,7 @@ impl RuntimeConfigError {
             Self::InvalidExpectedPolicyDigest | Self::PolicyDigestMismatch { .. } => {
                 "package.expectedPolicyDigest"
             }
+            Self::InvalidStrandedWorkAcknowledgement => "package.acknowledgeStrandedWork",
             Self::Invalid => "/",
         }
     }

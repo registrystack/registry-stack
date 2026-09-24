@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- BREAKING: the runtime refuses to activate a policy package that would strand
+  in-flight work pinned under an earlier package, and names each conflict with
+  its counts: a queue or access profile that pinned reviews or open work items
+  still need, a pinned review kind version declared with different content, a
+  removed source for source-context reviews, or a source read the pinned
+  display schema would refuse. Let that work finish, or set the new
+  `package.acknowledgeStrandedWork` to the exact package digest the refusal
+  names. `caseworkctl doctor` runs the same comparison as its `pinnedWork`
+  check and reports the conflicts under `pinnedWork`, so it previews the
+  refusal against the next package before a restart.
 - BREAKING: `caseworkctl doctor` names the check that failed instead of
   reporting every dependency failure as "A Casework runtime dependency check
   failed." A refusal carries the code `casework.doctor.check-failed`, names the

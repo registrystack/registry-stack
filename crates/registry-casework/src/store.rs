@@ -3125,6 +3125,49 @@ impl PostgresStore {
             .collect())
     }
 
+    /// In-flight reviews grouped by pinned policy, subject source and type,
+    /// and active stage, plus open work items per queue. The inventory holds
+    /// counts and pinned policy only, never subject data.
+    pub(crate) async fn pinned_work_inventory(
+        &self,
+    ) -> Result<crate::pinned_work::PinnedWorkInventory, StoreError> {
+        let client = self.client().await?;
+        let mut inventory = crate::pinned_work::PinnedWorkInventory::default();
+        for row in client
+            .query(
+                "SELECT policy_snapshot,subject_source,subject_type,active_stage_index,count(*) FROM casework_review_requests WHERE lifecycle='reviewing' GROUP BY policy_snapshot,subject_source,subject_type,active_stage_index",
+                &[],
+            )
+            .await?
+        {
+            let active_stage_index: i32 = row.try_get(3)?;
+            let reviews: i64 = row.try_get(4)?;
+            inventory.reviews.push(crate::pinned_work::PinnedReviewGroup {
+                policy: serde_json::from_value(row.try_get(0)?)
+                    .map_err(|_| StoreError::Corrupt)?,
+                subject_source: row.try_get(1)?,
+                subject_type: row.try_get(2)?,
+                active_stage_index: usize::try_from(active_stage_index)
+                    .map_err(|_| StoreError::Corrupt)?,
+                reviews: u64::try_from(reviews).map_err(|_| StoreError::Corrupt)?,
+            });
+        }
+        for row in client
+            .query(
+                "SELECT queue_id,count(*) FROM casework_items WHERE erased_at IS NULL AND state NOT IN ('completed','superseded','cancelled') GROUP BY queue_id",
+                &[],
+            )
+            .await?
+        {
+            let items: i64 = row.try_get(1)?;
+            inventory.work_items.insert(
+                row.try_get(0)?,
+                u64::try_from(items).map_err(|_| StoreError::Corrupt)?,
+            );
+        }
+        Ok(inventory)
+    }
+
     pub async fn source_status(
         &self,
         source_id: &str,

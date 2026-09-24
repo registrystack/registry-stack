@@ -750,6 +750,15 @@ async fn live_registry_change_refuses_projection_under_the_imported_source_contr
         SourceAdapterError::BindingMoved
     );
 }
+#[test]
+fn caller_disclosure_fields_are_the_imported_api_names_of_the_context_projection() {
+    let adapter = adapter_with_context_projection("http://127.0.0.1:9");
+    assert_eq!(
+        adapter.caller_disclosure_fields("correction"),
+        Some(vec!["summary".to_owned(), "attachmentMetadata".to_owned()])
+    );
+    assert_eq!(adapter.caller_disclosure_fields("licence"), None);
+}
 #[tokio::test]
 async fn caller_context_projection_is_value_bounded_and_never_widens() {
     let server = MockServer::start().await;
