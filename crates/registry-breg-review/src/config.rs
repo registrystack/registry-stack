@@ -55,7 +55,7 @@ pub struct ListenerConfig {
 }
 
 fn default_listener_bind() -> SocketAddr {
-    "127.0.0.1:8110"
+    "127.0.0.1:8115"
         .parse()
         .expect("valid review page listener default")
 }
@@ -646,7 +646,7 @@ mod tests {
     fn document(overrides: &[(&str, &str)]) -> String {
         let mut values = vec![
             ("tls", "operator-controlled-upstream"),
-            ("bind", "10.0.0.5:8110"),
+            ("bind", "10.0.0.5:8115"),
             ("origin", "https://review.example"),
             ("issuer", "https://id.example"),
             ("clientKeyRef", "secret:file/client-key.jwk"),
@@ -763,14 +763,31 @@ mod tests {
         }
         let development = document(&[
             ("tls", "development-loopback"),
-            ("bind", "127.0.0.1:8110"),
-            ("origin", "http://127.0.0.1:8110"),
+            ("bind", "127.0.0.1:8115"),
+            ("origin", "http://127.0.0.1:8115"),
             ("issuer", "http://127.0.0.1:9000"),
             ("baseUrl", "http://127.0.0.1:9100/base"),
         ]);
         assert!(load(&development).expect("development").development());
-        let exposed = development.replace("127.0.0.1:8110\"", "0.0.0.0:8110\"");
+        let exposed = development.replace("127.0.0.1:8115\"", "0.0.0.0:8115\"");
         assert_eq!(load(&exposed).expect_err("exposed").path(), "listener");
+    }
+
+    #[test]
+    fn an_omitted_bind_listens_beside_the_gateway_not_on_its_port() {
+        let development = document(&[
+            ("tls", "development-loopback"),
+            ("origin", "http://127.0.0.1:8115"),
+            ("issuer", "http://127.0.0.1:9000"),
+            ("baseUrl", "http://127.0.0.1:9100/base"),
+        ]);
+        let omitted = development.replace("  bind: \"10.0.0.5:8115\"\n", "");
+        assert_ne!(omitted, development);
+        let config = load(&omitted).expect("development without a bind");
+        assert_eq!(
+            config.listener.bind,
+            "127.0.0.1:8115".parse::<SocketAddr>().unwrap()
+        );
     }
 
     #[test]

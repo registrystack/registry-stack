@@ -20,7 +20,7 @@ echoing its value.
 apiVersion: registry.registrystack.org/breg-review-runtime/v1alpha1
 kind: BRegReviewRuntimeConfig
 listener:
-  bind: 127.0.0.1:8110
+  bind: 127.0.0.1:8115                           # the default
   tlsTermination: operator-controlled-upstream   # or development-loopback
   networkExposure: private-address               # or container-private
 publicOrigin: https://review.example
