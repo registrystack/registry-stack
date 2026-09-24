@@ -9,6 +9,9 @@ This crate is test-only. It fails to compile unless callers enable the
 
 - `MockIdp`, an in-process OIDC issuer with discovery, JWKS, token minting, and
   key rotation.
+- `TestAuthorizationServer` (feature `test-authorization-server`), an
+  in-process authorization server with the authorization-code, client
+  credentials, and token-exchange grants.
 - `MockHttpUpstream`, a WireMock-backed upstream with request-size tracking.
 - Ed25519 JWK fixtures for signing and verification tests.
 - `assert_chain_integrity` for internally consistent audit envelope assertions.
@@ -57,6 +60,42 @@ In-process OIDC issuer. Key methods:
 - `rotate_key()` — switch to the second fixture key, simulating a key rollover.
 - `stop()` — graceful shutdown.
 
+### `TestAuthorizationServer`
+
+In-process OAuth 2.0 authorization server, behind the
+`test-authorization-server` feature. It serves OIDC discovery, RFC 8414
+metadata, a JWKS, `/authorize`, and `/token` over loopback HTTP, and issues RFC
+9068 `at+jwt` access tokens signed with the Ed25519 fixture key.
+
+- `/authorize` runs the authorization-code grant with PKCE S256 only. Redirect
+  URIs match exactly. It is test-only: nobody signs in, and the code is issued
+  for the `login_hint` subject, else for the builder's `logged_in_subject`,
+  else the flow ends with `login_required`.
+- `/token` accepts `authorization_code` (one-time codes, PKCE verified),
+  `client_credentials`, and RFC 8693 token exchange. Confidential clients
+  authenticate with `private_key_jwt` (EdDSA, ES256, ES384, RS256, or RS384,
+  selected by `kid`, each assertion `jti` accepted once); public clients send
+  only `client_id` and may use only the authorization-code grant.
+- A token exchange takes an access-token subject this server issued and has
+  not expired, an optional actor token that must be the exchanging client's
+  own `client_credentials` token, and exactly one `resource` the client is
+  allowed. Requested scopes must be a subset of the subject token's. The issued
+  token names the subject's `sub`, the client in `azp` and `client_id`, the
+  resource as a single-string `aud`, and expires no later than the subject
+  token.
+- `ExchangeProfile::Conformant` (the default) issues `act = {"sub": ...}` and
+  the exchanging client's `registry_actor_kind`.
+  `ExchangeProfile::IssuerQualifiedActor` issues `act = {"sub": ..., "iss":
+  ...}` and copies `registry_actor_kind` from the subject token, a shape some
+  deployed servers emit.
+
+Register clients with `TestClient::new(id)` plus `with_public_jwk`,
+`with_redirect_uri`, `with_resource`, `with_actor_kind`, `with_token_lifetime`,
+and `with_service_subject`. `verifier_config(audiences)` returns a
+`registry-platform-oidc` verifier configuration that accepts the server's
+access tokens, and `issue_access_token` signs one directly, with a
+caller-chosen expiry, for refusal tests.
+
 ### `MockExpectation<'a>`
 
 Builder returned by `MockHttpUpstream::expect(method, path)`. Wire up the
@@ -101,6 +140,7 @@ so test code only needs to import from this crate.
 
 ```sh
 cargo test -p registry-platform-testing --features test-utils
+cargo test -p registry-platform-testing --all-features
 ```
 
 The crate also owns a cross-crate integration test that exercises middleware,
