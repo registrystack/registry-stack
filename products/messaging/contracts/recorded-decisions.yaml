@@ -1,0 +1,86 @@
+apiVersion: registry.registrystack.org/product-contract/v1
+product: messaging
+scope: mvp
+purpose: >-
+  Behaviour a reader could reasonably mistake for an oversight, recorded as a
+  deliberate choice with the reasoning that settled it. A later change may
+  overturn any of these, but it overturns the entry in the same commit rather
+  than rediscovering the question.
+decisions:
+  - id: MESSAGING-DEC-01
+    subject: The status route answers message.not-visible for a missing message
+    decision: >-
+      Every authenticated read of a message the caller may not see answers
+      404 message.not-visible, and so does a read of a message that does not
+      exist. Until the message store lands, every authenticated read answers
+      that way.
+    reasoning: >-
+      A distinct not-found answer would let any authenticated caller probe
+      which identifiers exist. One answer for both keeps the status route from
+      being an existence oracle.
+    evidence:
+      - {path: crates/registry-messaging-core/src/visibility.rs, name: a_missing_message_answers_exactly_like_an_invisible_one}
+      - {path: crates/registry-messaging/src/http.rs, name: an_authenticated_caller_is_told_an_unknown_message_is_not_visible}
+  - id: MESSAGING-DEC-02
+    subject: Authentication refusals are counted, not audited
+    decision: >-
+      A refused credential increments a closed-label counter on the private
+      metrics listener and writes no audit record.
+    reasoning: >-
+      An unauthenticated request names no caller the journal could attribute
+      it to, and journaling every refusal would let anyone who can reach the
+      listener grow the journal without bound. The counter carries the route
+      template and the refusal reason, never the message identifier or a
+      token value.
+    evidence:
+      - {path: crates/registry-messaging/src/http.rs, name: the_metrics_listener_serves_counters_and_nothing_else}
+      - {path: crates/registry-messaging/src/metrics.rs, name: labels_are_closed}
+  - id: MESSAGING-DEC-03
+    subject: One client resolves to exactly one access profile
+    decision: >-
+      A client identifier listed in two access profiles is refused when the
+      package loads, and a token resolves to the one profile its client is
+      listed in.
+    reasoning: >-
+      Choosing between two matching profiles at request time would need a
+      precedence rule a reviewer cannot see beside the templates. Refusing the
+      overlap keeps who may send what readable from the package alone.
+    evidence:
+      - {path: crates/registry-messaging-core/src/access.rs, name: a_client_in_two_profiles_is_refused}
+      - {path: crates/registry-messaging-core/src/access.rs, name: a_token_resolves_to_the_profile_its_client_is_listed_in}
+  - id: MESSAGING-DEC-04
+    subject: Operators read and act on messages but never submit them
+    decision: >-
+      The operator role sees every message and will settle, retry, and cancel
+      them; submission belongs to the sender role only.
+    reasoning: >-
+      An operator credential is broad by design. Letting it also send would
+      make the widest credential the one that can reach any recipient through
+      any template, which is the opposite of what an access profile is for.
+    evidence:
+      - {path: crates/registry-messaging-core/src/access.rs, name: a_submission_outside_the_callers_sender_profiles_or_templates_is_refused}
+  - id: MESSAGING-DEC-05
+    subject: Environment expressions are refused in credential references
+    decision: >-
+      The runtime configuration substitutes ${VAR} expressions in ordinary
+      string members after parsing, and refuses one in any member that holds a
+      secret reference.
+    reasoning: >-
+      A secret reference already names where the secret lives. Substituting
+      into it would let an environment variable redirect the runtime to a
+      different secret, and would put the reference outside review.
+    evidence:
+      - {path: crates/registry-messaging/src/config.rs, name: an_environment_expression_in_a_credential_field_is_refused}
+      - {path: crates/registry-messaging/src/environment.rs, name: an_expression_in_a_credential_member_is_refused}
+  - id: MESSAGING-DEC-06
+    subject: A pinned package digest is refused until the ledger can verify it
+    decision: >-
+      package.expectedDigest is part of the configuration grammar, and a
+      configuration that sets it is refused at load until the package ledger
+      can verify it.
+    reasoning: >-
+      Accepting the key and ignoring it would tell an operator their package
+      is pinned when nothing checks the pin. A loud refusal is the honest
+      answer until slice S2 verifies it.
+    evidence:
+      - {path: crates/registry-messaging/src/config.rs, name: a_pinned_package_digest_is_refused_until_it_can_be_verified}

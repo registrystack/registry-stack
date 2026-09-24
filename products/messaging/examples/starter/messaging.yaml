@@ -1,0 +1,24 @@
+apiVersion: registry.registrystack.org/messaging-package/v1alpha1
+kind: MessagingPackage
+# Who may call this deployment and what each caller may do. A client appears
+# in exactly one profile. Sender profiles and templates are named here by
+# identifier; the package documents that declare them arrive with templates
+# and provider dispatch.
+accessProfiles:
+  - id: case-notices
+    principalClaim: sub
+    requiredScopes: [messaging:send]
+    requesterClients: [case-system]
+    actorKind: service
+    role: sender
+    senderProfiles: [transactional]
+    templates: [appointment-reminder]
+    requestsPerMinute: 60
+    burst: 10
+  - id: operations
+    principalClaim: sub
+    requiredScopes: [messaging:operate]
+    requesterClients: [operations-console]
+    role: operator
+    requestsPerMinute: 60
+    burst: 10

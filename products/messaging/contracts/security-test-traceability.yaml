@@ -1,0 +1,30 @@
+contract: registry.messaging.security-test-traceability/v1
+scope: mvp
+executionStatus: not-recorded
+note: >-
+  Every entry names the tests that carry its invariant. A pending invariant
+  has no entry until the slice that enforces it adds its tests. Tests under
+  crates/registry-messaging/tests run only with the postgres-test feature and
+  a disposable database. This file records the obligation, not a passing run.
+entries:
+  - id: MESSAGING-SEC-01
+    tests:
+      - {path: crates/registry-messaging-core/src/access.rs, name: a_submission_outside_the_callers_sender_profiles_or_templates_is_refused}
+      - {path: crates/registry-messaging-core/src/access.rs, name: direct_content_is_accepted_only_where_the_profile_allows_it}
+      - {path: crates/registry-messaging-core/src/access.rs, name: a_client_listed_in_no_profile_is_refused}
+      - {path: crates/registry-messaging-core/src/access.rs, name: a_client_in_two_profiles_is_refused}
+      - {path: crates/registry-messaging/src/auth.rs, name: an_admitted_client_without_a_profile_is_not_authorized}
+      - {path: crates/registry-messaging/src/http.rs, name: a_client_without_a_profile_or_scope_is_not_authorized}
+  - id: MESSAGING-SEC-04
+    tests:
+      - {path: crates/registry-messaging-core/src/visibility.rs, name: another_caller_is_told_the_message_is_not_visible}
+      - {path: crates/registry-messaging-core/src/visibility.rs, name: a_missing_message_answers_exactly_like_an_invisible_one}
+      - {path: crates/registry-messaging/src/http.rs, name: an_authenticated_caller_is_told_an_unknown_message_is_not_visible}
+      - {path: crates/registry-messaging/src/http.rs, name: a_missing_or_malformed_credential_is_challenged}
+      - {path: crates/registry-messaging/src/http.rs, name: a_forged_credential_is_challenged}
+      - {path: crates/registry-messaging/src/http.rs, name: a_credential_for_another_audience_is_challenged}
+      - {path: crates/registry-messaging/src/auth.rs, name: an_expired_token_is_refused}
+      - {path: crates/registry-messaging/src/auth.rs, name: a_token_that_is_not_an_access_token_is_refused}
+      - {path: crates/registry-messaging/src/auth.rs, name: a_client_the_deployment_does_not_admit_is_refused}
+      - {path: crates/registry-messaging/src/auth.rs, name: an_exchanged_token_is_refused_when_no_authority_was_declared}
+      - {path: crates/registry-messaging/tests/postgres_migrate.rs, name: a_served_runtime_is_ready_and_keeps_metrics_on_the_private_listener}

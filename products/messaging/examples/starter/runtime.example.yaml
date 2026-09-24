@@ -1,0 +1,90 @@
+# A complete Messaging runtime configuration: the document
+# `messaging migrate --runtime-config` and `messaging serve --runtime-config`
+# read, and `messagingctl check --runtime-config` checks offline. Copy it to
+# runtime.yaml, set every absolute path to this deployment's real location,
+# and point the secret references at secrets the configured provider can
+# resolve. Messaging reads the authored package at package.root/messaging.yaml
+# and refuses to start when that file is missing or does not pass its checks.
+#
+# Every string member may carry ${VAR}, ${VAR:-default}, or ${VAR:?message};
+# the value is substituted after the YAML is parsed, so it is always text. A
+# member whose name ends in Ref names a secret and refuses an environment
+# expression: use a secret:env/NAME or secret:file/name reference instead.
+# Unknown keys are refused, with the path of the first one found.
+apiVersion: registry.registrystack.org/messaging-runtime/v1alpha1
+kind: MessagingRuntimeConfig
+package:
+  # The directory holding messaging.yaml. `expectedDigest` pins the package to
+  # a sha256: digest; this version cannot verify a package digest yet, so a
+  # configuration that sets it is refused rather than accepted unverified.
+  root: /srv/registry-messaging/package
+listener:
+  bind: 127.0.0.1:8107
+  tlsTermination: development-loopback
+  networkExposure: private-address
+  # `operator-controlled-upstream` is the production value: the runtime itself
+  # stays plaintext and an operator-managed TLS edge terminates transport in
+  # front of it. `development-loopback` is direct plaintext, refused on any
+  # non-loopback bind. `networkExposure: container-private` additionally
+  # permits an unspecified bind for a listener kept on a private container
+  # network.
+metricsListener:
+  # /metrics is served only here, never on the public listener. The address
+  # must be loopback or private, and must not share the public listener's
+  # socket. Omit the block to serve no metrics at all.
+  bind: 127.0.0.1:9107
+secretProviders:
+  file:
+    # Every secret:file reference resolves under this root. A secret file must
+    # be a regular file owned by the runtime user, with mode 0400 or 0600 and
+    # exactly one hard link; `openssl rand -hex 32` generates the audit key.
+    root: /run/secrets/registry-messaging
+  # Declare `environment: {}` to enable secret:env/NAME references. The
+  # runtime does not fall back from one provider to another; every configured
+  # reference must resolve under a provider declared here.
+  # environment: {}
+database:
+  # The least-privilege service connection and the operator-run migration
+  # connection, each a PostgreSQL URL held in the secret provider. The
+  # runtime requires TLS on the database connection.
+  runtimeUrlRef: secret:file/runtime-database-url
+  migrationUrlRef: secret:file/migration-database-url
+  # The PEM bundle of the private CA in front of PostgreSQL, when the
+  # deployment terminates database TLS with one.
+  # trustedRootCertificateRef: secret:file/postgres-ca.pem
+  # `testOnlyPlaintext: true` is the one plaintext escape, and only a build
+  # carrying the `postgres-test` feature accepts it.
+  # testOnlyPlaintext: true
+authentication:
+  oidc:
+    issuer: https://identity.example.test/realms/registry
+    audience: urn:example:messaging
+    # The claim carrying the accepted OAuth scopes; `registry_scopes` when
+    # omitted.
+    # scopeClaim: scope
+    # The OAuth clients this runtime admits. The list is never empty, and
+    # every client an access profile in messaging.yaml names must be listed.
+    allowedClients: [case-system, operations-console]
+    # `assertionIssuers` maps a client id to the assertion authorities it may
+    # exchange a subject token from. A deployment that performs no token
+    # exchange leaves it empty, and an exchanged token is then refused.
+    # assertionIssuers:
+    #   case-system: [https://issuer.example.test/assertions]
+    # Signing keys come from issuer discovery by default. Declare the static
+    # alternative when the runtime cannot reach the issuer's discovery
+    # document.
+    # jwksSource:
+    #   kind: static
+    #   documentRef: secret:file/jwks.json
+audit:
+  path: /var/lib/registry-messaging/audit.ndjson
+  hashKeyRef: secret:file/messaging-audit-key
+retention:
+  # Payload and recipient contact: 1 to 30 days after a terminal state.
+  # Content-free record: from the payload period up to ten years. Replayable
+  # submission receipt: one day up to the record period. These are defaults,
+  # not a jurisdictional recommendation; the start record in the audit journal
+  # carries the deployed values.
+  payloadDays: 7
+  recordDays: 90
+  submissionReceiptDays: 7

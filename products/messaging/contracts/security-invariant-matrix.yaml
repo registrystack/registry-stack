@@ -1,0 +1,184 @@
+apiVersion: registry.registrystack.org/product-contract/v1
+product: messaging
+scope: mvp
+evidenceStatus: source-mapped-not-executed
+evidenceNote: >-
+  Test references identify maintained proof obligations. This file does not
+  assert that any test ran or passed in a particular review. Rows whose named
+  test lives in a PostgreSQL suite are proven only when that suite runs against
+  a disposable database under the postgres-test feature.
+reviewRule: >-
+  This matrix is the baseline every later Messaging change is reviewed
+  against. A change that weakens a row rewrites the row in the same commit and
+  says why. A row may not lose its negative test. A pending row names the
+  slice that owes its enforcement and carries no test until that slice lands;
+  it becomes partial or enforced only in the change that adds the negative
+  test that earns it. The matrix lists the ten invariants of the product
+  specification, no fewer.
+invariants:
+  - id: MESSAGING-SEC-01
+    state: partial
+    threat: >-
+      A caller sends through a sender profile or template its access profile
+      does not list, so one integration spends another program's sender
+      identity or content, or an operator profile submits messages.
+    enforcementPoint: >-
+      The core's authorize_submission decision over the caller's resolved
+      access profile: the sender profile and the template must each be listed,
+      direct content needs the profile's explicit opt-in, and only the sender
+      role submits.
+    refusal: >-
+      Refuse with profile.not-authorized for a sender profile, template, or
+      direct content outside the profile, and with operation.not-authorized
+      for an operator; accept nothing.
+    partialNote: >-
+      The decision is implemented and tested in the core. No submission route
+      exists yet: slice S3 wires POST /v1/messages to this decision and adds
+      the route-level negative test.
+    negativeTest:
+      path: crates/registry-messaging-core/src/access.rs
+      name: a_submission_outside_the_callers_sender_profiles_or_templates_is_refused
+  - id: MESSAGING-SEC-02
+    state: pending
+    plannedSlice: S3
+    threat: >-
+      A request field chooses a provider endpoint, a credential, or a script,
+      so a caller redirects a send or spends an operator credential.
+    enforcementPoint: >-
+      A closed submission schema: the request names a sender profile and a
+      template, and every endpoint, credential, and script is bound by the
+      operator in configuration and the package.
+    refusal: >-
+      Refuse any unknown request member with request.invalid before
+      acceptance.
+    pendingNote: >-
+      No submission route exists until slice S3. The negative test proves the
+      schema is closed and an extra member is refused.
+  - id: MESSAGING-SEC-03
+    state: pending
+    plannedSlice: S3
+    threat: >-
+      A provider origin resolves, or is rebound, to a private, loopback, or
+      metadata address, so the worker reaches an internal service.
+    enforcementPoint: >-
+      The platform fixed-destination substrate: a configured origin, DNS
+      resolved once, and every resolved address checked against the allowed
+      set before the connection is pinned.
+    refusal: >-
+      Refuse the send before any byte leaves and record the attempt as not
+      sent.
+    pendingNote: >-
+      Provider egress lands in slice S3 with the HTTP provider kind. The
+      negative test rebinds a provider origin to a private or metadata
+      address.
+  - id: MESSAGING-SEC-04
+    state: partial
+    threat: >-
+      A caller reads or cancels another caller's message, or learns whether a
+      message identifier exists at all.
+    enforcementPoint: >-
+      The core's check_message_visibility decision, applied on the status
+      route after authentication: only the submitter and operator profiles
+      see a message, and a missing message answers exactly like an invisible
+      one.
+    refusal: >-
+      Answer 404 message.not-visible to every other caller, whether or not the
+      message exists.
+    partialNote: >-
+      The status route authenticates and applies the decision, and every
+      authenticated caller receives message.not-visible because no message
+      store exists yet. Slice S3 supplies the submitter lookup and the cancel
+      route, and adds the negative test where a second sender reads and
+      cancels a real message.
+    negativeTest:
+      path: crates/registry-messaging-core/src/visibility.rs
+      name: another_caller_is_told_the_message_is_not_visible
+  - id: MESSAGING-SEC-05
+    state: pending
+    plannedSlice: S3
+    threat: >-
+      A worker whose lease was reaped finishes late and overwrites the outcome
+      a newer worker recorded.
+    enforcementPoint: >-
+      The platform dispatch core's lease token and generation fence on every
+      outcome write.
+    refusal: >-
+      Refuse the stale write and leave the newer outcome in place.
+    pendingNote: >-
+      Dispatch lands in slice S3 on the extracted platform dispatch core. The
+      negative test writes an outcome after the lease is reaped.
+  - id: MESSAGING-SEC-06
+    state: pending
+    plannedSlice: S3
+    threat: >-
+      A send that may have reached the provider is retried, so a recipient
+      receives the same message twice.
+    enforcementPoint: >-
+      The platform transport's delivery certainty: a failure after the
+      request was written is maybe-sent, and a maybe-sent attempt moves to
+      unknown unless the sender profile opts into retry.
+    refusal: >-
+      Record unknown and never send again without an operator settle.
+    pendingNote: >-
+      Dispatch lands in slice S3. The negative test times out after the
+      request is written and proves no second send occurs.
+  - id: MESSAGING-SEC-07
+    state: pending
+    plannedSlice: S5
+    threat: >-
+      A forged, replayed, or reordered provider callback changes a delivery
+      report or regresses it to an earlier state.
+    enforcementPoint: >-
+      The configured callback verifier kind, a replay window, and a report
+      state that only moves forward.
+    refusal: >-
+      Refuse a bad signature, ignore a duplicate, and never regress a report.
+    pendingNote: >-
+      Callbacks and receipts land in slice S5. The negative tests cover a bad
+      signature, a duplicate, and an out-of-order receipt.
+  - id: MESSAGING-SEC-08
+    state: pending
+    plannedSlice: S6
+    threat: >-
+      Recipient contacts, message bodies, template data, or credentials reach
+      the operational log or the audit journal.
+    enforcementPoint: >-
+      Audit records carry operation, caller pseudonym, sender profile,
+      template reference, correlation, outcome class, and a keyed recipient
+      reference; log fields never carry payload values.
+    refusal: >-
+      Nothing to refuse at the caller: the absence is the control, proven over
+      the logs and audit of a full journey.
+    pendingNote: >-
+      Slice S1 writes only the start record, which carries the version and
+      retention. The full-journey absence test lands in slice S6, once every
+      audited operation exists.
+  - id: MESSAGING-SEC-09
+    state: pending
+    plannedSlice: S2
+    threat: >-
+      A template reaches the network or a file, or renders without bound and
+      exhausts the runtime.
+    enforcementPoint: >-
+      The template engine with no loader beyond the package, no filesystem or
+      network functions, fuel, and an output ceiling.
+    refusal: >-
+      Refuse the render with a bounded error and accept nothing.
+    pendingNote: >-
+      Templates land in slice S2. The negative tests exhaust fuel and exceed
+      the output ceiling.
+  - id: MESSAGING-SEC-10
+    state: pending
+    plannedSlice: S6
+    threat: >-
+      Payloads outlive their retention, or erasure removes the payload of a
+      message still sending or in an unknown outcome.
+    enforcementPoint: >-
+      The retention job: payloads are nulled retention.payloadDays after a
+      terminal state, and a message in sending or unknown is never erased.
+    refusal: >-
+      Skip a non-terminal message and erase every expired terminal payload.
+    pendingNote: >-
+      Retention lands in slice S6. The negative test proves erasure runs on
+      schedule and skips sending and unknown messages.
+deferred: []
