@@ -51,6 +51,12 @@
     `audit.path` (`audit.caseworkctl.ndjson` beside `audit.ndjson`).
   - The retention report no longer carries an `auditRecords` count.
 
+- The optional `metricsListener.bind` runtime setting serves `/metrics`
+  (Prometheus text: build and package digest, database reachability, and
+  per-source reconciliation failures and last-success age) and `/version` (running version and package digest) on a second,
+  operator-private address. It must be loopback or private, never a wildcard,
+  and never the API listener's address and port. Without it no telemetry
+  socket opens, and the API listener is unchanged.
 - BREAKING: Casework and its BReg sources run in lock-step. BReg now names its
   release in a `Registry-Engine-Version` header on `GET /v1/registry`, and the
   Casework BReg adapter refuses a source whose engine reports another release,

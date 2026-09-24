@@ -6,6 +6,7 @@ mod auth;
 mod clocks;
 mod config;
 mod http;
+mod metrics;
 mod pinned_work;
 pub mod problem;
 mod review;
