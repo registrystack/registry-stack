@@ -365,6 +365,11 @@ entries:
     tests: [{file: crates/registry-evidence/src/config.rs, name: authority_claim_names_must_be_distinct_and_must_not_shadow_registered_claims}]
   - id: sec-path-binding-unreachable-selector-set
     tests: [{file: crates/registry-evidence/tests/source_contracts.rs, name: an_allowed_selector_set_that_cannot_fill_the_path_template_is_refused}]
+  - id: sec-path-selector-refused-before-source
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_selector_value_the_source_path_cannot_carry_is_refused_before_source_access}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: an_encodable_path_selector_value_still_reaches_the_source}
+      - {file: crates/registry-evidence/src/source.rs, name: path_selector_encoding_is_single_pass_and_hostile_values_fail_closed}
   - id: sec-search-then-fetch-bounded
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_is_two_fixed_audited_calls_with_validated_fact_handoff}

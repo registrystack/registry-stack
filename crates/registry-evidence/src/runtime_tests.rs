@@ -2583,6 +2583,125 @@ async fn invalid_selector_does_not_create_an_authorization_refusal() {
     );
 }
 
+/// Bind the adult-status source's request path to the `family_name` selector
+/// field, so a selector value becomes a path segment.
+fn bind_adult_source_path_to_family_name(bundle_root: &Path) {
+    let configuration_path = bundle_root.join("evidence.yaml");
+    let mut configuration =
+        fs::read_to_string(&configuration_path).expect("copied configuration is readable");
+    replace_exact(
+        &mut configuration,
+        "    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/facts",
+        "    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      pathTemplate: /v1/facts/{family_name}\n      pathBindings:\n        family_name: {from: selector, role: subject, profile: person-demographics-v1, field: family_name}",
+        1,
+    );
+    fs::write(configuration_path, configuration).expect("path-bound configuration is written");
+}
+
+fn adult_request_with_family_name(family_name: &str) -> EvidenceRequest {
+    request(
+        "urn:example:fixture:requirement:adult-status:v1",
+        "fixture-eligibility",
+        vec![requested_subject(
+            "subject",
+            "person-demographics-v1",
+            Some([
+                ("given_name", "Amina"),
+                ("family_name", family_name),
+                ("birth_date", "2000-01-01"),
+            ]),
+        )],
+    )
+}
+
+/// A selector value the bound source path cannot carry is a caller input
+/// error, found while the selectors resolve: before any source attempt is
+/// audited and before the source is contacted.
+#[tokio::test]
+async fn a_selector_value_the_source_path_cannot_carry_is_refused_before_source_access() {
+    for family_name in ["a/b", "..", "100%", "a\\b"] {
+        let server = MockServer::start().await;
+        let prepared = prepare_fixture_with_mutation(
+            "subject-binding-secret-canary-32-bytes-minimum",
+            &server.uri(),
+            &FixtureCeilings::deployment_defaults(),
+            bind_adult_source_path_to_family_name,
+        );
+        let runtime =
+            EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+                .await
+                .expect("runtime with a selector-bound source path initializes");
+        let request = adult_request_with_family_name(family_name);
+
+        let error = runtime
+            .evaluate(
+                "operation-unencodable-path-selector",
+                &access_token(None),
+                &request,
+            )
+            .await
+            .expect_err("a selector value the source path cannot carry is refused");
+        assert_eq!(error.problem(), ProblemCode::InvalidSelector);
+
+        let batch_error = runtime
+            .evaluate_request_batch(
+                "operation-unencodable-path-selector-batch",
+                &access_token(None),
+                &request_batch_from_request(&request, 1),
+            )
+            .await
+            .expect_err("the request batch refuses the same selector value");
+        assert_eq!(batch_error.problem(), ProblemCode::InvalidSelector);
+
+        assert!(server
+            .received_requests()
+            .await
+            .expect("request journal is available")
+            .is_empty());
+        assert!(
+            fs::read_to_string(&prepared.audit_path)
+                .expect("audit is readable")
+                .is_empty(),
+            "an unencodable selector value must not record a source attempt"
+        );
+    }
+}
+
+/// The selector-resolution check refuses only what the path cannot carry: a
+/// value that needs percent-encoding still reaches the source, encoded once.
+#[tokio::test]
+async fn an_encodable_path_selector_value_still_reaches_the_source() {
+    let server = MockServer::start().await;
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &server.uri(),
+        &FixtureCeilings::deployment_defaults(),
+        bind_adult_source_path_to_family_name,
+    );
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("runtime with a selector-bound source path initializes");
+
+    // No source response is mounted, so the evaluation itself fails after
+    // the source call; only the refusal code and the request path matter.
+    let error = runtime
+        .evaluate(
+            "operation-encodable-path-selector",
+            &access_token(None),
+            &adult_request_with_family_name("Diallo Ba"),
+        )
+        .await
+        .expect_err("the unmounted source answers no evidence");
+    assert_ne!(error.problem(), ProblemCode::InvalidSelector);
+    let received = server
+        .received_requests()
+        .await
+        .expect("request journal is available");
+    assert_eq!(received.len(), 1);
+    assert_eq!(received[0].url.path(), "/v1/facts/Diallo%20Ba");
+}
+
 #[tokio::test]
 async fn missing_principal_never_falls_back_to_client_id_or_azp() {
     let fixture = acceptance_runtime().await;

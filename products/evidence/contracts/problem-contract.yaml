@@ -39,6 +39,11 @@ authorization_refusal_audit:
   order: The minimal registry.evidence.audit.authorization-refusal/v1 event is durably accepted before the evidence.denied response.
   failure: An audit append failure replaces the evidence.denied response with service.unavailable.
   operational_only: [evidence.invalid_request, request.selector_invalid, auth.invalid_credential]
+selector_refusal:
+  code: request.selector_invalid
+  applies_to: Every selector the matched entitlement resolves, including a value that passes its profile but that a source of the requirement binds to a request path segment the value cannot occupy under the source path encoding rule.
+  order: Returned during selector resolution, after authorization and before any access-attempt audit event, credential acquisition, or source contact. It is never reported as source.unavailable.
+  budget: Counts against the caller's selector-failure budget like every other selector refusal.
 existence_disclosure:
   default_public_collapse:
     internal_classes: [no_match, ambiguous, required_fact_missing, derivation_input_unresolved]

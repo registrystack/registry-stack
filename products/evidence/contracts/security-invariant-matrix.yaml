@@ -277,6 +277,11 @@ invariants:
     threat: An authorization server that grants token exchange per client but not per assertion authority lets any exchange-capable client present any authority that server trusts, so a client approved to act on one authority's assertions reaches Evidence carrying another authority's and is indistinguishable from the approved one at the boundary.
     enforcement: The pairing is applied in the platform verifier beside allowedClients, under the same client_id/azp semantics, so a refusal is a credential refusal taken before any requirement is read or made visible to the caller. A claim-free client-credentials token is admitted either way, so the rule narrows exchanged authority without gating ordinary service callers.
     negative_test: sec-assertion-authority-pairing
+  - id: V1-I56
+    rule: A selector value that a source of the requirement binds to a request path segment the value cannot occupy is refused as request.selector_invalid during selector resolution, before any access-attempt audit event, credential acquisition, or source contact.
+    threat: A caller-chosen value that passes its profile reaches the source stage, records an access attempt that never happened, and is reported as source.unavailable, so a caller input error reads as an authoritative-source outage in both the response and the durable audit, and an attacker can manufacture that appearance at will.
+    enforcement: Selector resolution renders every selector-bound path segment of every source the requirement acquires from exactly as the source request renders it and applies the one segment admissibility rule the path encoder uses, so the two cannot drift. A refusal is an ordinary selector error, charged to the selector-failure budget and operational-only. The encoder's own rejection during path materialization remains the floor.
+    negative_test: sec-path-selector-refused-before-source
 
 cross_cutting:
   holder_bound_entity_reference_prohibited:
