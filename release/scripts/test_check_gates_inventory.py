@@ -794,6 +794,16 @@ class GateInventoryTest(unittest.TestCase):
                 "BReg client contract consistency",
             ),
             (
+                "run: products/breg/scripts/check-mcp-gateway-boundary.sh",
+                "run: true # citizen gateway boundary disabled",
+                "Enforce the citizen gateway's delegated-agent boundary",
+            ),
+            (
+                "run: products/breg/scripts/check-service-dependencies.sh",
+                "run: true # citizen service dependencies disabled",
+                "Keep the citizen gateway and review page off the registry runtime",
+            ),
+            (
                 "run: products/breg/scripts/test-postgres.sh",
                 "run: true # Base Registry Engine PostgreSQL disabled",
                 "Base Registry Engine PostgreSQL journeys",
