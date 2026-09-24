@@ -1,6 +1,7 @@
-schemaVersion: registry-discovery/runtime/v1alpha1
+apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
+kind: DiscoveryRuntimeConfig
 listener:
-  address: 127.0.0.1:8080
+  bind: 127.0.0.1:8080
 indexPath: discovery-index.json
 limits:
   maximumRequestBytes: 65536

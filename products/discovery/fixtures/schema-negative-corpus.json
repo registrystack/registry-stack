@@ -76,14 +76,32 @@
     {
       "name": "runtime-refuses-non-socket-listener",
       "contract": "runtime",
-      "pointer": "/listener/address",
+      "pointer": "/listener/bind",
       "value": "localhost"
     },
     {
       "name": "runtime-refuses-out-of-range-socket-literal",
       "contract": "runtime",
-      "pointer": "/listener/address",
+      "pointer": "/listener/bind",
       "value": "999.999.999.999:99999"
+    },
+    {
+      "name": "runtime-refuses-removed-schema-version",
+      "contract": "runtime",
+      "pointer": "/schemaVersion",
+      "value": "registry-discovery/runtime/v1alpha1"
+    },
+    {
+      "name": "runtime-refuses-removed-listener-address",
+      "contract": "runtime",
+      "pointer": "/listener/address",
+      "value": "127.0.0.1:8080"
+    },
+    {
+      "name": "runtime-refuses-foreign-envelope",
+      "contract": "runtime",
+      "pointer": "/kind",
+      "value": "RelayRuntimeConfig"
     },
     {
       "name": "runtime-refuses-parent-traversal-index-path",

@@ -39,4 +39,4 @@ EXPOSE 8080
 # subcommand. It also reads no environment variable, so the command is what
 # binds the runtime file.
 ENTRYPOINT ["/usr/local/bin/discovery"]
-CMD ["--runtime", "/etc/registry-discovery/runtime.yaml"]
+CMD ["--runtime-config", "/etc/registry-discovery/runtime.yaml"]

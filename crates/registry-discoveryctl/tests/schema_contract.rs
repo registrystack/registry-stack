@@ -177,7 +177,12 @@ fn accepted_by_rust(contract: &str, document: &Value) -> bool {
             check_project(project.path(), false).is_ok()
         }
         "runtime" => {
-            let temporary = tempfile::tempdir().expect("temporary runtime");
+            let temporary = tempfile::tempdir_in(
+                std::env::temp_dir()
+                    .canonicalize()
+                    .expect("temporary root resolves"),
+            )
+            .expect("temporary runtime");
             let path = temporary.path().join("runtime.yaml");
             fs::write(
                 &path,
@@ -358,9 +363,9 @@ fn runtime_response_and_listener_boundaries_match_the_closed_rust_parser() {
         "the public schema must carry the stable Rust response-size minimum"
     );
     assert_eq!(
-        schema["properties"]["listener"]["properties"]["address"]["maxLength"].as_u64(),
-        u64::try_from(registry_discovery::MAXIMUM_LISTENER_ADDRESS_CHARACTERS).ok(),
-        "the public schema must carry the Rust listener-address bound"
+        schema["properties"]["listener"]["properties"]["bind"]["maxLength"].as_u64(),
+        u64::try_from(registry_discovery::MAXIMUM_LISTENER_BIND_CHARACTERS).ok(),
+        "the public schema must carry the Rust listener-bind bound"
     );
     assert!(
         registry_discovery::openapi::OPENAPI_BYTES.len() <= minimum_response_bytes,
@@ -414,7 +419,7 @@ fn runtime_response_and_listener_boundaries_match_the_closed_rust_parser() {
         let mut document = positive_document("runtime");
         set_pointer(
             &mut document,
-            "/listener/address",
+            "/listener/bind",
             Value::String(address.to_owned()),
         );
         assert!(
@@ -439,7 +444,7 @@ fn runtime_response_and_listener_boundaries_match_the_closed_rust_parser() {
         let mut document = positive_document("runtime");
         set_pointer(
             &mut document,
-            "/listener/address",
+            "/listener/bind",
             Value::String(address.to_owned()),
         );
         assert!(
@@ -454,12 +459,12 @@ fn runtime_response_and_listener_boundaries_match_the_closed_rust_parser() {
 
     let overlong_address = format!(
         "127.0.0.1:{}80",
-        "0".repeat(registry_discovery::MAXIMUM_LISTENER_ADDRESS_CHARACTERS)
+        "0".repeat(registry_discovery::MAXIMUM_LISTENER_BIND_CHARACTERS)
     );
     let mut document = positive_document("runtime");
     set_pointer(
         &mut document,
-        "/listener/address",
+        "/listener/bind",
         Value::String(overlong_address),
     );
     assert!(!validator.is_valid(&document));
