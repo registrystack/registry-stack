@@ -1120,6 +1120,9 @@ jobs:
       - name: Test release rehearsal workflow
         run: python3 -m unittest release/scripts/test_release_rehearsal.py
 
+      - name: Test release upgrade rehearsal
+        run: python3 -m unittest release/scripts/test_rehearse_upgrade.py
+
       - name: Test rehearsal advisory evidence collector
         run: python3 -m unittest release/scripts/test_collect_rehearsal_advisory_evidence.py
 

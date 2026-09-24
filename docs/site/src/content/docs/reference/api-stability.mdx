@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-09-24"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -117,6 +117,12 @@ Every release documents a forward state path from its immediate predecessor.
 An upgrade that skips releases follows each sequential hop unless the target release explicitly
 certifies a direct path.
 
+The promise starts at `v0.33.0`. The one exception is v0.32 to v0.33: no adopter ran v0.32, so
+`v0.33.0` shipped without a forward state path from it, and state written by v0.32 or an earlier
+release has no supported upgrade.
+
+{/* Evidence: release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR and FORWARD_PATH_EXCEPTION. */}
+
 The reverse is not promised. Relay and Evidence Gateway parse config with
 `deny_unknown_fields`, so a config file that uses keys introduced in a newer release fails to load
 on an older binary. Pin your config to the release you deploy.
@@ -199,6 +205,16 @@ The promise is machine-checked where a checker exists:
 - Config: Relay's grammars reject unknown keys at parse time rather than ignoring them, and
   Evidence Gateway's config parser is tested against the frozen contract schemas rather than a schema
   generated from it.
+- Forward state path: the release upgrade rehearsal workflow runs
+  `release/scripts/rehearse-upgrade.py` on every pull request that changes a release manifest, and
+  on manual dispatch. It downloads the previous release's Base Registry Engine, Casework, and
+  Evidence Gateway binaries, verifies them against the signed `SHA256SUMS` as `release/VERIFY.md`
+  describes, and writes records, review work, and an audit chain with them against disposable
+  PostgreSQL. It then runs the upgrade steps with the binaries built from the pull request and
+  fails when any captured view is served differently or any table holds fewer rows. It refuses to
+  start from a release before `v0.33.0`. Scheduling state is not rehearsed.
+
+{/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, fetch_release(), view_differences(), row_count_losses(), and check_forward_path(). */}
 
 A change that a gate flags as breaking lands only in a release whose version number permits
 it, together with the deprecation and migration steps required by the

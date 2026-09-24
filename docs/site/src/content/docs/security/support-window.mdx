@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-19"
+last_reviewed: "2026-09-24"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -35,7 +35,8 @@ The rest of the lifecycle policy is designed to make rolling forward cheap:
   Manifest have no migrated state, so moving to the fixed release needs no migration step for
   them. Base Registry Engine, Casework, and Scheduling each own migrated PostgreSQL state; moving
   to the fixed release for one of them can require running the migration command its release notes
-  name (`bregctl apply`, `casework migrate`, or `scheduling migrate`).
+  name (`bregctl apply`, `casework migrate`, or `scheduling migrate`). The forward state path
+  starts at `v0.33.0`; v0.32 to v0.33 has none, because no adopter ran v0.32.
 - Patch releases contain fixes only, so a security patch is a minimal, low-risk step.
 - The [revision replacement procedure](../../operate/relay/) documents the manual abort and
   post-acceptance recovery boundary. Operators verify and exercise the exact candidate package

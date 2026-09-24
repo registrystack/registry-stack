@@ -1,0 +1,92 @@
+name: RegistryStack Release Upgrade Rehearsal
+
+# A release promises a forward state path from its immediate predecessor.
+# This rehearsal downloads the previous release's authenticated binaries,
+# writes real state with them, upgrades that state with the binaries built
+# from this source, and fails when state is no longer served or a row is lost.
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - release/manifests/**
+      - release/scripts/rehearse-upgrade.py
+      - release/scripts/test_rehearse_upgrade.py
+      - .github/workflows/release-upgrade-rehearsal.yml
+  workflow_dispatch:
+    inputs:
+      from_tag:
+        description: Exact published vMAJOR.MINOR.PATCH tag to upgrade from; the newest release at or below the workspace version when omitted
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-upgrade-rehearsal-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rehearse:
+    name: Upgrade rehearsal from the previous release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.11.16"
+
+      - name: Build the binaries under test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --profile ci \
+            -p registry-breg --features registry-breg/runtime \
+            -p registry-bregctl -p registry-casework -p registry-caseworkctl \
+            -p registry-evidence -p registry-evidencectl --bins
+
+      - name: Rehearse the upgrade from verified release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FROM_TAG: ${{ inputs.from_tag || '' }}
+        run: |
+          set -euo pipefail
+          from_tag=()
+          if [[ -n "${FROM_TAG}" ]]; then
+            from_tag=(--from-tag "${FROM_TAG}")
+          fi
+          uv run --no-project --with PyYAML==6.0.2 \
+            python3 release/scripts/rehearse-upgrade.py \
+            "${from_tag[@]}" \
+            --platform linux-amd64 \
+            --to-bin-dir target/ci \
+            --work-dir "${RUNNER_TEMP}/upgrade-rehearsal" \
+            --container-name registry-upgrade-rehearsal-postgres \
+            --report "${RUNNER_TEMP}/upgrade-rehearsal-report.json"
+          cat "${RUNNER_TEMP}/upgrade-rehearsal-report.json"
