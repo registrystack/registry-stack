@@ -582,6 +582,9 @@ Without `--apply` it previews the lifecycle event, the least-privilege `casework
 the paired local clients, and the authority and optional executor runtime bindings.
 The report includes the exact candidate fragments, `status: preview`, and
 `activation: not_performed`.
+Each paired request entity gets its own lifecycle hook, `casework-lifecycle-v1-<entity>`, because BReg requires a hook id to be unique across the registry and sends it as the event's `ce-type`.
+The prefix leaves room for an entity id of at most 42 bytes within BReg's 64-byte identifier limit; `source add` refuses a longer one before it writes anything.
+It also refuses a `registry.yaml` that still carries the bare `casework-lifecycle-v1` hook an earlier `caseworkctl` wrote, naming each entity that carries it: remove that hook and repeat `source add`.
 Read the patch before you take the next step.
 
 ```sh
@@ -607,7 +610,7 @@ The source description differs once the BReg registry changes, because it pins `
 The runtime binding differs after a hand edit, or when the paired review authorities or executors change.
 The refusal writes nothing. It names each differing file and the reason, then prints the commands that recover: move each file aside to a `.previous` copy, and repeat the same `source add --apply`. Each printed move refuses instead of replacing a `.previous` copy an earlier, unfinished recovery already left there; when one already exists, the refusal names it and asks you to compare it with the current file and delete or rename it before you run the printed commands.
 Compare each new file with its `.previous` copy, carry any hand edit you still need into the new runtime binding, then delete the copies.
-When the entity set shrinks, the message also names each dropped entity's `casework-lifecycle-v1` hook and `casework-reader` permission: `source add` never removes a fragment it generated earlier, so remove them from `registry.yaml` yourself, or BReg keeps emitting that entity's lifecycle events and the reader credential keeps read access to it after Casework stops coordinating it.
+When the entity set shrinks, the message also names each dropped entity's `casework-lifecycle-v1-<entity>` hook and `casework-reader` permission: `source add` never removes a fragment it generated earlier, so remove them from `registry.yaml` yourself, or BReg keeps emitting that entity's lifecycle events and the reader credential keeps read access to it after Casework stops coordinating it.
 The lifecycle hook and the `casework-reader` permission in the BReg `registry.yaml` follow the same rule.
 If an earlier `caseworkctl`, a changed projection, or a hand edit left a different one, the refusal names the entity. Unless you wrote that fragment yourself, remove it and repeat `source add --apply`. When the hook is the entity's only hook, remove the `hooks` key as well. When the permission is the only one in the profile, remove the whole `casework-reader` profile.
 Independently of the description and binding comparison above, `source add` also refuses, before preview or apply, whenever `registry.yaml` still carries a lifecycle hook or `casework-reader` permission for a request entity the current pairing does not include, whatever left it there: it names the entity and the exact fragment to remove, and nothing is written until you remove it and repeat `source add`.
