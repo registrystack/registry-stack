@@ -23,13 +23,12 @@ use registry_scheduling_core::{
     SCHEDULING_RUNTIME_SCHEMA_ID,
 };
 
+use registry_platform_config::blocks::SECRET_PROVIDER_PATTERN;
+
 use crate::config::{
     RuntimeConfig, MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT, MAXIMUM_ASSERTION_ISSUER_BYTES,
     MAXIMUM_ASSERTION_ISSUER_CLIENTS, MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES,
 };
-
-const SECRET_REFERENCE_SCHEMA_PATTERN: &str =
-    "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$";
 
 pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     let mut derived = serde_json::to_value(schemars::schema_for!(RuntimeConfig))?;
@@ -58,23 +57,12 @@ pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
 }
 
 /// State in the schema the bounds `RuntimeConfig::check` and
-/// `validate_secret_references` enforce at load: operated paths are absolute,
-/// every secret field is a secret reference, a static JWKS document names its
-/// provider, and at least one secret provider is configured.
+/// `validate_secret_references` enforce at load beyond the shared blocks,
+/// which carry their own: the audit destination has the shape
+/// `AuditConfig::destination` requires and its file is absolute with no `..`
+/// segment, every Scheduling secret field is a secret reference, and a static
+/// JWKS document names an enabled provider.
 fn install_runtime_constraints(schema: &mut Value) {
-    for (definition, property) in [
-        ("RuntimePackageConfig", "root"),
-        ("FileSecretProviderConfig", "root"),
-    ] {
-        set_definition_property(
-            schema,
-            definition,
-            property,
-            "pattern",
-            Value::String("^/".to_owned()),
-        );
-    }
-    // The audit file is also refused with a `..` segment.
     set_definition_property(
         schema,
         "AuditConfig",
@@ -83,36 +71,20 @@ fn install_runtime_constraints(schema: &mut Value) {
         Value::String(registry_platform_audit::ABSOLUTE_AUDIT_PATH_PATTERN.to_owned()),
     );
     for (definition, property) in [
-        ("DatabaseConfig", "runtimeUrlRef"),
-        ("DatabaseConfig", "migrationUrlRef"),
-        ("DatabaseConfig", "trustedRootCertificateRef"),
         ("AuditConfig", "hashKeyRef"),
         ("ReminderDestinationConfig", "bearerTokenRef"),
+        ("HookDestinationConfig", "hmacSha256KeyRef"),
     ] {
         set_definition_property(
             schema,
             definition,
             property,
             "pattern",
-            Value::String("^secret:(?:env|file)/".to_owned()),
+            Value::String(SECRET_PROVIDER_PATTERN.to_owned()),
         );
     }
-    set_jwks_document_reference_constraints(schema);
     set_assertion_issuer_bounds(schema);
     set_audit_destination_constraints(schema);
-    if let Some(providers) = schema
-        .get_mut("$defs")
-        .and_then(|definitions| definitions.get_mut("SecretProvidersConfig"))
-        .and_then(Value::as_object_mut)
-    {
-        providers.insert(
-            "anyOf".to_owned(),
-            serde_json::json!([
-                {"required": ["file"], "properties": {"file": {"$ref": "#/$defs/FileSecretProviderConfig"}}},
-                {"required": ["environment"], "properties": {"environment": {"$ref": "#/$defs/EnvironmentSecretProviderConfig"}}}
-            ]),
-        );
-    }
     if let Some(root) = schema.as_object_mut() {
         root.insert(
             "allOf".to_owned(),
@@ -186,28 +158,6 @@ fn set_audit_destination_constraints(schema: &mut Value) {
                 "properties": {"path": {"type": "string"}}
             }),
         );
-    }
-}
-
-/// A static JWKS document reference is the one secret field whose full
-/// reference grammar the schema states: the other fields need only name a
-/// provider, while this one an operator authors directly.
-fn set_jwks_document_reference_constraints(schema: &mut Value) {
-    if let Some(variants) = schema
-        .pointer_mut("/$defs/OidcJwksSource/oneOf")
-        .and_then(Value::as_array_mut)
-    {
-        for variant in variants {
-            if let Some(document_reference) = variant
-                .pointer_mut("/properties/documentRef")
-                .and_then(Value::as_object_mut)
-            {
-                document_reference.insert(
-                    "pattern".to_owned(),
-                    Value::String(SECRET_REFERENCE_SCHEMA_PATTERN.to_owned()),
-                );
-            }
-        }
     }
 }
 
@@ -320,6 +270,7 @@ fn set_const(schema: &mut Value, property: &str, expected: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_config::blocks::SECRET_REFERENCE_PATTERN;
 
     #[test]
     fn runtime_schema_is_deterministic_and_versioned() {
@@ -351,7 +302,7 @@ mod tests {
         let documents = runtime_documents().unwrap();
         let document: Value = serde_json::from_str(&documents[RUNTIME_SCHEMA_FILE]).unwrap();
         for (definition, property) in [
-            ("RuntimePackageConfig", "root"),
+            ("PackageConfig", "root"),
             ("FileSecretProviderConfig", "root"),
         ] {
             assert_eq!(
@@ -370,6 +321,7 @@ mod tests {
             ("DatabaseConfig", "trustedRootCertificateRef"),
             ("AuditConfig", "hashKeyRef"),
             ("ReminderDestinationConfig", "bearerTokenRef"),
+            ("HookDestinationConfig", "hmacSha256KeyRef"),
         ] {
             assert_eq!(
                 document["$defs"][definition]["properties"][property]["pattern"],
@@ -386,8 +338,8 @@ mod tests {
             "at least one secret provider must be configured"
         );
         assert_eq!(
-            document["$defs"]["OidcJwksSource"]["oneOf"][1]["properties"]["documentRef"]["pattern"],
-            SECRET_REFERENCE_SCHEMA_PATTERN
+            document["$defs"]["JwksSource"]["oneOf"][2]["properties"]["documentRef"]["pattern"],
+            SECRET_REFERENCE_PATTERN
         );
         let audit = &document["$defs"]["AuditConfig"];
         assert_eq!(

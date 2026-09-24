@@ -586,7 +586,13 @@ pub(super) const RUNTIME_EXAMPLE: &str = r#"# A complete Scheduling runtime conf
 # location, and point the secret references at secrets the configured provider
 # can resolve. Scheduling reads the authored policy at
 # package.root/scheduling.yaml and refuses to start when that file is missing
-# or does not pass its checks.
+# or does not pass its checks. Every configured path must be absolute and must
+# not pass through a symbolic link.
+#
+# String values in this file may use ${VAR}, ${VAR:-default}, or ${VAR:?message}
+# to take a deployment value from the environment when the runtime starts.
+# Substitution never applies to a *Ref field, whose value must be written as a
+# literal secret reference, nor to the authored scheduling.yaml.
 apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1
 kind: SchedulingRuntimeConfig
 package:
@@ -596,7 +602,12 @@ package:
   # also contain the scheduling.package.json manifest `schedulingctl package`
   # writes; development loopback may select an unpackaged project directory.
   root: /srv/registry-scheduling/package
+  # Pin the package the runtime must serve: the sha256 label
+  # `schedulingctl package` prints as the policy digest. A mismatch, or a pin
+  # over a directory without a package manifest, is a startup refusal.
+  # expectedDigest: sha256:<64 lowercase hex digits>
 listener:
+  # Required: the IP address and port the runtime listens on.
   bind: 127.0.0.1:8105
   tlsTermination: development-loopback
   networkExposure: private-address
@@ -663,6 +674,8 @@ authentication:
     # jwksSource:
     #   kind: static
     #   documentRef: secret:file/jwks.json
+    # `kind: uri` with `uri: https://...` fetches the key set from a fixed
+    # address instead of the one discovery names.
 audit:
   # One single-writer destination. `file`, the default, appends to the
   # absolute path, rotates at rotateBytes (default 100 MiB), and deletes

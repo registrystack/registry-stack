@@ -20,7 +20,7 @@ required-features = ["postgres-test"]
 [features]
 default = []
 postgres-test = []
-schema = ["dep:schemars", "registry-platform-audit/schema"]
+schema = ["dep:schemars", "registry-platform-audit/schema", "registry-platform-config/schema"]
 
 [lints]
 workspace = true
