@@ -156,6 +156,8 @@ kind: CaseworkRuntimeConfig
 package:
   # The selected package always contains the policy at casework.yaml.
   root: /etc/registry-casework/package
+  # Optional: the policyDigest of the package you reviewed; any other package is refused.
+  expectedPolicyDigest: sha256:0000000000000000000000000000000000000000000000000000000000000000
 listener:
   # The proxy in front of this private listener terminates TLS.
   bind: 10.42.0.7:8100
@@ -199,7 +201,7 @@ sources:
 
 | Section | What it binds |
 | --- | --- |
-| `package` | The absolute root of the package containing `casework.yaml`, its manifest, and exact source descriptions. |
+| `package` | The absolute root of the package containing `casework.yaml`, its manifest, and exact source descriptions, and optionally the one policy digest the runtime may load from it. |
 | `listener` | The listener address and the transport boundary the deployment declares for it. |
 | `secretProviders` | The explicitly enabled file and environment secret providers. |
 | `database` | Secret references for the runtime and migration connection URLs, and an optional trusted root certificate for the PostgreSQL connection. |
@@ -317,24 +319,34 @@ not declare or any symbolic link. A start that verifies the package records the 
 the runtime log before anything else happens.
 
 With `tlsTermination: operator-controlled-upstream`, an absent manifest is a refusal rather than a
-fallback to the authored project. Each of these refusals is one run's entire output on standard
-error, written before the listener binds, and each exits non-zero:
+fallback to the authored project.
+
+A verified package proves its files match its own manifest, not that it is the package you
+reviewed. Set `package.expectedPolicyDigest` to the `policyDigest` that `caseworkctl package`
+reported for the reviewed package, and the runtime starts only on that package: a package naming
+another digest, or a directory with no manifest, is refused with both digests named, so a
+replaced package directory cannot change the policy a restart loads.
+
+Each of these refusals is one run's entire output on standard error, written before the listener
+binds, and each exits non-zero:
 
 ```text
 casework: operator-controlled production requires a verified Casework policy package
 casework: the Casework policy package is invalid
+casework: package.expectedPolicyDigest is sha256:4f0c…, but package.root holds the package with policy digest sha256:9b2e…
 casework: the Casework runtime configuration is not valid YAML
 casework: the Casework runtime configuration is invalid
 casework: the Casework secret-provider configuration is invalid; secretProviders.file.root must be an absolute path
 ```
 
 The first line reports a production configuration with no manifest. The second reports a manifest
-whose digests, byte counts, or file set do not match the directory. The third and fourth report the
-runtime file itself: unparseable YAML, and a configuration the checks refuse, which covers an
-invalid listener boundary, an empty issuer or claim name, a human-identity claim equal to the scope
-claim, an access profile using the human-identity claim as its principal claim, and a `sources` map
-that does not match the declared source ids exactly. The fifth reports a secret provider root the
-resolver cannot use.
+whose digests, byte counts, or file set do not match the directory. The third reports a verified
+package other than the one `package.expectedPolicyDigest` names, shown here with both digests
+shortened. The fourth and fifth report the runtime file itself: unparseable YAML, and a
+configuration the checks refuse, which covers an invalid listener boundary, an empty issuer or
+claim name, a human-identity claim equal to the scope claim, an access profile using the
+human-identity claim as its principal claim, and a `sources` map that does not match the declared
+source ids exactly. The sixth reports a secret provider root the resolver cannot use.
 
 {/* Evidence: crates/registry-casework/src/config.rs, verify_policy_package(),
     PolicyPackageManifest, RuntimeConfig::check(), and RuntimeConfigError;

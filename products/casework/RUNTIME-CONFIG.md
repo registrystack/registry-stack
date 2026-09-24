@@ -18,6 +18,15 @@ kind: CaseworkRuntimeConfig
 also contain a matching `casework.package.json`. Development loopback may
 select an authored project directory without that manifest.
 
+`package.expectedPolicyDigest` is optional. When set, it is `sha256:` followed
+by 64 lowercase hexadecimal digits, and the runtime starts only on the verified
+package whose manifest names that `policyDigest`. A package naming any other
+digest, or a directory without `casework.package.json`, is refused before the
+runtime starts, and the refusal names the expected digest and the one found.
+Set it to the digest printed by `caseworkctl package` for the package you
+reviewed, so that replacing the files under `package.root` cannot change the
+policy a restart loads.
+
 `listener` is required. `listener.bind` is one numeric socket address, including
 bracketed IPv6 forms, and defaults to `127.0.0.1:8100` when omitted from the
 listener block. `listener.tlsTermination` is required. Use
