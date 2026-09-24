@@ -8,6 +8,18 @@
 //! credential, secret reference, URL, or header value the runtime owns is
 //! ever placed in its scope. Its output is size-bound in Rust before it is
 //! read, since the platform script adapter bounds evaluation, not output.
+//!
+//! Rhai runs in process. The scripts are trusted package artifacts, compiled
+//! once at activation, and every call is bounded by
+//! [`MAXIMUM_SCRIPT_OPERATIONS`], by the send deadline the engine's progress
+//! check enforces, and by the profile's string, array, and map limits; a
+//! separate process or a WebAssembly runtime would add a boundary without
+//! adding a bound. The prepare and interpret scripts run inline on the
+//! dispatch worker's task: a call holds its thread for at most the operation
+//! budget and never past the attempt deadline, and moving it to the blocking
+//! pool would copy the rendered message for every attempt. The receipt
+//! script is the exception and runs on the blocking pool, because it answers
+//! public callback requests whose arrival the runtime does not pace.
 
 use std::collections::BTreeMap;
 use std::time::Instant;
