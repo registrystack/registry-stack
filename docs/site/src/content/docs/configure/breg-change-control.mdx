@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-04"
+last_reviewed: "2026-09-25"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -86,12 +86,32 @@ entities:
 
 | Member | Effect |
 |---|---|
-| `changeControl.requiredFor` | The operations on the target that must go through a request. With `[patch]`, a direct patch of a placement is refused even for a profile that holds `patch`: the operation is absent from ordinary permissions, and only applying a request performs it. |
+| `changeControl.requiredFor` | The operations on the target that must go through a request. With `[patch]`, a direct patch of a placement is refused even for a profile that holds `patch`: the operation is absent from ordinary permissions, and only applying a request performs it. A profile that still holds an operation `requiredFor` names, or holds `batch` on an entity controlled for `create` or `patch`, is refused by `check` with `change_control.direct_write_grant`. `import` is not a direct write and stays allowed (see below). |
 | `changeRequest.effects` | What applying the request writes. `target` names the record from a reference field, `operation` is `create` or `patch`, `set` maps target fields to request fields, and `clear` lists target fields to null. A request entity declares either `effects` or a `planner`, never both. |
 | `review` | The logical external review authority and policy frozen into the submitted proposal. Casework owns the policy, review stages, reviewer independence, and terminal result. A request that intentionally needs no external review declares `review: {mode: none}`. |
 | `onApproved` | What happens after BReg has reconciled an exact approved result. `manual` waits for a currently authorized caller to use `apply_request`. `automatic` requires a logical `executor`; runtime configuration binds that executor to a separate ordinary credential that uses the same source action and guards. |
 | `application` | Optional application preconditions over frozen request facts, current target facts, or signed Evidence. It does not choose review or application authority. |
 | `retention.mode` | `retain` or `operator_erase`. With `operator_erase`, an operator can erase the proposal detail of an applied or canceled request while the record and its state remain. |
+
+A governed entity still needs a way to receive its initial records, and a later district or
+program adds many more. Grant `import` on the entity for that, never `batch`:
+
+```yaml
+accessProfiles:
+  - id: loader
+    operations: [import]
+```
+
+`import` is create only and is served only by the durable ingestion-run routes: it declares no
+item route and no raw batch route, so it can never change an existing record, and change control
+does not count it as a direct write. It loads nothing until an operator opens an import authority
+for the entity and profile, bounded by volume, expiry, and optionally the exact input files, as
+[move data in bulk](../../operate/breg-data/#load-a-governed-entity-through-an-import-window)
+describes. The profile needs an authenticated principal and the entity needs `batch` bounds;
+`import` is refused beside `batch` on the same entity, on a change-request or consent-record
+entity, and for a task-grant profile. Declaring `import` before change control is added keeps the
+same route when the successor package governs the entity, so the package diff reports no route
+removal.
 
 Decide `retention.mode` before the first request is submitted, because a proposal stored under `retain` keeps its detail for as long as the record exists; [retain, erase, and audit](../../operate/breg-retention/) covers what an operator can erase later.
 
@@ -523,6 +543,8 @@ The report lists every compiled action with its inputs, effects, grants, contrac
 |---|---|
 | `check` reports a `change_request.*` error. | `effects` and `planner` are exclusive; `review` must be either `{mode: none}` or an authority and policy id; manual application must omit an executor; automatic application must name one. `check` does not run the script; evaluate it with `project planner-test`. |
 | A direct patch of a controlled entity is refused although the profile holds `patch`. | The entity's `changeControl.requiredFor` includes `patch`, so the write must arrive as an applied request. Submit a request of one of the `eligibleRequestTypes` that `explain change-requests` lists. |
+| `check` reports `change_control.direct_write_grant`. | A profile still holds a controlled operation, or `batch` on an entity controlled for `create` or `patch`. Remove it; for bulk loads of new records, grant `import` in its place and load through an import authority. |
+| `check` reports `import.batch_bounds.required`, `import.principal.required`, or `import.batch.redundant`. | An `import` grant needs the entity's `batch` bounds, a non-anonymous profile, and no `batch` grant on the same entity in any profile. |
 | `project planner-test` fails, or a submit is refused with `request.invalid`. | The script failed, returned an effect outside `writes`, attempted to return an obsolete disposition, or broke a bound. Read the message, fix the script or the ceiling, and rerun `project planner-test` with the same request file. |
 | `revise_request` answers `409 mutation.conflict`. | The settled review result rules the shape out: a rejected request can only be cancelled, and a send-back or an expired approval is answered by a revision, not a rebase. Read the request again and follow the action it offers. |
 | An invoke fails with `precondition.failed`. | A target changed between the target-conditions request and the invoke. Ask for target conditions again and invoke with the new ETags. |

@@ -102,3 +102,8 @@ traceability:
   - {id: BREG-SEC-99, state: enforced, negativeId: BREG-NEG-99, negativeTest: {path: crates/registry-breg/tests/consent_access.rs, name: every_recipient_client_must_be_an_allowed_client}}
   - {id: BREG-SEC-100, state: enforced, negativeId: BREG-NEG-100, negativeTest: {path: crates/registry-breg/tests/postgres_consent_access.rs, name: real_postgres_consent_successors_match_fresh_install_when_added_changed_and_removed}}
   - {id: BREG-SEC-101, state: enforced, negativeId: BREG-NEG-101, negativeTest: {path: crates/registry-breg/tests/postgres_consent_examples.rs, name: self_action_answers_an_unknown_subject_like_a_subject_its_link_does_not_cover}}
+  - {id: BREG-SEC-102, state: enforced, negativeId: BREG-NEG-102, negativeTest: {path: crates/registry-breg/tests/postgres_import_authority.rs, name: an_import_run_is_refused_without_an_open_authority}}
+  - {id: BREG-SEC-103, state: enforced, negativeId: BREG-NEG-103, negativeTest: {path: crates/registry-breg/tests/postgres_import_authority.rs, name: closing_the_authority_blocks_the_next_chunk_and_keeps_committed_ones}}
+  - {id: BREG-SEC-104, state: enforced, negativeId: BREG-NEG-104, negativeTest: {path: crates/registry-breg/tests/postgres_import_authority.rs, name: every_chunk_counts_against_the_authority_until_it_is_exhausted}}
+  - {id: BREG-SEC-105, state: enforced, negativeId: BREG-NEG-105, negativeTest: {path: crates/registry-breg/tests/postgres_import_authority.rs, name: the_runtime_role_cannot_open_close_or_reopen_an_authority}}
+  - {id: BREG-SEC-106, state: enforced, negativeId: BREG-NEG-106, negativeTest: {path: crates/registry-breg/tests/import_grant_compiler.rs, name: batch_is_still_refused_on_a_controlled_entity_and_the_message_suggests_import}}

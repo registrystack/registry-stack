@@ -293,7 +293,7 @@ A run response carries operational metadata and bounded failure classifications 
 source rows, committed record values, or chunk bodies.
 
 {/* Evidence: crates/registry-breg/src/ingestion_store.rs, IngestionRunStatus and IngestionRefusal;
-    crates/registry-breg/src/data.rs, ingestion_batch_route() and ingestion_chunk_idempotency_key();
+    crates/registry-breg/src/data.rs, ingestion_route() and ingestion_chunk_idempotency_key();
     crates/registry-breg/src/api/mod.rs, router(). */}
 
 ### Create a run
@@ -319,6 +319,16 @@ source as 64 lowercase hexadecimal characters. The chunking contract is
 `greedy-canonical-http-batch-v1`; a run refuses any other algorithm, so its remaining source
 bytes are never reinterpreted under a different chunking contract.
 
+A profile that holds `import` on the entity announces `"operation": "create"` here; an import
+grant has no other write route. Its run is created only while the entity holds an open import
+authority for that profile: unexpired, opened under the active package revision, with remaining
+volume that covers the whole announced `itemCount`, and, when the authority pins input digests,
+listing this `inputDigest`. Otherwise the answer is `412 precondition.failed` and no run exists.
+Every chunk of an import run rechecks the authority in its own transaction and counts its
+committed items against the authority's volume. Operators open and close authorities with
+`bregctl import-authority`; see
+[Load a governed entity through an import window](../../operate/breg-data/#load-a-governed-entity-through-an-import-window).
+
 ### The run document
 
 Every run response is one document:
@@ -327,7 +337,7 @@ Every run response is one document:
 | --- | --- |
 | `runId` | The run identifier. |
 | `status` | `open`, `complete`, `cancelled`, or `blocked`. |
-| `blockedReason` | Present when the run is `blocked`: `activePackageChanged`. |
+| `blockedReason` | Present when the run is `blocked`: `activePackageChanged` or `importAuthorityClosed`. |
 | `entityId`, `operation`, `profileId` | The bound entity, its create-or-patch operation, and the selected profile. |
 | `packageRevision`, `schemaFingerprint` | The binding the run was created under. |
 | `inputDigest`, `inputLength`, `itemCount`, `chunkCount` | The announced source: digest, byte length, item count, and chunk count. |
@@ -342,7 +352,10 @@ Every run response is one document:
 An open run whose binding no longer matches the active package reports `blocked` with
 `blockedReason` `activePackageChanged`. A blocked run is retained and inspectable, and it
 never reinterprets its remaining bytes under a new binding: continue in a successor run created
-under the new package.
+under the new package. An import run whose authority was closed, expired, exhausted, or
+superseded by a package activation reports `blocked` with `blockedReason` `importAuthorityClosed`
+at the next chunk, which commits nothing and answers `409 ingestion.run_blocked`; continue the
+uncommitted remainder in a successor run under a new authority.
 
 `lastAttempt.outcome` classifies the last submission as `committed`, `replayed`, `invalidItem`,
 `refused`, `bindingChanged`, `chunkMismatch`, `runNotOpen`, or `unavailable`. `invalidItem` and
@@ -395,7 +408,7 @@ re-sending the chunk. A receipt is erased with the record history it describes; 
 then answers `410 ingestion.receipt_erased`, and the chunk's counts stay in the run.
 
 {/* Evidence: crates/registry-breg/src/ingestion_store.rs, StoredChunkReceipt and IngestionBlockedReason;
-    crates/registry-breg/src/data.rs, ingestion_batch_route(). */}
+    crates/registry-breg/src/data.rs, ingestion_route(). */}
 
 ### Recovery
 
@@ -411,7 +424,7 @@ then answers `410 ingestion.receipt_erased`, and the chunk's counts stay in the 
 A run drives the same compiled batch route one chunk at a time, so an existing direct batch
 client keeps its contract unchanged.
 
-{/* Evidence: crates/registry-breg/src/data.rs, ingestion_batch_route(). */}
+{/* Evidence: crates/registry-breg/src/data.rs, ingestion_route(). */}
 
 ## History reads
 
