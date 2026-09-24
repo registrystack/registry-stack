@@ -9,10 +9,26 @@ use std::io;
 use std::path::Path;
 
 /// Every file of the starter, by its path relative to the new directory.
-pub(crate) const FILES: [(&str, &str); 15] = [
+pub(crate) const FILES: [(&str, &str); 19] = [
     (
         "messaging.yaml",
         include_str!("../../../products/messaging/examples/starter/messaging.yaml"),
+    ),
+    (
+        "providers/sms-gateway/provider.yaml",
+        include_str!("../../../products/messaging/examples/starter/providers/sms-gateway/provider.yaml"),
+    ),
+    (
+        "providers/sms-gateway/scripts/interpret.rhai",
+        include_str!("../../../products/messaging/examples/starter/providers/sms-gateway/scripts/interpret.rhai"),
+    ),
+    (
+        "providers/sms-gateway/scripts/prepare.rhai",
+        include_str!("../../../products/messaging/examples/starter/providers/sms-gateway/scripts/prepare.rhai"),
+    ),
+    (
+        "providers/sms-gateway/scripts/receipt.rhai",
+        include_str!("../../../products/messaging/examples/starter/providers/sms-gateway/scripts/receipt.rhai"),
     ),
     (
         "runtime.example.yaml",

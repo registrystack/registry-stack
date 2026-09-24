@@ -289,10 +289,12 @@ receipt output is refused above 64 KiB. A 2xx the interpret script cannot
 classify is `maybe-sent`, never accepted. Tracing records the stage, the HTTP
 status, the failure kind, and the outcome class only.
 
-`onUncertain: retry` is refused at startup unless the provider declares
-`idempotentSubmit` or the sender profile accepts duplicates
-(`check_uncertain_retry`); the check is exposed for the configuration loader
-to call.
+`onUncertain: retry` is refused when the package loads unless the provider
+declares `idempotentSubmit` or the sender profile accepts duplicates. The
+manifest's provider entry is the one place that capability is declared: an
+`smtp` provider may not declare it, `provider.yaml` has no such member, and
+the prepare script sees the idempotency key only when it is declared, so a
+script cannot rely on deduplication the manifest does not state.
 
 Residual risks: the test suite cannot inject a resolver, so it proves the
 refusal with a name that resolves to loopback and with literal private and

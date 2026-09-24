@@ -195,6 +195,7 @@ impl Harness {
         )
         .unwrap();
         copy_tree(&starter.join("templates"), &package_root.join("templates"));
+        copy_tree(&starter.join("providers"), &package_root.join("providers"));
         let runtime_path = write_runtime(root.path(), &package_root, &isolated.reference);
         migrate_from_path(&runtime_path).await.expect("migrate");
         let config = RuntimeConfig::load(&runtime_path).expect("the runtime configuration");

@@ -91,7 +91,6 @@ request:
 responseHeaders: [x-request-id]
 capabilities:
   receipts: none
-  idempotentSubmit: false
   concurrencyLimit: 4
 ",
     );
@@ -1443,15 +1442,12 @@ async fn a_script_referring_to_anything_outside_its_arguments_fails() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn uncertain_retry_needs_idempotent_submit_or_accepted_duplicates() {
-    let mut capabilities = plain_package(false).capabilities;
-    assert_eq!(
-        check_uncertain_retry(&capabilities, false),
-        Err(UncertainRetryRefused)
+fn idempotent_submission_is_declared_in_the_manifest_not_in_capabilities() {
+    let declared_here = serde_norway::from_str::<HttpProviderPackage>(
+        "prepareScript: p.rhai\nrequest: {method: post}\n\
+         capabilities: {receipts: none, idempotentSubmit: true, concurrencyLimit: 1}\n",
     );
-    assert_eq!(check_uncertain_retry(&capabilities, true), Ok(()));
-    capabilities.idempotent_submit = true;
-    assert_eq!(check_uncertain_retry(&capabilities, false), Ok(()));
+    assert!(declared_here.is_err());
 }
 
 #[test]
@@ -1482,13 +1478,13 @@ fn unknown_configuration_members_are_refused() {
     assert!(follow_redirects.is_err());
     let unknown_package_member = serde_norway::from_str::<HttpProviderPackage>(
         "prepareScript: p.rhai\nrequest: {method: post}\n\
-         capabilities: {receipts: none, idempotentSubmit: false, concurrencyLimit: 1}\n\
+         capabilities: {receipts: none, concurrencyLimit: 1}\n\
          endpoint: https://gateway.example.org/\n",
     );
     assert!(unknown_package_member.is_err());
     let unknown_capability = serde_norway::from_str::<HttpProviderPackage>(
         "prepareScript: p.rhai\nrequest: {method: post}\n\
-         capabilities: {receipts: none, idempotentSubmit: false, concurrencyLimit: 1, burst: 3}\n",
+         capabilities: {receipts: none, concurrencyLimit: 1, burst: 3}\n",
     );
     assert!(unknown_capability.is_err());
 }
@@ -1898,7 +1894,6 @@ async fn the_mock_example_sends_json_with_an_idempotency_key_and_reads_its_answe
             .respond(response)
             .await;
         let provider = mock_gateway(&upstream, &secrets).await;
-        assert!(provider.capabilities().idempotent_submit);
 
         let sent = provider.send(&message(&content)).await;
 

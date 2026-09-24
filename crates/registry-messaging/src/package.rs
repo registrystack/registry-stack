@@ -6,24 +6,32 @@
 //! `templates/` tree laid out as `<id>/<version>/` directories. Each version
 //! directory holds `template.yaml`, `schema.json`, an optional
 //! `sample.json`, and one directory per locale holding the part sources
-//! `subject.j2`, `text.j2`, and `html.j2`. Nothing else may appear under
-//! `templates/`: an unknown entry, a hidden file, or a symbolic link is
-//! refused rather than skipped, so what the runtime reads is exactly what
-//! the author sees. Other entries beside `messaging.yaml` at the root, such
-//! as a README or the runtime example, are not package content and are
-//! neither read nor digested.
+//! `subject.j2`, `text.j2`, and `html.j2`.
+//!
+//! Every provider the manifest declares with kind `http` has a
+//! `providers/<id>/` directory holding `provider.yaml`, the provider's
+//! package half, and exactly the scripts it names, at the paths it names
+//! relative to that directory. No other directory may appear under
+//! `providers/`: an `smtp` provider has no package files.
+//!
+//! Nothing else may appear under `templates/` or `providers/`: an unknown
+//! entry, a hidden file, or a symbolic link is refused rather than skipped,
+//! so what the runtime reads is exactly what the author sees. Other entries
+//! beside `messaging.yaml` at the root, such as a README or the runtime
+//! example, are not package content and are neither read nor digested.
 //!
 //! The package digest is SHA-256 over the canonical JSON of the sorted file
 //! list, each file named by its `/`-separated path under the root with its
 //! own SHA-256 and length. The same bytes always give the same digest, and
 //! changing, adding, or removing any package file changes it.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read as _;
 use std::path::Path;
 
 use registry_messaging_core::{
-    LocaleSources, MessagingPackage, Package, PackageError, PartKind, TemplateDocument,
-    TemplateSource, MAXIMUM_TEMPLATE_SOURCE_BYTES, MESSAGING_PACKAGE_API_VERSION,
+    LocaleSources, MessagingPackage, Package, PackageError, PartKind, ProviderKind,
+    TemplateDocument, TemplateSource, MAXIMUM_TEMPLATE_SOURCE_BYTES, MESSAGING_PACKAGE_API_VERSION,
     MESSAGING_PACKAGE_KIND, PACKAGE_FILE,
 };
 use serde::{Deserialize, Serialize};
@@ -32,6 +40,10 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use crate::config::{redact_refused_values, refused_yaml};
+use crate::http_provider::{
+    compile_scripts, HttpProviderError, HttpProviderPackage, HttpProviderScripts,
+    MAXIMUM_SCRIPT_SOURCE_BYTES,
+};
 
 /// The directory under the package root holding every template version.
 pub const TEMPLATES_DIRECTORY: &str = "templates";
@@ -43,11 +55,18 @@ pub const SCHEMA_FILE: &str = "schema.json";
 /// and rendered in every locale when the package loads.
 pub const SAMPLE_FILE: &str = "sample.json";
 
+/// The directory under the package root holding every HTTP provider's
+/// package half.
+pub const PROVIDERS_DIRECTORY: &str = "providers";
+/// An HTTP provider's package half, under `providers/<id>/`.
+pub const PROVIDER_FILE: &str = "provider.yaml";
+
 /// The largest `messaging.yaml` the runtime reads.
 pub const MAXIMUM_MANIFEST_BYTES: u64 = 1024 * 1024;
-/// The largest file under `templates/`.
+/// The largest file under `templates/`, and the largest `provider.yaml`.
 pub const MAXIMUM_TEMPLATE_FILE_BYTES: u64 = MAXIMUM_TEMPLATE_SOURCE_BYTES as u64;
-/// The most directory entries a package may hold under `templates/`.
+/// The most directory entries a package may hold under `templates/` and
+/// `providers/` together.
 pub const MAXIMUM_PACKAGE_ENTRIES: usize = 4096;
 /// The most bytes all package files may hold together.
 pub const MAXIMUM_PACKAGE_BYTES: u64 = 32 * 1024 * 1024;
@@ -63,12 +82,46 @@ pub struct PackageFile {
     pub bytes: u64,
 }
 
-/// A package read from disk: the checked package and the files its digest
-/// covers, sorted by path.
+/// A package read from disk: the checked package, the package half of every
+/// HTTP provider by provider id, and the files its digest covers, sorted by
+/// path.
 #[derive(Clone, Debug)]
 pub struct LoadedPackage {
     pub package: Package,
+    pub providers: BTreeMap<String, HttpProviderSource>,
     pub files: Vec<PackageFile>,
+}
+
+/// One HTTP provider's package half as read from `providers/<id>/`: its
+/// checked `provider.yaml` and the sources of the scripts it names, each of
+/// which compiled when the package loaded.
+#[derive(Clone)]
+pub struct HttpProviderSource {
+    pub package: HttpProviderPackage,
+    prepare: String,
+    interpret: Option<String>,
+    receipt: Option<String>,
+}
+
+impl HttpProviderSource {
+    /// The script sources, as activation takes them.
+    #[must_use]
+    pub fn scripts(&self) -> HttpProviderScripts<'_> {
+        HttpProviderScripts {
+            prepare: &self.prepare,
+            interpret: self.interpret.as_deref(),
+            receipt: self.receipt.as_deref(),
+        }
+    }
+}
+
+impl std::fmt::Debug for HttpProviderSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HttpProviderSource")
+            .field("package", &self.package)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Why a package could not be loaded, and where.
@@ -118,7 +171,7 @@ pub enum PackageLoadReason {
     Symlink,
     #[error("exceeds {0} bytes")]
     FileTooLarge(u64),
-    #[error("holds more than {MAXIMUM_PACKAGE_ENTRIES} entries under templates")]
+    #[error("holds more than {MAXIMUM_PACKAGE_ENTRIES} entries under templates and providers")]
     TooManyEntries,
     #[error("holds more than {MAXIMUM_PACKAGE_BYTES} bytes of package files")]
     TooLarge,
@@ -128,6 +181,8 @@ pub enum PackageLoadReason {
     Parse { at: String, cause: String },
     #[error("is refused: {0}")]
     Invalid(PackageError),
+    #[error("is refused: {0}")]
+    Provider(HttpProviderError),
 }
 
 /// Read the package under `root`, compute its digest, and check it.
@@ -145,7 +200,19 @@ pub fn load_package(root: &Path) -> Result<LoadedPackage, PackageLoadError> {
             let (at, cause) = refused_yaml(error);
             PackageLoadError::new(PACKAGE_FILE, PackageLoadReason::Parse { at, cause })
         })?;
+    // The manifest's own checks run first so the provider directories are
+    // read only for identifiers already known to be valid.
+    manifest
+        .check()
+        .map_err(|error| PackageLoadError::new(PACKAGE_FILE, PackageLoadReason::Invalid(error)))?;
     let sources = reader.read_templates()?;
+    let http_providers: BTreeSet<String> = manifest
+        .providers
+        .iter()
+        .filter(|provider| provider.kind == ProviderKind::Http)
+        .map(|provider| provider.id.clone())
+        .collect();
+    let providers = reader.read_providers(&http_providers)?;
     let mut files = reader.files;
     files.sort_by(|left, right| left.path.cmp(&right.path));
     let digest = package_digest(&files);
@@ -160,7 +227,11 @@ pub fn load_package(root: &Path) -> Result<LoadedPackage, PackageLoadError> {
         };
         PackageLoadError::new(&file, PackageLoadReason::Invalid(error))
     })?;
-    Ok(LoadedPackage { package, files })
+    Ok(LoadedPackage {
+        package,
+        providers,
+        files,
+    })
 }
 
 /// The digest of a sorted file list.
@@ -315,6 +386,156 @@ impl Reader<'_> {
         Ok(sources)
     }
 
+    fn read_providers(
+        &mut self,
+        declared: &BTreeSet<String>,
+    ) -> Result<BTreeMap<String, HttpProviderSource>, PackageLoadError> {
+        let missing = |id: &str| {
+            PackageLoadError::new(
+                &format!("{PROVIDERS_DIRECTORY}/{id}/{PROVIDER_FILE}"),
+                PackageLoadReason::Read(std::io::ErrorKind::NotFound.into()),
+            )
+        };
+        let directory = self.root.join(PROVIDERS_DIRECTORY);
+        let metadata = match std::fs::symlink_metadata(&directory) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return match declared.first() {
+                    Some(id) => Err(missing(id)),
+                    None => Ok(BTreeMap::new()),
+                };
+            }
+            Err(error) => {
+                return Err(PackageLoadError::new(
+                    PROVIDERS_DIRECTORY,
+                    PackageLoadReason::Read(error),
+                ))
+            }
+        };
+        if metadata.file_type().is_symlink() {
+            return Err(PackageLoadError::new(
+                PROVIDERS_DIRECTORY,
+                PackageLoadReason::Symlink,
+            ));
+        }
+        if !metadata.is_dir() {
+            return Err(PackageLoadError::new(
+                PROVIDERS_DIRECTORY,
+                PackageLoadReason::Unexpected,
+            ));
+        }
+        let mut listed = BTreeSet::new();
+        for (name, kind) in self.list(PROVIDERS_DIRECTORY)? {
+            let path = format!("{PROVIDERS_DIRECTORY}/{name}");
+            if kind != EntryKind::Directory || !declared.contains(&name) {
+                return Err(PackageLoadError::new(&path, PackageLoadReason::Unexpected));
+            }
+            listed.insert(name);
+        }
+        let mut providers = BTreeMap::new();
+        for id in declared {
+            if !listed.contains(id) {
+                return Err(missing(id));
+            }
+            providers.insert(id.clone(), self.read_provider(id)?);
+        }
+        Ok(providers)
+    }
+
+    fn read_provider(&mut self, id: &str) -> Result<HttpProviderSource, PackageLoadError> {
+        let directory = format!("{PROVIDERS_DIRECTORY}/{id}");
+        let manifest_path = format!("{directory}/{PROVIDER_FILE}");
+        let text = self.read_file(&manifest_path, MAXIMUM_TEMPLATE_FILE_BYTES)?;
+        let deserializer = serde_norway::Deserializer::from_str(&text);
+        let package: HttpProviderPackage =
+            serde_path_to_error::deserialize(deserializer).map_err(|error| {
+                let (at, cause) = refused_yaml(error);
+                PackageLoadError::new(&manifest_path, PackageLoadReason::Parse { at, cause })
+            })?;
+        package.validate().map_err(|error| {
+            PackageLoadError::new(&manifest_path, PackageLoadReason::Provider(error))
+        })?;
+        let scripts: Vec<(&'static str, String)> = [
+            ("prepareScript", Some(&package.prepare_script)),
+            ("interpretScript", package.interpret_script.as_ref()),
+            ("receiptScript", package.receipt_script.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(field, path)| path.map(|path| (field, path.clone())))
+        .collect();
+        let mut expected: BTreeSet<String> = scripts.iter().map(|(_, path)| path.clone()).collect();
+        expected.insert(PROVIDER_FILE.to_owned());
+        self.expect_only(&directory, "", &expected)?;
+        let mut sources = BTreeMap::new();
+        for (field, path) in &scripts {
+            let text = self.read_file(
+                &format!("{directory}/{path}"),
+                MAXIMUM_SCRIPT_SOURCE_BYTES as u64,
+            )?;
+            sources.insert(*field, text);
+        }
+        let source = HttpProviderSource {
+            prepare: sources.remove("prepareScript").unwrap_or_default(),
+            interpret: sources.remove("interpretScript"),
+            receipt: sources.remove("receiptScript"),
+            package,
+        };
+        compile_scripts(&source.package, source.scripts()).map_err(|error| {
+            let path = match &error {
+                HttpProviderError::Script { script, .. } => scripts
+                    .iter()
+                    .find(|(field, _)| field == script)
+                    .map_or_else(
+                        || manifest_path.clone(),
+                        |(_, path)| format!("{directory}/{path}"),
+                    ),
+                _ => manifest_path.clone(),
+            };
+            PackageLoadError::new(&path, PackageLoadReason::Provider(error))
+        })?;
+        Ok(source)
+    }
+
+    /// Walk `directory` and refuse every entry that is not one of the
+    /// `expected` files, relative to the provider directory, or a directory
+    /// on the way to one.
+    fn expect_only(
+        &mut self,
+        provider: &str,
+        relative: &str,
+        expected: &BTreeSet<String>,
+    ) -> Result<(), PackageLoadError> {
+        let directory = if relative.is_empty() {
+            provider.to_owned()
+        } else {
+            format!("{provider}/{relative}")
+        };
+        for (name, kind) in self.list(&directory)? {
+            let entry = if relative.is_empty() {
+                name
+            } else {
+                format!("{relative}/{name}")
+            };
+            let allowed = match kind {
+                EntryKind::File => expected.contains(&entry),
+                EntryKind::Directory => {
+                    let prefix = format!("{entry}/");
+                    expected.iter().any(|path| path.starts_with(&prefix))
+                }
+            };
+            if !allowed {
+                return Err(PackageLoadError::new(
+                    &format!("{provider}/{entry}"),
+                    PackageLoadReason::Unexpected,
+                ));
+            }
+            if kind == EntryKind::Directory {
+                self.expect_only(provider, &entry, expected)?;
+            }
+        }
+        Ok(())
+    }
+
     fn read_json(&mut self, path: &str) -> Result<Value, PackageLoadError> {
         let text = self.read_file(path, MAXIMUM_TEMPLATE_FILE_BYTES)?;
         serde_json::from_str(&text).map_err(|error| {
@@ -433,7 +654,11 @@ pub(crate) mod tests {
         for entry in std::fs::read_dir(from).unwrap() {
             let entry = entry.unwrap();
             let name = entry.file_name();
-            if top && name != PACKAGE_FILE && name != TEMPLATES_DIRECTORY {
+            if top
+                && name != PACKAGE_FILE
+                && name != TEMPLATES_DIRECTORY
+                && name != PROVIDERS_DIRECTORY
+            {
                 continue;
             }
             let target = to.join(&name);
@@ -456,6 +681,7 @@ pub(crate) mod tests {
     }
 
     const REMINDER: &str = "templates/appointment-reminder/1";
+    const GATEWAY: &str = "providers/sms-gateway";
 
     #[test]
     fn the_starter_package_loads_with_a_digest_over_its_sorted_files() {
@@ -683,6 +909,197 @@ pub(crate) mod tests {
         assert_eq!(
             error.path(),
             "package.root/templates/appointment-reminder-sms/1"
+        );
+    }
+
+    #[test]
+    fn the_starter_package_ships_its_http_provider_digested() {
+        let root = starter_copy();
+        let loaded = load_package(root.path()).unwrap();
+        let paths: Vec<&str> = loaded.files.iter().map(|file| file.path.as_str()).collect();
+        for file in [
+            "providers/sms-gateway/provider.yaml",
+            "providers/sms-gateway/scripts/prepare.rhai",
+            "providers/sms-gateway/scripts/interpret.rhai",
+            "providers/sms-gateway/scripts/receipt.rhai",
+        ] {
+            assert!(paths.contains(&file), "{file} is not digested");
+        }
+        assert_eq!(
+            loaded.providers.keys().collect::<Vec<_>>(),
+            vec!["sms-gateway"]
+        );
+        let gateway = &loaded.providers["sms-gateway"];
+        assert_eq!(gateway.package.prepare_script, "scripts/prepare.rhai");
+        let scripts = gateway.scripts();
+        assert!(scripts.prepare.contains("fn prepare"));
+        assert!(scripts.interpret.is_some());
+        assert!(scripts.receipt.is_some());
+
+        let digest = loaded.package.digest().to_owned();
+        let script = root.path().join(GATEWAY).join("scripts/prepare.rhai");
+        let original = std::fs::read_to_string(&script).unwrap();
+        std::fs::write(&script, format!("{original}\n")).unwrap();
+        assert_ne!(load_package(root.path()).unwrap().package.digest(), digest);
+    }
+
+    #[test]
+    fn the_starter_provider_is_the_mock_example_byte_for_byte() {
+        let mock = starter_root().join("../providers/mock");
+        let starter = starter_root().join(GATEWAY);
+        for file in [
+            "provider.yaml",
+            "scripts/prepare.rhai",
+            "scripts/interpret.rhai",
+            "scripts/receipt.rhai",
+        ] {
+            assert_eq!(
+                std::fs::read(mock.join(file)).unwrap(),
+                std::fs::read(starter.join(file)).unwrap(),
+                "{file} differs from the mock example"
+            );
+        }
+    }
+
+    #[test]
+    fn a_declared_http_provider_without_its_directory_is_refused() {
+        let root = starter_copy();
+        std::fs::remove_dir_all(root.path().join(GATEWAY)).unwrap();
+        let error = refusal(root.path());
+        assert!(error.is_read_failure(), "{error}");
+        assert_eq!(
+            error.path(),
+            format!("package.root/{GATEWAY}/provider.yaml")
+        );
+
+        let root = starter_copy();
+        std::fs::remove_dir_all(root.path().join(PROVIDERS_DIRECTORY)).unwrap();
+        let error = refusal(root.path());
+        assert_eq!(
+            error.path(),
+            format!("package.root/{GATEWAY}/provider.yaml")
+        );
+
+        let root = starter_copy();
+        std::fs::remove_file(root.path().join(GATEWAY).join("scripts/receipt.rhai")).unwrap();
+        let error = refusal(root.path());
+        assert!(error.is_read_failure(), "{error}");
+        assert_eq!(
+            error.path(),
+            format!("package.root/{GATEWAY}/scripts/receipt.rhai")
+        );
+    }
+
+    #[test]
+    fn a_provider_entry_outside_the_layout_is_refused_by_path() {
+        for (entry, directory) in [
+            ("providers/mail-relay".to_owned(), true),
+            ("providers/unknown".to_owned(), true),
+            ("providers/stray.yaml".to_owned(), false),
+            (format!("{GATEWAY}/README.md"), false),
+            (format!("{GATEWAY}/connection.example.yaml"), false),
+            (format!("{GATEWAY}/.hidden"), false),
+            (format!("{GATEWAY}/fixtures"), true),
+            (format!("{GATEWAY}/scripts/extra.rhai"), false),
+        ] {
+            let root = starter_copy();
+            let path = root.path().join(&entry);
+            if directory {
+                std::fs::create_dir(&path).unwrap();
+            } else {
+                std::fs::write(&path, "x").unwrap();
+            }
+            let error = refusal(root.path());
+            assert!(
+                matches!(error.reason(), PackageLoadReason::Unexpected),
+                "{entry}: {error}"
+            );
+            assert_eq!(error.path(), format!("package.root/{entry}"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symbolic_link_under_providers_is_refused() {
+        let root = starter_copy();
+        let script = root.path().join(GATEWAY).join("scripts/prepare.rhai");
+        let outside = root.path().join("outside.rhai");
+        std::fs::rename(&script, &outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &script).unwrap();
+        let error = refusal(root.path());
+        assert!(
+            matches!(error.reason(), PackageLoadReason::Symlink),
+            "{error}"
+        );
+        assert_eq!(
+            error.path(),
+            format!("package.root/{GATEWAY}/scripts/prepare.rhai")
+        );
+
+        let root = starter_copy();
+        let directory = root.path().join(GATEWAY);
+        let outside = root.path().join("outside");
+        std::fs::rename(&directory, &outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &directory).unwrap();
+        let error = refusal(root.path());
+        assert!(
+            matches!(error.reason(), PackageLoadReason::Symlink),
+            "{error}"
+        );
+        assert_eq!(error.path(), format!("package.root/{GATEWAY}"));
+    }
+
+    #[test]
+    fn a_provider_that_does_not_parse_check_or_compile_is_refused_at_its_file() {
+        let root = starter_copy();
+        let manifest = root.path().join(GATEWAY).join("provider.yaml");
+        let original = std::fs::read_to_string(&manifest).unwrap();
+        std::fs::write(
+            &manifest,
+            format!("{original}endpoint: https://x.example/\n"),
+        )
+        .unwrap();
+        let error = refusal(root.path());
+        assert!(
+            matches!(error.reason(), PackageLoadReason::Parse { .. }),
+            "{error}"
+        );
+        assert_eq!(
+            error.path(),
+            format!("package.root/{GATEWAY}/provider.yaml")
+        );
+
+        let root = starter_copy();
+        std::fs::write(
+            root.path().join(GATEWAY).join("provider.yaml"),
+            original.replace("concurrencyLimit: 8", "concurrencyLimit: 0"),
+        )
+        .unwrap();
+        let error = refusal(root.path());
+        assert!(
+            matches!(error.reason(), PackageLoadReason::Provider(_)),
+            "{error}"
+        );
+        assert!(error.to_string().contains("concurrencyLimit"), "{error}");
+        assert_eq!(
+            error.path(),
+            format!("package.root/{GATEWAY}/provider.yaml")
+        );
+
+        let root = starter_copy();
+        std::fs::write(
+            root.path().join(GATEWAY).join("scripts/interpret.rhai"),
+            "fn interpret(response) {",
+        )
+        .unwrap();
+        let error = refusal(root.path());
+        assert!(
+            matches!(error.reason(), PackageLoadReason::Provider(_)),
+            "{error}"
+        );
+        assert_eq!(
+            error.path(),
+            format!("package.root/{GATEWAY}/scripts/interpret.rhai")
         );
     }
 }

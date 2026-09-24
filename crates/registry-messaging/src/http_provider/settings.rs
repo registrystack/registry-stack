@@ -111,16 +111,14 @@ pub enum HttpSendMethod {
     Get,
 }
 
-/// What a provider can do, declared by the package.
+/// What a provider can do, declared by the package. Whether it
+/// deduplicates submissions is declared once, as `idempotentSubmit` on the
+/// provider in `messaging.yaml`, where the sender profile checks read it.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpProviderCapabilities {
     pub receipts: ReceiptCapability,
-    /// Whether the provider deduplicates submissions on a key the request
-    /// carries. Only then may an uncertain send be retried without the
-    /// operator accepting duplicates.
-    pub idempotent_submit: bool,
     /// The most sends the provider accepts at once, 1 to 64.
     pub concurrency_limit: u16,
     /// The provider's documented send rate. The worker enforces it at claim
@@ -324,32 +322,6 @@ pub(crate) fn invalid(field: &'static str, reason: impl Into<String>) -> HttpPro
     HttpProviderError::Invalid {
         field,
         reason: reason.into(),
-    }
-}
-
-/// Why `onUncertain: retry` is refused for a sender profile.
-#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
-#[error(
-    "onUncertain: retry needs a provider that declares idempotentSubmit: true, or acceptDuplicates: true on the profile"
-)]
-pub struct UncertainRetryRefused;
-
-/// The startup check behind `onUncertain: retry`: retrying a send that may
-/// already have reached the provider is safe only when the provider
-/// deduplicates on the key the request carries, or when the operator has
-/// accepted duplicates for the profile.
-///
-/// # Errors
-///
-/// [`UncertainRetryRefused`] when neither holds.
-pub const fn check_uncertain_retry(
-    capabilities: &HttpProviderCapabilities,
-    accept_duplicates: bool,
-) -> Result<(), UncertainRetryRefused> {
-    if capabilities.idempotent_submit || accept_duplicates {
-        Ok(())
-    } else {
-        Err(UncertainRetryRefused)
     }
 }
 

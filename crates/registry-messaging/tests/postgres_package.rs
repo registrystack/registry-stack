@@ -121,6 +121,7 @@ impl Deployment {
         )
         .unwrap();
         copy_tree(&starter.join("templates"), &package.join("templates"));
+        copy_tree(&starter.join("providers"), &package.join("providers"));
         let deployment = Self {
             root,
             reference: isolated.reference.clone(),

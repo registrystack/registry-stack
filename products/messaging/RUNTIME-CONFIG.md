@@ -126,6 +126,7 @@ The rest of the manifest declares what callers send through:
 ```yaml
 providers:
   - {id: mail-relay, kind: smtp}
+  - {id: sms-gateway, kind: http, idempotentSubmit: true}
 senderProfiles:
   - {id: transactional, channel: email, provider: mail-relay, sender: notices@example.org}
   - {id: reminders-sms, channel: sms, provider: sms-gateway, sender: Registry, maximumSegments: 2}
@@ -134,8 +135,10 @@ templates:
 ```
 
 A provider declares its `kind`, `smtp` or `http`, and `idempotentSubmit`
-when it deduplicates submissions on the idempotency key the runtime sends;
-its endpoint and credentials are runtime configuration. A sender profile names its `channel`
+when it deduplicates submissions on the idempotency key the runtime sends.
+`idempotentSubmit` is the one declaration of that capability: only an `http`
+provider may set it, and only then does its prepare script see the key. Its
+endpoint and credentials are runtime configuration. A sender profile names its `channel`
 (`email` or `sms`), a declared provider that can carry it, and the `sender`
 identity. An SMS sender profile sets `maximumSegments`, from 1 to 10; a
 rendered SMS needing more segments is refused `422
@@ -167,6 +170,35 @@ duplicate is better than a missed message. A message whose request names no
 `retention.payloadDays` if that comes first, and is not sent after it
 expires.
 
+### HTTP providers
+
+Every `http` provider has a directory `providers/<id>/` holding
+`provider.yaml` and the scripts it names, at the paths it names relative to
+that directory:
+
+```yaml
+prepareScript: scripts/prepare.rhai
+interpretScript: scripts/interpret.rhai   # optional; the status code decides without one
+receiptScript: scripts/receipt.rhai       # exactly when receipts is callback
+request:
+  method: post                            # or get, which runtime settings must acknowledge
+  headers: [idempotency-key, x-request-id]
+responseHeaders: [x-request-id]
+capabilities:
+  receipts: callback                      # none, callback, or reconcile
+  concurrencyLimit: 8                     # 1 to 64
+  ratePerSecond: 20                       # optional, 1 to 1000
+```
+
+`provider.yaml` is closed and at most 64 KiB; each script is at most 64 KiB
+and must compile with exactly its entry point when the package loads. A
+directory for an `smtp` provider or an undeclared id, a file the provider does
+not name, a hidden entry, or a symbolic link under `providers/` is refused
+with its path, and a declared `http` provider without its directory or a
+named script is refused as missing. `providers/` is digested with the rest of
+the package. `products/messaging/examples/providers/` holds two example
+provider directories, and the starter ships the mock one as `sms-gateway`.
+
 ### Templates
 
 Each template version lives under `templates/<id>/<version>/`:
@@ -193,8 +225,8 @@ declare is refused `422 template.locale-unavailable`, never answered in
 another language.
 
 Symbolic links are refused anywhere in the package, and files at the package
-root other than `messaging.yaml` and `templates/` are ignored and not part of
-the digest.
+root other than `messaging.yaml`, `templates/`, and `providers/` are ignored
+and not part of the digest.
 
 ### The package ledger
 

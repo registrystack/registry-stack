@@ -53,6 +53,14 @@
   route and Scheduling do. A body that is not strict JSON, or a missing or
   malformed `Idempotency-Key`, stays `400 request.invalid`.
 - Record that status reads are not journaled (MESSAGING-DEC-15).
+- Read every `http` provider's package half from `providers/<id>/`:
+  `provider.yaml` and exactly the scripts it names, digested with the
+  package, compiled at load, and refused with its path when an entry is
+  unknown, hidden, a symbolic link, or missing. The starter ships the mock
+  provider as `sms-gateway`.
+- Declare idempotent submission once, as `idempotentSubmit` on the manifest's
+  provider entry. An `smtp` provider may not declare it, and
+  `capabilities.idempotentSubmit` in `provider.yaml` is refused.
 - Add `registry-messaging-client` with health and readiness.
 - Publish the security invariant matrix, the recorded decisions, and the
   problem catalog under `https://id.registrystack.org/problems/registry-messaging/`.

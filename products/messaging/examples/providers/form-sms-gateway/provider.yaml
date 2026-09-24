@@ -11,10 +11,10 @@ interpretScript: scripts/interpret.rhai
 receiptScript: scripts/receipt.rhai
 request:
   method: post
+# The provider does not deduplicate submissions, so its entry in
+# messaging.yaml leaves `idempotentSubmit` unset and an uncertain send is
+# never retried unless the sender profile accepts duplicates.
 capabilities:
   receipts: callback
-  # The provider does not deduplicate submissions, so an uncertain send is
-  # never retried unless the sender profile accepts duplicates.
-  idempotentSubmit: false
   concurrencyLimit: 16
   ratePerSecond: 1

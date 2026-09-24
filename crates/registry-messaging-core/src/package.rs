@@ -100,7 +100,10 @@ pub struct ProviderDeclaration {
     pub id: String,
     pub kind: ProviderKind,
     /// The provider deduplicates submissions on the idempotency key the
-    /// runtime sends, so sending one message twice delivers it once.
+    /// runtime sends, so sending one message twice delivers it once. This is
+    /// the one declaration of that capability: an HTTP provider's scripts
+    /// see the key only when it is set, and an `smtp` provider may not set
+    /// it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub idempotent_submit: bool,
 }
@@ -286,6 +289,11 @@ pub enum PackageError {
          not declare idempotentSubmit and the profile does not set acceptDuplicates"
     )]
     UncertainRetry { profile: String, provider: String },
+    #[error(
+        "provider `{0}` is an smtp provider, which cannot declare idempotentSubmit: an SMTP \
+         relay does not deduplicate on a key the runtime sends"
+    )]
+    IdempotentSmtp(String),
     #[error("access profile `{profile}` names {kind} `{id}`, which the package does not declare")]
     UnknownReference {
         profile: String,
@@ -338,6 +346,13 @@ impl MessagingPackage {
             }
         }
         let providers = index("provider", &self.providers, |provider| &provider.id)?;
+        if let Some(provider) = self
+            .providers
+            .iter()
+            .find(|provider| provider.kind == ProviderKind::Smtp && provider.idempotent_submit)
+        {
+            return Err(PackageError::IdempotentSmtp(provider.id.clone()));
+        }
         let sender_profiles = index("sender profile", &self.sender_profiles, |profile| {
             &profile.id
         })?;
@@ -820,6 +835,16 @@ pub(crate) mod tests {
         let mut accepting = value;
         accepting["senderProfiles"][1]["acceptDuplicates"] = json!(true);
         assert!(package(accepting).unwrap().check().is_ok());
+    }
+
+    #[test]
+    fn an_smtp_provider_cannot_declare_idempotent_submission() {
+        let mut value = valid();
+        value["providers"][0]["idempotentSubmit"] = json!(true);
+        assert_eq!(
+            refusal(value),
+            PackageError::IdempotentSmtp("relay".to_owned())
+        );
     }
 
     #[test]

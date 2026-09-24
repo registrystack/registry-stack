@@ -74,12 +74,11 @@ pub use script::{
     MAXIMUM_SCRIPT_OUTPUT_BYTES, MAXIMUM_SCRIPT_SOURCE_BYTES,
 };
 pub use settings::{
-    check_uncertain_retry, CredentialPlacement, HttpProviderAuthentication,
-    HttpProviderCapabilities, HttpProviderError, HttpProviderPackage, HttpProviderRequest,
-    HttpProviderSettings, HttpSendMethod, ReceiptCapability, RedirectPolicy, UncertainRetryRefused,
-    MAXIMUM_CONCURRENCY_LIMIT, MAXIMUM_RATE_PER_SECOND, MAXIMUM_RESPONSE_BYTES,
-    MAXIMUM_SCRIPT_HEADERS, MAXIMUM_SCRIPT_PATH_BYTES, MAXIMUM_TOKEN_CACHE_SECONDS,
-    MINIMUM_TOKEN_CACHE_SECONDS,
+    CredentialPlacement, HttpProviderAuthentication, HttpProviderCapabilities, HttpProviderError,
+    HttpProviderPackage, HttpProviderRequest, HttpProviderSettings, HttpSendMethod,
+    ReceiptCapability, RedirectPolicy, MAXIMUM_CONCURRENCY_LIMIT, MAXIMUM_RATE_PER_SECOND,
+    MAXIMUM_RESPONSE_BYTES, MAXIMUM_SCRIPT_HEADERS, MAXIMUM_SCRIPT_PATH_BYTES,
+    MAXIMUM_TOKEN_CACHE_SECONDS, MINIMUM_TOKEN_CACHE_SECONDS,
 };
 
 use script::{
@@ -316,37 +315,7 @@ impl HttpProviderSettings {
     ) -> Result<HttpProvider, HttpProviderError> {
         package.validate()?;
         let connection = self.check_connection(package, trust_bundle_pem)?;
-        let prepare = script::compile("prepareScript", scripts.prepare, PREPARE_ENTRYPOINT, 2)?;
-        let interpret = match (&package.interpret_script, scripts.interpret) {
-            (Some(_), Some(source)) => Some(script::compile(
-                "interpretScript",
-                source,
-                INTERPRET_ENTRYPOINT,
-                1,
-            )?),
-            (None, None) => None,
-            _ => {
-                return Err(invalid(
-                    "interpretScript",
-                    "a source is supplied exactly when the package names one",
-                ))
-            }
-        };
-        let receipt = match (&package.receipt_script, scripts.receipt) {
-            (Some(_), Some(source)) => Some(script::compile(
-                "receiptScript",
-                source,
-                RECEIPT_ENTRYPOINT,
-                1,
-            )?),
-            (None, None) => None,
-            _ => {
-                return Err(invalid(
-                    "receiptScript",
-                    "a source is supplied exactly when the package names one",
-                ))
-            }
-        };
+        let (prepare, interpret, receipt) = compile_scripts(package, scripts)?;
         let resolved = self.resolve_authentication(package, connection.development, secrets)?;
         let origin_id = destination_origin_id(provider_id)?;
         let profile = if connection.development {
@@ -455,6 +424,47 @@ impl HttpProviderSettings {
             capabilities: package.capabilities.clone(),
         })
     }
+}
+
+/// Compile the scripts one provider package names, each under its
+/// entry-point contract. The package loader runs this to refuse a script
+/// that does not compile; activation runs it to keep the result.
+pub(crate) fn compile_scripts(
+    package: &HttpProviderPackage,
+    scripts: HttpProviderScripts<'_>,
+) -> Result<(AST, Option<AST>, Option<AST>), HttpProviderError> {
+    let prepare = script::compile("prepareScript", scripts.prepare, PREPARE_ENTRYPOINT, 2)?;
+    let interpret = match (&package.interpret_script, scripts.interpret) {
+        (Some(_), Some(source)) => Some(script::compile(
+            "interpretScript",
+            source,
+            INTERPRET_ENTRYPOINT,
+            1,
+        )?),
+        (None, None) => None,
+        _ => {
+            return Err(invalid(
+                "interpretScript",
+                "a source is supplied exactly when the package names one",
+            ))
+        }
+    };
+    let receipt = match (&package.receipt_script, scripts.receipt) {
+        (Some(_), Some(source)) => Some(script::compile(
+            "receiptScript",
+            source,
+            RECEIPT_ENTRYPOINT,
+            1,
+        )?),
+        (None, None) => None,
+        _ => {
+            return Err(invalid(
+                "receiptScript",
+                "a source is supplied exactly when the package names one",
+            ))
+        }
+    };
+    Ok((prepare, interpret, receipt))
 }
 
 fn destination_origin_id(provider_id: &str) -> Result<String, HttpProviderError> {

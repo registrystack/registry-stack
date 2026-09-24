@@ -1,12 +1,15 @@
 apiVersion: registry.registrystack.org/messaging-package/v1alpha1
 kind: MessagingPackage
-# The transports this deployment sends through. Only the kind is package;
-# each provider's endpoint and credentials are runtime configuration.
+# The transports this deployment sends through. The kind and, for an http
+# provider, its scripts under providers/<id>/ are package; each provider's
+# endpoint and credentials are runtime configuration. `idempotentSubmit`
+# declares that the provider drops a repeat carrying the same idempotency key.
 providers:
   - id: mail-relay
     kind: smtp
   - id: sms-gateway
     kind: http
+    idempotentSubmit: true
 # What a caller selects: a channel, the provider carrying it, the sender
 # identity, and for SMS the most segments one message may use.
 senderProfiles:
