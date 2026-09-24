@@ -476,11 +476,15 @@ enum CommandKind {
     Retention,
     AttemptSettlement,
     AttemptUncertainMarking,
+    Migration,
 }
 
 fn command_kind(command: &Command) -> CommandKind {
     if matches!(command, Command::Retention(_)) {
         return CommandKind::Retention;
+    }
+    if matches!(command, Command::Db(_)) {
+        return CommandKind::Migration;
     }
     if let Command::Attempt(args) = command {
         return match args.command {
@@ -488,10 +492,7 @@ fn command_kind(command: &Command) -> CommandKind {
             AttemptCommand::MarkUncertain(_) => CommandKind::AttemptUncertainMarking,
         };
     }
-    if matches!(
-        command,
-        Command::Doctor(_) | Command::Db(_) | Command::Dev(_)
-    ) {
+    if matches!(command, Command::Doctor(_) | Command::Dev(_)) {
         CommandKind::Operational
     } else {
         CommandKind::Authoring
@@ -673,6 +674,30 @@ fn operator_refusal(kind: CommandKind, error: &anyhow::Error) -> Option<Value> {
                 "casework.attempt-mark-uncertain.refused",
                 "attempt",
                 marking.to_string(),
+                action,
+            )
+        }
+        CommandKind::Migration => {
+            // Only the refusals `casework migrate` names are passed through; a
+            // database that cannot be reached stays an operational failure.
+            let store = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<StoreError>())?;
+            let action = match store {
+                StoreError::SchemaNewer { .. } => {
+                    "Run the casework release that migrated this database or a later one; \
+                     Casework does not migrate a schema down."
+                }
+                StoreError::HostedWorkWouldBeDropped { .. } => {
+                    "Keep this database with the release that wrote it until its hosted work \
+                     is exported, then migrate a fresh Casework database."
+                }
+                _ => return None,
+            };
+            (
+                "casework.migration.refused",
+                "database",
+                store.to_string(),
                 action,
             )
         }
@@ -1532,6 +1557,74 @@ mod tests {
             diagnostic["suggestedAction"],
             "Correct the unavailable runtime dependency, then retry."
         );
+    }
+
+    #[test]
+    fn db_migrate_passes_migration_refusals_through_and_keeps_database_failures_generic() {
+        let kind = command_kind(
+            &Cli::try_parse_from(["caseworkctl", "db", "migrate", "."])
+                .unwrap()
+                .command,
+        );
+
+        let newer = anyhow::Error::new(StoreError::SchemaNewer {
+            found: 17,
+            supported: 16,
+        })
+        .context("applying Casework database migrations");
+        let (exit, diagnostic) = classify_failure(kind, &newer);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(diagnostic["code"], "casework.migration.refused");
+        assert_eq!(diagnostic["artifact"], "operator_action");
+        assert_eq!(diagnostic["path"], "database");
+        assert_eq!(
+            diagnostic["message"],
+            "the Casework database schema version 17 is newer than this binary supports (16); run a casework release that supports it"
+        );
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "Run the casework release that migrated this database or a later one; Casework does not migrate a schema down."
+        );
+
+        let hosted = anyhow::Error::new(StoreError::HostedWorkWouldBeDropped {
+            version: 15,
+            tables: vec![("casework_hosted_items", 1)],
+        })
+        .context("applying Casework database migrations");
+        let (exit, diagnostic) = classify_failure(kind, &hosted);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(diagnostic["code"], "casework.migration.refused");
+        assert_eq!(
+            diagnostic["message"],
+            StoreError::HostedWorkWouldBeDropped {
+                version: 15,
+                tables: vec![("casework_hosted_items", 1)],
+            }
+            .to_string()
+        );
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .unwrap()
+                .contains("casework_hosted_items (1 row)"),
+            "{diagnostic:#}"
+        );
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "Keep this database with the release that wrote it until its hosted work is exported, then migrate a fresh Casework database."
+        );
+
+        for failure in [StoreError::Unavailable, StoreError::Corrupt] {
+            let failure =
+                anyhow::Error::new(failure).context("applying Casework database migrations");
+            let (exit, diagnostic) = classify_failure(kind, &failure);
+            assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
+            assert_eq!(diagnostic["code"], "caseworkctl.operational-failure");
+            assert_eq!(
+                diagnostic["message"],
+                "A Casework runtime dependency check failed."
+            );
+        }
     }
 
     #[test]

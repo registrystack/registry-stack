@@ -607,7 +607,7 @@ The following operator-supplied variables select the maintained suites:
 
 | Variable | Suite | Database |
 |---|---|---|
-| `CASEWORK_TEST_DATABASE_URL` | `--test postgres_transactions` | Its own: the suite resets `public` |
+| `CASEWORK_TEST_DATABASE_URL` | `--test postgres_transactions`, and `-p registry-caseworkctl --lib` | Its own: the suite resets `public`; the `caseworkctl` test creates a unique schema beside it |
 | `CASEWORK_VISIBILITY_TEST_DATABASE_URL` | `--test service_visibility` | Its own: the suite resets `public` |
 | `CASEWORK_SOURCE_RETENTION_TEST_DATABASE_URL` | `--test source_retention_postgres` | Its own: the suite resets `public` |
 | `CASEWORK_CLOCK_TEST_DATABASE_URL` | `--lib clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget` | Its own: the test resets `public` |
@@ -636,6 +636,8 @@ export CASEWORK_ASSIGNMENT_TEST_DATABASE_URL=postgresql://localhost/casework_rev
 export CASEWORK_ROUTING_TEST_DATABASE_URL=postgresql://localhost/casework_review_test
 export CASEWORK_INBOX_TEST_DATABASE_URL=postgresql://localhost/casework_inbox_ordering_test
 cargo test -p registry-casework --features postgres-test --test postgres_transactions --locked
+cargo test -p registry-caseworkctl --features postgres-test --lib --locked \
+  -- --exact cli_contract_tests::db_migrate_reports_a_schema_newer_than_this_binary_with_its_own_refusal
 cargo test -p registry-casework --features postgres-test --test service_visibility --locked
 cargo test -p registry-casework --features postgres-test --test source_retention_postgres --locked
 cargo test -p registry-casework --features postgres-test --lib --locked \

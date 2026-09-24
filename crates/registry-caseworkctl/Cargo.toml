@@ -12,6 +12,10 @@ publish = false
 name = "caseworkctl"
 path = "src/main.rs"
 
+[features]
+default = []
+postgres-test = ["registry-casework/postgres-test"]
+
 [lints]
 workspace = true
 
@@ -45,3 +49,4 @@ zeroize.workspace = true
 
 [dev-dependencies]
 jsonschema.workspace = true
+tokio-postgres.workspace = true

@@ -662,6 +662,18 @@ jobs:
         env:
           CASEWORK_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
         run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test postgres_transactions
+      - name: Verify caseworkctl db migrate reports a migration refusal
+        # An inexact name filter that selects nothing still exits 0, so the
+        # step names the test exactly and fails unless it reports one pass.
+        shell: bash
+        env:
+          CASEWORK_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
+        run: |
+          set -euo pipefail
+          cargo test --locked --profile ci -p registry-caseworkctl --features postgres-test --lib \
+            -- --exact cli_contract_tests::db_migrate_reports_a_schema_newer_than_this_binary_with_its_own_refusal \
+            | tee "${RUNNER_TEMP}/caseworkctl-migrate.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/caseworkctl-migrate.log"
       - name: Create isolated visibility-test database
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}

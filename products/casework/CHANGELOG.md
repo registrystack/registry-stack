@@ -101,6 +101,13 @@
   with `the Casework database schema version N is newer than this binary
   supports (M); run a casework release that supports it`, and `migrate` writes
   nothing.
+- Fix `caseworkctl db migrate` reducing a migration refusal to `A Casework
+  runtime dependency check failed.` The schema-newer-than-binary refusal and
+  the refusal to drop retained hosted work now reach the operator with the
+  message `casework migrate` prints, under the code
+  `casework.migration.refused`, the path `database`, and exit status 1. A
+  database that cannot be reached is still reported as an operational failure
+  with exit status 3.
 - `caseworkctl attempt settle` now names the recovery step when it refuses a
   pending attempt: once the execution lease expires, the actor who started the
   attempt calls `POST /v1/work-items/{itemId}/attempts/{attemptId}/recover`
