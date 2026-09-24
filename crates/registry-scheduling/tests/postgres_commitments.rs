@@ -2454,9 +2454,7 @@ async fn a_commitment_against_an_unanchored_pool_refuses_loudly() {
 
 #[tokio::test]
 async fn an_arrival_offering_without_its_window_record_is_an_operator_gap() {
-    let start = (Utc::now() + TimeDelta::hours(3))
-        .with_nanosecond(0)
-        .expect("second precision");
+    let start = window_start();
     let fx = fixture_publishing(
         &policy_with_window(),
         &["north-counter".to_owned(), "two-counter".to_owned()],
@@ -2700,9 +2698,7 @@ async fn a_concurrent_identical_request_replays_the_winning_receipt() {
 /// back its tentative claim and replay that receipt.
 #[tokio::test]
 async fn concurrent_identical_admissible_requests_replay_one_winning_success() {
-    let start = (Utc::now() + TimeDelta::hours(3))
-        .with_nanosecond(0)
-        .expect("second precision");
+    let start = window_start();
     let fx = fixture_with_window(start).await;
     let body = arrival(&fx, start, Some("public"));
     let (status, winner) = fx
@@ -4388,6 +4384,59 @@ fn policy_with_shared_window() -> String {
     )
 }
 
+/// A window start about three hours out, stamped to the second, whose
+/// two-hour window closes by the 23:30 UTC end of the test opening. Three
+/// hours out would run the window past closing for runs between 18:30 and
+/// 21:00 UTC, so those runs take the latest start that still closes in time,
+/// or the next midnight when that start is too close to now. Every choice stays
+/// inside the availability range the window tests query and inside the
+/// offering's cancellation cutoff, as three hours does.
+fn window_start() -> DateTime<Utc> {
+    window_start_at(Utc::now())
+}
+
+fn window_start_at(now: DateTime<Utc>) -> DateTime<Utc> {
+    let start = (now + TimeDelta::hours(3))
+        .with_nanosecond(0)
+        .expect("second precision");
+    let day = start.date_naive();
+    let latest = day
+        .and_hms_opt(21, 30, 0)
+        .expect("the last start that closes by 23:30")
+        .and_utc();
+    if start <= latest {
+        start
+    } else if latest >= now + TimeDelta::minutes(90) {
+        latest
+    } else {
+        day.succ_opt()
+            .expect("a following day")
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight")
+            .and_utc()
+    }
+}
+
+#[test]
+fn every_window_start_is_published_listed_and_inside_the_cutoff() {
+    let midnight = DateTime::parse_from_rfc3339("2026-09-24T00:00:00.5Z")
+        .expect("a fixed day")
+        .with_timezone(&Utc);
+    for minute in 0..24 * 60 {
+        let now = midnight + TimeDelta::minutes(minute);
+        let start = window_start_at(now);
+        let closing = start
+            .date_naive()
+            .and_hms_opt(23, 30, 0)
+            .expect("the opening end")
+            .and_utc();
+        assert_eq!(start.nanosecond(), 0, "{now}: {start}");
+        assert!(start + TimeDelta::hours(2) <= closing, "{now}: {start}");
+        assert!(start >= now + TimeDelta::minutes(60), "{now}: {start}");
+        assert!(start < now + TimeDelta::minutes(240), "{now}: {start}");
+    }
+}
+
 /// The operator records that publish one concrete arrival window.
 fn records_with_window(start: DateTime<Utc>) -> SchedulingFacts {
     let mut facts = records_without(&[]);
@@ -4874,9 +4923,7 @@ async fn plant_window(fx: &Fixture, window: &PublishedWindow) {
 /// account for.
 #[tokio::test]
 async fn a_window_record_must_belong_to_the_authorized_offering_and_location() {
-    let start = (Utc::now() + TimeDelta::hours(3))
-        .with_nanosecond(0)
-        .expect("second precision");
+    let start = window_start();
     let fx = fixture_publishing(
         &policy_with_shared_window(),
         &["north-counter".to_owned(), "two-counter".to_owned()],
@@ -5243,9 +5290,7 @@ async fn policy_publication_refuses_to_move_an_active_offering_between_pools() {
 async fn an_arrival_window_allocates_its_units_and_holds_its_channel_ceiling() {
     // The published interval is stamped to the second, which is the precision
     // every comparison below reads it back at.
-    let start = (Utc::now() + TimeDelta::hours(3))
-        .with_nanosecond(0)
-        .expect("second precision");
+    let start = window_start();
     let fx = fixture_with_window(start).await;
 
     let offered = window_entry(&fx, 60, 300)
@@ -5368,9 +5413,7 @@ async fn an_arrival_window_allocates_its_units_and_holds_its_channel_ceiling() {
 
 #[tokio::test]
 async fn an_arrival_reschedule_persists_its_new_units_and_channel() {
-    let start = (Utc::now() + TimeDelta::hours(3))
-        .with_nanosecond(0)
-        .expect("second precision");
+    let start = window_start();
     let mut facts = records_with_window(start);
     facts.windows[0].units = 6;
     facts.windows[0].units_policy = RequiredUnitsPolicy::PerRecipient {
@@ -6121,9 +6164,7 @@ async fn a_suppressed_reminder_is_skipped_and_keeps_its_accounting() {
 /// full one as the public capacity refusal, never as a revision mismatch.
 #[tokio::test]
 async fn explain_answers_a_window_offering_rather_than_a_revision_mismatch() {
-    let start = (Utc::now() + TimeDelta::hours(3))
-        .with_nanosecond(0)
-        .expect("second precision");
+    let start = window_start();
     let fx = fixture_with_window(start).await;
     let uri = format!(
         "/v1/availability/explain?offering={WINDOW_OFFERING}&start={}",
