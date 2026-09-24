@@ -48,6 +48,9 @@ pub struct BregAdapter {
     /// The source reader failure cause last logged, so a persistent failure is
     /// reported once per change instead of once per subject read.
     reader_failure: Mutex<Option<String>>,
+    /// The generation the formula of releases up to v0.33.0 gives this
+    /// binding, present when the adapter was built from an operator binding.
+    legacy_binding_generation: Option<String>,
 }
 
 /// The credential behind a BReg read. A source reader failure stops Casework
@@ -136,7 +139,39 @@ impl BregAdapter {
             reader,
             webhook_key: Zeroizing::new(webhook_key),
             reader_failure: Mutex::new(None),
+            legacy_binding_generation: None,
         })
+    }
+
+    pub(crate) fn with_legacy_binding_generation(mut self, generation: String) -> Self {
+        self.legacy_binding_generation = Some(generation);
+        self
+    }
+
+    /// The generation the formula of releases up to v0.33.0 gives this
+    /// binding. That formula also covered credentials, transport, and
+    /// presentation settings; it is exposed only so the runtime can recognise
+    /// work a deployment stored under it.
+    pub fn legacy_binding_generation(&self) -> Option<&str> {
+        self.legacy_binding_generation.as_deref()
+    }
+
+    /// Continue this source under a generation its work is already stored
+    /// under. The runtime calls this only with a generation the store recorded
+    /// for this adapter's own binding generation, so existing occurrences,
+    /// grants, and saved attempts keep matching.
+    pub fn adopt_stored_binding_generation(
+        &mut self,
+        generation: &str,
+    ) -> Result<(), SourceAdapterError> {
+        if generation.is_empty()
+            || generation.len() > 512
+            || generation.chars().any(char::is_control)
+        {
+            return Err(SourceAdapterError::Invalid);
+        }
+        generation.clone_into(&mut self.config.binding_generation);
+        Ok(())
     }
 
     /// Verify the configured BReg runtime and the complete read contract

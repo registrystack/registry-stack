@@ -435,11 +435,23 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             .sources
             .get(&source.id)
             .ok_or_else(|| RuntimeError::SourceConfiguration(source.id.clone()))?;
-        let adapter = binding
+        let mut adapter = binding
             .build_adapter(source, project_root, &secrets)
             .map_err(|_| RuntimeError::SourceConfiguration(source.id.clone()))?;
+        // Work a release up to v0.33.0 stored under its own generation formula
+        // continues under that generation instead of being superseded.
+        let generation = store
+            .adopt_source_generation(
+                &source.id,
+                adapter.binding_generation(),
+                adapter.legacy_binding_generation(),
+            )
+            .await?;
+        adapter
+            .adopt_stored_binding_generation(&generation)
+            .map_err(|_| RuntimeError::SourceConfiguration(source.id.clone()))?;
         store
-            .register_source_generation(&source.id, adapter.binding_generation())
+            .register_source_generation(&source.id, &generation)
             .await?;
         adapters.push(Arc::new(adapter));
     }
