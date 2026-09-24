@@ -696,12 +696,15 @@ pub fn write_secret(directory: &Path, name: &str, value: &[u8]) {
 
 pub struct Options {
     pub token_lifetime: Duration,
+    /// Top-level blocks appended to the runtime document, such as `limits`.
+    pub extra_document: String,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Self {
             token_lifetime: Duration::from_secs(300),
+            extra_document: String::new(),
         }
     }
 }
@@ -761,10 +764,12 @@ impl Environment {
              secretProviders:\n  file:\n    root: {secrets}\n\
              signIn:\n  issuer: {issuer}\n  clientId: {CLIENT_ID}\n  clientKeyRef: secret:file/client-key.jwk\n  scopes: [\"{SCOPE}\"]\n\
              registry:\n  baseUrl: {base_url}\n  resource: {RESOURCE}\n  entity: {ENTITY}\n  targetField: {TARGET_FIELD}\n  accessProfile: {PROFILE}\n\
-             audit:\n  path: {audit}\n  hashKeyRef: secret:file/audit-key\n",
+             audit:\n  path: {audit}\n  hashKeyRef: secret:file/audit-key\n\
+             {extra}",
             secrets = secrets.display(),
             issuer = authorization_server.issuer(),
             audit = audit_path.display(),
+            extra = options.extra_document,
         );
         std::fs::write(&config_path, document).unwrap();
         Self {

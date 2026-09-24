@@ -2,18 +2,17 @@
 
 //! The review page, its submit, and sign-out.
 //!
-//! Every request resolves in the same order: the per-address limit, the
-//! request identifier's shape, the session, the per-person limit, the form
-//! and its CSRF token, and only then the registry. A submit re-reads the
+//! Every request resolves in the same order: the request identifier's shape,
+//! the session, the limit of the person it names, the form and its CSRF
+//! token, and only then the registry. A submit re-reads the
 //! draft and its target before it calls the registry, so a crafted form
 //! cannot skip the check the page made before it offered the form.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::rejection::PathRejection;
-use axum::extract::{ConnectInfo, Path, State};
+use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use registry_breg_client::{BRegIdempotencyKey, BRegProblemCode};
@@ -29,7 +28,6 @@ use crate::{canonical_uuid, cookie, App, Problem, MAXIMUM_FORM_BYTES};
 struct Caller<'a> {
     cookie: &'a str,
     session: Current,
-    address: String,
 }
 
 fn sign_in_redirect(request_id: &str) -> Response {
@@ -44,16 +42,13 @@ fn sign_in_redirect(request_id: &str) -> Response {
         .into_response()
 }
 
-/// Admit a request for `/requests/{id}`: the address limit, the identifier's
-/// shape, the session, and the person's limit, in that order.
+/// Admit a request for `/requests/{id}`: the identifier's shape, the
+/// session, and the limit of the person it names, in that order.
 async fn admit<'a>(
     app: &App,
-    peer: SocketAddr,
     path: Result<Path<String>, PathRejection>,
     headers: &'a HeaderMap,
 ) -> Result<(String, Caller<'a>), Response> {
-    let address = app.address(peer)?;
-    app.admit_address(&address).await?;
     let Ok(Path(request_id)) = path else {
         return Err(app.problem(Problem::NotFound));
     };
@@ -66,14 +61,7 @@ async fn admit<'a>(
         return Err(sign_in_redirect(&request_id));
     };
     app.admit_citizen(&session.citizen).await?;
-    Ok((
-        request_id,
-        Caller {
-            cookie,
-            session,
-            address,
-        },
-    ))
+    Ok((request_id, Caller { cookie, session }))
 }
 
 fn profile(app: &App) -> Profile<'_> {
@@ -97,7 +85,6 @@ async fn audit(
             action,
             outcome,
             Some(&caller.session.citizen),
-            &caller.address,
             Some(request_id),
         )
         .await
@@ -185,11 +172,10 @@ fn render(
 /// person's own token and render both.
 pub(crate) async fn review(
     State(app): State<Arc<App>>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     path: Result<Path<String>, PathRejection>,
     headers: HeaderMap,
 ) -> Response {
-    let (request_id, caller) = match admit(&app, peer, path, &headers).await {
+    let (request_id, caller) = match admit(&app, path, &headers).await {
         Ok(admitted) => admitted,
         Err(response) => return response,
     };
@@ -239,12 +225,11 @@ fn check_csrf(app: &App, form: &Form, session: &Current) -> Result<(), Response>
 /// under the idempotency key bound to that view.
 pub(crate) async fn submit(
     State(app): State<Arc<App>>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     path: Result<Path<String>, PathRejection>,
     headers: HeaderMap,
     body: Body,
 ) -> Response {
-    let (request_id, caller) = match admit(&app, peer, path, &headers).await {
+    let (request_id, caller) = match admit(&app, path, &headers).await {
         Ok(admitted) => admitted,
         Err(response) => return response,
     };
@@ -349,17 +334,9 @@ pub(crate) async fn submit(
 /// signed out.
 pub(crate) async fn sign_out(
     State(app): State<Arc<App>>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: Body,
 ) -> Response {
-    let address = match app.address(peer) {
-        Ok(address) => address,
-        Err(response) => return response,
-    };
-    if let Err(response) = app.admit_address(&address).await {
-        return response;
-    }
     let signed_out = |app: &App| {
         let mut response = app.rendered(StatusCode::OK, app.templates.signed_out());
         response.headers_mut().append(
@@ -373,6 +350,9 @@ pub(crate) async fn sign_out(
     else {
         return signed_out(&app);
     };
+    if let Err(response) = app.admit_citizen(&session.citizen).await {
+        return response;
+    }
     let form = match read_form(&app, body).await {
         Ok(form) => form,
         Err(response) => return response,
@@ -390,7 +370,6 @@ pub(crate) async fn sign_out(
             Action::SignOut,
             Outcome::Succeeded,
             Some(&session.citizen),
-            &address,
             None,
         )
         .await

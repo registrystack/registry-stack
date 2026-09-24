@@ -154,8 +154,13 @@ identifier, the action, keyed pseudonyms of the citizen and the client, and
 the outcome. Neither journal records a field value, a prompt, a token, or
 model output. An action whose audit record cannot be written fails closed.
 
-Both services rate limit per citizen and per client; a request over either
-limit gets a `429` with `Retry-After`.
+The gateway rate limits per citizen and per client. The review page limits
+each signed-in citizen, and caps its unauthenticated sign-in routes with one
+limit shared by everyone, because it reads neither peer addresses nor
+forwarded headers and cannot tell browsers apart before sign-in. Per-client
+limiting in front of the review page belongs at the edge proxy, and the
+operator must configure it there. A request over any limit gets a `429` with
+`Retry-After`.
 
 The review page keeps sign-in and review state in memory only. Restarting it
 discards every open sign-in and every in-progress review; a citizen

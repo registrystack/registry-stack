@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The hash-chained audit journal. It names people, the page's client, and
-//! remote addresses only by keyed pseudonyms, and never holds a token, a
-//! cookie, a CSRF value, or a record value.
+//! The hash-chained audit journal. It names people and the page's client only
+//! by keyed pseudonyms, and never holds a token, a cookie, a CSRF value, a
+//! record value, or a network address: behind a proxy every browser shares
+//! one peer address, so it would name no one.
 
 use registry_platform_audit::{AuditError, AuditKeyHasher, DurableSegmentedAuditLog};
 use serde_json::{json, Value};
 
 const PRINCIPAL_CLASS: &str = "breg-review-principal-v1";
 const CLIENT_CLASS: &str = "breg-review-client-v1";
-const ADDRESS_CLASS: &str = "breg-review-address-v1";
 
 /// The largest a journal segment grows before the log rotates to the next.
 pub(crate) const MAXIMUM_SEGMENT_BYTES: u64 = 64 * 1024 * 1024;
@@ -84,17 +84,11 @@ impl Journal {
         pseudonym(&self.hasher, PRINCIPAL_CLASS, &json!([issuer, subject]))
     }
 
-    /// The pseudonym of a remote address, which also keys its rate limit.
-    pub(crate) fn address(&self, address: &str) -> Result<String, PseudonymError> {
-        pseudonym(&self.hasher, ADDRESS_CLASS, &json!([address]))
-    }
-
     pub(crate) async fn record(
         &self,
         action: Action,
         outcome: Outcome,
         citizen: Option<&str>,
-        address: &str,
         request_id: Option<&str>,
     ) -> Result<(), AuditError> {
         let mut record = json!({
@@ -102,7 +96,6 @@ impl Journal {
             "action": action.as_str(),
             "outcome": outcome.as_str(),
             "clientPseudonym": self.client,
-            "addressPseudonym": address,
         });
         if let Some(citizen) = citizen {
             record["citizenPseudonym"] = Value::from(citizen);

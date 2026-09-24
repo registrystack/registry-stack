@@ -5,11 +5,10 @@
 //! confidential client. The access token stays in the server-side session;
 //! the browser holds only a random session identifier.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
-use axum::extract::{ConnectInfo, RawQuery, State};
+use axum::extract::{RawQuery, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -67,19 +66,14 @@ fn fresh(app: &App) -> Result<String, Response> {
 
 /// `GET /signin?return=/requests/{id}`: start a sign-in and send the browser
 /// to the provider.
-pub(crate) async fn start(
-    State(app): State<Arc<App>>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    RawQuery(query): RawQuery,
-) -> Response {
-    match begin(&app, peer, query.as_deref()).await {
+pub(crate) async fn start(State(app): State<Arc<App>>, RawQuery(query): RawQuery) -> Response {
+    match begin(&app, query.as_deref()).await {
         Ok(response) | Err(response) => response,
     }
 }
 
-async fn begin(app: &App, peer: SocketAddr, query: Option<&str>) -> Result<Response, Response> {
-    let address = app.address(peer)?;
-    app.admit_address(&address).await?;
+async fn begin(app: &App, query: Option<&str>) -> Result<Response, Response> {
+    app.admit_sign_in().await?;
     let request_id =
         return_request(query).ok_or_else(|| app.problem(Problem::ReturnPathRefused))?;
     let state = fresh(app)?;
@@ -116,7 +110,7 @@ async fn begin(app: &App, peer: SocketAddr, query: Option<&str>) -> Result<Respo
                 app.sign_in_lifetime,
             ),
         )
-        .map_err(|_| app.problem(Problem::SessionsExhausted))?;
+        .map_err(|_| app.problem(Problem::SignInsExhausted))?;
     // The provider returns the browser with a cross-site top-level GET, which
     // carries a Lax cookie and not a Strict one.
     let sign_in = app.cookies.set(
@@ -136,11 +130,10 @@ async fn begin(app: &App, peer: SocketAddr, query: Option<&str>) -> Result<Respo
 /// session. The sign-in cookie is cleared whatever the outcome.
 pub(crate) async fn callback(
     State(app): State<Arc<App>>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
-    let mut response = match complete(&app, peer, query.as_deref(), &headers).await {
+    let mut response = match complete(&app, query.as_deref(), &headers).await {
         Ok(response) | Err(response) => response,
     };
     response.headers_mut().append(
@@ -152,12 +145,10 @@ pub(crate) async fn callback(
 
 async fn complete(
     app: &App,
-    peer: SocketAddr,
     query: Option<&str>,
     headers: &HeaderMap,
 ) -> Result<Response, Response> {
-    let address = app.address(peer)?;
-    app.admit_address(&address).await?;
+    app.admit_sign_in().await?;
     let refused = || app.problem(Problem::SignInRefused);
     // Taking the pending sign-in consumes it, so a replayed callback finds
     // nothing, whatever it carries.
@@ -246,13 +237,7 @@ async fn complete(
     let csrf = fresh(app)?;
     if let Err(error) = app
         .journal
-        .record(
-            Action::SignIn,
-            Outcome::Succeeded,
-            Some(&citizen),
-            &address,
-            None,
-        )
+        .record(Action::SignIn, Outcome::Succeeded, Some(&citizen), None)
         .await
     {
         tracing::error!(%error, "the sign-in could not be audited");

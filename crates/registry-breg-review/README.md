@@ -42,8 +42,8 @@ audit:
   path: /var/lib/breg-review/journal
   hashKeyRef: secret:file/audit-key
 limits:                                           # optional
-  perCitizen: { requestsPerMinute: 120, burst: 30 }
-  perAddress: { requestsPerMinute: 600, burst: 120 }
+  perCitizen: { requestsPerMinute: 120, burst: 30 }      # each signed-in person
+  globalSignIn: { requestsPerMinute: 600, burst: 120 }   # everyone, sign-in routes only
 session:                                          # optional
   maximumSessions: 10000
   maximumPendingSignIns: 10000
@@ -111,11 +111,28 @@ with a notice instead of submitting.
   stylesheet carries `Cache-Control: no-store`.
 - Form bodies are bounded, single-valued, and closed to the `csrf` and `view`
   fields. CSRF tokens are compared in constant time.
-- Requests are limited per remote address and per signed-in person. Behind a
-  reverse proxy the per-address limit sees the proxy's address.
+- The page reads neither peer addresses nor forwarded headers, so it cannot
+  tell one browser from another before sign-in, and behind a reverse proxy
+  every browser would share one address anyway. It keeps two limits of its
+  own:
+  - `limits.perCitizen` applies to every request that presents a session,
+    keyed by the signed-in person, so one person's sessions share it and
+    never slow anyone else.
+  - `limits.globalSignIn` is one limit shared by everyone on `/signin` and
+    `/signin/callback`. It bounds the sign-in work the page does, and a flood
+    of sign-in starts can use it up for everyone until it refills.
+- Per-client limiting belongs at the edge proxy, and operators must configure
+  it there: the page's global sign-in limit is a ceiling, not a defense for
+  any one person.
+- Every started sign-in waits in memory until its callback or
+  `signInLifetimeSeconds`. Startup refuses a `maximumPendingSignIns` smaller
+  than the sign-ins `globalSignIn` admits in that lifetime (its burst plus its
+  rate over the lifetime), so the limit, not a full store, is what refuses a
+  sign-in. A full store would still answer a `sign-ins-exhausted` page.
 - The audit journal is hash-chained and records each sign-in, read, submit, and
-  sign-out with its outcome. It names people, the client, and addresses only by
-  keyed pseudonyms and never holds a token, cookie, CSRF value, or record value.
+  sign-out with its outcome. It names people and the client only by keyed
+  pseudonyms and never holds a token, cookie, CSRF value, record value, or
+  network address.
   When the journal cannot record an action, the page refuses the action.
 - Neither the operational log nor the journal carries a token, code, state,
   nonce, cookie, or subject identifier.

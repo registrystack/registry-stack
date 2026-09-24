@@ -145,20 +145,27 @@ pub struct RateConfig {
     pub burst: u32,
 }
 
+/// The page's own request limits. It reads neither peer addresses nor
+/// forwarded headers, so it cannot tell one browser from another before
+/// sign-in: a per-client limit belongs at the edge proxy.
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LimitsConfig {
+    /// One limit for each signed-in person, shared by all their sessions,
+    /// on every request that presents a session.
     #[serde(default = "default_per_citizen")]
     pub per_citizen: RateConfig,
-    #[serde(default = "default_per_address")]
-    pub per_address: RateConfig,
+    /// One limit shared by everyone on the unauthenticated sign-in routes,
+    /// `/signin` and `/signin/callback`.
+    #[serde(default = "default_global_sign_in")]
+    pub global_sign_in: RateConfig,
 }
 
 impl Default for LimitsConfig {
     fn default() -> Self {
         Self {
             per_citizen: default_per_citizen(),
-            per_address: default_per_address(),
+            global_sign_in: default_global_sign_in(),
         }
     }
 }
@@ -170,7 +177,7 @@ const fn default_per_citizen() -> RateConfig {
     }
 }
 
-const fn default_per_address() -> RateConfig {
+const fn default_global_sign_in() -> RateConfig {
     RateConfig {
         requests_per_minute: 600,
         burst: 120,
@@ -323,7 +330,7 @@ impl RuntimeConfig {
         {
             return Err(RuntimeConfigError::InvalidRegistry);
         }
-        for rate in [self.limits.per_citizen, self.limits.per_address] {
+        for rate in [self.limits.per_citizen, self.limits.global_sign_in] {
             if rate.requests_per_minute == 0 || rate.burst == 0 {
                 return Err(RuntimeConfigError::InvalidLimits);
             }
@@ -335,6 +342,16 @@ impl RuntimeConfig {
             || !(60..=3600).contains(&session.sign_in_lifetime_seconds)
         {
             return Err(RuntimeConfigError::InvalidSession);
+        }
+        // Every sign-in the global limit admits stays pending for up to its
+        // lifetime, so the store must hold them all. A store the limit could
+        // fill would keep refusing sign-ins long after the limit refilled.
+        let global = self.limits.global_sign_in;
+        let admitted = u64::from(global.burst)
+            + (u64::from(global.requests_per_minute) * session.sign_in_lifetime_seconds)
+                .div_ceil(60);
+        if (session.maximum_pending_sign_ins as u64) < admitted {
+            return Err(RuntimeConfigError::PendingSignInsFillable { admitted });
         }
         self.validate_secret_references()
     }
@@ -596,6 +613,8 @@ pub enum RuntimeConfigError {
     InvalidLimits,
     #[error("session bounds are outside their accepted ranges")]
     InvalidSession,
+    #[error("session.maximumPendingSignIns must hold every sign-in limits.globalSignIn admits within session.signInLifetimeSeconds: at least {admitted}")]
+    PendingSignInsFillable { admitted: u64 },
 }
 
 impl RuntimeConfigError {
@@ -615,6 +634,7 @@ impl RuntimeConfigError {
             Self::InvalidRegistry => "registry",
             Self::InvalidLimits => "limits",
             Self::InvalidSession => "session",
+            Self::PendingSignInsFillable { .. } => "session.maximumPendingSignIns",
         }
     }
 }
@@ -687,6 +707,32 @@ mod tests {
         );
         assert_eq!(config.session.maximum_sessions, 10_000);
         assert_eq!(config.limits.per_citizen.requests_per_minute, 120);
+    }
+
+    #[test]
+    fn the_global_sign_in_cap_cannot_fill_the_pending_store() {
+        // 600 starts a minute over a 600-second sign-in lifetime, plus the
+        // burst, is 6120 sign-ins in flight at most.
+        let with = |pending: usize| {
+            format!(
+                "{}limits:\n  globalSignIn: {{ requestsPerMinute: 600, burst: 120 }}\n\
+                 session:\n  maximumPendingSignIns: {pending}\n  signInLifetimeSeconds: 600\n",
+                document(&[])
+            )
+        };
+        let error = load(&with(6119)).expect_err("a store the cap can fill");
+        assert_eq!(error.path(), "session.maximumPendingSignIns");
+        assert!(error.to_string().contains("6120"), "{error}");
+        load(&with(6120)).expect("a store the cap cannot fill");
+    }
+
+    #[test]
+    fn a_per_address_limit_is_not_accepted() {
+        let text = format!(
+            "{}limits:\n  perAddress: {{ requestsPerMinute: 600, burst: 120 }}\n",
+            document(&[])
+        );
+        assert!(load(&text).is_err());
     }
 
     #[test]

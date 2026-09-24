@@ -496,6 +496,7 @@ async fn health_and_ready_answer() {
 async fn the_session_ends_with_the_access_token() {
     let harness = Harness::start_with(Options {
         token_lifetime: Duration::from_secs(2),
+        ..Options::default()
     })
     .await;
     let (cookie, _) = harness.review().await;
@@ -717,8 +718,69 @@ async fn the_audit_journal_names_pseudonyms_actions_and_outcomes() {
     assert_eq!(signed_in["citizenPseudonym"], read["citizenPseudonym"]);
     assert!(read["citizenPseudonym"].as_str().unwrap().len() >= 32);
     assert!(read["clientPseudonym"].as_str().unwrap().len() >= 32);
+    // Behind a proxy every browser shares one peer address, so the journal
+    // does not name it.
+    for record in &records {
+        assert!(record.get("addressPseudonym").is_none(), "{record}");
+    }
     assert!(!journal.contains(CITIZEN_A));
     assert!(!journal.contains(support::CLIENT_ID));
     assert!(!journal.contains(&csrf));
     assert!(!journal.contains(&cookie_pair(&cookie)[("breg-review-session=".len())..]));
+}
+
+/// A page whose unauthenticated routes admit `global_burst` requests and whose
+/// signed-in people each admit `citizen_burst`, both refilling once a minute.
+async fn limited(global_burst: u32, citizen_burst: u32) -> Harness {
+    Harness::start_with(Options {
+        extra_document: format!(
+            "limits:\n  globalSignIn: {{ requestsPerMinute: 1, burst: {global_burst} }}\n  \
+             perCitizen: {{ requestsPerMinute: 1, burst: {citizen_burst} }}\n"
+        ),
+        ..Options::default()
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_session_over_its_own_limit_is_refused_while_another_proceeds() {
+    // Two sign-ins, a start and a callback each, spend the whole global cap:
+    // behind a proxy every browser shares it, so it must not also limit
+    // signed-in people.
+    let harness = limited(4, 2).await;
+    let a = cookie_pair(&harness.sign_in(CITIZEN_A).await);
+    let b = cookie_pair(&harness.sign_in(CITIZEN_B).await);
+
+    for _ in 0..2 {
+        let page = harness.get(&review_path(), Some(&a)).await;
+        assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    }
+    let refused = harness.get(&review_path(), Some(&a)).await;
+    assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(refused.error_code(), Some("rate-limited"));
+    assert!(refused.header("retry-after").is_some());
+
+    let other = harness
+        .get(&format!("/requests/{B_REQUEST_ID}"), Some(&b))
+        .await;
+    assert_eq!(other.status, StatusCode::OK, "{}", other.body);
+}
+
+#[tokio::test]
+async fn the_global_cap_still_limits_sign_in_starts() {
+    let harness = limited(3, 30).await;
+    let a = cookie_pair(&harness.sign_in(CITIZEN_A).await);
+    let start = format!("/signin?return=%2Frequests%2F{REQUEST_ID}");
+
+    let admitted = harness.get(&start, None).await;
+    assert_eq!(admitted.status, StatusCode::SEE_OTHER, "{}", admitted.body);
+    let refused = harness.get(&start, None).await;
+    assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(refused.error_code(), Some("rate-limited"));
+    assert!(refused.header("retry-after").is_some());
+    assert!(refused.set_cookie("breg-review-signin").is_none());
+
+    // A signed-in person draws on their own limit, not the global one.
+    let page = harness.get(&review_path(), Some(&a)).await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
 }

@@ -24,7 +24,6 @@ mod templates;
 
 pub use config::{RuntimeConfig, RuntimeConfigError};
 
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -58,6 +57,8 @@ use crate::journal::Journal;
 use crate::session::{well_formed_token, Store};
 use crate::templates::Templates;
 
+/// The one key of the global sign-in limit.
+const GLOBAL_SIGN_IN_KEY: &str = "global";
 /// The largest form body the page reads.
 const MAXIMUM_FORM_BYTES: usize = 16 * 1024;
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -177,8 +178,10 @@ pub(crate) struct App {
     pub templates: Templates,
     pub sessions: Store,
     pub journal: Journal,
+    /// Keyed by the signed-in person a session names.
     pub per_citizen: TokenBucketLimiter,
-    pub per_address: TokenBucketLimiter,
+    /// One bucket for everyone on the unauthenticated sign-in routes.
+    pub global_sign_in: TokenBucketLimiter,
     pub cookies: Cookies,
     pub maximum_session: Duration,
     pub sign_in_lifetime: Duration,
@@ -196,6 +199,7 @@ pub(crate) enum Problem {
     SignInRefused,
     SignInUnavailable,
     SessionsExhausted,
+    SignInsExhausted,
     AuditUnavailable,
     RegistryUnavailable,
     RequestConflict,
@@ -260,6 +264,12 @@ impl Problem {
                 "Busy",
                 "Too many people are signed in right now. Try again later.",
             ),
+            Self::SignInsExhausted => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "sign-ins-exhausted",
+                "Busy",
+                "Too many sign-ins are in progress right now. Try again in a few minutes.",
+            ),
             Self::AuditUnavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "audit-unavailable",
@@ -282,7 +292,7 @@ impl Problem {
                 StatusCode::TOO_MANY_REQUESTS,
                 "rate-limited",
                 "Too many requests",
-                "Too many requests came from here. Wait a moment and try again.",
+                "Too many requests arrived. Wait a moment and try again.",
             ),
             Self::Internal => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -336,16 +346,11 @@ impl App {
         }
     }
 
-    /// The keyed pseudonym of the peer address, which also keys its limit.
-    pub(crate) fn address(&self, peer: SocketAddr) -> Result<String, Response> {
-        self.journal.address(&peer.ip().to_string()).map_err(|_| {
-            tracing::error!("an address pseudonym could not be derived");
-            self.problem(Problem::Internal)
-        })
-    }
-
-    pub(crate) async fn admit_address(&self, address: &str) -> Result<(), Response> {
-        self.admit(&self.per_address, address).await
+    /// Admit a request to a sign-in route against the one limit everyone
+    /// shares. The page cannot tell browsers apart before sign-in, so a
+    /// per-client limit on these routes belongs at the edge proxy.
+    pub(crate) async fn admit_sign_in(&self) -> Result<(), Response> {
+        self.admit(&self.global_sign_in, GLOBAL_SIGN_IN_KEY).await
     }
 
     pub(crate) async fn admit_citizen(&self, citizen: &str) -> Result<(), Response> {
@@ -554,7 +559,7 @@ pub async fn router(config: RuntimeConfig) -> Result<Router, RuntimeError> {
         ),
         journal,
         per_citizen: limiter(config.limits.per_citizen)?,
-        per_address: limiter(config.limits.per_address)?,
+        global_sign_in: limiter(config.limits.global_sign_in)?,
         cookies: Cookies::for_mode(development),
         maximum_session: Duration::from_secs(config.session.maximum_lifetime_seconds),
         sign_in_lifetime: Duration::from_secs(config.session.sign_in_lifetime_seconds),
@@ -652,14 +657,9 @@ async fn stylesheet() -> Response {
         .into_response()
 }
 
-/// Serve `router` on `listener`, handing each request its peer address for
-/// the per-address limit.
+/// Serve `router` on `listener`.
 pub async fn serve(listener: tokio::net::TcpListener, router: Router) -> std::io::Result<()> {
-    axum::serve(
-        listener,
-        router.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await
+    axum::serve(listener, router).await
 }
 
 #[cfg(test)]
@@ -693,6 +693,14 @@ mod tests {
         let mut malformed = HeaderMap::new();
         malformed.insert(header::COOKIE, HeaderValue::from_static("name=<script>"));
         assert_eq!(cookie(&malformed, "name"), None);
+    }
+
+    #[test]
+    fn a_full_sign_in_store_answers_its_own_refusal() {
+        let (status, code, _, message) = Problem::SignInsExhausted.parts();
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(code, "sign-ins-exhausted");
+        assert!(message.contains("sign-ins are in progress"), "{message}");
     }
 
     #[test]
