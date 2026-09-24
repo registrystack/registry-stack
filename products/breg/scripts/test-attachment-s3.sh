@@ -8,26 +8,53 @@ set -euo pipefail
 export BREG_TEST_S3_ACCESS_KEY=breg960test
 export BREG_TEST_S3_SECRET_KEY=breg960-test-only-secret
 export BREG_TEST_S3_BUCKET=breg-http-attachments
-container=$(docker run --rm -d -p 127.0.0.1::9000 \
-  -e MINIO_ROOT_USER="$BREG_TEST_S3_ACCESS_KEY" \
-  -e MINIO_ROOT_PASSWORD="$BREG_TEST_S3_SECRET_KEY" \
-  quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
-  server /data)
-trap 'docker stop "$container" >/dev/null' EXIT
-port=$(docker port "$container" 9000/tcp)
+# SeaweedFS takes its static S3 credentials from a mounted identities file
+# rather than environment variables; write one scoped to this run only.
+config_dir=$(mktemp -d)
+container=
+trap 'if [[ -n "$container" ]]; then docker rm --force "$container" >/dev/null; fi; rm -rf "$config_dir"' EXIT
+cat >"$config_dir/s3.json" <<EOF
+{
+  "identities": [
+    {
+      "name": "breg-test",
+      "credentials": [
+        {"accessKey": "$BREG_TEST_S3_ACCESS_KEY", "secretKey": "$BREG_TEST_S3_SECRET_KEY"}
+      ],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}
+EOF
+# The image drops to its own unprivileged user, so the file must be readable
+# to it; the credentials are the synthetic ones already written above.
+chmod 755 "$config_dir"
+chmod 644 "$config_dir/s3.json"
+container=$(docker run -d -p 127.0.0.1::8333 \
+  -v "$config_dir:/config:ro" \
+  chrislusf/seaweedfs@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882 \
+  server -s3 -s3.config=/config/s3.json -dir=/data)
+port=$(docker port "$container" 8333/tcp)
 export BREG_TEST_S3_ENDPOINT="http://$port"
 ready=false
 for ((attempt=0; attempt<30; attempt++)); do
-  if curl --fail --silent "$BREG_TEST_S3_ENDPOINT/minio/health/ready" >/dev/null; then
+  if curl --fail --silent "$BREG_TEST_S3_ENDPOINT/healthz" >/dev/null; then
     ready=true
     break
   fi
   sleep 1
 done
-[[ "$ready" == true ]] || { echo 'Disposable S3 server did not become ready.' >&2; exit 1; }
-docker exec "$container" /usr/bin/mc alias set acceptance http://127.0.0.1:9000 \
-  "$BREG_TEST_S3_ACCESS_KEY" "$BREG_TEST_S3_SECRET_KEY" >/dev/null
-docker exec "$container" /usr/bin/mc mb "acceptance/$BREG_TEST_S3_BUCKET" >/dev/null
+if [[ "$ready" != true ]]; then
+  echo 'Disposable S3 server did not become ready.' >&2
+  docker logs --tail 50 "$container" >&2
+  exit 1
+fi
+# Bucket creation goes straight through the S3 API with the host's own curl
+# rather than a CLI baked into the image, so the choice of server image never
+# adds a tooling dependency here.
+curl --fail --silent --show-error --aws-sigv4 "aws:amz:us-east-1:s3" \
+  --user "$BREG_TEST_S3_ACCESS_KEY:$BREG_TEST_S3_SECRET_KEY" \
+  -X PUT "$BREG_TEST_S3_ENDPOINT/$BREG_TEST_S3_BUCKET" >/dev/null
 
 export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
