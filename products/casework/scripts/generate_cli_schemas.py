@@ -21,9 +21,46 @@ STRING_ARRAY = {"type": "array", "items": {"type": "string"}}
 OBJECT_ARRAY = {"type": "array", "items": {"type": "object"}}
 DIAGNOSTICS = {"$ref": "#/$defs/diagnostics"}
 FINDINGS = {"$ref": "#/$defs/findings"}
+AUDIT_HASH = {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+AUDIT_CHAIN = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "records",
+        "segments",
+        "activeSegmentVerified",
+        "startPrevHash",
+        "headHash",
+    ],
+    "properties": {
+        "records": {"type": "integer", "minimum": 0},
+        "segments": {"type": "integer", "minimum": 0},
+        "activeSegmentVerified": BOOLEAN,
+        "startPrevHash": AUDIT_HASH,
+        "headHash": AUDIT_HASH,
+    },
+}
 
 
 REPORTS = {
+    "AuditExportReport": {
+        "command": "audit export",
+        "required": ["runtimeConfig", "output", "auditChain"],
+        "properties": {
+            "runtimeConfig": STRING,
+            "output": STRING,
+            "auditChain": AUDIT_CHAIN,
+        },
+    },
+    "AuditVerifyReport": {
+        "command": "audit verify",
+        "required": ["runtimeConfig", "fromHead", "auditChain"],
+        "properties": {
+            "runtimeConfig": STRING,
+            "fromHead": AUDIT_HASH,
+            "auditChain": AUDIT_CHAIN,
+        },
+    },
     "AttemptSettlementReport": {
         "command": "attempt settle",
         "required": ["project", "runtimeConfig", "report"],
@@ -93,16 +130,7 @@ REPORTS = {
                     "conflicts": OBJECT_ARRAY,
                 },
             },
-            "auditChain": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["records", "segments", "activeSegmentVerified"],
-                "properties": {
-                    "records": {"type": "integer", "minimum": 0},
-                    "segments": {"type": "integer", "minimum": 0},
-                    "activeSegmentVerified": BOOLEAN,
-                },
-            },
+            "auditChain": AUDIT_CHAIN,
             "eventWiringGuidance": STRING,
         },
         "defs": {

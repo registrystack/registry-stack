@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+mod audit;
 mod dev;
 mod display_schema;
 mod lifecycle;
@@ -59,6 +60,8 @@ enum Command {
     Doctor(DoctorArgs),
     /// Manage Casework's own database.
     Db(DbArgs),
+    /// Verify or export the retained audit journal offline.
+    Audit(AuditArgs),
     /// Preview or erase retained local payload copies for one source request.
     Retention(RetentionArgs),
     /// Preview or record an operator decision about one source attempt whose lease has expired.
@@ -172,6 +175,51 @@ struct OperatorArgs {
     /// Runtime configuration file; defaults to runtime.yaml in the project.
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct AuditArgs {
+    #[command(subcommand)]
+    command: AuditCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum AuditCommand {
+    /// Verify every retained audit record's keyed hash and chain link.
+    ///
+    /// Reads the journal at audit.path under the key audit.hashKeyRef names
+    /// and writes nothing. While Casework runs, its writer holds the active
+    /// segment, so only the sealed history is verified; the report states
+    /// which.
+    Verify(AuditVerifyArgs),
+    /// Write the verified retained audit records to a new owner-only file.
+    ///
+    /// The export holds the journal's pseudonymized records exactly as
+    /// retained, one JSON line each, and is linked into place only once the
+    /// whole chain has verified. While Casework runs, the export carries the
+    /// sealed history only; stop Casework first for a complete export.
+    Export(AuditExportArgs),
+}
+
+#[derive(Debug, Args)]
+struct AuditVerifyArgs {
+    /// Absolute runtime configuration naming audit.path and audit.hashKeyRef.
+    #[arg(long, value_name = "FILE")]
+    runtime_config: PathBuf,
+    /// A headHash reported earlier for this journal; the retained chain must
+    /// hold it or continue from it.
+    #[arg(long, value_name = "HEX")]
+    from_head: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct AuditExportArgs {
+    /// Absolute runtime configuration naming audit.path and audit.hashKeyRef.
+    #[arg(long, value_name = "FILE")]
+    runtime_config: PathBuf,
+    /// Absolute path of the new export file; an existing file is never replaced.
+    #[arg(long, value_name = "FILE")]
+    output: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -454,6 +502,10 @@ fn cli_report_kind(command: &Command) -> &'static str {
             AttemptCommand::Settle(_) => "AttemptSettlementReport",
             AttemptCommand::MarkUncertain(_) => "AttemptUncertainMarkingReport",
         },
+        Command::Audit(args) => match args.command {
+            AuditCommand::Verify(_) => "AuditVerifyReport",
+            AuditCommand::Export(_) => "AuditExportReport",
+        },
         Command::Check(_) => "CheckReport",
         Command::Db(_) => "DatabaseMigrationReport",
         Command::Doctor(_) => "DoctorReport",
@@ -493,7 +545,10 @@ fn command_kind(command: &Command) -> CommandKind {
             AttemptCommand::MarkUncertain(_) => CommandKind::AttemptUncertainMarking,
         };
     }
-    if matches!(command, Command::Doctor(_) | Command::Dev(_)) {
+    if matches!(
+        command,
+        Command::Doctor(_) | Command::Dev(_) | Command::Audit(_)
+    ) {
         CommandKind::Operational
     } else {
         CommandKind::Authoring
@@ -503,6 +558,19 @@ fn command_kind(command: &Command) -> CommandKind {
 fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
     if let Some(diagnostic) = operator_refusal(kind, error) {
         return (DOMAIN_REFUSAL_EXIT, diagnostic);
+    }
+    if let Some(refusal) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<audit::AuditRefusal>())
+    {
+        return (
+            DOMAIN_REFUSAL_EXIT,
+            json!({
+                "severity":"error", "code":"casework.audit.refused",
+                "artifact":"audit_journal", "path":refusal.path,
+                "message":refusal.message, "suggestedAction":refusal.action
+            }),
+        );
     }
     if let Some(check) = error
         .chain()
@@ -957,6 +1025,12 @@ fn run(cli: Cli) -> Result<Value> {
         Command::Simulate(args) => project::simulate(&args.project, &args.fixture),
         Command::Test(args) => project::test(&args.project),
         Command::Doctor(args) => project::doctor(&args.runtime_config),
+        Command::Audit(args) => match args.command {
+            AuditCommand::Verify(args) => {
+                audit::verify(&args.runtime_config, args.from_head.as_deref())
+            }
+            AuditCommand::Export(args) => audit::export(&args.runtime_config, &args.output),
+        },
         Command::Db(args) => match args.command {
             DbCommand::Migrate(args) => {
                 project::db_migrate(&args.project, args.runtime_config.as_deref())

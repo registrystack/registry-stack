@@ -3190,6 +3190,18 @@ impl PostgresStore {
         let client = self.client().await?;
         Ok(client.query("SELECT event_id,audit_record FROM casework_audit_outbox WHERE published_at IS NULL ORDER BY event_id LIMIT $1", &[&limit]).await?.into_iter().map(|row|(row.get(0),row.get(1))).collect())
     }
+    /// Audit records committed to the database and not yet appended to the
+    /// audit journal.
+    pub async fn audit_outbox_pending(&self) -> Result<i64, StoreError> {
+        let client = self.client().await?;
+        Ok(client
+            .query_one(
+                "SELECT count(*) FROM casework_audit_outbox WHERE published_at IS NULL",
+                &[],
+            )
+            .await?
+            .get(0))
+    }
     pub async fn mark_audit_published(&self, event_id: Uuid) -> Result<(), StoreError> {
         let client = self.client().await?;
         client

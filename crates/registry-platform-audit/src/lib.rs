@@ -12,8 +12,8 @@ mod segmented_jsonl;
 #[cfg(unix)]
 pub use segmented_jsonl::{
     preflight_segmented_audit_sink, segmented_audit_paths, verify_segmented_audit_chain,
-    visit_stopped_segmented_audit_chain, DurableSegmentedAuditLog, DurableSegmentedJsonlSink,
-    SegmentedAuditSummary,
+    visit_segmented_audit_chain, visit_stopped_segmented_audit_chain, DurableSegmentedAuditLog,
+    DurableSegmentedJsonlSink, SegmentedAuditSummary,
 };
 
 use std::{

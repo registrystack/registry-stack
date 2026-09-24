@@ -5158,6 +5158,7 @@ dependencies = [
  "registry-casework",
  "registry-casework-breg",
  "registry-casework-core",
+ "registry-platform-audit",
  "registry-platform-buildinfo",
  "registry-platform-config",
  "registry-platform-crypto",

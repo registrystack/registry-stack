@@ -1174,6 +1174,7 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
         &config.audit.path,
         &resolver,
         &config.audit.hash_key_ref,
+        None,
     )
     .map_err(|error| {
         anyhow::Error::new(DoctorCheckFailure {

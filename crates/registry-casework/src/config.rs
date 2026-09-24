@@ -327,6 +327,8 @@ pub struct RuntimeConfig {
     pub kind: String,
     pub package: RuntimePackageConfig,
     pub listener: ListenerConfig,
+    #[serde(default)]
+    pub metrics_listener: Option<MetricsListenerConfig>,
     pub secret_providers: SecretProvidersConfig,
     pub database: DatabaseConfig,
     pub authentication: AuthenticationConfig,
@@ -556,6 +558,45 @@ pub struct ListenerConfig {
     pub tls_termination: TlsTermination,
     #[serde(default)]
     pub network_exposure: ListenerNetworkExposure,
+}
+
+/// Operator-private listener for `/metrics` and `/version`.
+///
+/// It is separate from the API listener so the counters and the active
+/// package digest never appear on the surface the public contract describes.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MetricsListenerConfig {
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
+    pub bind: SocketAddr,
+}
+
+impl MetricsListenerConfig {
+    fn validate(&self, listener: &ListenerConfig) -> Result<(), RuntimeConfigError> {
+        let address = self.bind.ip();
+        let private = match address {
+            IpAddr::V4(address) => address.is_loopback() || address.is_private(),
+            IpAddr::V6(address) => address.is_loopback() || is_unique_local(address),
+        };
+        if self.bind.port() == 0 || !private || address.is_multicast() {
+            return Err(RuntimeConfigError::InvalidMetricsListener);
+        }
+        // An IPv6 wildcard socket is commonly dual-stack, so it is treated as
+        // covering both families on every host; the IPv4 wildcard covers
+        // only IPv4.
+        let listener_address = listener.bind.ip();
+        let wildcard_covers_metrics = match listener_address {
+            IpAddr::V4(listener_address) => listener_address.is_unspecified() && address.is_ipv4(),
+            IpAddr::V6(listener_address) => listener_address.is_unspecified(),
+        };
+        if (address == listener_address || wildcard_covers_metrics)
+            && self.bind.port() == listener.bind.port()
+        {
+            return Err(RuntimeConfigError::InvalidMetricsListener);
+        }
+        Ok(())
+    }
 }
 
 fn default_listener_bind() -> SocketAddr {
@@ -829,6 +870,9 @@ impl RuntimeConfig {
             self.listener.tls_termination,
         ) {
             return Err(RuntimeConfigError::InvalidListener);
+        }
+        if let Some(metrics_listener) = &self.metrics_listener {
+            metrics_listener.validate(&self.listener)?;
         }
         if self.authentication.oidc.issuer.is_empty()
             || self.authentication.oidc.audience.is_empty()
@@ -2068,6 +2112,76 @@ reviewProducers:
     }
 
     #[test]
+    fn the_optional_metrics_listener_is_absent_by_default_and_stays_operator_private() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let operator = root.path().join("runtime.yaml");
+        let load = |metrics: Option<serde_json::Value>, listener: &str| {
+            let mut document = operator_value(&package, "operator-controlled-upstream");
+            document["listener"]["bind"] = serde_json::json!(listener);
+            document["listener"]["networkExposure"] = serde_json::json!("container-private");
+            if let Some(metrics) = metrics {
+                document["metricsListener"] = metrics;
+            }
+            std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+            RuntimeConfig::load(&operator)
+        };
+
+        assert!(load(None, "127.0.0.1:8100")
+            .unwrap()
+            .metrics_listener
+            .is_none());
+        for accepted in [
+            "127.0.0.1:9100",
+            "10.0.0.5:9100",
+            "[fd00::1]:9100",
+            "[::1]:9100",
+        ] {
+            let config = load(
+                Some(serde_json::json!({"bind": accepted})),
+                "127.0.0.1:8100",
+            )
+            .unwrap_or_else(|error| panic!("{accepted}: {error}"));
+            assert_eq!(
+                config.metrics_listener.expect("metrics listener").bind,
+                accepted.parse().unwrap()
+            );
+        }
+        for (refused, listener) in [
+            ("0.0.0.0:9100", "127.0.0.1:8100"),
+            ("[::]:9100", "127.0.0.1:8100"),
+            ("203.0.113.9:9100", "127.0.0.1:8100"),
+            ("127.0.0.1:0", "127.0.0.1:8100"),
+            ("127.0.0.1:8100", "127.0.0.1:8100"),
+            ("10.0.0.5:8100", "0.0.0.0:8100"),
+            ("[fd00::1]:8100", "[::]:8100"),
+            ("10.0.0.5:8100", "[::]:8100"),
+        ] {
+            let error =
+                load(Some(serde_json::json!({"bind": refused})), listener).expect_err(refused);
+            assert!(
+                matches!(error, RuntimeConfigError::InvalidMetricsListener),
+                "{refused} beside {listener}: {error}"
+            );
+            assert_eq!(error.path(), "metricsListener");
+        }
+        assert!(load(
+            Some(serde_json::json!({"bind": "10.0.0.5:8100"})),
+            "[fd00::1]:8100"
+        )
+        .is_ok());
+        assert!(matches!(
+            load(
+                Some(serde_json::json!({"bind": "127.0.0.1:9100", "path": "/metrics"})),
+                "127.0.0.1:8100"
+            ),
+            Err(RuntimeConfigError::Parse { .. })
+        ));
+    }
+
+    #[test]
     fn runtime_envelope_listener_and_operated_paths_are_strict() {
         let root = tempfile::tempdir().unwrap();
         let package = root.path().join("package");
@@ -2393,6 +2507,10 @@ pub enum RuntimeConfigError {
     Invalid,
     #[error("listener is not valid for its declared TLS termination and network exposure")]
     InvalidListener,
+    #[error(
+        "metricsListener.bind must be a loopback or private address with a nonzero port that the API listener does not also occupy"
+    )]
+    InvalidMetricsListener,
     #[error("authentication.oidc is invalid or conflicts with accessProfiles[].principalClaim")]
     InvalidOidc,
     #[error(
@@ -2439,6 +2557,7 @@ impl RuntimeConfigError {
             Self::InvalidOidc | Self::Oidc => "authentication.oidc",
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
             Self::InvalidListener => "listener",
+            Self::InvalidMetricsListener => "metricsListener",
             Self::InvalidDatabaseReference | Self::PlaintextDatabase => "database",
             Self::InvalidAuditReference => "audit.hashKeyRef",
             Self::InvalidSourceBindings | Self::SourceDescription => "sources",

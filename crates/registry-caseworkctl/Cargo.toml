@@ -50,4 +50,5 @@ uuid = { workspace = true, features = ["serde"] }
 zeroize.workspace = true
 
 [dev-dependencies]
+registry-platform-audit.workspace = true
 tokio-postgres.workspace = true

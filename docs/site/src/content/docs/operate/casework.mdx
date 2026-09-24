@@ -203,6 +203,7 @@ sources:
 | --- | --- |
 | `package` | The absolute root of the package containing `casework.yaml`, its manifest, and exact source descriptions, and optionally the one policy digest the runtime may load from it. |
 | `listener` | The listener address and the transport boundary the deployment declares for it. |
+| `metricsListener` | Optional. A second, operator-private address for `/metrics` and `/version`; see [Scrape metrics and the running version](#scrape-metrics-and-the-running-version). |
 | `secretProviders` | The explicitly enabled file and environment secret providers. |
 | `database` | Secret references for the runtime and migration connection URLs, and an optional trusted root certificate for the PostgreSQL connection. |
 | `authentication` | The OpenID Connect issuer, audience, claim names, human-identity assertion, and the source of the issuer's keys. |
@@ -548,6 +549,45 @@ passes, and `200` otherwise. Readiness checks the audit publisher first, then th
 reconciliation health. The `503` body names none of these; the runtime log and `caseworkctl doctor`
 do.
 
+### Scrape metrics and the running version
+
+Set `metricsListener` to serve telemetry on a second address that the proxy in front of the API
+never routes to:
+
+```yaml
+metricsListener:
+  bind: 127.0.0.1:9100
+```
+
+The address must be loopback or private with a nonzero port, never a wildcard, and never the address
+and port the API listener occupies; the runtime refuses anything else at `metricsListener` before
+it opens a connection. Both addresses bind before either serves, so a metrics address already in
+use refuses startup, and the metrics listener stops with the API listener. Without the block no
+telemetry socket opens.
+
+`GET /version` answers JSON with the running `version` and the `packageDigest` of the verified
+policy package, `null` for an unpackaged local project, so a rollout can confirm which package each
+replica serves. `GET /metrics` answers the Prometheus text format, read at scrape time:
+
+| Series | Meaning |
+| --- | --- |
+| `casework_build_info{version,package_digest}` | Always `1`; the labels carry the build and the package digest. |
+| `casework_audit_publisher_up` | `1` while the last audit publication pass appended every due record, `0` after a failed pass. |
+| `casework_database_up` | `1` when this scrape read PostgreSQL. The series below appear only then. |
+| `casework_audit_outbox_pending` | Audit records committed to the database and not yet appended to the audit file. |
+| `casework_source_reconciliation_consecutive_failures{source_id}` | Failed reconciliation passes in a row for each configured source. |
+| `casework_source_reconciliation_last_success_age_seconds{source_id}` | Seconds since the source last reconciled; absent until its first success. |
+
+Alert on a growing `casework_audit_outbox_pending`, on `casework_audit_publisher_up` at `0`, and on
+a reconciliation age well beyond the source's interval: that age catches a pass that hangs, which
+readiness does not. The only label values are the configured source identifiers, the version, and
+the package digest.
+
+{/* Evidence: crates/registry-casework/src/config.rs, MetricsListenerConfig;
+    crates/registry-casework/src/metrics.rs, metrics_router() and render();
+    crates/registry-casework/src/runtime.rs, serve_from_path() and serve_until_worker_stops();
+    crates/registry-casework/src/store.rs, audit_outbox_pending(). */}
+
 The audit publication worker runs once a second: it reads pending records, appends them to the
 keyed chain, and marks them published. A failed pass makes readiness fail, logs only the stage that
 failed (`pending-read`, `record-identity`, `sink-append`, or `published-mark`) rather than the
@@ -683,6 +723,37 @@ either product's database directly.
     crates/registry-casework/src/service.rs, reconcile_source() and RECONCILIATION_FAILURE_THRESHOLD;
     crates/registry-casework/src/store.rs, record_reconciliation_outcome() and reconciliation_health();
     crates/registry-casework/tests/secret_diagnostics.rs. */}
+
+### Verify and export the audit chain
+
+`caseworkctl audit verify` checks the retained audit chain against `audit.hashKeyRef` without
+opening the database or a source, reading the same runtime file `doctor` reads:
+
+```sh
+caseworkctl audit verify --runtime-config /etc/registry-casework/runtime.yaml
+```
+
+Its report gives the records and files it verified, whether it covered the active file, the
+`headHash` of the last record, and the `startPrevHash` the first retained record continues when
+older files were archived away (`null` for a chain that starts at its beginning). Record `headHash`
+somewhere the audit host cannot rewrite. A later run with `--from-head <headHash>` proves the
+retained chain still holds that record or continues from it, and refuses a journal that was
+replaced or truncated after the head was recorded. A chain the key does not verify, a missing or
+altered record, or a head the chain never held is refused with code `casework.audit.refused` and
+exit status 1, naming the path at fault.
+
+`caseworkctl audit export --runtime-config <file> --output <path>` writes the verified retained
+records, byte for byte as JSONL, to a new owner-only file. It refuses a destination that already
+exists and leaves no file behind when it refuses. The records are the pseudonymized ones the audit
+file holds, so the export discloses no more than the file does, and verifying it needs the same
+key. Both commands cover the active file only when no runtime holds its lock, and report that
+under `activeSegmentVerified`; stop Casework for a complete export.
+
+{/* Evidence: crates/registry-caseworkctl/src/audit.rs, verify() and export();
+    crates/registry-casework/src/runtime.rs, verify_audit_journal(), export_audit_journal(),
+    and AuditHead;
+    crates/registry-platform-audit/src/segmented_jsonl.rs, visit_segmented_audit_chain();
+    crates/registry-caseworkctl/src/cli_contract_tests.rs. */}
 
 ## Change the active package
 

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- `caseworkctl audit verify` checks the retained audit chain against
+  `audit.hashKeyRef` and reports the last record's `headHash`; with
+  `--from-head` it refuses a chain that no longer holds a head recorded
+  earlier. `caseworkctl audit export --output` writes the verified retained
+  records to a new owner-only JSONL file and never replaces an existing one.
+  Both refuse with `casework.audit.refused`. The `auditChain` object in their
+  reports and in `doctor` gains `headHash` and `startPrevHash`, and a chain
+  whose oldest files were archived away now verifies from the first retained
+  record instead of being refused as a fork.
+- The optional `metricsListener.bind` runtime setting serves `/metrics`
+  (Prometheus text: build and package digest, audit publisher health, audit
+  outbox backlog, and per-source reconciliation failures and last-success
+  age) and `/version` (running version and package digest) on a second,
+  operator-private address. It must be loopback or private, never a wildcard,
+  and never the API listener's address and port. Without it no telemetry
+  socket opens, and the API listener is unchanged.
 - BREAKING: Casework and its BReg sources run in lock-step. BReg now names its
   release in a `Registry-Engine-Version` header on `GET /v1/registry`, and the
   Casework BReg adapter refuses a source whose engine reports another release,

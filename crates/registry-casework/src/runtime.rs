@@ -627,6 +627,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             },
         ));
     }
+    let metrics_store = store.clone();
     let audit_publisher = RuntimeAuditPublisher {
         store,
         chain: audit_chain,
@@ -634,6 +635,12 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         identifiers: audit_profile.key_hasher(),
     };
     let audit_health = service.audit_publisher_health();
+    let metrics_state = crate::metrics::MetricsState::new(
+        Arc::new(metrics_store),
+        config.sources.keys().cloned().collect(),
+        package_digest.clone(),
+        audit_health.clone(),
+    );
     workers.push(supervise("audit publication", worker_stopped, async move {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         let mut failed_stage = None;
@@ -652,10 +659,21 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         authenticator,
         project: Arc::new(project),
     });
+    // Both sockets bind before either serves, so a metrics address already in
+    // use refuses startup instead of leaving an API without its telemetry.
+    let metrics = match &config.metrics_listener {
+        Some(metrics_listener) => Some((
+            tokio::net::TcpListener::bind(metrics_listener.bind)
+                .await
+                .map_err(RuntimeError::MetricsListen)?,
+            crate::metrics::metrics_router(metrics_state),
+        )),
+        None => None,
+    };
     let listener = tokio::net::TcpListener::bind(config.listener.bind)
         .await
         .map_err(RuntimeError::Listen)?;
-    let served = serve_until_worker_stops(listener, app, worker_stops).await;
+    let served = serve_until_worker_stops(listener, app, metrics, worker_stops).await;
     for worker in workers {
         worker.abort();
     }
@@ -676,16 +694,40 @@ fn reconciliation_timer(period: Duration) -> Interval {
 
 /// Serve until a supervised background loop stops. The listener never stops on
 /// its own, so a clean return means a worker stopped, and the process reports
-/// that as a failure for whatever supervises it to restart.
+/// that as a failure for whatever supervises it to restart. The optional
+/// operator-private metrics listener serves beside it and stops with it.
 async fn serve_until_worker_stops(
     listener: tokio::net::TcpListener,
     app: axum::Router,
+    metrics: Option<(tokio::net::TcpListener, axum::Router)>,
     stops: mpsc::Receiver<&'static str>,
 ) -> Result<(), RuntimeError> {
-    axum::serve(listener, app)
+    let (api_stopped, mut metrics_stop) = tokio::sync::watch::channel(());
+    let metrics = metrics.map(|(metrics_listener, metrics_app)| {
+        tokio::spawn(async move {
+            axum::serve(metrics_listener, metrics_app)
+                .with_graceful_shutdown(async move {
+                    let _ = metrics_stop.changed().await;
+                })
+                .await
+        })
+    });
+    let served = axum::serve(listener, app)
         .with_graceful_shutdown(worker_stop(stops))
-        .await
-        .map_err(RuntimeError::Listen)?;
+        .await;
+    drop(api_stopped);
+    if let Some(metrics) = metrics {
+        match metrics.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::error!(error = %error, "the Casework metrics listener failed");
+            }
+            Err(error) => {
+                tracing::error!(error = %error, "the Casework metrics listener stopped unexpectedly");
+            }
+        }
+    }
+    served.map_err(RuntimeError::Listen)?;
     Err(RuntimeError::WorkerStopped)
 }
 
@@ -747,7 +789,7 @@ fn resolve_audit_secret(
 }
 
 /// What a read-only verification of the retained audit chain covered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditJournalVerification {
     /// Records whose keyed chain links verified.
@@ -757,6 +799,37 @@ pub struct AuditJournalVerification {
     /// Whether the active segment was verified. A running writer holds it,
     /// so only the sealed history is verified while the runtime serves.
     pub active_segment_verified: bool,
+    /// The head the first retained record continues, as lowercase hex:
+    /// `None` when the retained chain begins at its first record, and the
+    /// archived head when earlier sealed segments were moved away.
+    pub start_prev_hash: Option<String>,
+    /// The hash of the last verified record, as lowercase hex, which a later
+    /// verification may name to prove the chain continued from it.
+    pub head_hash: Option<String>,
+}
+
+/// A record hash an operator retained, such as the `headHash` an earlier
+/// verification or export reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuditHead([u8; 32]);
+
+impl AuditHead {
+    /// Parse the 64-character lowercase hexadecimal form the audit journal
+    /// and its reports use.
+    pub fn parse(value: &str) -> Option<Self> {
+        if value.len() != 64
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return None;
+        }
+        let mut head = [0u8; 32];
+        for (index, byte) in head.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?;
+        }
+        Some(Self(head))
+    }
 }
 
 /// Verify the retained audit chain at `path` under the key `hash_key_ref`
@@ -764,11 +837,81 @@ pub struct AuditJournalVerification {
 ///
 /// A path with no retained file yet verifies as an empty chain. A chain that
 /// does not verify under the key is refused with the same description the
-/// runtime gives at startup.
+/// runtime gives at startup. With `from_head`, the chain must also hold that
+/// head: as a verified record, or as the archived head its first retained
+/// record continues.
 pub fn verify_audit_journal(
     path: &Path,
     secrets: &SecretResolver,
     hash_key_ref: &str,
+    from_head: Option<AuditHead>,
+) -> Result<AuditJournalVerification, RuntimeError> {
+    let mut found = false;
+    let verification = walk_audit_journal(path, secrets, hash_key_ref, |envelope, _| {
+        found |= from_head.is_some_and(|head| head.0 == envelope.record_hash);
+        Ok(())
+    })?;
+    if let Some(head) = from_head {
+        let continues = verification.start_prev_hash == Some(hash_hex(&head.0));
+        if !found && !continues {
+            return Err(RuntimeError::AuditHeadMissing);
+        }
+    }
+    Ok(verification)
+}
+
+/// Verify the retained audit chain as [`verify_audit_journal`] does and write
+/// every verified record to `out` as the JSON line the journal holds.
+///
+/// The records are the pseudonymized envelopes the journal already retains,
+/// so the export discloses nothing the journal does not, and it verifies
+/// under the same key. A running writer holds the active segment, so the
+/// export then carries the sealed history only, which the returned
+/// `active_segment_verified` states. `out` may hold a partial copy when this
+/// returns an error; the caller publishes it only on success.
+pub fn export_audit_journal(
+    path: &Path,
+    secrets: &SecretResolver,
+    hash_key_ref: &str,
+    out: &mut dyn std::io::Write,
+) -> Result<AuditJournalVerification, RuntimeError> {
+    let mut write_failure = None;
+    let walked = walk_audit_journal(path, secrets, hash_key_ref, |_, line| {
+        out.write_all(line.as_bytes())
+            .and_then(|()| out.write_all(b"\n"))
+            .map_err(|error| {
+                let kind = error.kind();
+                write_failure = Some(kind);
+                registry_platform_audit::AuditError::Io(std::io::Error::from(kind))
+            })
+    });
+    if let Some(kind) = write_failure {
+        return Err(RuntimeError::AuditExport(kind.to_string()));
+    }
+    let verification = walked?;
+    out.flush()
+        .map_err(|error| RuntimeError::AuditExport(error.kind().to_string()))?;
+    Ok(verification)
+}
+
+/// The lowercase hexadecimal form the audit journal writes a hash in.
+fn hash_hex(hash: &[u8; 32]) -> String {
+    use std::fmt::Write as _;
+
+    hash.iter()
+        .fold(String::with_capacity(64), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
+}
+
+/// Walk the retained audit chain under the key `hash_key_ref` names, passing
+/// each record to `visit` once its own link verifies.
+fn walk_audit_journal(
+    path: &Path,
+    secrets: &SecretResolver,
+    hash_key_ref: &str,
+    visit: impl FnMut(&AuditEnvelope, &str) -> Result<(), registry_platform_audit::AuditError>,
 ) -> Result<AuditJournalVerification, RuntimeError> {
     let audit_secret = resolve_audit_secret(secrets, hash_key_ref)?;
     let audit_profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
@@ -786,15 +929,22 @@ pub fn verify_audit_journal(
             records: 0,
             segments: 0,
             active_segment_verified: false,
+            start_prev_hash: None,
+            head_hash: None,
         });
     }
-    let summary =
-        registry_platform_audit::verify_segmented_audit_chain(path, &audit_profile.chain_hasher())
-            .map_err(|error| RuntimeError::AuditJournal(describe_audit_journal_failure(&error)))?;
+    let summary = registry_platform_audit::visit_segmented_audit_chain(
+        path,
+        &audit_profile.chain_hasher(),
+        visit,
+    )
+    .map_err(|error| RuntimeError::AuditJournal(describe_audit_journal_failure(&error)))?;
     Ok(AuditJournalVerification {
         records: summary.records,
         segments: summary.segments,
         active_segment_verified: summary.active_verified,
+        start_prev_hash: summary.start_prev_hash.as_ref().map(hash_hex),
+        head_hash: summary.last_hash.as_ref().map(hash_hex),
     })
 }
 
@@ -1607,11 +1757,63 @@ mod tests {
             .expect("report a stopped worker");
         let served = tokio::time::timeout(
             Duration::from_secs(5),
-            serve_until_worker_stops(listener, axum::Router::new(), stops),
+            serve_until_worker_stops(listener, axum::Router::new(), None, stops),
         )
         .await
         .expect("the listener stops after a background worker stops");
         assert!(matches!(served, Err(RuntimeError::WorkerStopped)));
+    }
+
+    #[tokio::test]
+    async fn the_metrics_listener_serves_beside_the_api_and_stops_with_it() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local listener");
+        let metrics = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local metrics listener");
+        let metrics_address = metrics.local_addr().expect("metrics address");
+        let metrics_app =
+            axum::Router::new().route("/version", axum::routing::get(|| async { "ok" }));
+        let (stopped, stops) = mpsc::channel(1);
+        let served = tokio::spawn(serve_until_worker_stops(
+            listener,
+            axum::Router::new(),
+            Some((metrics, metrics_app)),
+            stops,
+        ));
+
+        let mut stream = tokio::net::TcpStream::connect(metrics_address)
+            .await
+            .expect("reach the metrics listener");
+        stream
+            .write_all(b"GET /version HTTP/1.1\r\nhost: metrics\r\nconnection: close\r\n\r\n")
+            .await
+            .expect("send a request");
+        let mut response = String::new();
+        stream
+            .read_to_string(&mut response)
+            .await
+            .expect("read the response");
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.ends_with("ok"), "{response}");
+
+        stopped
+            .send("clock")
+            .await
+            .expect("report a stopped worker");
+        let served = tokio::time::timeout(Duration::from_secs(5), served)
+            .await
+            .expect("the listeners stop after a background worker stops")
+            .expect("the serving task completes");
+        assert!(matches!(served, Err(RuntimeError::WorkerStopped)));
+        assert!(
+            tokio::net::TcpStream::connect(metrics_address)
+                .await
+                .is_err(),
+            "the metrics listener closes with the API listener"
+        );
     }
 
     #[tokio::test]
@@ -1869,12 +2071,14 @@ mod tests {
             SecretResolver::new([SecretProvider::File], secret_root.path()).expect("resolver");
 
         assert_eq!(
-            verify_audit_journal(&path, &secrets, "secret:file/casework-audit-key")
+            verify_audit_journal(&path, &secrets, "secret:file/casework-audit-key", None)
                 .expect("a journal with no file yet verifies as empty"),
             AuditJournalVerification {
                 records: 0,
                 segments: 0,
                 active_segment_verified: false,
+                start_prev_hash: None,
+                head_hash: None,
             }
         );
 
@@ -1904,12 +2108,91 @@ mod tests {
         drop(chain);
         drop(sink);
 
-        let verified = verify_audit_journal(&path, &secrets, "secret:file/casework-audit-key")
-            .expect("the chain verifies under its own key");
+        let verified =
+            verify_audit_journal(&path, &secrets, "secret:file/casework-audit-key", None)
+                .expect("the chain verifies under its own key");
         assert_eq!(verified.records, 3);
         assert!(verified.active_segment_verified);
+        assert_eq!(verified.start_prev_hash, None);
+        let retained = std::fs::read_to_string(&path).expect("read the journal");
+        let hashes = retained
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<Value>(line).expect("envelope")["record_hash"]
+                    .as_str()
+                    .expect("record hash")
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(verified.head_hash.as_deref(), Some(hashes[2].as_str()));
 
-        let refused = verify_audit_journal(&path, &secrets, "secret:file/other-audit-key")
+        for head in [&hashes[0], &hashes[1], &hashes[2]] {
+            let from_head = AuditHead::parse(head).expect("a record hash is a head");
+            assert_eq!(
+                verify_audit_journal(
+                    &path,
+                    &secrets,
+                    "secret:file/casework-audit-key",
+                    Some(from_head),
+                )
+                .expect("the chain continues from a head it holds"),
+                verified
+            );
+        }
+        let unknown = AuditHead::parse(&"ab".repeat(32)).expect("well-formed head");
+        let missing = verify_audit_journal(
+            &path,
+            &secrets,
+            "secret:file/casework-audit-key",
+            Some(unknown),
+        )
+        .expect_err("a head the chain never held is refused");
+        assert!(matches!(missing, RuntimeError::AuditHeadMissing));
+        assert!(AuditHead::parse("not-a-head").is_none());
+        assert!(AuditHead::parse(&"AB".repeat(32)).is_none());
+
+        let mut exported = Vec::new();
+        assert_eq!(
+            export_audit_journal(
+                &path,
+                &secrets,
+                "secret:file/casework-audit-key",
+                &mut exported,
+            )
+            .expect("the verified chain exports"),
+            verified
+        );
+        assert_eq!(
+            String::from_utf8(exported).expect("UTF-8 export"),
+            retained,
+            "an export carries every retained line exactly as the journal holds it"
+        );
+
+        struct RefusingWriter;
+        impl std::io::Write for RefusingWriter {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let unwritten = export_audit_journal(
+            &path,
+            &secrets,
+            "secret:file/casework-audit-key",
+            &mut RefusingWriter,
+        )
+        .expect_err("a failed write refuses the export");
+        assert!(
+            matches!(&unwritten, RuntimeError::AuditExport(_))
+                && unwritten
+                    .to_string()
+                    .starts_with("the Casework audit export could not be written"),
+            "{unwritten}"
+        );
+
+        let refused = verify_audit_journal(&path, &secrets, "secret:file/other-audit-key", None)
             .expect_err("another key does not verify the chain");
         assert_eq!(
             refused.to_string(),
@@ -1918,6 +2201,70 @@ mod tests {
             )
             .to_string()
         );
+    }
+
+    #[tokio::test]
+    async fn audit_journal_verification_continues_from_an_archived_head() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (_root, audit) = audit_directory_with_mode(0o700);
+        let path = audit.join("casework.jsonl");
+        let secret_root = tempfile::tempdir().expect("temporary secret root");
+        let secret = secret_root.path().join("casework-audit-key");
+        std::fs::write(&secret, b"casework-audit-archive-secret-32-bytes").expect("write secret");
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600))
+            .expect("restrict audit secret");
+        let secrets =
+            SecretResolver::new([SecretProvider::File], secret_root.path()).expect("resolver");
+        let profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+            b"casework-audit-archive-secret-32-bytes".to_vec(),
+        ))
+        .expect("audit profile");
+        {
+            let sink = DurableSegmentedJsonlSink::open(&path, 600).expect("writer lock");
+            let chain = profile
+                .bootstrap_or_start_empty(&sink)
+                .await
+                .expect("keyed bootstrap");
+            for index in 0..8 {
+                chain
+                    .append(
+                        &sink,
+                        serde_json::json!({
+                            "eventId": Uuid::new_v4().to_string(),
+                            "event": "casework.synthetic",
+                            "index": index,
+                        }),
+                    )
+                    .await
+                    .expect("append");
+            }
+        }
+        let segments = registry_platform_audit::segmented_audit_paths(&path).expect("segments");
+        assert!(
+            segments.len() >= 3,
+            "the fixture must seal more than one segment"
+        );
+        let first = std::fs::read_to_string(&segments[0]).expect("read the first segment");
+        let archived_head = serde_json::from_str::<Value>(first.lines().last().expect("a record"))
+            .expect("envelope")["record_hash"]
+            .as_str()
+            .expect("record hash")
+            .to_owned();
+        std::fs::remove_file(&segments[0]).expect("archive the first segment");
+
+        let verified = verify_audit_journal(
+            &path,
+            &secrets,
+            "secret:file/casework-audit-key",
+            Some(AuditHead::parse(&archived_head).expect("head")),
+        )
+        .expect("the retained chain continues from the archived head");
+        assert_eq!(
+            verified.start_prev_hash.as_deref(),
+            Some(archived_head.as_str())
+        );
+        assert_eq!(verified.records, 8 - first.lines().count());
     }
 
     fn upgrade_audit_profile() -> AuditProfile {
@@ -2413,6 +2760,13 @@ pub enum RuntimeError {
     AuditSecret(String),
     #[error("the Casework audit journal could not be initialized: {0}")]
     AuditJournal(String),
+    #[error(
+        "the retained audit chain neither holds the given head nor continues from it; \
+         the journal was replaced or truncated after that head was recorded"
+    )]
+    AuditHeadMissing,
+    #[error("the Casework audit export could not be written ({0})")]
+    AuditExport(String),
     #[error("the Casework review completion destination configuration is invalid")]
     CompletionConfiguration,
     #[error("the CASEWORK_LOG level is invalid; it must be one of error, warn, or info")]
@@ -2423,6 +2777,8 @@ pub enum RuntimeError {
     Service(#[from] crate::ServiceError),
     #[error("the Casework listener failed")]
     Listen(#[source] std::io::Error),
+    #[error("the Casework metrics listener at metricsListener.bind failed")]
+    MetricsListen(#[source] std::io::Error),
     #[error("a Casework background worker stopped")]
     WorkerStopped,
 }

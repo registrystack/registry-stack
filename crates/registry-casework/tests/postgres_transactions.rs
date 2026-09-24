@@ -1631,6 +1631,42 @@ async fn retrying_an_audit_publication_preserves_its_original_timestamp() {
 }
 
 #[tokio::test]
+async fn the_audit_outbox_backlog_counts_only_unpublished_records() {
+    let (store, client, _schema) = isolated_schema("audit_outbox_backlog").await;
+    store.migrate().await.expect("migrate");
+    assert_eq!(
+        store.audit_outbox_pending().await.expect("empty backlog"),
+        0
+    );
+    let events = [
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+    ];
+    for event_id in &events {
+        client
+            .execute(
+                "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
+                &[event_id, &serde_json::json!({"event": "casework.test"})],
+            )
+            .await
+            .expect("insert a pending audit record");
+    }
+    assert_eq!(store.audit_outbox_pending().await.expect("backlog"), 3);
+    store
+        .mark_audit_published(events[1])
+        .await
+        .expect("publish one record");
+    assert_eq!(
+        store
+            .audit_outbox_pending()
+            .await
+            .expect("backlog after one publication"),
+        2
+    );
+}
+
+#[tokio::test]
 async fn a_resubmitted_proposal_supersedes_the_earlier_application_item() {
     let (store, client, _schema) = isolated_schema("casework_resubmission").await;
     store.migrate().await.expect("migrate");

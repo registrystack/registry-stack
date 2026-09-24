@@ -54,6 +54,13 @@ listener block. `listener.tlsTermination` is required. Use
 defaults to `private-address`; `container-private` permits an unspecified bind
 only for a listener kept on a private container network.
 
+`metricsListener` is optional and absent by default. `metricsListener.bind` is
+one numeric socket address with a nonzero port, loopback or private (IPv4
+private range or IPv6 unique local), never a wildcard, and never the address
+and port the API listener occupies; an IPv6 wildcard API listener counts as
+occupying that port on both families. When set, the runtime serves `/metrics`
+and `/version` there and nowhere else.
+
 `secretProviders` explicitly enables each accepted reference form. Declare
 `file: {root: ABSOLUTE_DIRECTORY}` before using `secret:file/name`. Declare
 `environment: {}` before using `secret:env/NAME`. The runtime does not fall back

@@ -620,6 +620,23 @@ pub fn verify_segmented_audit_chain(
     path: &Path,
     hasher: &AuditChainHasher,
 ) -> Result<SegmentedAuditSummary, AuditError> {
+    visit_segmented_audit_chain(path, hasher, |_, _| Ok(()))
+}
+
+/// Verify what [`verify_segmented_audit_chain`] verifies and pass each record,
+/// in chain order, to a caller-owned visitor as soon as its own link verifies.
+///
+/// The visitor receives the parsed envelope and its exact retained line
+/// without the line terminator. A record the visitor has seen may still be
+/// followed by a refusal, so a caller that copies records publishes the copy
+/// only once this returns `Ok`. The writer lock is held for the whole walk
+/// whenever the active segment is read, so no append lands mid-walk.
+pub fn visit_segmented_audit_chain(
+    path: &Path,
+    hasher: &AuditChainHasher,
+    mut visit: impl FnMut(&AuditEnvelope, &str) -> Result<(), AuditError>,
+) -> Result<SegmentedAuditSummary, AuditError> {
+    let mut visit = |envelope: AuditEnvelope, line: &str| visit(&envelope, line);
     let parent = parent(path)?;
     validate_directory(parent, DirectoryPolicy::OwnerControlled)?;
     let guard = verification_lock(path)?;
@@ -652,7 +669,7 @@ pub fn verify_segmented_audit_chain(
     let mut segments = 0usize;
     for (_, path) in &sealed {
         let file = open_sealed(path)?;
-        let verification = verify_segment(file, hasher, head)?;
+        let verification = verify_segment_with(file, hasher, head, &mut visit)?;
         head = verification.head;
         records = records.saturating_add(verification.records);
         segments = segments.saturating_add(1);
@@ -662,7 +679,7 @@ pub fn verify_segmented_audit_chain(
     if active_verified {
         let file = open_read(path)?;
         validate_owner_only_active_file(&file)?;
-        let verification = verify_segment(file, hasher, head)?;
+        let verification = verify_segment_with(file, hasher, head, &mut visit)?;
         head = verification.head;
         records = records.saturating_add(verification.records);
         segments = segments.saturating_add(1);
@@ -836,7 +853,7 @@ pub fn visit_stopped_segmented_audit_chain(
             file.try_clone().map_err(AuditError::Io)?,
             hasher,
             head,
-            &mut |envelope| {
+            &mut |envelope, _| {
                 records = records.checked_add(1).ok_or_else(file_size_error)?;
                 if records > maximum_records {
                     return Err(file_size_error());
@@ -859,7 +876,7 @@ pub fn visit_stopped_segmented_audit_chain(
         active.try_clone().map_err(AuditError::Io)?,
         hasher,
         head,
-        &mut |envelope| {
+        &mut |envelope, _| {
             records = records.checked_add(1).ok_or_else(file_size_error)?;
             if records > maximum_records {
                 return Err(file_size_error());
@@ -894,14 +911,14 @@ fn verify_segment(
     hasher: &AuditChainHasher,
     expected_head: Option<[u8; 32]>,
 ) -> Result<SegmentVerification, AuditError> {
-    verify_segment_with(file, hasher, expected_head, &mut |_| Ok(()))
+    verify_segment_with(file, hasher, expected_head, &mut |_, _| Ok(()))
 }
 
 fn verify_segment_with(
     file: File,
     hasher: &AuditChainHasher,
     expected_head: Option<[u8; 32]>,
-    visit: &mut impl FnMut(AuditEnvelope) -> Result<(), AuditError>,
+    visit: &mut impl FnMut(AuditEnvelope, &str) -> Result<(), AuditError>,
 ) -> Result<SegmentVerification, AuditError> {
     let mut reader = BufReader::new(file);
     let mut expected_previous = expected_head;
@@ -915,7 +932,7 @@ fn verify_segment_with(
                 found: OptionalHashHex(verification.start_prev_hash),
             });
         }
-        visit(envelope)?;
+        visit(envelope, exact)?;
         expected_previous = verification.last_hash;
         records = records.saturating_add(verification.records);
     }
@@ -1560,6 +1577,43 @@ mod tests {
         assert_eq!(summary.start_prev_hash, archived_head);
         assert_eq!(summary.last_hash, complete.last_hash);
         assert_eq!(summary.records, complete.records - archived_records);
+    }
+
+    #[tokio::test]
+    async fn a_visitor_sees_every_retained_line_exactly_in_chain_order() {
+        let (_directory, path, hasher) = fixture();
+        {
+            let sink = DurableSegmentedJsonlSink::open(&path, 450).expect("sink opens");
+            let chain = ChainState::bootstrap_or_start_empty(&sink, hasher.clone())
+                .await
+                .expect("chain starts");
+            for index in 0..7 {
+                chain
+                    .append(&sink, json!({"index": index, "padding": "x".repeat(160)}))
+                    .await
+                    .expect("record appends");
+            }
+        }
+        let mut retained = String::new();
+        for segment in segmented_audit_paths(&path).expect("segments enumerate") {
+            retained.push_str(&fs::read_to_string(segment).expect("segment reads"));
+        }
+
+        let mut visited = String::new();
+        let mut indexes = Vec::new();
+        let summary = visit_segmented_audit_chain(&path, &hasher, |envelope, line| {
+            indexes.push(envelope.record["index"].as_u64().expect("index"));
+            visited.push_str(line);
+            visited.push('\n');
+            Ok(())
+        })
+        .expect("chain verifies");
+
+        assert!(summary.active_verified);
+        assert!(summary.segments >= 2);
+        assert_eq!(summary.records, 7);
+        assert_eq!(indexes, (0..7).collect::<Vec<_>>());
+        assert_eq!(visited, retained);
     }
 
     #[tokio::test]

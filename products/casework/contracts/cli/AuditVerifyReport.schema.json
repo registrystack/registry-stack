@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha2/DoctorReport.schema.json",
-  "title": "DoctorReport",
-  "description": "Versioned JSON report emitted by caseworkctl for doctor.",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha2/AuditVerifyReport.schema.json",
+  "title": "AuditVerifyReport",
+  "description": "Versioned JSON report emitted by caseworkctl for audit verify.",
   "oneOf": [
     {
       "type": "object",
@@ -13,77 +13,31 @@
         "ok",
         "command",
         "runtimeConfig",
-        "packageRoot",
-        "checks",
-        "packageDigest",
-        "secretFileChecks",
-        "sourceChecks",
-        "pinnedWork",
-        "auditChain",
-        "eventWiringGuidance"
+        "fromHead",
+        "auditChain"
       ],
       "properties": {
         "apiVersion": {
           "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
-          "const": "DoctorReport"
+          "const": "AuditVerifyReport"
         },
         "ok": {
           "const": true
         },
         "command": {
-          "const": "doctor"
+          "const": "audit verify"
         },
         "runtimeConfig": {
           "type": "string"
         },
-        "packageRoot": {
-          "type": "string"
-        },
-        "packageDigest": {
+        "fromHead": {
           "type": [
             "string",
             "null"
-          ]
-        },
-        "checks": {
-          "$ref": "#/$defs/doctorChecks"
-        },
-        "secretFileChecks": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        },
-        "sourceChecks": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        },
-        "pinnedWork": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "verdict",
-            "conflicts"
           ],
-          "properties": {
-            "verdict": {
-              "enum": [
-                "clear",
-                "acknowledged",
-                "development"
-              ]
-            },
-            "conflicts": {
-              "type": "array",
-              "items": {
-                "type": "object"
-              }
-            }
-          }
+          "pattern": "^[0-9a-f]{64}$"
         },
         "auditChain": {
           "type": "object",
@@ -122,9 +76,6 @@
               "pattern": "^[0-9a-f]{64}$"
             }
           }
-        },
-        "eventWiringGuidance": {
-          "type": "string"
         }
       }
     },
@@ -142,13 +93,13 @@
           "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
-          "const": "DoctorReport"
+          "const": "AuditVerifyReport"
         },
         "ok": {
           "const": false
         },
         "command": {
-          "const": "doctor"
+          "const": "audit verify"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"
@@ -200,54 +151,6 @@
       "type": "array",
       "items": {
         "$ref": "#/$defs/diagnostic"
-      }
-    },
-    "doctorChecks": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "configuration",
-        "secretFiles",
-        "sourceDescriptions",
-        "sourceConnections",
-        "database",
-        "pinnedWork",
-        "oidcIssuer",
-        "directory",
-        "reconciliation",
-        "auditChain"
-      ],
-      "properties": {
-        "configuration": {
-          "const": "ready"
-        },
-        "secretFiles": {
-          "const": "ready"
-        },
-        "sourceDescriptions": {
-          "const": "ready"
-        },
-        "sourceConnections": {
-          "const": "ready"
-        },
-        "database": {
-          "const": "ready"
-        },
-        "pinnedWork": {
-          "const": "ready"
-        },
-        "oidcIssuer": {
-          "const": "ready"
-        },
-        "directory": {
-          "const": "ready"
-        },
-        "reconciliation": {
-          "const": "ready"
-        },
-        "auditChain": {
-          "const": "ready"
-        }
       }
     }
   }
