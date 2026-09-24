@@ -202,18 +202,18 @@ recipients:
 ```
 
 The consent records the generator writes belong to a dataset named `consent`.
-A project with a `manifestProjection`, like the one `init` wrote, declares it under `datasets`, names a generated profile that reads it, and adds `consent` to its data service's `servesDatasets`:
+A project with a `manifestProjection`, like the one `init` wrote, needs that dataset declared under `datasets`; the next command declares it itself if it is not there yet, naming a generated steward profile as its `accessProfile`:
 
 ```yaml
     - id: consent
       title: Consent records
-      description: Recorded consent decisions and the recipients they name.
-      owner: Generic Registry Authority
+      description: Privacy notices, consent decisions, and consent links.
       status: under_development
+      classificationCeiling: restricted
       accessProfile: record-consent-steward
 ```
 
-Without it, the next command refuses with `manifest_projection.entity.dataset_dangling` or `manifest_projection.dataset.access_profile_unknown` and writes nothing.
+If the project already declares a `consent` dataset, the command leaves it exactly as authored and reuses it for the new subject too, the way it already reuses a first subject's shared vocabularies; if that existing dataset's access profile does not cover the module's entities, the command reports `module.consent.dataset_conflict` and writes nothing.
 Then generate the consent module for the subject entity:
 
 ```sh
