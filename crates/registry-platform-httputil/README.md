@@ -20,6 +20,14 @@ Outbound HTTP utilities for registry services.
   provider's configured resource and scopes. Every exchange is fresh and does
   not use or replace the service-token cache. Returned task bounds remain the
   consuming resource server's authorization responsibility.
+  `redeem_authorization_code` redeems an authorization code with its PKCE
+  verifier and redirect URI for a relying party that signs people in, with the
+  same client assertion and configured resource and no scope parameter. It
+  checks input shape before any request, refuses a response scope missing a
+  configured scope, and never touches the service-token cache. It returns a
+  `RedeemedAuthorizationCode`: the access token, a monotonic expiry when the
+  issuer stated one, and the unverified ID token, which the caller verifies
+  before reading any claim.
 - `ExchangeAuthorization` for one immutable host-verified person or task-grant
   context. The first-party source signs a bounded grantless JWT; the remote
   source obtains a new assertion with a narrowly configured bootstrap on each

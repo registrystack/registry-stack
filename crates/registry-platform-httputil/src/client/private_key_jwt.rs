@@ -93,6 +93,10 @@ const _: () = assert!(MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS == 86_400);
 /// The grant this provider asks for. The client authenticates as itself, on its
 /// own behalf, which is the closed grant this provider supports.
 const GRANT_TYPE: &str = "client_credentials";
+const AUTHORIZATION_CODE_GRANT_TYPE: &str = "authorization_code";
+/// Longest authorization code this provider will present. Codes are short
+/// opaque strings; the bound keeps a redirect parameter from growing the form.
+const MAXIMUM_AUTHORIZATION_CODE_BYTES: usize = 4 * 1024;
 const TOKEN_EXCHANGE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
 const JWT_SUBJECT_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:jwt";
 const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_token";
@@ -118,6 +122,64 @@ impl SubjectTokenType {
             Self::Jwt => JWT_SUBJECT_TOKEN_TYPE,
             Self::AccessToken => ACCESS_TOKEN_TYPE,
         }
+    }
+}
+
+/// The grant one token request asks for.
+enum Grant<'a> {
+    ClientCredentials,
+    Exchange(ExchangeGrant<'a>),
+    AuthorizationCode(AuthorizationCodeGrant<'a>),
+}
+
+/// The authorization-code members of one token request (RFC 6749 section
+/// 4.1.3, with the RFC 7636 section 4.5 verifier).
+struct AuthorizationCodeGrant<'a> {
+    code: &'a str,
+    redirect_uri: &'a Url,
+    code_verifier: &'a str,
+}
+
+/// What an authorization code was redeemed for: the signed-in user's access
+/// token, when it stops being worth presenting, and the OpenID Connect ID token
+/// when the issuer returned one.
+///
+/// The ID token is returned unverified. A caller that relies on it verifies it
+/// (issuer, audience, nonce, expiry) before reading any claim.
+pub struct RedeemedAuthorizationCode {
+    access_token: BearerToken,
+    expires_at: Option<Instant>,
+    id_token: Option<Zeroizing<String>>,
+}
+
+impl RedeemedAuthorizationCode {
+    #[must_use]
+    pub fn access_token(&self) -> &BearerToken {
+        &self.access_token
+    }
+
+    /// A monotonic deadline from the issuer's stated `expires_in`, clamped to
+    /// [`MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS`]. `None` when the issuer
+    /// stated no usable lifetime.
+    #[must_use]
+    pub fn expires_at(&self) -> Option<Instant> {
+        self.expires_at
+    }
+
+    /// The unverified ID token, if the issuer returned one.
+    #[must_use]
+    pub fn id_token(&self) -> Option<&str> {
+        self.id_token.as_ref().map(|token| token.as_str())
+    }
+}
+
+impl fmt::Debug for RedeemedAuthorizationCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RedeemedAuthorizationCode")
+            .field("expires_at", &self.expires_at)
+            .field("has_id_token", &self.id_token.is_some())
+            .finish_non_exhaustive()
     }
 }
 
@@ -571,13 +633,70 @@ impl PrivateKeyJwt {
         self.acquire_for_grant(
             self.clock.unix_seconds(),
             self.clock.monotonic(),
-            Some(ExchangeGrant {
+            Grant::Exchange(ExchangeGrant {
                 subject_token,
                 subject_token_type,
                 actor_token,
             }),
         )
         .await
+    }
+
+    /// Redeem an authorization code for the signed-in user's access token,
+    /// with the PKCE `code_verifier` and the `redirect_uri` the authorization
+    /// request named.
+    ///
+    /// The configured resource is sent as the RFC 8707 `resource` parameter.
+    /// Scopes belong to the authorization request, so none is sent here, but
+    /// a response scope missing a configured scope is refused as for every
+    /// other grant. Each call authenticates with a fresh client assertion and
+    /// never reads or replaces the service-token cache. Malformed inputs are
+    /// refused before any request is made.
+    pub async fn redeem_authorization_code(
+        &self,
+        code: &str,
+        redirect_uri: &Url,
+        code_verifier: &str,
+    ) -> Result<RedeemedAuthorizationCode, TokenError> {
+        if code.is_empty()
+            || code.len() > MAXIMUM_AUTHORIZATION_CODE_BYTES
+            || !code.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(TokenError::Invalid {
+                reason: "the authorization code must be bounded non-empty visible ASCII",
+            });
+        }
+        // RFC 7636 section 4.1: 43 to 128 unreserved characters.
+        if !(43..=128).contains(&code_verifier.len())
+            || !code_verifier
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"-._~".contains(&byte))
+        {
+            return Err(TokenError::Invalid {
+                reason: "the code verifier must be 43 to 128 unreserved characters",
+            });
+        }
+        if redirect_uri.cannot_be_a_base() || redirect_uri.fragment().is_some() {
+            return Err(TokenError::Invalid {
+                reason: "the redirect URI must be an absolute URI without a fragment",
+            });
+        }
+        let acquired = self
+            .acquire_for_grant(
+                self.clock.unix_seconds(),
+                self.clock.monotonic(),
+                Grant::AuthorizationCode(AuthorizationCodeGrant {
+                    code,
+                    redirect_uri,
+                    code_verifier,
+                }),
+            )
+            .await?;
+        Ok(RedeemedAuthorizationCode {
+            access_token: acquired.token,
+            expires_at: acquired.expires_at,
+            id_token: acquired.id_token,
+        })
     }
 
     /// Whether `other` authenticates as the same client at the same token
@@ -824,14 +943,15 @@ impl PrivateKeyJwt {
     /// `monotonic_now` is what the cache deadline of whatever it issues is
     /// measured from.
     async fn acquire(&self, now: i64, monotonic_now: Instant) -> Result<AcquiredToken, TokenError> {
-        self.acquire_for_grant(now, monotonic_now, None).await
+        self.acquire_for_grant(now, monotonic_now, Grant::ClientCredentials)
+            .await
     }
 
     async fn acquire_for_grant(
         &self,
         now: i64,
         monotonic_now: Instant,
-        exchange: Option<ExchangeGrant<'_>>,
+        grant: Grant<'_>,
     ) -> Result<AcquiredToken, TokenError> {
         let assertion = self.sign_assertion(now)?;
         // The assertion is a credential, so it lives in a scrubbed buffer here.
@@ -848,16 +968,21 @@ impl PrivateKeyJwt {
             let mut form = url::form_urlencoded::Serializer::new(String::new());
             form.append_pair(
                 "grant_type",
-                if exchange.is_some() {
-                    TOKEN_EXCHANGE_GRANT_TYPE
-                } else {
-                    GRANT_TYPE
+                match &grant {
+                    Grant::ClientCredentials => GRANT_TYPE,
+                    Grant::Exchange(_) => TOKEN_EXCHANGE_GRANT_TYPE,
+                    Grant::AuthorizationCode(_) => AUTHORIZATION_CODE_GRANT_TYPE,
                 },
             );
             form.append_pair("client_id", &self.client_id);
             form.append_pair("client_assertion_type", CLIENT_ASSERTION_TYPE);
             form.append_pair("client_assertion", &assertion);
-            if let Some(exchange) = &exchange {
+            if let Grant::AuthorizationCode(redemption) = &grant {
+                form.append_pair("code", redemption.code);
+                form.append_pair("redirect_uri", redemption.redirect_uri.as_str());
+                form.append_pair("code_verifier", redemption.code_verifier);
+            }
+            if let Grant::Exchange(exchange) = &grant {
                 form.append_pair("subject_token", exchange.subject_token);
                 form.append_pair("subject_token_type", exchange.subject_token_type.as_urn());
                 form.append_pair("requested_token_type", ACCESS_TOKEN_TYPE);
@@ -868,7 +993,11 @@ impl PrivateKeyJwt {
                     form.append_pair("actor_token_type", ACCESS_TOKEN_TYPE);
                 }
             }
-            if let Some(scope) = &self.scope {
+            // The authorization request carried the scope of a code; RFC 6749
+            // section 4.1.3 gives its redemption none.
+            if let (Some(scope), false) =
+                (&self.scope, matches!(grant, Grant::AuthorizationCode(_)))
+            {
                 form.append_pair("scope", scope);
             }
             if let Some(resource) = &self.resource {
@@ -943,7 +1072,9 @@ impl PrivateKeyJwt {
         if !issued.token_type.eq_ignore_ascii_case(BEARER_TOKEN_TYPE) {
             return Err(TokenError::Protocol { status });
         }
-        if exchange.is_some() && issued.issued_token_type.as_deref() != Some(ACCESS_TOKEN_TYPE) {
+        if matches!(grant, Grant::Exchange(_))
+            && issued.issued_token_type.as_deref() != Some(ACCESS_TOKEN_TYPE)
+        {
             return Err(TokenError::Protocol { status });
         }
         // A stated response scope is a claim about what the credential may do,
@@ -987,6 +1118,12 @@ impl PrivateKeyJwt {
                 // 1..=MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS, so the deadline is
                 // an instant at most a day ahead of the reading it is built on.
                 .map(|seconds| monotonic_now + Duration::from_secs(seconds.unsigned_abs())),
+            // Only a code redemption hands an ID token to its caller; any other
+            // grant's is dropped here, wiped with the response buffer.
+            id_token: issued
+                .id_token
+                .filter(|_| matches!(grant, Grant::AuthorizationCode(_)))
+                .map(Zeroizing::new),
         })
     }
 }
@@ -1085,6 +1222,8 @@ pub(super) struct AcquiredToken {
     /// is already spent; beside `false` it is an issuer saying nothing.
     pub(super) lifetime_stated: bool,
     pub(super) expires_at: Option<Instant>,
+    /// The OpenID Connect ID token an authorization-code redemption returned.
+    id_token: Option<Zeroizing<String>>,
 }
 
 /// The success response of RFC 6749 section 5.1, in the members this client uses.
@@ -1100,6 +1239,7 @@ struct IssuedToken {
     expires_in: Option<Option<i64>>,
     scope: Option<String>,
     issued_token_type: Option<String>,
+    id_token: Option<String>,
 }
 
 /// Read a member as present, whatever it holds.
@@ -2950,5 +3090,168 @@ mod tests {
             .with_resource("urn:registry:evidence%20record"),
         )
         .expect("a complete ASCII percent escape is accepted");
+    }
+
+    const REDIRECT_URI: &str = "https://review.example.org/signed-in";
+    const CODE_VERIFIER: &str = "verifier-0123456789-0123456789-0123456789-0123456789";
+
+    fn redirect_uri() -> Url {
+        Url::parse(REDIRECT_URI).expect("the redirect URI parses")
+    }
+
+    fn code_provider(server: &MockServer) -> PrivateKeyJwt {
+        PrivateKeyJwt::with_clock(
+            config(endpoint(&server.uri()), client_key(Some(KEY_ID)))
+                .with_resource("urn:registry:records")
+                .with_scopes(["openid", "records:read"]),
+            Arc::new(TestClock::new(NOW)),
+        )
+        .expect("the provider is usable as configured")
+    }
+
+    /// The authorization-code grant of RFC 6749 section 4.1.3 with the PKCE
+    /// verifier of RFC 7636 section 4.5, authenticated by the same client
+    /// assertion, naming the configured resource and no scope.
+    #[tokio::test]
+    async fn an_authorization_code_is_redeemed_with_its_verifier_and_the_client_assertion() {
+        let server = token_endpoint_serving(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": ISSUED_CREDENTIAL,
+            "token_type": "Bearer",
+            "expires_in": TOKEN_LIFETIME_SECONDS,
+            "scope": "openid records:read",
+            "id_token": "synthetic-id-token",
+        })))
+        .await;
+        let provider = code_provider(&server);
+
+        let redeemed = provider
+            .redeem_authorization_code("synthetic-code", &redirect_uri(), CODE_VERIFIER)
+            .await
+            .expect("the code is redeemed");
+
+        assert_eq!(redeemed.access_token().expose(), ISSUED_CREDENTIAL);
+        assert_eq!(redeemed.id_token(), Some("synthetic-id-token"));
+        assert!(redeemed.expires_at().is_some());
+        let form = request_form_body(&server).await;
+        let names: Vec<&str> = form.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "grant_type",
+                "client_id",
+                "client_assertion_type",
+                "client_assertion",
+                "code",
+                "redirect_uri",
+                "code_verifier",
+                "resource",
+            ]
+        );
+        let value = |name: &str| {
+            form.iter()
+                .find(|(candidate, _)| candidate == name)
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(value("grant_type"), Some("authorization_code"));
+        assert_eq!(value("code"), Some("synthetic-code"));
+        assert_eq!(value("redirect_uri"), Some(REDIRECT_URI));
+        assert_eq!(value("code_verifier"), Some(CODE_VERIFIER));
+        assert_eq!(value("resource"), Some("urn:registry:records"));
+        // The redeemed credential is the signed-in user's, never the client's
+        // own, so it neither reads nor fills the service-token cache.
+        assert!(provider.cached.read().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn authorization_code_redemption_refuses_malformed_inputs_before_io() {
+        let server = token_endpoint_serving(issued(Some(TOKEN_LIFETIME_SECONDS))).await;
+        let provider = code_provider(&server);
+        let long_code = "c".repeat(4 * 1024 + 1);
+        for (code, verifier) in [
+            ("", CODE_VERIFIER),
+            ("code\r\ncanary", CODE_VERIFIER),
+            (long_code.as_str(), CODE_VERIFIER),
+            ("synthetic-code", "too-short-canary"),
+            (
+                "synthetic-code",
+                "verifier+canary-0123456789-0123456789-0123456789",
+            ),
+        ] {
+            let error = provider
+                .redeem_authorization_code(code, &redirect_uri(), verifier)
+                .await
+                .expect_err("the malformed input is refused");
+            assert!(matches!(error, TokenError::Invalid { .. }), "{error:?}");
+            assert!(!error.to_string().contains("canary"));
+        }
+        let with_fragment = Url::parse("https://review.example.org/signed-in#canary").unwrap();
+        let error = provider
+            .redeem_authorization_code("synthetic-code", &with_fragment, CODE_VERIFIER)
+            .await
+            .expect_err("a redirect URI with a fragment is refused");
+        assert!(matches!(error, TokenError::Invalid { .. }));
+        assert_eq!(token_requests(&server).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_redeemed_code_states_no_expiry_when_the_issuer_states_no_lifetime() {
+        let server = token_endpoint_serving(issued_with_scope(None, None)).await;
+        let redeemed = code_provider(&server)
+            .redeem_authorization_code("synthetic-code", &redirect_uri(), CODE_VERIFIER)
+            .await
+            .expect("the code is redeemed");
+        assert!(redeemed.expires_at().is_none());
+        assert!(redeemed.id_token().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_redeemed_code_missing_a_requested_scope_is_refused() {
+        let server = token_endpoint_serving(issued_with_scope(
+            Some(TOKEN_LIFETIME_SECONDS),
+            Some("openid"),
+        ))
+        .await;
+        let error = code_provider(&server)
+            .redeem_authorization_code("synthetic-code", &redirect_uri(), CODE_VERIFIER)
+            .await
+            .expect_err("a narrowed grant is refused");
+        assert_eq!(error, TokenError::ScopeNarrowed);
+    }
+
+    #[tokio::test]
+    async fn a_declined_code_reports_only_the_registered_code() {
+        let server = token_endpoint_serving(ResponseTemplate::new(400).set_body_json(json!({
+            "error": "invalid_grant",
+            "error_description": "canary"
+        })))
+        .await;
+        let error = code_provider(&server)
+            .redeem_authorization_code("synthetic-code", &redirect_uri(), CODE_VERIFIER)
+            .await
+            .expect_err("the declined code is refused");
+        assert_eq!(
+            error,
+            TokenError::Refused {
+                code: OAuthErrorCode::InvalidGrant
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_redeemed_code_renders_without_its_credentials() {
+        let server = token_endpoint_serving(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": ISSUED_CREDENTIAL,
+            "token_type": "Bearer",
+            "expires_in": TOKEN_LIFETIME_SECONDS,
+            "id_token": "synthetic-id-token",
+        })))
+        .await;
+        let redeemed = code_provider(&server)
+            .redeem_authorization_code("synthetic-code", &redirect_uri(), CODE_VERIFIER)
+            .await
+            .expect("the code is redeemed");
+        let rendered = format!("{redeemed:?}");
+        assert!(!rendered.contains(ISSUED_CREDENTIAL), "{rendered}");
+        assert!(!rendered.contains("synthetic-id-token"), "{rendered}");
     }
 }
