@@ -43,6 +43,11 @@ pub enum MigrationError {
     EmptyPlan,
     #[error("the Registry package apply failed")]
     ApplyFailed,
+    /// Refused before maintenance began: retained history coverage does not
+    /// admit a successor until an erasure lifecycle finishes or a rebaseline
+    /// restores it.
+    #[error("retained history coverage does not admit a successor package")]
+    HistoryCoverage,
     #[error("a persisted field pattern has invalid PostgreSQL syntax")]
     FieldPatternSyntax { entity_id: String, field_id: String },
     #[error("existing rows do not conform to a persisted field pattern")]
@@ -534,9 +539,16 @@ pub async fn apply_verified_package(
             .begin_initial_package(&target, &ledger, request.roles.runtime)
             .await
     };
-    if began.is_err() {
+    if let Err(error) = began {
         let _ = connection.release().await;
-        return Err(MigrationError::ApplyFailed);
+        // The coverage check runs inside the begin transaction before its
+        // first write, so a coverage refusal leaves maintenance state as it was.
+        return Err(match error {
+            crate::postgres::PostgresKernelError::HistoryCoverageIncomplete => {
+                MigrationError::HistoryCoverage
+            }
+            _ => MigrationError::ApplyFailed,
+        });
     }
 
     if declares_encrypted_fields {

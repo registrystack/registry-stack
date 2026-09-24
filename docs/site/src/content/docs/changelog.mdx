@@ -18,6 +18,20 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- `bregctl apply` reports a successor refused because retained history coverage
+  does not admit it as `apply.history.coverage_incomplete`, with the suggested
+  action `prepare_history_rebaseline_request`, instead of
+  `apply.migration.failed`. The refusal leaves maintenance state unchanged, and
+  its message names the recovery: finish a pending
+  `field-encryption erase-history` run or run `history rebaseline`, then apply
+  the same package again. See
+  [retain, erase, and audit](../operate/breg-retention/#restore-snapshot-coverage-after-an-erasure).
+
+{/* Evidence: crates/registry-breg/src/migration.rs, MigrationError::HistoryCoverage and apply_verified_package();
+    crates/registry-breg/src/postgres/interlock.rs, verify_history_coverage_can_begin_successor();
+    crates/registry-breg/tests/postgres_history_migration.rs, unrecorded_coverage_gap_still_freezes_the_next_package;
+    crates/registry-bregctl/src/lib.rs, apply_reports_a_history_coverage_refusal_with_its_recovery. */}
+
 - `bregctl apply` reports a successor package with nothing to apply as
   `apply.package.empty_plan`, with the suggested action
   `correct_package_build`, instead of a package binding refusal. See

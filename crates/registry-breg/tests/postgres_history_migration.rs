@@ -408,7 +408,7 @@ async fn unrecorded_coverage_gap_still_freezes_the_next_package() {
         },
     ))
     .await;
-    assert_value_free(refused.err(), MigrationError::ApplyFailed);
+    assert_value_free(refused.err(), MigrationError::HistoryCoverage);
     let untouched = database
         .admin
         .query_one(

@@ -204,6 +204,9 @@ pub enum PostgresKernelError {
     CatalogInvariant(&'static str),
     #[error("Registry is unavailable for record operations")]
     RegistryUnavailable,
+    /// Retained history coverage does not admit a successor package.
+    #[error("retained history coverage does not admit a successor package")]
+    HistoryCoverageIncomplete,
 }
 
 impl From<tokio_postgres::Error> for PostgresKernelError {
