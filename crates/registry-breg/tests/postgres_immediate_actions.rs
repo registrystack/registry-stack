@@ -516,7 +516,8 @@ async fn create_only_action_requires_no_condition_and_replays_without_crud_grant
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_required_inputs_refuse() {
+async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_null_and_required_inputs_refuse(
+) {
     let project = registry_breg::contract::parse_project_yaml(include_bytes!(
         "fixtures/absent-optional-action-inputs.yaml"
     ))
@@ -602,6 +603,55 @@ async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_required_i
             2
         ),
         "an absent optional input leaves the patched field unchanged"
+    );
+
+    // An explicit null is a supplied value, not an omission: a fixed-effect
+    // action refuses it instead of skipping the field.
+    let null_on_create = invoke(
+        "/v1/actions/create-entry",
+        "create-with-null-note",
+        json!({"input": {"label": "Null entry", "note": null}}),
+    )
+    .await;
+    assert_eq!(
+        null_on_create.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        null_on_create.body
+    );
+    assert_eq!(null_on_create.body["code"], "request.invalid");
+    let condition = invoke(
+        "/v1/actions/update-entry/target-conditions",
+        "",
+        json!({"input": {"entryId": noted_id}}),
+    )
+    .await;
+    assert_eq!(condition.status, StatusCode::OK, "{}", condition.body);
+    let null_on_patch = invoke(
+        "/v1/actions/update-entry",
+        "update-with-null-note",
+        json!({
+            "input": {"entryId": noted_id, "status": "closed", "note": null},
+            "preconditions": condition.body["preconditions"].clone()
+        }),
+    )
+    .await;
+    assert_eq!(
+        null_on_patch.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        null_on_patch.body
+    );
+    assert_eq!(null_on_patch.body["code"], "request.invalid");
+    assert_eq!(
+        entry_values(&database, &registry, &noted_id).await,
+        (
+            "Second entry".to_owned(),
+            Some("kept".to_owned()),
+            Some("reviewed".to_owned()),
+            2
+        ),
+        "a refused explicit null leaves the stored record unchanged"
     );
 
     let missing_label = invoke(

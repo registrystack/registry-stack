@@ -2474,12 +2474,10 @@ async fn verify_action_requirements(
             .fields
             .get(&requirement.field)
             .ok_or(MutationError::InvalidRequest)?;
-        let expected_value = match (&requirement.equals, &requirement.equals_input) {
-            (Some(value), None) => value,
-            (None, Some(input)) => inputs.get(input).ok_or(MutationError::InvalidRequest)?,
-            _ => return Err(MutationError::InvalidRequest),
-        };
-        let expected = sql_value(expected_value, &field.field_type)?;
+        let expected = sql_value(
+            requirement_expected_value(requirement, inputs)?,
+            &field.field_type,
+        )?;
         // The exact row is already authorized and locked until commit. Use its
         // PostgreSQL type's equality, including decimal and timestamp semantics.
         let sql = format!(
@@ -2497,6 +2495,20 @@ async fn verify_action_requirements(
         }
     }
     Ok(())
+}
+
+/// The value a requirement compares its stored field against. The compiler
+/// admits `equalsInput` only for a required input; should the named input
+/// still be absent, the request is refused rather than the check skipped.
+fn requirement_expected_value<'a>(
+    requirement: &'a crate::model::CompiledActionRequirement,
+    inputs: &'a ActionInputs,
+) -> Result<&'a Value, MutationError> {
+    match (&requirement.equals, &requirement.equals_input) {
+        (Some(value), None) => Ok(value),
+        (None, Some(input)) => inputs.get(input).ok_or(MutationError::InvalidRequest),
+        _ => Err(MutationError::InvalidRequest),
+    }
 }
 
 async fn load_action_row(
@@ -3166,6 +3178,30 @@ mod tests {
             ),
             "an absent required input still refuses the request"
         );
+    }
+
+    /// The compiler refuses an `equalsInput` that names an optional input.
+    /// Should one still arrive without that input, the requirement refuses the
+    /// request instead of skipping the check the way an absent effect input
+    /// skips its field.
+    #[test]
+    fn an_absent_equality_input_refuses_instead_of_skipping_the_requirement() {
+        let requirement = crate::model::CompiledActionRequirement {
+            input: "parent".to_owned(),
+            entity_id: "parent".to_owned(),
+            field: "status".to_owned(),
+            equals: None,
+            equals_input: Some("expected-status".to_owned()),
+        };
+        let supplied = Map::from_iter([("expected-status".to_owned(), json!("active"))]);
+        assert_eq!(
+            requirement_expected_value(&requirement, &supplied).unwrap(),
+            &json!("active")
+        );
+        assert!(matches!(
+            requirement_expected_value(&requirement, &Map::new()),
+            Err(MutationError::InvalidRequest)
+        ));
     }
 
     #[test]
