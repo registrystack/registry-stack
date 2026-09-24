@@ -350,7 +350,8 @@ async fn openapi(
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let visible = visible_surfaces(&service, &claims, &options);
     let visible_actions = actions::visible_actions(&service, &claims, &options);
-    if visible.is_empty() && visible_actions.is_empty() {
+    let imports = ingestion::import_surfaces(&service, &claims, &options);
+    if visible.is_empty() && visible_actions.is_empty() && imports.is_empty() {
         return concealed();
     }
 
@@ -437,6 +438,7 @@ async fn openapi(
         crate::artifacts::append_review_completion_openapi(&mut paths, &mut schemas);
     }
     ingestion::append_openapi(&service, &visible, &mut paths, &mut schemas);
+    ingestion::append_openapi(&service, &imports, &mut paths, &mut schemas);
     Json(json!({
         "openapi": "3.1.0",
         "info": {"title": service.registry.registry_id(), "version": service.registry.version()},

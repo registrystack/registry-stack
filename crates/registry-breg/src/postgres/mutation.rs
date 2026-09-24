@@ -1097,7 +1097,7 @@ impl PostgresRecordMutationService {
         if input.chunk_algorithm_version != crate::data::RUN_CHUNK_ALGORITHM_VERSION {
             return Err(IngestionServiceError::RequestInvalid);
         }
-        if crate::data::ingestion_batch_route(&self.registry, &input.entity_id, &input.profile_id)
+        if crate::data::ingestion_route(&self.registry, &input.entity_id, &input.profile_id)
             .is_none()
         {
             return Err(IngestionServiceError::RequestInvalid);
@@ -1741,9 +1741,8 @@ impl PostgresRecordMutationService {
             &input.digest,
         )
         .map_err(|_| IngestionServiceError::RequestInvalid)?;
-        let route =
-            crate::data::ingestion_batch_route(&self.registry, &run.entity_id, &run.profile_id)
-                .ok_or(IngestionServiceError::Unavailable)?;
+        let route = crate::data::ingestion_route(&self.registry, &run.entity_id, &run.profile_id)
+            .ok_or(IngestionServiceError::Unavailable)?;
         let plan = MutationPlan::from_compiled(&self.registry, &route.id)
             .map_err(|_| IngestionServiceError::RequestInvalid)?;
         let response_fields = plan_readable_fields(&self.registry, &run.entity_id, &run.profile_id)

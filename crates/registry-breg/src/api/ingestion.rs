@@ -36,10 +36,11 @@ struct IngestionRoute {
     base: CompiledRoute,
 }
 
-/// Bind the ingestion-run routes of every batch-driven entity. The compiled
-/// batch route is resolved through the same lookup the client-side import plan
-/// uses, so a run and a direct batch submission of the same bytes authorize
-/// against the same operation.
+/// Bind the ingestion-run routes of every batch-driven or import-driven
+/// entity. The compiled bulk route is resolved through the same lookup the
+/// client-side import plan uses, so a run and a direct batch submission of the
+/// same bytes authorize against the same operation, and an `import` grant
+/// authorizes against its own route, which nothing else mounts.
 pub(super) fn routes(service: &HttpService) -> Router<Arc<HttpService>> {
     let mut app = Router::new();
     if service.mutations.is_none() {
@@ -49,13 +50,14 @@ pub(super) fn routes(service: &HttpService) -> Router<Arc<HttpService>> {
         if entity.batch.is_none() {
             continue;
         }
-        // Every profile that grants the batch operation resolves the same
-        // compiled route, so the first hit is the route the runs drive.
+        // Every profile that grants the bulk operation resolves the same
+        // compiled route, so the first hit is the route the runs drive. The
+        // compiler refuses `batch` beside `import` on one entity.
         let Some(base) = entity
             .access_profiles
             .keys()
             .filter_map(|profile_id| {
-                crate::data::ingestion_batch_route(&service.registry, &entity.id, profile_id)
+                crate::data::ingestion_route(&service.registry, &entity.id, profile_id)
             })
             .next()
         else {
@@ -954,10 +956,38 @@ fn parse_run_cursor(value: &str) -> Result<Uuid, QueryParseError> {
         .ok_or(QueryParseError::Invalid)
 }
 
+/// The authorized `import` surfaces of one caller. An `import` route is never
+/// mounted as a route of its own, so it is absent from the visible surfaces;
+/// the ingestion-run document is the only place it is advertised.
+pub(super) fn import_surfaces<'a>(
+    service: &'a HttpService,
+    claims: &VerifiedRequestClaims,
+    options: &QueryOptions,
+) -> Vec<AuthorizedSurface<'a>> {
+    if service.mutations.is_none() {
+        return Vec::new();
+    }
+    service
+        .registry
+        .routes()
+        .routes
+        .iter()
+        .filter(|route| route.operation == Operation::Import)
+        .filter(|route| {
+            service
+                .registry
+                .entities()
+                .get(&route.entity_id)
+                .is_some_and(|entity| entity.batch.is_some())
+        })
+        .filter_map(|route| authorize_route(service, route, claims, options))
+        .collect()
+}
+
 /// Advertise the ingestion routes of one selected profile. Like the attachment
 /// operations, they are appended to the compiled-route document only for a
-/// caller that holds the batch operation under the selected profile and
-/// answers with a principal, and they never appear in `/v1/registry`.
+/// caller that holds the batch or import operation under the selected profile
+/// and answers with a principal, and they never appear in `/v1/registry`.
 pub(super) fn append_openapi(
     service: &HttpService,
     surfaces: &[AuthorizedSurface<'_>],
@@ -969,12 +999,34 @@ pub(super) fn append_openapi(
     }
     let mut advertised = false;
     for surface in surfaces.iter().filter(|surface| {
-        surface.route.operation == Operation::Batch
-            && surface.read_path.is_none()
+        matches!(
+            surface.route.operation,
+            Operation::Batch | Operation::Import
+        ) && surface.read_path.is_none()
             && surface.context.principal().is_some()
     }) {
         let Some(batch) = surface.entity.batch.as_ref() else {
             continue;
+        };
+        let profile = &surface.entity.access_profiles[surface.context.selected_profile()];
+        let input_schema_id =
+            crate::artifacts::openapi_input_schema_id(&surface.entity.id, surface.route.operation);
+        // The batch input schema is collected from the visible routes; an
+        // import route is not one of them, so its input schema is added here.
+        if surface.route.operation == Operation::Import {
+            schemas.entry(input_schema_id.clone()).or_insert_with(|| {
+                crate::artifacts::openapi_entity_input_schema(
+                    surface.entity,
+                    Some(&profile.writable_fields),
+                )
+            });
+        }
+        let (allow_create, allow_patch) = match surface.route.operation {
+            Operation::Import => (true, false),
+            _ => (
+                profile.operations.contains(&Operation::Create),
+                profile.operations.contains(&Operation::Patch),
+            ),
         };
         let root = format!("/v1/records/{}/ingestion-runs", surface.entity.route);
         let operation_id = |name: &str| format!("{}.ingestion.{name}", surface.entity.id);
@@ -1098,7 +1150,12 @@ pub(super) fn append_openapi(
                     "required": true,
                     "content": {
                         "application/json": {
-                            "schema": submit_chunk_schema(surface.entity, batch)
+                            "schema": submit_chunk_schema(
+                                &input_schema_id,
+                                batch,
+                                allow_create,
+                                allow_patch,
+                            )
                         }
                     }
                 },
@@ -1335,24 +1392,27 @@ fn create_run_schema() -> Value {
 /// and the digests that bind the chunk to the announced input. The item
 /// count bound is the compiled batch maximum, the same ceiling the ordinary
 /// batch route enforces.
-fn submit_chunk_schema(entity: &CompiledEntity, batch: &crate::contract::BatchSource) -> Value {
+/// The chunk body: the batch item shapes the selected grant admits, each
+/// create item's data drawn from the grant's input schema.
+fn submit_chunk_schema(
+    input_schema_id: &str,
+    batch: &crate::contract::BatchSource,
+    allow_create: bool,
+    allow_patch: bool,
+) -> Value {
+    let items = crate::artifacts::openapi_batch_items_schema(
+        json!({"$ref": format!("#/components/schemas/{input_schema_id}")}),
+        batch.maximum_items,
+        allow_create,
+        allow_patch,
+    );
     json!({
         "type": "object",
         "additionalProperties": false,
         "required": ["chunkIndex", "items", "digest", "prefixDigest"],
         "properties": {
             "chunkIndex": {"type": "integer", "minimum": 0},
-            "items": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": batch.maximum_items,
-                "items": {
-                    "$ref": format!(
-                        "#/components/schemas/{}/properties/items/items",
-                        crate::artifacts::openapi_input_schema_id(&entity.id, Operation::Batch)
-                    )
-                }
-            },
+            "items": items,
             "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "prefixDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
         }
