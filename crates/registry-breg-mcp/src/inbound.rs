@@ -20,6 +20,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use registry_platform_audit::AuditKeyHasher;
+use registry_platform_authcommon::{parse_bearer_token, BearerParseError};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier, TokenVerifierConfig, VerifiedToken,
@@ -361,6 +362,9 @@ async fn admit(limiter: &TokenBucketLimiter, key: &str) -> Result<(), Refusal> {
     }
 }
 
+/// The one bearer credential a request carries. A header of another scheme,
+/// or too short to name one, is no bearer credential at all; a bearer header
+/// the shared parser refuses is an invalid token.
 fn bearer_token(headers: &HeaderMap) -> Result<&str, Refusal> {
     let mut values = headers.get_all(header::AUTHORIZATION).iter();
     let value = values.next().ok_or(Refusal::Missing)?;
@@ -368,15 +372,10 @@ fn bearer_token(headers: &HeaderMap) -> Result<&str, Refusal> {
         return Err(Refusal::InvalidToken);
     }
     let value = value.to_str().map_err(|_| Refusal::InvalidToken)?;
-    let (scheme, token) = value.split_once(' ').ok_or(Refusal::Missing)?;
-    if !scheme.eq_ignore_ascii_case("bearer") {
-        return Err(Refusal::Missing);
-    }
-    let token = token.trim_start_matches(' ');
-    if token.is_empty() || token.contains(' ') {
-        return Err(Refusal::InvalidToken);
-    }
-    Ok(token)
+    parse_bearer_token(value).map_err(|error| match error {
+        BearerParseError::Malformed | BearerParseError::InvalidScheme => Refusal::Missing,
+        _ => Refusal::InvalidToken,
+    })
 }
 
 /// The RFC 9728 metadata URL for a resource: the well-known prefix inserted
@@ -623,6 +622,28 @@ mod tests {
         );
     }
 
+    /// The separator is exactly one space, as every other Registry Stack
+    /// resource server parses it: a second space is not trimmed away.
+    #[tokio::test]
+    async fn a_bearer_token_after_two_spaces_is_refused_as_invalid() {
+        let authorization = authorization_server().await;
+        let router = server_for(&authorization, limits(10, 10));
+        let token =
+            authorization.issue_access_token(CHAT_HOST, "citizen-a", RESOURCE, SCOPE, now() + 300);
+        let request = Request::post("/mcp")
+            .header(header::AUTHORIZATION, format!("Bearer  {token}"))
+            .body(Body::empty())
+            .expect("request");
+        let response = router.clone().oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            challenge(&response),
+            format!("Bearer error=\"invalid_token\", resource_metadata=\"{METADATA}\"")
+        );
+        // The same token with one space is admitted.
+        assert_eq!(call(&router, Some(&token)).await.status(), StatusCode::OK);
+    }
+
     #[tokio::test]
     async fn a_client_that_is_not_admitted_is_refused() {
         let authorization = authorization_server().await;
@@ -863,5 +884,11 @@ mod tests {
             HeaderValue::from_static("Bearer a b"),
         );
         assert_eq!(bearer_token(&headers), Err(Refusal::InvalidToken));
+        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer  a"));
+        assert_eq!(bearer_token(&headers), Err(Refusal::InvalidToken));
+        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer"));
+        assert_eq!(bearer_token(&headers), Err(Refusal::Missing));
+        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("bearer a"));
+        assert_eq!(bearer_token(&headers), Ok("a"));
     }
 }
