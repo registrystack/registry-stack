@@ -1197,10 +1197,13 @@ fn validate_claims(
     {
         return Err(FixtureError::AuthorityWideningRefused);
     }
+    // The reserved consent claims come from the verified client's recipient
+    // set, never from a token, so a journey neither supplies nor needs them.
     let boundary_claims = profile
         .row_boundaries
         .iter()
         .map(|boundary| boundary.claim.as_str())
+        .filter(|name| !crate::consent::is_reserved_claim(name))
         .collect::<BTreeSet<_>>();
     if claims.direct_claims.iter().any(|(name, value)| {
         !boundary_claims.contains(name.as_str()) || value.verified_value().is_err()
@@ -1257,6 +1260,7 @@ fn action_profile_from_grant(grant: &CompiledActionPermission) -> AccessProfileS
             .flat_map(|target| target.row_boundaries.iter().cloned())
             .collect(),
         membership_boundaries: Vec::new(),
+        require_consent: Vec::new(),
         request_visibility: None,
         lookups: Vec::new(),
         read_paths: Vec::new(),
@@ -3210,6 +3214,7 @@ fn assert_exact_claims(
     let actual_names = profile
         .row_boundaries
         .iter()
+        .filter(|boundary| !crate::consent::is_reserved_claim(&boundary.claim))
         .filter(|boundary| mapped.direct_claim(&boundary.claim).is_some())
         .map(|boundary| boundary.claim.clone())
         .collect::<BTreeSet<_>>();
@@ -6348,6 +6353,69 @@ mod tests {
         assert_eq!(
             assert_exact_claims(&claims, &profile, &exact, &widened_scopes),
             Err(FixtureError::AuthorityWideningRefused)
+        );
+    }
+
+    #[test]
+    fn fixture_claims_leave_reserved_consent_claims_to_the_verified_client() {
+        let profile: AccessProfileSource = serde_json::from_value(json!({
+            "id": "recipient-feed",
+            "principalClaim": "registry_principal",
+            "actorKind": "service",
+            "requesterClients": ["wfp-scope"],
+            "requiredScopes": ["consent:read"],
+            "operations": ["list"],
+            "rowBoundaries": [
+                {"field": "recipient", "claim": "registry:recipients", "operator": "in"},
+                {"field": "decision", "claim": "registry:consent-decisions:consent-decision", "operator": "in"}
+            ]
+        }))
+        .unwrap();
+        let claims: ClaimsSource = serde_json::from_value(json!({
+            "principal": "fixture-recipient",
+            "scopes": ["consent:read"],
+            "actorKind": "service",
+            "requesterClient": "wfp-scope"
+        }))
+        .unwrap();
+        assert_eq!(
+            validate_claims(&claims, &profile, ExpectedOutcome::Success),
+            Ok(())
+        );
+        for reserved in [
+            "registry:recipients",
+            "registry:consent-decisions:consent-decision",
+        ] {
+            let mut supplied = claims.clone();
+            supplied.direct_claims.insert(
+                reserved.to_owned(),
+                serde_json::from_value(json!(["wfp"])).unwrap(),
+            );
+            assert_eq!(
+                validate_claims(&supplied, &profile, ExpectedOutcome::Success),
+                Err(FixtureError::AuthorityWideningRefused)
+            );
+        }
+        let mapped = VerifiedRequestClaims::authenticated(
+            "registry_principal",
+            "fixture-recipient",
+            claims.scopes.clone(),
+            None,
+            BTreeMap::new(),
+        )
+        .and_then(|mapped| {
+            mapped.with_consent_claims(
+                BTreeSet::from(["wfp".to_owned()]),
+                &BTreeMap::from([(
+                    "consent-decision".to_owned(),
+                    BTreeSet::from(["given".to_owned(), "withdrawn".to_owned()]),
+                )]),
+            )
+        })
+        .unwrap();
+        assert_eq!(
+            assert_exact_claims(&claims, &profile, &mapped, &claims.scopes),
+            Ok(())
         );
     }
 

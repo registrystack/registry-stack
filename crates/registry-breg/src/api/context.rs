@@ -86,6 +86,7 @@ pub struct VerifiedRequestClaims {
     grant: Option<GrantClaims>,
     grant_subjects: BTreeMap<String, Value>,
     human_identity: Option<registry_review_client::HumanIdentity>,
+    recipients: BTreeSet<String>,
 }
 
 impl VerifiedRequestClaims {
@@ -114,6 +115,7 @@ impl VerifiedRequestClaims {
             grant: None,
             grant_subjects: BTreeMap::new(),
             human_identity: None,
+            recipients: BTreeSet::new(),
         })
     }
 
@@ -158,6 +160,40 @@ impl VerifiedRequestClaims {
         Ok(self)
     }
 
+    /// Fill the reserved consent claims from the verified client's recipient
+    /// set and the compiled feed decision sets. Any same-named value already
+    /// present is discarded first: no token supplies a reserved claim. An
+    /// empty recipient set leaves `registry:recipients` absent, so a feed
+    /// boundary on it refuses the request.
+    pub(crate) fn with_consent_claims(
+        mut self,
+        recipients: BTreeSet<String>,
+        decisions: &BTreeMap<String, BTreeSet<String>>,
+    ) -> Result<Self, VerifiedContextError> {
+        self.direct_claims
+            .retain(|name, _| !crate::consent::is_reserved_claim(name));
+        if !recipients.is_empty() {
+            self.direct_claims.insert(
+                crate::consent::RECIPIENTS_CLAIM.to_owned(),
+                VerifiedClaimValue::direct_string_set(recipients.iter().cloned())?,
+            );
+        }
+        for (entity, values) in decisions {
+            self.direct_claims.insert(
+                crate::consent::decisions_claim(entity),
+                VerifiedClaimValue::direct_string_set(values.iter().cloned())?,
+            );
+        }
+        self.recipients = recipients;
+        Ok(self)
+    }
+
+    /// The consent recipients the verified client acts for: its organization
+    /// and every group containing it. Empty for an unmapped client.
+    pub(crate) fn recipients(&self) -> &BTreeSet<String> {
+        &self.recipients
+    }
+
     #[must_use]
     pub fn anonymous() -> Self {
         Self {
@@ -172,6 +208,7 @@ impl VerifiedRequestClaims {
             grant: None,
             grant_subjects: BTreeMap::new(),
             human_identity: None,
+            recipients: BTreeSet::new(),
         }
     }
 
@@ -234,6 +271,7 @@ impl fmt::Debug for VerifiedRequestClaims {
                 &self.actor_subject.as_ref().map(|_| "<redacted>"),
             )
             .field("task_grant", &self.grant.as_ref().map(|_| "<redacted>"))
+            .field("recipient_count", &self.recipients.len())
             .finish()
     }
 }
@@ -303,6 +341,7 @@ pub struct AuthorizedRequestContext {
     task_grant: Option<TaskGrantBinding>,
     grant_audit: Option<crate::audit::GrantAuditContext>,
     human_identity: Option<registry_review_client::HumanIdentity>,
+    recipients: BTreeSet<String>,
 }
 
 impl AuthorizedRequestContext {
@@ -323,7 +362,19 @@ impl AuthorizedRequestContext {
             task_grant: None,
             grant_audit: None,
             human_identity: None,
+            recipients: BTreeSet::new(),
         }
+    }
+
+    /// Carry the verified client's consent recipient set into the session
+    /// context every consent probe reads.
+    pub(crate) fn with_recipients(mut self, claims: &VerifiedRequestClaims) -> Self {
+        self.recipients = claims.recipients().clone();
+        self
+    }
+
+    pub(crate) fn recipients(&self) -> &BTreeSet<String> {
+        &self.recipients
     }
 
     pub(crate) fn with_submitter_targets(
@@ -414,6 +465,7 @@ impl fmt::Debug for AuthorizedRequestContext {
                 "task_grant",
                 &self.task_grant.as_ref().map(|_| "<redacted>"),
             )
+            .field("recipient_count", &self.recipients.len())
             .finish()
     }
 }

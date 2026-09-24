@@ -2582,7 +2582,8 @@ fn authorize_direct_route_base<'a>(
         row_boundaries,
     )
     .with_task_grant(task_grant_binding(profile, claims).ok()?)
-    .with_grant_audit(claims);
+    .with_grant_audit(claims)
+    .with_recipients(claims);
     let submitter_targets = profile
         .submitter_targets
         .iter()
@@ -2679,7 +2680,8 @@ fn authorize_read_path_route<'a>(
             row_boundaries,
         )
         .with_task_grant(task_grant_binding(profile, claims).ok()?)
-        .with_grant_audit(claims),
+        .with_grant_audit(claims)
+        .with_recipients(claims),
         readable_fields,
         read_path: Some(read_path),
     })

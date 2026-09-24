@@ -203,7 +203,12 @@ impl AuthorityInventory {
         surface: &str,
         boundaries: &[RowBoundarySource],
     ) -> Result<(), AuthorityInventoryError> {
-        for boundary in boundaries {
+        // The engine fills reserved consent claims from the verified client;
+        // no token supplies them, so they are never read from one.
+        for boundary in boundaries
+            .iter()
+            .filter(|boundary| !crate::consent::is_reserved_claim(&boundary.claim))
+        {
             let field_type = compiled_authority_field_type(entity, &boundary.field)
                 .ok_or(AuthorityInventoryError::BoundaryFieldNotCompiled)?;
             self.claim(

@@ -26,7 +26,7 @@ use crate::api::{VerifiedClaimValue, VerifiedRequestClaims};
 pub(crate) use crate::authority::compiled_authority_field_type;
 use crate::authority::{authority_inventory, AuthorityInventoryError, DirectClaimExpectation};
 use crate::contract::FieldTypeSource;
-use crate::model::CompiledRegistry;
+use crate::model::{CompiledRecipients, CompiledRegistry};
 
 const MAX_CLAIM_NAME_BYTES: usize = 128;
 const MAX_SCOPE_VALUES: usize = 128;
@@ -146,6 +146,8 @@ pub struct RegistryAuthenticator {
     direct_claims: BTreeMap<String, DirectClaimExpectation>,
     contextual_claims: ClaimNames,
     trusted_actors: BTreeMap<String, String>,
+    recipients: CompiledRecipients,
+    consent_decisions: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl RegistryAuthenticator {
@@ -162,6 +164,7 @@ impl RegistryAuthenticator {
         let audience = verifier_config.audiences[0].clone();
         let scope_claim = verifier_config.scope_claim.clone();
         let issuer = verifier_config.issuer.clone();
+        let consent_decisions = crate::consent::feed_decisions(registry.entities());
         Ok(Self {
             verifier: TokenVerifier::new(verifier_config, key_source),
             last_key_refusal_warning: Mutex::new(None),
@@ -173,6 +176,8 @@ impl RegistryAuthenticator {
             direct_claims,
             contextual_claims: claims.contextual_claims,
             trusted_actors: claims.trusted_actors,
+            recipients: registry.recipients().clone(),
+            consent_decisions,
         })
     }
 
@@ -305,6 +310,12 @@ impl RegistryAuthenticator {
         } else {
             direct_claims
         };
+        // The recipient set comes from the same verified matched client that
+        // `requesterClients` checks, never from a token claim or a header.
+        let recipients = requester_client
+            .as_deref()
+            .map(|client| self.recipients.recipient_set(client))
+            .unwrap_or_default();
 
         VerifiedRequestClaims::authenticated(
             self.principal_claim.clone(),
@@ -323,6 +334,7 @@ impl RegistryAuthenticator {
             )
         })
         .and_then(|claims| claims.with_human_identity(human_identity))
+        .and_then(|claims| claims.with_consent_claims(recipients, &self.consent_decisions))
         .map_err(|_| AuthenticationError::InvalidClaims)
     }
 }
@@ -547,6 +559,16 @@ fn validate_claim_mapping(
         {
             return Err(AuthenticationConfigError::InvalidClaimMapping);
         }
+    }
+    // A recipient's client that the verifier would refuse can never read under
+    // consent, so a mismatch is a configuration error, not a silent denial.
+    if registry.recipients().clients().any(|client| {
+        !verifier
+            .allowed_clients
+            .iter()
+            .any(|allowed| allowed == client)
+    }) {
+        return Err(AuthenticationConfigError::InvalidClaimMapping);
     }
     if inventory
         .principal_claims

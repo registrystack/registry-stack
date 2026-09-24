@@ -2286,6 +2286,7 @@ fn strict_claim_context(
     .map(|claims| claims.with_grant_audit(context.grant_audit().cloned()))
     .and_then(|claims| claims.with_human_identity(context.human_identity().cloned()))
     .and_then(|claims| claims.with_api_submitter_targets(registry, context))
+    .and_then(|claims| claims.with_recipients(context.recipients().clone()))
     .and_then(|claims| match context.task_grant() {
         Some(grant) => claims.with_task_grant(grant.clone()),
         None => Ok(claims),

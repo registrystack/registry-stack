@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/breg-explain/v1alpha2/QueriesExplanation.schema.json",
+  "$id": "https://registrystack.org/breg-explain/v1alpha3/QueriesExplanation.schema.json",
   "title": "QueriesExplanation",
   "description": "Wire shape of `explanation` for `bregctl explain queries`. Every node is reconstructed field by field by bregctl and is pinned in full, except `fieldType`, which is a passthrough of the compiled field-type source and is declared opaque wherever it appears.",
   "type": "object",
@@ -25,7 +25,7 @@
   },
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha2"
+      "const": "registry.registrystack.org/breg-explain/v1alpha3"
     },
     "kind": {
       "const": "QueriesExplanation"

@@ -1148,20 +1148,9 @@ fn snapshot_where_sql(
             }
         }
     }
-    for (index, boundary) in crate::membership::boundaries(entity, claims.access_profile())
-        .iter()
-        .enumerate()
-    {
-        let field = fields.field(&boundary.field)?;
-        predicates.push(format!(
-            "registry_context.{}({})",
-            crate::generated_ddl::quote_identifier(&crate::membership::function_name(
-                &entity.id,
-                claims.access_profile(),
-                index
-            )),
-            field_typed_sql(field)?
-        ));
+    for probe in crate::membership::row_probes(entity, claims.access_profile()) {
+        let field = fields.field(&probe.field)?;
+        predicates.push(probe.sql(&field_typed_sql(field)?));
     }
     if let Some(instant) = &query.temporal_instant {
         let temporal = entity
@@ -1554,6 +1543,7 @@ fn strict_claim_context(
         row_boundaries,
     )
     .and_then(|claims| claims.with_api_submitter_targets(registry, context))
+    .and_then(|claims| claims.with_recipients(context.recipients().clone()))
     .map_err(|_| ReadServiceError::Unavailable)
 }
 

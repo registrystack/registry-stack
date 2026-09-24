@@ -1,11 +1,11 @@
 ---
-title: Membership read boundaries
-description: How a read grant requires a current active membership record, what PostgreSQL enforces, and which operations and combinations the compiler refuses.
+title: Membership and consent read boundaries
+description: How a read grant requires a current active membership record or the subject's recorded consent, what PostgreSQL enforces, and which operations and combinations the compiler refuses.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-08"
+last_reviewed: "2026-09-24"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -16,6 +16,11 @@ program, or team responsible for a record. Memberships are ordinary governed rec
 steward creates or deactivates them through the normal mutation API, and the reader keeps the same
 identity token throughout. Base Registry Engine (BReg) compiles the requirement into the database,
 so the same model works for facility, document, or asset registries without new server code.
+
+A read grant can also require that the subject of a row consented to its disclosure to the caller's
+organization, for the request's purpose, before the row is returned. Consent decisions are ordinary
+create-only records, and the same database-side model enforces them. [Consent-gated
+reads](#consent-gated-reads) covers that boundary.
 
 ## When to reach for one
 
@@ -107,13 +112,101 @@ row-level-security bypass.
     crates/registry-breg/src/contract.rs, MembershipBoundarySource;
     products/breg/membership-access.md. */}
 
+## Consent-gated reads
+
+A membership boundary asks who the caller is affiliated with. A consent boundary asks what the
+row's subject decided: whether they agreed that this recipient may read their record for this
+purpose, under this profile. It is not a lawful-basis engine, a consent-request workflow, or a
+credential. The registry records what the subject decided and refuses a gated read the recorded
+decisions do not cover.
+
+### Who the recipient is
+
+A project declares `recipients`: organizations, each with the OAuth clients it reads through, and
+groups of organizations. The caller's recipient set comes from the verified requester client, the
+token's `azp` or `client_id`: the organization that lists that client plus every group it belongs
+to. A token cannot supply the set. The engine discards any `registry:recipients` or
+`registry:consent-decisions:` claim a token carries and fills both from its own configuration, and
+a client no organization lists has an empty set, so every consent check it reaches fails closed.
+The server refuses to start when a recipient client is missing from the issuer's `allowedClients`.
+
+### When a row is disclosed
+
+A permission lists `requireConsent` checks, each naming a consent record and the row key it
+matches: the row's own id, or a stored reference to the subject. A row is disclosed while, for
+every check, a live give exists whose subject is the row's key, whose scope is the gated profile
+id, whose purpose is the request's verified purpose, and whose recipient is in the caller's set.
+
+Decisions are ordered by their capped time, the earlier of the declared start and the moment the
+registry recorded them. A withdrawal whose capped time is at or after a give's ends that give, and
+on a tie the withdrawal wins. So a future-dated give cannot outrank a withdrawal recorded after it,
+and a backdated give recorded after a withdrawal is superseded by it: a renewed give needs a
+current start.
+A give ends at the earlier of its `until` and its capped time plus the record's `maxDuration`.
+Expiry is computed at read time, and a withdrawal takes effect for transactions that start after it
+commits, with no token change, cache flush, or restart.
+
+The profile id is the scope a subject agreed to. Removing `requireConsent` or widening a gated
+profile in place would read under a scope the subject never saw, so the supported change is a new
+profile id with the old one listed under `retiredConsentScopes`. `bregctl diff` marks the in-place
+change for review and attaches a `reason`; that reason is a review aid in tooling output, not a
+runtime guarantee. Consent codes are append-only: stored decisions keep their recipient and scope
+codes, so a recipient is retired by removing its clients, not its entry.
+
+### What the compiler refuses
+
+| Combination | Diagnostic |
+| --- | --- |
+| Writes, actions, reviewed changes, or request lifecycle grants on a gated permission | `consent.require.read_only` |
+| An anonymous gated profile | `consent.require.anonymous` |
+| A gated profile without `requesterClients`, or with a client no recipient organization lists | `consent.require.clients` |
+| A spatial bbox permission, which uses a separate database authority role | `consent.require.spatial_unsupported` |
+| Bulk data export of a gated permission | `consent.require.export_unsupported` |
+| Exporting a gated profile as an Evidence source | `consent.require.evidence_source_unsupported` |
+| A read path that reaches a gated entity through a later step | `consent.require.read_path_target` |
+| A profile granting `create` or `batch` on a consent record, which only actions declaring `consentIssuer` write | `consent.record.direct_write` |
+| A consent record no permission requires yet | `consent.require.unused` |
+
+Every read operation of a gated permission is checked: get, lookup, list, count, snapshot,
+revisions, continuation cursors, and read paths rooted at the gated entity. A row without consent
+answers `404` exactly like an absent row.
+
+### What it does not enforce
+
+A profile without `requireConsent` bypasses consent. `bregctl check` reports
+`access.consent.ungated_client` when an ungated profile reads a gated entity while it admits any
+client, or a client a gated profile admits; give each side its own clients. A recipient reads the
+decisions addressed to it through a feed profile, and that feed shows withdrawals and
+invalidations addressed to it, including one for a subject it never received a give for; refusals
+never reach it. Assisted capture and link provisioning rest on staff integrity and the audit
+journal. List response timing is not equalized, so a caller measuring many requests may infer the
+size of a gated population. Consent gates rows, not fields.
+
+### How PostgreSQL enforces it
+
+Each consent record compiles to one `SECURITY INVOKER` set-returning probe function, evaluated
+once per query under the same processing-only marker model as membership boundaries. The runtime
+sets the caller's recipients in the record transaction from the verified client, never from a
+token claim or request header, and the probe matches nothing when that setting is missing or
+malformed. The compiler also creates the indexes the probe reads, and a runtime refuses a probe
+whose catalog definition was altered.
+
+{/* Evidence: crates/registry-breg/src/consent.rs, validate_recipients(), is_reserved_claim() and feed_decisions();
+    crates/registry-breg/src/model.rs, recipient_set();
+    crates/registry-breg/src/access.rs, access.consent.ungated_client;
+    crates/registry-breg/src/tooling.rs, GATED_SCOPE_WIDENED and UNGATED_SCOPE;
+    crates/registry-breg/tests/postgres_consent_access.rs;
+    products/breg/consent.md. */}
+
 ## Next
 
 - [Control access per profile](../../configure/breg-access/) to author the profile, its scopes, and
-  the permission the boundary sits in.
+  the permission the boundary sits in, including a consent-gated read.
 - [Base Registry Engine configuration reference](../../reference/breg-configuration/) for every
   permission key a fragment names.
 - [Modeling patterns for registries](../registry-modeling-patterns/) for the record structures a
   membership model joins.
 - [Current membership access](https://github.com/registrystack/registry-stack/blob/main/products/breg/membership-access.md)
   for the full contract and its fixture project.
+- [Consent-gated reads](https://github.com/registrystack/registry-stack/blob/main/products/breg/consent.md)
+  for the full consent contract, its generated module, and its fixture projects.

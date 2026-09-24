@@ -42,6 +42,7 @@ pub(crate) fn compile_immediate_actions(
     entities: &BTreeMap<String, CompiledEntity>,
     profiles: &[ProjectAccessProfileSource],
     assets: &[crate::contract::ModuleAssetSource],
+    vocabularies: &BTreeMap<String, Vec<String>>,
 ) -> Result<CompiledActionInventory, Vec<Diagnostic>> {
     let mut errors = Vec::new();
     validate_action_permission_sources(actions, profiles, &mut errors);
@@ -91,10 +92,21 @@ pub(crate) fn compile_immediate_actions(
     if !errors.is_empty() {
         return Err(errors);
     }
+    let input_vocabularies = compiled_actions
+        .iter()
+        .flat_map(|action| &action.inputs)
+        .filter_map(|input| match &input.field_type {
+            FieldTypeSource::VocabularyCode { vocabulary, .. } => vocabularies
+                .get(vocabulary)
+                .map(|codes| (vocabulary.clone(), codes.iter().cloned().collect())),
+            _ => None,
+        })
+        .collect();
     Ok(CompiledActionInventory {
         actions: compiled_actions,
         routes,
         access,
+        input_vocabularies,
     })
 }
 
@@ -108,6 +120,7 @@ fn compile_action(
 ) -> Option<CompiledAction> {
     let action = &collected.source;
     validate_id(&action.id, "actions[].id", errors);
+    crate::consent::validate_action(action, entities, profiles, errors);
     if action.inputs.is_empty() {
         errors.push(Diagnostic::error(
             "action.inputs.empty",
@@ -180,11 +193,11 @@ fn compile_action(
         route: format!("/v1/actions/{}", action.id),
         condition_route,
         contract_fingerprint: contract_fingerprint(
-            action,
+            &action.id,
             entities,
             &inputs,
             (&effects, handler.as_ref()),
-            &requires,
+            (&requires, action.consent_issuer),
             &permissions,
         ),
         handler,
@@ -197,6 +210,7 @@ fn compile_action(
         maximum_targets: MAX_CHANGE_REQUEST_TARGETS,
         maximum_field_mutations: MAX_CHANGE_REQUEST_FIELD_MUTATIONS,
         maximum_snapshot_bytes: MAX_CHANGE_REQUEST_SNAPSHOT_BYTES,
+        consent_issuer: action.consent_issuer,
     })
 }
 
@@ -1635,6 +1649,7 @@ fn compile_permissions(
                     "anonymous access profiles cannot invoke immediate actions",
                 ));
             }
+            crate::consent::validate_action_permission(profile, grant, entities, errors);
             if !grant.entity.is_empty() {
                 errors.push(Diagnostic::error(
                     "action.permission.exclusive",
@@ -1888,6 +1903,7 @@ fn validate_permission_access_requirements(
             spatial_queries: None,
             row_boundaries: row_boundaries.to_vec(),
             membership_boundaries: Vec::new(),
+            require_consent: Vec::new(),
             request_visibility: None,
             lookups: Vec::new(),
             read_paths: Vec::new(),
@@ -1987,6 +2003,7 @@ fn entity_permission_fields_empty(grant: &crate::contract::AccessPermissionSourc
         && grant.sortable_fields.is_empty()
         && grant.row_boundaries.is_empty()
         && grant.membership_boundaries.is_empty()
+        && grant.require_consent.is_empty()
         && grant.lookups.is_empty()
         && grant.read_paths.is_empty()
         && grant.apply_targets.is_empty()
@@ -1997,15 +2014,112 @@ fn entity_permission_fields_empty(grant: &crate::contract::AccessPermissionSourc
         && !grant.allow_data_export
 }
 
+/// Whether `after` differs from `before` only by vocabulary codes added to its
+/// inputs or to the fields of the entities it targets, so every request the
+/// previous contract accepted keeps the same meaning. An input may gain only
+/// codes new to its vocabulary in this revision: one that starts accepting a
+/// code its vocabulary already had, such as a withdrawal that starts giving,
+/// changes what the action does. Any other difference, including a fingerprint
+/// an earlier compiler derived differently, is not.
+#[cfg(feature = "runtime")]
+pub(crate) fn contract_only_adds_vocabulary_codes(
+    (before, previous_vocabularies): (&CompiledAction, &BTreeMap<String, BTreeSet<String>>),
+    previous_entities: &BTreeMap<String, CompiledEntity>,
+    (after, vocabularies): (&CompiledAction, &BTreeMap<String, BTreeSet<String>>),
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> bool {
+    let inputs = after
+        .inputs
+        .iter()
+        .map(|input| {
+            let mut input = input.clone();
+            if let Some(previous) = before.inputs.iter().find(|other| other.id == input.id) {
+                if input_gains_only_new_codes(
+                    &previous.field_type,
+                    &input.field_type,
+                    previous_vocabularies,
+                    vocabularies,
+                ) {
+                    input.field_type = previous.field_type.clone();
+                }
+            }
+            input
+        })
+        .collect::<Vec<_>>();
+    let entities = entities
+        .iter()
+        .map(|(entity_id, entity)| {
+            let mut entity = entity.clone();
+            if let Some(previous) = previous_entities.get(entity_id) {
+                for (field_id, field) in &mut entity.fields {
+                    if let Some(previous_field) = previous.fields.get(field_id) {
+                        if field
+                            .field_type
+                            .keeps_vocabulary_codes_of(&previous_field.field_type)
+                        {
+                            field.field_type = previous_field.field_type.clone();
+                        }
+                    }
+                }
+            }
+            (entity_id.clone(), entity)
+        })
+        .collect::<BTreeMap<_, _>>();
+    contract_fingerprint(
+        &after.id,
+        &entities,
+        &inputs,
+        (&after.effects, after.handler.as_ref()),
+        (&after.requires, after.consent_issuer),
+        &after.permissions,
+    ) == before.contract_fingerprint
+}
+
+/// Whether an action input keeps every code it accepted and gains only codes
+/// its vocabulary did not have before. A predecessor that recorded no codes for
+/// the vocabulary cannot tell, so the input fails closed to a reviewed change.
+#[cfg(feature = "runtime")]
+fn input_gains_only_new_codes(
+    previous: &FieldTypeSource,
+    after: &FieldTypeSource,
+    previous_vocabularies: &BTreeMap<String, BTreeSet<String>>,
+    vocabularies: &BTreeMap<String, BTreeSet<String>>,
+) -> bool {
+    let (
+        FieldTypeSource::VocabularyCode {
+            vocabulary,
+            values: previous_values,
+        },
+        FieldTypeSource::VocabularyCode { values, .. },
+    ) = (previous, after)
+    else {
+        return false;
+    };
+    let (Some(previous_codes), Some(codes)) = (
+        previous_vocabularies.get(vocabulary),
+        vocabularies.get(vocabulary),
+    ) else {
+        return false;
+    };
+    after.keeps_vocabulary_codes_of(previous)
+        && values
+            .iter()
+            .filter(|value| !previous_values.contains(value))
+            .all(|value| codes.contains(value) && !previous_codes.contains(value))
+}
+
 fn contract_fingerprint(
-    action: &ActionSource,
+    action_id: &str,
     entities: &BTreeMap<String, CompiledEntity>,
     inputs: &[CompiledActionInput],
     (effects, handler): (
         &[CompiledActionEffect],
         Option<&crate::model::CompiledActionHandler>,
     ),
-    requires: &[CompiledActionRequirement],
+    (requires, consent_issuer): (
+        &[CompiledActionRequirement],
+        Option<crate::contract::ConsentIssuerSource>,
+    ),
     permissions: &[CompiledActionPermission],
 ) -> String {
     let target_entities = effects
@@ -2027,7 +2141,7 @@ fn contract_fingerprint(
         .collect::<BTreeMap<_, _>>();
     let mut payload = json!({
         "version": 1,
-        "id": action.id,
+        "id": action_id,
         "inputs": inputs,
         "targetEntities": target_contracts,
         "effects": effects,
@@ -2044,6 +2158,11 @@ fn contract_fingerprint(
     // Preserve existing action identities when no acceptance requirement is added.
     if !requires.is_empty() {
         payload["requires"] = json!(requires);
+    }
+    // Only actions that create consent rows carry an issuer, so every other
+    // action keeps its identity.
+    if let Some(issuer) = consent_issuer {
+        payload["consentIssuer"] = json!(issuer);
     }
     let bytes = canonicalize_json(&payload).expect("compiled immediate action canonicalizes");
     let digest = Sha256::digest(bytes);

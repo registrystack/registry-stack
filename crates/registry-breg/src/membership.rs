@@ -230,11 +230,64 @@ pub(crate) fn boundaries<'a>(
         .unwrap_or_default()
 }
 
-#[cfg(feature = "runtime")]
-pub(crate) fn fields(entity: &CompiledEntity, profile: &str) -> BTreeSet<String> {
+/// One per-row probe: a `registry_context` helper tested against the key
+/// taken from one field of the protected row. Membership and consent probes
+/// share this shape, and every read path that filters rows takes its probes
+/// from [`row_probes`] and renders them with [`RowProbe::sql`], so no path can
+/// apply one gate and forget the other.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RowProbe {
+    pub(crate) function: String,
+    /// The protected row's field holding the key. The canonical id field
+    /// names the row's own `record_id`.
+    pub(crate) field: String,
+    pub(crate) form: RowProbeForm,
+}
+
+/// How a probe's helper answers for a key.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RowProbeForm {
+    /// `helper(key) RETURNS boolean`, called once per row.
+    PerKey,
+    /// `helper() RETURNS SETOF uuid`: every key that passes. The call is
+    /// uncorrelated, so PostgreSQL evaluates it once per query and tests each
+    /// row against the result.
+    KeySet,
+}
+
+impl RowProbe {
+    /// The boolean SQL expression testing `key` against this probe.
+    pub(crate) fn sql(&self, key: &str) -> String {
+        let function = quote_identifier(&self.function);
+        match self.form {
+            RowProbeForm::PerKey => format!("registry_context.{function}({key})"),
+            RowProbeForm::KeySet => format!(
+                "{key} IN (SELECT consented.subject FROM registry_context.{function}() AS consented(subject))"
+            ),
+        }
+    }
+}
+
+/// Every per-row probe of one profile: membership boundaries first, then
+/// consent requirements.
+pub(crate) fn row_probes(entity: &CompiledEntity, profile: &str) -> Vec<RowProbe> {
     boundaries(entity, profile)
         .iter()
-        .map(|boundary| boundary.field.clone())
+        .enumerate()
+        .map(|(index, boundary)| RowProbe {
+            function: function_name(&entity.id, profile, index),
+            field: boundary.field.clone(),
+            form: RowProbeForm::PerKey,
+        })
+        .chain(crate::consent::row_probes(entity, profile))
+        .collect()
+}
+
+#[cfg(feature = "runtime")]
+pub(crate) fn fields(entity: &CompiledEntity, profile: &str) -> BTreeSet<String> {
+    row_probes(entity, profile)
+        .into_iter()
+        .map(|probe| probe.field)
         .collect()
 }
 
@@ -248,21 +301,18 @@ pub(crate) fn function_name(entity: &str, profile: &str, index: usize) -> String
     format!("membership_{}", hex_prefix(&hash.finalize(), 12))
 }
 
+/// The probes of one form, rendered against the protected row and joined
+/// with `AND`; empty when the profile has none of that form.
 pub(crate) fn predicate(
     entity: &CompiledEntity,
     profile: &str,
+    form: RowProbeForm,
     mut root_value: impl FnMut(&str) -> String,
 ) -> String {
-    boundaries(entity, profile)
+    row_probes(entity, profile)
         .iter()
-        .enumerate()
-        .map(|(index, boundary)| {
-            format!(
-                "registry_context.{}({})",
-                quote_identifier(&function_name(&entity.id, profile, index)),
-                root_value(&boundary.field)
-            )
-        })
+        .filter(|probe| probe.form == form)
+        .map(|probe| probe.sql(&root_value(&probe.field)))
         .collect::<Vec<_>>()
         .join(" AND ")
 }

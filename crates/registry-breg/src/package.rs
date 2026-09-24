@@ -27,9 +27,9 @@ use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::generated_ddl::{
     add_blind_index_column_statement, add_column_statement, drop_spatial_bbox_function_statement,
     drop_spatial_candidate_view_statement, generate_ddl_with_actions, quote_identifier,
-    set_column_not_null_statement, spatial_bbox_function_statement, spatial_projection_fields,
-    spatial_projection_statements, DdlPolicy, DdlPolicyRole, DdlStatement, DdlStatementKind,
-    DdlTable,
+    replace_vocabulary_check_statement, set_column_not_null_statement,
+    spatial_bbox_function_statement, spatial_projection_fields, spatial_projection_statements,
+    DdlPolicy, DdlPolicyRole, DdlStatement, DdlStatementKind, DdlTable,
 };
 use crate::history_schema::{
     serialize_descriptor, HistoryEntityDescriptor, HistoryLifecycleDescriptor,
@@ -46,7 +46,8 @@ use crate::migration_plan::{
 };
 use crate::model::{
     CompiledAccessInventory, CompiledActionInventory, CompiledEntity, CompiledQueryInventory,
-    CompiledQueryOperation, CompiledQueryTemporalValueKind, CompiledRouteInventory,
+    CompiledQueryOperation, CompiledQueryTemporalValueKind, CompiledRecipients,
+    CompiledRouteInventory,
 };
 use crate::physical_names::PhysicalNameInventory;
 use crate::CompiledRegistry;
@@ -216,6 +217,8 @@ pub struct CompiledRegistryMigrationBaseline {
     pub queries: CompiledQueryInventory,
     #[serde(default, skip_serializing_if = "CompiledActionInventory::is_empty")]
     pub actions: CompiledActionInventory,
+    #[serde(default, skip_serializing_if = "CompiledRecipients::is_empty")]
+    pub recipients: CompiledRecipients,
 }
 
 impl CompiledRegistryMigrationBaseline {
@@ -231,6 +234,7 @@ impl CompiledRegistryMigrationBaseline {
             access: compiled.access().clone(),
             queries: compiled.queries().clone(),
             actions: compiled.actions().clone(),
+            recipients: compiled.recipients().clone(),
         }
     }
 }
@@ -281,6 +285,7 @@ pub enum CompiledRegistryChangeCode {
     FieldAddedRequired,
     FieldRemoved,
     FieldTypeChanged,
+    FieldVocabularyCodesAdded,
     FieldPhysicalNameChanged,
     FieldRequirednessChanged,
     FieldPatternAdded,
@@ -313,6 +318,14 @@ pub enum CompiledRegistryChangeCode {
     ActionAdded,
     ActionRemoved,
     ActionChanged,
+    ActionVocabularyCodesAdded,
+    ConsentRecordChanged,
+    RecipientOrganizationAdded,
+    RecipientOrganizationRemoved,
+    RecipientOrganizationChanged,
+    RecipientGroupAdded,
+    RecipientGroupRemoved,
+    RecipientGroupChanged,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -340,6 +353,7 @@ pub enum CompiledRegistryChangeTargetKind {
     QueryInventory,
     Event,
     Action,
+    Recipient,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1015,6 +1029,7 @@ pub fn compiled_registry_change_set_from_baseline(
     compare_routes(previous, &candidate_baseline, &mut changes);
     compare_query_inventory(previous, &candidate_baseline, &mut changes);
     compare_actions(previous, &candidate_baseline, &mut changes);
+    compare_recipients(previous, &candidate_baseline, &mut changes);
     sort_changes(&mut changes);
     changes.dedup();
 
@@ -1189,6 +1204,18 @@ fn compare_entities(
                 changes,
                 CompiledRegistryChangeClass::AccessOrDisclosureChange,
                 CompiledRegistryChangeCode::EntityAccessRequirementsChanged,
+                target(
+                    CompiledRegistryChangeTargetKind::Entity,
+                    Some(entity_id.as_str()),
+                    None,
+                ),
+            );
+        }
+        if previous_entity.consent_record != candidate_entity.consent_record {
+            push_change(
+                changes,
+                CompiledRegistryChangeClass::AccessOrDisclosureChange,
+                CompiledRegistryChangeCode::ConsentRecordChanged,
                 target(
                     CompiledRegistryChangeTargetKind::Entity,
                     Some(entity_id.as_str()),
@@ -1447,7 +1474,24 @@ fn compare_fields(
                 ),
             );
         }
-        if previous_field.field_type != candidate_field.field_type {
+        if previous_field.field_type != candidate_field.field_type
+            && candidate_field
+                .field_type
+                .keeps_vocabulary_codes_of(&previous_field.field_type)
+        {
+            // Every stored code stays valid, so the change only widens the
+            // column check. An encrypted column carries no check to widen.
+            push_change(
+                changes,
+                CompiledRegistryChangeClass::CompatibleAdditive,
+                CompiledRegistryChangeCode::FieldVocabularyCodesAdded,
+                target(
+                    CompiledRegistryChangeTargetKind::Field,
+                    Some(entity_id),
+                    Some(field_id.as_str()),
+                ),
+            );
+        } else if previous_field.field_type != candidate_field.field_type {
             let code = match (&previous_field.field_type, &candidate_field.field_type) {
                 (
                     FieldTypeSource::Reference {
@@ -1643,14 +1687,35 @@ fn compare_actions(
         .map(|action| (action.id.as_str(), action))
         .collect::<BTreeMap<_, _>>();
     for (id, before) in &previous_actions {
-        let code = match candidate_actions.get(id) {
+        let (class, code) = match candidate_actions.get(id) {
             Some(after) if before.contract_fingerprint == after.contract_fingerprint => continue,
-            Some(_) => CompiledRegistryChangeCode::ActionChanged,
-            None => CompiledRegistryChangeCode::ActionRemoved,
+            // Every request the previous contract accepted keeps its meaning;
+            // the action only accepts codes new to its vocabularies.
+            Some(after)
+                if crate::immediate_actions::contract_only_adds_vocabulary_codes(
+                    (before, &previous.actions.input_vocabularies),
+                    &previous.entities,
+                    (after, &candidate.actions.input_vocabularies),
+                    &candidate.entities,
+                ) =>
+            {
+                (
+                    CompiledRegistryChangeClass::CompatibleAdditive,
+                    CompiledRegistryChangeCode::ActionVocabularyCodesAdded,
+                )
+            }
+            Some(_) => (
+                CompiledRegistryChangeClass::AccessOrDisclosureChange,
+                CompiledRegistryChangeCode::ActionChanged,
+            ),
+            None => (
+                CompiledRegistryChangeClass::AccessOrDisclosureChange,
+                CompiledRegistryChangeCode::ActionRemoved,
+            ),
         };
         push_change(
             changes,
-            CompiledRegistryChangeClass::AccessOrDisclosureChange,
+            class,
             code,
             target(CompiledRegistryChangeTargetKind::Action, None, Some(id)),
         );
@@ -1664,6 +1729,74 @@ fn compare_actions(
                 target(CompiledRegistryChangeTargetKind::Action, None, Some(id)),
             );
         }
+    }
+}
+
+/// Recipients are project-level runtime configuration: they change no DDL, so
+/// each change needs its own code for the diff to show it and for activation
+/// to carry it as a metadata-only plan.
+fn compare_recipients(
+    previous: &CompiledRegistryMigrationBaseline,
+    candidate: &CompiledRegistryMigrationBaseline,
+    changes: &mut Vec<CompiledRegistryChange>,
+) {
+    use CompiledRegistryChangeCode as Code;
+    compare_recipient_list(
+        &previous.recipients.organizations,
+        &candidate.recipients.organizations,
+        |organization| &organization.id,
+        [
+            Code::RecipientOrganizationAdded,
+            Code::RecipientOrganizationRemoved,
+            Code::RecipientOrganizationChanged,
+        ],
+        changes,
+    );
+    compare_recipient_list(
+        &previous.recipients.groups,
+        &candidate.recipients.groups,
+        |group| &group.id,
+        [
+            Code::RecipientGroupAdded,
+            Code::RecipientGroupRemoved,
+            Code::RecipientGroupChanged,
+        ],
+        changes,
+    );
+}
+
+fn compare_recipient_list<T: PartialEq>(
+    previous: &[T],
+    candidate: &[T],
+    id: impl Fn(&T) -> &String,
+    [added, removed, changed]: [CompiledRegistryChangeCode; 3],
+    changes: &mut Vec<CompiledRegistryChange>,
+) {
+    let before = previous
+        .iter()
+        .map(|item| (id(item), item))
+        .collect::<BTreeMap<_, _>>();
+    let after = candidate
+        .iter()
+        .map(|item| (id(item), item))
+        .collect::<BTreeMap<_, _>>();
+    for recipient in before.keys().chain(after.keys()).collect::<BTreeSet<_>>() {
+        let code = match (before.get(recipient), after.get(recipient)) {
+            (Some(left), Some(right)) if left == right => continue,
+            (Some(_), Some(_)) => changed,
+            (Some(_), None) => removed,
+            (None, _) => added,
+        };
+        push_change(
+            changes,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange,
+            code,
+            target(
+                CompiledRegistryChangeTargetKind::Recipient,
+                None,
+                Some(recipient),
+            ),
+        );
     }
 }
 
@@ -1873,41 +2006,43 @@ fn additive_migration_plan(
     let mut new_statement_ids = BTreeSet::<String>::new();
     let mut replacement_statement_ids = BTreeSet::<String>::new();
     let mut added_columns = BTreeMap::<String, Vec<DdlStatement>>::new();
+    let mut widened_checks = BTreeMap::<String, Vec<DdlStatement>>::new();
     let previous_ddl = generate_ddl_with_actions(
         &previous.entities,
         &previous.physical_names,
         &previous.actions,
     );
     let mut removed_dependency_statements = Vec::new();
-    let previous_membership_functions = previous_ddl
+    let previous_probe_functions = previous_ddl
         .statements
         .iter()
         .filter(|statement| {
             statement.kind == DdlStatementKind::Function
-                && statement.id.starts_with("registry_context.membership_")
+                && is_row_probe_function_statement(&statement.id)
         })
         .map(|statement| (statement.id.as_str(), statement))
         .collect::<BTreeMap<_, _>>();
-    let candidate_membership_functions = candidate
+    let candidate_probe_functions = candidate
         .ddl()
         .statements
         .iter()
         .filter(|statement| {
             statement.kind == DdlStatementKind::Function
-                && statement.id.starts_with("registry_context.membership_")
+                && is_row_probe_function_statement(&statement.id)
         })
         .map(|statement| (statement.id.as_str(), statement))
         .collect::<BTreeMap<_, _>>();
-    for (id, statement) in &candidate_membership_functions {
-        if previous_membership_functions.get(id) != Some(statement) {
+    for (id, statement) in &candidate_probe_functions {
+        if previous_probe_functions.get(id) != Some(statement) {
             new_statement_ids.insert((*id).to_owned());
-            if previous_membership_functions.contains_key(id) {
+            if previous_probe_functions.contains_key(id) {
                 replacement_statement_ids.insert((*id).to_owned());
             }
         }
     }
-    // Drop obsolete membership policies before their helper dependencies. The
-    // activation ACL reconciliation installs the candidate policies afterward.
+    // Drop obsolete membership and consent policies before their helper
+    // dependencies. The activation ACL reconciliation installs the candidate
+    // policies afterward.
     for table in &previous_ddl.tables {
         let candidate_table = candidate
             .ddl()
@@ -1915,14 +2050,17 @@ fn additive_migration_plan(
             .iter()
             .find(|other| other.entity_id == table.entity_id);
         for policy in &table.policies {
-            let membership_policy = policy.name.starts_with("registry_membership_")
-                || policy
-                    .using_expression
-                    .iter()
-                    .chain(&policy.check_expression)
-                    .any(|expression| expression.contains("registry_context.\"membership_"));
-            if membership_policy
-                && !candidate_table.is_some_and(|other| other.policies.contains(policy))
+            let probe_policy = ROW_PROBE_PREFIXES.iter().any(|prefix| {
+                policy.name.starts_with(&format!("registry_{prefix}"))
+                    || policy
+                        .using_expression
+                        .iter()
+                        .chain(&policy.check_expression)
+                        .any(|expression| {
+                            expression.contains(&format!("registry_context.\"{prefix}"))
+                        })
+            });
+            if probe_policy && !candidate_table.is_some_and(|other| other.policies.contains(policy))
             {
                 removed_dependency_statements.push(drop_policy_statement(
                     &table.entity_id,
@@ -1933,15 +2071,18 @@ fn additive_migration_plan(
         }
     }
     for function in &previous_ddl.functions {
-        if function.name.starts_with("membership_")
-            && !candidate_membership_functions.contains_key(function.id.as_str())
+        if ROW_PROBE_PREFIXES
+            .iter()
+            .any(|prefix| function.name.starts_with(prefix))
+            && !candidate_probe_functions.contains_key(function.id.as_str())
         {
             removed_dependency_statements.push(DdlStatement {
                 id: format!("{}.drop", function.id),
                 kind: DdlStatementKind::Function,
                 sql: format!(
-                    "DROP FUNCTION registry_context.{}(uuid)",
-                    quote_identifier(&function.name)
+                    "DROP FUNCTION registry_context.{}({})",
+                    quote_identifier(&function.name),
+                    function.arguments
                 ),
             });
         }
@@ -2050,6 +2191,19 @@ fn additive_migration_plan(
                 new_statement_ids.insert(format!("entity.{entity_id}.field.{field_id}.pattern"));
             }
             if let Some(previous_field) = previous_entity.fields.get(field_id) {
+                if previous_field.field_type != field.field_type
+                    && field
+                        .field_type
+                        .keeps_vocabulary_codes_of(&previous_field.field_type)
+                {
+                    widened_checks.entry(entity_id.clone()).or_default().extend(
+                        replace_vocabulary_check_statement(
+                            candidate_entity,
+                            &candidate.physical_names().entities[entity_id],
+                            field,
+                        ),
+                    );
+                }
                 // Turning encryption on swaps the field's storage: the envelope
                 // and blind-index columns arrive nullable, a unique lookup
                 // index lands empty ahead of the reviewed backfill that fills
@@ -2166,6 +2320,30 @@ fn additive_migration_plan(
                 new_statement_ids.insert(format!("entity.{entity_id}.index.{index_id}"));
             }
         }
+        // Consent indexes follow the consent record: a changed key or revoke
+        // set drops the prior index and builds the candidate one.
+        let previous_indexes = crate::consent::index_statements(previous_entity);
+        let candidate_indexes = crate::consent::index_statements(candidate_entity);
+        for (id, name, sql) in &previous_indexes {
+            if !candidate_indexes
+                .iter()
+                .any(|candidate| &candidate.2 == sql)
+            {
+                removed_dependency_statements.push(DdlStatement {
+                    id: format!("{id}.drop"),
+                    kind: DdlStatementKind::Index,
+                    sql: format!(
+                        "DROP INDEX IF EXISTS registry_data.{}",
+                        quote_identifier(name)
+                    ),
+                });
+            }
+        }
+        for (id, _, sql) in &candidate_indexes {
+            if !previous_indexes.iter().any(|previous| &previous.2 == sql) {
+                new_statement_ids.insert(id.clone());
+            }
+        }
     }
 
     let mut statements = removed_dependency_statements;
@@ -2173,6 +2351,9 @@ fn additive_migration_plan(
         if let Some(entity_id) = table_statement_entity_id(&statement.id) {
             if let Some(columns) = added_columns.get(entity_id) {
                 statements.extend(columns.iter().cloned());
+            }
+            if let Some(checks) = widened_checks.get(entity_id) {
+                statements.extend(checks.iter().cloned());
             }
         }
         if new_statement_ids.contains(statement.id.as_str()) {
@@ -2195,9 +2376,21 @@ fn additive_migration_plan(
     }
 }
 
+/// Name prefixes of the generated per-row probe helpers, membership and
+/// consent, which migrations replace and drop together with their policies.
+const ROW_PROBE_PREFIXES: [&str; 2] = ["membership_", "consent_"];
+
+fn is_row_probe_function_statement(id: &str) -> bool {
+    id.strip_prefix("registry_context.").is_some_and(|name| {
+        ROW_PROBE_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+    })
+}
+
 fn replacement_statement(statement: &DdlStatement) -> DdlStatement {
     if statement.kind == DdlStatementKind::Function
-        && statement.id.starts_with("registry_context.membership_")
+        && is_row_probe_function_statement(&statement.id)
     {
         return DdlStatement {
             id: statement.id.clone(),
@@ -3863,6 +4056,7 @@ struct PredecessorGovernedModel {
     access: CompiledAccessInventory,
     queries: CompiledQueryInventory,
     actions: CompiledActionInventory,
+    recipients: CompiledRecipients,
 }
 
 impl PredecessorGovernedModel {
@@ -3878,6 +4072,7 @@ impl PredecessorGovernedModel {
             access: self.access.clone(),
             queries: self.queries.clone(),
             actions: self.actions.clone(),
+            recipients: self.recipients.clone(),
         }
     }
 
@@ -3948,6 +4143,13 @@ fn signed_predecessor_governed_model(
         .transpose()
         .map_err(|_| PackageError::Derivation)?
         .unwrap_or_default();
+    let recipients: CompiledRecipients = value
+        .get("recipients")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|_| PackageError::Derivation)?
+        .unwrap_or_default();
 
     let physical_names: PhysicalNameInventory =
         signed_manifest_json(manifest, loaded, PackageFileRole::PhysicalNameInventory)?;
@@ -4000,6 +4202,7 @@ fn signed_predecessor_governed_model(
         access,
         queries,
         actions,
+        recipients,
     })
 }
 

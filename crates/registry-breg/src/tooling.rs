@@ -38,6 +38,9 @@ pub struct AccessChangeDetail {
     pub direction: AccessChangeDirection,
     pub before: serde_json::Value,
     pub after: serde_json::Value,
+    /// Why a guard asks for review, when the direction alone does not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -95,6 +98,24 @@ fn classify_change(
 
     match change.code {
         Code::ConstraintAdded | Code::IndexAdded => DiffClassification::LockOrRewriteRisk,
+        // The migration stays additive, but it replaces the column check under
+        // an exclusive table lock and validates every row against it. An
+        // encrypted column stores envelopes and carries no check to replace.
+        Code::FieldVocabularyCodesAdded => {
+            let encrypted = change
+                .target
+                .entity_id
+                .as_deref()
+                .and_then(|entity| candidate.entities().get(entity))
+                .zip(change.target.member_id.as_deref())
+                .and_then(|(entity, field)| entity.fields.get(field))
+                .is_some_and(|field| field.encryption.is_some());
+            if encrypted {
+                DiffClassification::CompatibleAdditive
+            } else {
+                DiffClassification::LockOrRewriteRisk
+            }
+        }
         Code::DerivedRelationChanged if change.class == BaseClass::CompatibleAdditive => {
             DiffClassification::CompatibleAdditive
         }
@@ -122,6 +143,18 @@ fn classify_change(
         Code::EventAdded | Code::EventRemoved | Code::EventChanged => {
             DiffClassification::Unsupported
         }
+        // Consent configuration and actions change who may read or write
+        // without changing storage; their details carry the review reasons.
+        Code::ConsentRecordChanged
+        | Code::RecipientOrganizationAdded
+        | Code::RecipientOrganizationRemoved
+        | Code::RecipientOrganizationChanged
+        | Code::RecipientGroupAdded
+        | Code::RecipientGroupRemoved
+        | Code::RecipientGroupChanged
+        | Code::ActionAdded
+        | Code::ActionRemoved
+        | Code::ActionChanged => DiffClassification::AccessChange,
         _ => match change.class {
             BaseClass::CompatibleAdditive => DiffClassification::CompatibleAdditive,
             BaseClass::DataBackfillRequired => DiffClassification::DataBackfillRequired,
@@ -152,6 +185,18 @@ fn access_change_details(
 ) -> Vec<AccessChangeDetail> {
     use serde_json::{json, Value};
     use CompiledRegistryChangeCode as Code;
+    match change.code {
+        Code::RecipientOrganizationAdded
+        | Code::RecipientOrganizationRemoved
+        | Code::RecipientOrganizationChanged
+        | Code::RecipientGroupAdded
+        | Code::RecipientGroupRemoved
+        | Code::RecipientGroupChanged => return recipient_details(baseline, candidate, change),
+        Code::ActionAdded | Code::ActionChanged | Code::ActionVocabularyCodesAdded => {
+            return action_details(baseline, candidate, change)
+        }
+        _ => {}
+    }
     let Some(entity) = change.target.entity_id.as_deref() else {
         return vec![];
     };
@@ -179,6 +224,20 @@ fn access_change_details(
             };
             (summarize(before_entity), summarize(after_entity))
         }
+        Code::ConsentRecordChanged => {
+            let mut details = consent_record_details(
+                before_entity.and_then(|e| e.consent_record.as_ref()),
+                after_entity.and_then(|e| e.consent_record.as_ref()),
+            );
+            details.extend(consent_index_details(before_entity, after_entity));
+            return details;
+        }
+        Code::FieldTypeChanged => {
+            return consent_vocabulary_details(
+                before_entity.and_then(|e| e.fields.get(member)),
+                after_entity.and_then(|e| e.fields.get(member)),
+            )
+        }
         _ => return vec![],
     };
     if before.is_null() || after.is_null() {
@@ -187,8 +246,63 @@ fn access_change_details(
             direction: AccessChangeDirection::ReviewRequired,
             before,
             after,
+            reason: None,
         }];
     }
+    // A gated profile id is a consent scope: every subject consented to the
+    // scope as it stood, so nothing may widen under the same id.
+    let gated = change.code == Code::AccessProfileChanged
+        && before_entity
+            .and_then(|e| e.access_profiles.get(member))
+            .is_some_and(|profile| !profile.require_consent.is_empty());
+    object_details(&before, &after, |field, left, right| {
+        let direction = access_direction(field, left, right);
+        if !gated {
+            (direction, None)
+        } else if field == "requireConsent" && right.is_null() {
+            (AccessChangeDirection::ReviewRequired, Some(UNGATED_SCOPE))
+        } else if direction == AccessChangeDirection::Widening
+            || (matches!(field, "lookups" | "readPaths") && adds_items(left, right))
+        {
+            (
+                AccessChangeDirection::ReviewRequired,
+                Some(GATED_SCOPE_WIDENED),
+            )
+        } else {
+            (direction, None)
+        }
+    })
+}
+
+const GATED_SCOPE_WIDENED: &str = "this profile is a consent scope and subjects consented to the narrower scope; a new profile id is a new scope and asks again";
+const UNGATED_SCOPE: &str = "removing requireConsent reads without the consent the scope was declared under; rename the profile and list the old id in retiredConsentScopes instead";
+const CLIENT_ADDED: &str = "a new client extends every existing consent given to this organization, and to every group it belongs to, onto the new client";
+const GROUP_MEMBERS_CHANGED: &str = "changing a group's members changes who holds every existing consent given to the group; prefer a new group id with a new notice clause";
+const MAX_DURATION_RAISED: &str =
+    "raising maxDuration makes existing gives last longer than the notice said";
+const CODE_REMOVED: &str = "consent vocabulary codes are append-only; retire the code instead (an organization with no clients, or an id in retiredConsentScopes), since the migration also fails against existing rows that carry it";
+const STEWARD_ISSUER: &str = "steward actions create consent without the subject's principal";
+const ACTION_CODES_ADDED: &str = "the action accepts codes new to their vocabulary without review; check that each is one this action may write, such as a recipient or scope its notice names";
+const CONSENT_INDEXES_REBUILT: &str = "the migration builds these consent indexes with a plain CREATE INDEX inside its transaction, which blocks writes to the consent table until it commits, and dropping a prior index blocks reads as well; apply it when the table can wait";
+
+/// Whether `after` holds an item `before` lacks, reading an omitted list as empty.
+fn adds_items(before: &serde_json::Value, after: &serde_json::Value) -> bool {
+    let before = before.as_array().map(Vec::as_slice).unwrap_or_default();
+    after
+        .as_array()
+        .is_some_and(|after| after.iter().any(|item| !before.contains(item)))
+}
+
+/// One detail per changed key of two serialized objects, each with its guard.
+fn object_details(
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+    guard: impl Fn(
+        &str,
+        &serde_json::Value,
+        &serde_json::Value,
+    ) -> (AccessChangeDirection, Option<&'static str>),
+) -> Vec<AccessChangeDetail> {
     let keys = before
         .as_object()
         .into_iter()
@@ -202,14 +316,227 @@ fn access_change_details(
             if left == right {
                 return None;
             }
+            let (direction, reason) = guard(field, left, right);
             Some(AccessChangeDetail {
                 field: field.clone(),
-                direction: access_direction(field, left, right),
+                direction,
                 before: left.clone(),
                 after: right.clone(),
+                reason: reason.map(str::to_owned),
             })
         })
         .collect()
+}
+
+fn recipient_details(
+    baseline: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+    change: &CompiledRegistryChange,
+) -> Vec<AccessChangeDetail> {
+    use serde_json::{json, Value};
+    use AccessChangeDirection::{Narrowing, ReviewRequired};
+    use CompiledRegistryChangeCode as Code;
+    let Some(id) = change.target.member_id.as_deref() else {
+        return vec![];
+    };
+    let organization = |registry: &CompiledRegistry| {
+        registry
+            .recipients()
+            .organizations
+            .iter()
+            .find(|organization| organization.id == id)
+            .map(|organization| json!(organization))
+            .unwrap_or(Value::Null)
+    };
+    let group = |registry: &CompiledRegistry| {
+        registry
+            .recipients()
+            .groups
+            .iter()
+            .find(|group| group.id == id)
+            .map(|group| json!(group))
+            .unwrap_or(Value::Null)
+    };
+    let (field, before, after) = match change.code {
+        Code::RecipientOrganizationAdded
+        | Code::RecipientOrganizationRemoved
+        | Code::RecipientOrganizationChanged => (
+            "organization",
+            organization(baseline),
+            organization(candidate),
+        ),
+        _ => ("group", group(baseline), group(candidate)),
+    };
+    if before.is_null() || after.is_null() {
+        // A new code has no consent yet; a removed one breaks every row that
+        // carries it.
+        return vec![AccessChangeDetail {
+            field: field.into(),
+            direction: ReviewRequired,
+            reason: after.is_null().then(|| CODE_REMOVED.to_owned()),
+            before,
+            after,
+        }];
+    }
+    object_details(&before, &after, |field, left, right| match field {
+        "clients" if adds_items(left, right) => (ReviewRequired, Some(CLIENT_ADDED)),
+        "clients" => (Narrowing, None),
+        "members" => (ReviewRequired, Some(GROUP_MEMBERS_CHANGED)),
+        _ => (ReviewRequired, None),
+    })
+}
+
+fn consent_record_details(
+    before: Option<&crate::model::CompiledConsentRecord>,
+    after: Option<&crate::model::CompiledConsentRecord>,
+) -> Vec<AccessChangeDetail> {
+    use crate::consent::duration_seconds;
+    use serde_json::json;
+    use AccessChangeDirection::{Narrowing, ReviewRequired};
+    let (Some(before), Some(after)) = (before, after) else {
+        return vec![AccessChangeDetail {
+            field: "consentRecord".into(),
+            direction: ReviewRequired,
+            before: json!(before),
+            after: json!(after),
+            reason: None,
+        }];
+    };
+    let raised = duration_seconds(&after.max_duration) > duration_seconds(&before.max_duration);
+    object_details(&json!(before), &json!(after), |field, _, _| match field {
+        "maxDuration" if raised => (ReviewRequired, Some(MAX_DURATION_RAISED)),
+        "maxDuration" => (Narrowing, None),
+        _ => (ReviewRequired, None),
+    })
+}
+
+/// The consent indexes a migration drops (`before`) and builds (`after`),
+/// named by statement id, when a changed consent record changes their SQL.
+///
+/// A successor's statements run in one transaction, so the build cannot use
+/// `CREATE INDEX CONCURRENTLY`: its lock is held until the migration commits.
+fn consent_index_details(
+    before: Option<&crate::model::CompiledEntity>,
+    after: Option<&crate::model::CompiledEntity>,
+) -> Option<AccessChangeDetail> {
+    let statements = |entity: Option<&crate::model::CompiledEntity>| {
+        entity
+            .map(crate::consent::index_statements)
+            .unwrap_or_default()
+    };
+    let (before, after) = (statements(before), statements(after));
+    let only_in = |side: &[(String, String, String)], other: &[(String, String, String)]| {
+        side.iter()
+            .filter(|(_, _, sql)| !other.iter().any(|(_, _, other)| other == sql))
+            .map(|(id, _, _)| id.clone())
+            .collect::<Vec<_>>()
+    };
+    let (dropped, built) = (only_in(&before, &after), only_in(&after, &before));
+    (!built.is_empty() || !dropped.is_empty()).then(|| AccessChangeDetail {
+        field: "consentIndexes".into(),
+        direction: AccessChangeDirection::ReviewRequired,
+        before: serde_json::json!(dropped),
+        after: serde_json::json!(built),
+        reason: Some(CONSENT_INDEXES_REBUILT.to_owned()),
+    })
+}
+
+/// A field bound to a consent vocabulary that lost a code.
+fn consent_vocabulary_details(
+    before: Option<&crate::model::CompiledField>,
+    after: Option<&crate::model::CompiledField>,
+) -> Vec<AccessChangeDetail> {
+    use crate::contract::FieldTypeSource;
+    let codes = |field: Option<&crate::model::CompiledField>| match field.map(|f| &f.field_type) {
+        Some(FieldTypeSource::VocabularyCode { vocabulary, values })
+            if crate::consent::is_reserved_vocabulary(vocabulary) =>
+        {
+            Some(values.clone())
+        }
+        _ => None,
+    };
+    let (Some(before), Some(after)) = (codes(before), codes(after)) else {
+        return vec![];
+    };
+    if before.iter().all(|code| after.contains(code)) {
+        return vec![];
+    }
+    vec![AccessChangeDetail {
+        field: "values".into(),
+        direction: AccessChangeDirection::ReviewRequired,
+        before: serde_json::json!(before),
+        after: serde_json::json!(after),
+        reason: Some(CODE_REMOVED.to_owned()),
+    }]
+}
+
+fn action_details(
+    baseline: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+    change: &CompiledRegistryChange,
+) -> Vec<AccessChangeDetail> {
+    use crate::contract::ConsentIssuerSource;
+    use serde_json::{json, Map, Value};
+    use CompiledRegistryChangeCode as Code;
+    let Some(id) = change.target.member_id.as_deref() else {
+        return vec![];
+    };
+    let action = |registry: &CompiledRegistry| {
+        registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| action.id == id)
+            .cloned()
+    };
+    let (before, Some(after)) = (action(baseline), action(candidate)) else {
+        return vec![];
+    };
+    let mut details = Vec::new();
+    let before_issuer = before.as_ref().and_then(|action| action.consent_issuer);
+    if after.consent_issuer == Some(ConsentIssuerSource::Steward)
+        && before_issuer != Some(ConsentIssuerSource::Steward)
+    {
+        details.push(AccessChangeDetail {
+            field: "consentIssuer".into(),
+            direction: AccessChangeDirection::ReviewRequired,
+            before: json!(before_issuer),
+            after: json!(after.consent_issuer),
+            reason: Some(STEWARD_ISSUER.to_owned()),
+        });
+    }
+    if change.code == Code::ActionVocabularyCodesAdded {
+        let Some(before) = before else {
+            return details;
+        };
+        let codes = |input: &crate::model::CompiledActionInput| match &input.field_type {
+            crate::contract::FieldTypeSource::VocabularyCode { values, .. } => json!(values),
+            _ => Value::Null,
+        };
+        let mut widened_before = Map::new();
+        let mut widened_after = Map::new();
+        for input in &after.inputs {
+            let Some(previous) = before
+                .inputs
+                .iter()
+                .find(|previous| previous.id == input.id)
+            else {
+                continue;
+            };
+            if previous.field_type != input.field_type {
+                widened_before.insert(input.id.clone(), codes(previous));
+                widened_after.insert(input.id.clone(), codes(input));
+            }
+        }
+        details.push(AccessChangeDetail {
+            field: "inputCodes".into(),
+            direction: AccessChangeDirection::ReviewRequired,
+            before: Value::Object(widened_before),
+            after: Value::Object(widened_after),
+            reason: Some(ACTION_CODES_ADDED.to_owned()),
+        });
+    }
+    details
 }
 
 fn access_direction(

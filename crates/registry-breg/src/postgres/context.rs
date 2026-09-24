@@ -198,6 +198,7 @@ pub struct ClaimContext {
     task_grant: Option<crate::task_grant::TaskGrantBinding>,
     grant_audit: Option<crate::audit::GrantAuditContext>,
     human_identity: Option<registry_review_client::HumanIdentity>,
+    recipients: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -244,6 +245,19 @@ impl ClaimContext {
 
     pub(crate) fn human_identity(&self) -> Option<&registry_review_client::HumanIdentity> {
         self.human_identity.as_ref()
+    }
+
+    /// Install the verified client's consent recipient set, written to
+    /// `registry.recipients` for every consent probe of this transaction.
+    pub fn with_recipients(mut self, recipients: BTreeSet<String>) -> Result<Self> {
+        validate_recipients(&recipients)?;
+        self.recipients = recipients;
+        Ok(self)
+    }
+
+    #[must_use]
+    pub fn recipients(&self) -> &BTreeSet<String> {
+        &self.recipients
     }
 
     pub(crate) fn with_task_grant(
@@ -338,6 +352,7 @@ impl ClaimContext {
             task_grant: None,
             grant_audit: None,
             human_identity: None,
+            recipients: BTreeSet::new(),
         })
     }
 
@@ -372,6 +387,7 @@ impl ClaimContext {
             task_grant: None,
             grant_audit: None,
             human_identity: None,
+            recipients: BTreeSet::new(),
         })
     }
 
@@ -505,8 +521,22 @@ impl ClaimContext {
         if canonical_boundaries(&self.row_boundaries)? != self.canonical_row_boundaries {
             return Err(invalid_context());
         }
+        validate_recipients(&self.recipients)?;
         Ok(())
     }
+}
+
+/// One organization plus at most 63 groups, each a bounded context value.
+const MAX_RECIPIENTS: usize = 64;
+
+fn validate_recipients(recipients: &BTreeSet<String>) -> Result<()> {
+    if recipients.len() > MAX_RECIPIENTS {
+        return Err(invalid_context());
+    }
+    for recipient in recipients {
+        validate_required_context_value(recipient)?;
+    }
+    Ok(())
 }
 
 impl fmt::Debug for ClaimContext {
@@ -518,6 +548,7 @@ impl fmt::Debug for ClaimContext {
             .field("access_profile", &self.access_profile)
             .field("purpose", &self.purpose.as_ref().map(|_| "<redacted>"))
             .field("row_boundaries", &self.row_boundaries)
+            .field("recipient_count", &self.recipients.len())
             .finish()
     }
 }
@@ -2400,19 +2431,23 @@ pub async fn begin_record_transaction<'a>(
     if !ready {
         return Err(PostgresKernelError::RegistryUnavailable);
     }
+    // A JSON array of strings; `[]` for a client no organization lists.
+    let recipients = serde_json::to_string(&claims.recipients).map_err(|_| invalid_context())?;
     transaction
         .execute_typed(
             "SELECT set_config('registry.principal', $1, true),
                     set_config('registry.access_profile', $2, true),
                     set_config('registry.purpose', $3, true),
                     set_config('registry.row_boundaries', $4, true),
-                    set_config('registry.active_package_revision', $5, true)",
+                    set_config('registry.active_package_revision', $5, true),
+                    set_config('registry.recipients', $6, true)",
             &[
                 (&claims.principal.as_deref().unwrap_or(""), Type::TEXT),
                 (&claims.access_profile, Type::TEXT),
                 (&claims.purpose.as_deref().unwrap_or(""), Type::TEXT),
                 (&claims.canonical_row_boundaries, Type::TEXT),
                 (&expected.package_revision, Type::TEXT),
+                (&recipients, Type::TEXT),
             ],
         )
         .await?;
@@ -2481,13 +2516,17 @@ pub async fn begin_action_transaction<'a>(
                     set_config('registry.access_profile', $2, true),
                     set_config('registry.purpose', $3, true),
                     set_config('registry.row_boundaries', $4, true),
-                    set_config('registry.active_package_revision', $5, true)",
+                    set_config('registry.active_package_revision', $5, true),
+                    set_config('registry.recipients', $6, true)",
             &[
                 &claims.principal(),
                 &claims.access_profile(),
                 &claims.purpose().unwrap_or(""),
                 &"[]",
                 &expected.package_revision,
+                // Gated profiles cannot invoke actions, so no action path
+                // evaluates a consent probe.
+                &"[]",
             ],
         )
         .await?;
@@ -3163,6 +3202,7 @@ mod tests {
                 read_paths: Vec::new(),
                 change_control: None,
                 change_request: None,
+                consent_record: None,
                 fields: vec![
                     FieldSource {
                         pattern: None,
@@ -3213,6 +3253,7 @@ mod tests {
                     required_purposes: BTreeSet::from(["operations".to_owned()]),
                     permissions: vec![AccessPermissionSource {
                         membership_boundaries: Vec::new(),
+                        require_consent: Vec::new(),
                         entity: "entry".to_owned(),
                         action: None,
                         operations: operations.clone(),
@@ -3264,6 +3305,7 @@ mod tests {
                     required_purposes: BTreeSet::new(),
                     permissions: vec![AccessPermissionSource {
                         membership_boundaries: Vec::new(),
+                        require_consent: Vec::new(),
                         entity: "entry".to_owned(),
                         action: None,
                         operations,
@@ -3298,6 +3340,8 @@ mod tests {
                 },
             ],
             vocabularies: Vec::new(),
+            recipients: None,
+            retired_consent_scopes: Vec::new(),
         };
         compile_project(&project, &[], CompileProfile::Authoring).expect("test project compiles")
     }

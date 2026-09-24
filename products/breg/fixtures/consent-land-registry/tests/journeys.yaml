@@ -1,0 +1,239 @@
+apiVersion: registry.registrystack.org/breg-journeys/v1
+# Every timestamp on 2026-09-01 is an anchor: the PostgreSQL acceptance harness
+# rebases that date to the day before the run, so gives that must be in force
+# stay inside the 365-day maxDuration whenever the suite runs.
+journeys:
+  - id: lender-reads-a-tenure-right-only-under-consent
+    steps:
+      - id: publish-notice
+        entity: tenure-right-privacy-notice
+        accessProfile: tenure-right-consent-steward
+        claims: &steward_claims
+          principal: synthetic-consent-steward
+          scopes: ["consent:tenure-right:steward"]
+        request:
+          operation: create
+          data:
+            noticeVersion: "2026.1"
+            language: en
+            title: Sharing your tenure right with lenders
+            controllerName: Land Registry Authority
+            controllerContact: privacy@consent-land-registry.example.gov
+            jurisdiction: Solmara
+            legalBasis: Consent of the right holder.
+            withdrawalMethod: Withdraw at any land registry office or through the self-service portal.
+            publishedAt: "2026-01-01T00:00:00Z"
+        expect: {outcome: success, status: 201}
+        capture: notice
+      - id: publish-lender-a-clause
+        entity: tenure-right-notice-clause
+        accessProfile: tenure-right-consent-steward
+        claims: *steward_claims
+        request:
+          operation: create
+          data:
+            notice: {recordRef: notice}
+            recipient: lender-a
+            purpose: credit-assessment
+            scope: lender-assessment
+            description: Lender A reads your tenure right to assess a loan secured on it.
+        expect: {outcome: success, status: 201}
+        capture: lender-a-clause
+      - id: publish-consortium-clause
+        entity: tenure-right-notice-clause
+        accessProfile: tenure-right-consent-steward
+        claims: *steward_claims
+        request:
+          operation: create
+          data:
+            notice: {recordRef: notice}
+            recipient: lending-consortium
+            purpose: credit-assessment
+            scope: lender-assessment
+            description: Every lender in the lending consortium reads your tenure right to assess a loan secured on it.
+        expect: {outcome: success, status: 201}
+        capture: consortium-clause
+      - id: register-parcel
+        entity: parcel
+        accessProfile: land-registry-operator
+        claims: &operator_claims
+          principal: synthetic-land-registrar
+          scopes: ["registry:land:operate"]
+          actorKind: human
+          requesterClient: land-registry-console
+        request:
+          operation: create
+          data: {parcelCode: PARCEL-0042, district: river-district, areaSquareMetres: 1200}
+        expect: {outcome: success, status: 201}
+        capture: parcel
+      - id: register-tenure-right
+        entity: tenure-right
+        accessProfile: land-registry-operator
+        claims: *operator_claims
+        request:
+          operation: create
+          data:
+            parcel: {recordRef: parcel}
+            holderName: Imani Mwangi
+            tenureKind: customary
+            encumbered: false
+        expect: {outcome: success, status: 201}
+        capture: tenure-right
+      - id: link-holder
+        entity: tenure-right-consent-link
+        accessProfile: tenure-right-consent-link-steward
+        claims:
+          principal: synthetic-link-steward
+          scopes: ["consent:tenure-right:link"]
+        request:
+          operation: create
+          data: {subject: {recordRef: tenure-right}, principal: imani-self, active: true}
+        expect: {outcome: success, status: 201}
+        capture: holder-link
+      - id: lender-a-cannot-read-before-consent
+        entity: tenure-right
+        accessProfile: lender-assessment
+        claims: &lender_a_claims
+          principal: synthetic-lender-a
+          scopes: ["registry:land:read"]
+          purpose: credit-assessment
+          actorKind: service
+          requesterClient: lender-a-portal
+        request: {operation: get, recordRef: tenure-right}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+      - id: holder-gives-consent-to-lender-a
+        action: give-tenure-right-consent
+        accessProfile: tenure-right-consent-self
+        claims: &holder_claims
+          principal: imani-self
+          scopes: ["consent:tenure-right:self"]
+          directClaims:
+            registry_principal: imani-self
+        request:
+          operation: invoke
+          idempotencyKey: imani-give-lender-a
+          input:
+            link: {recordRef: holder-link}
+            subject: {recordRef: tenure-right}
+            clause: {recordRef: lender-a-clause}
+            recipient: lender-a
+            purpose: credit-assessment
+            scope: lender-assessment
+            decision: given
+            channel: self-service
+            effectiveAt: "2026-09-01T00:00:00Z"
+        expect: {outcome: success, status: 200}
+      - id: lender-a-reads-the-tenure-right
+        entity: tenure-right
+        accessProfile: lender-assessment
+        claims: *lender_a_claims
+        request: {operation: get, recordRef: tenure-right}
+        expect:
+          outcome: success
+          status: 200
+          fields: {holderName: Imani Mwangi, tenureKind: customary, encumbered: false}
+      - id: lender-b-cannot-read-lender-a-consent
+        entity: tenure-right
+        accessProfile: lender-assessment
+        claims: &lender_b_claims
+          principal: synthetic-lender-b
+          scopes: ["registry:land:read"]
+          purpose: credit-assessment
+          actorKind: service
+          requesterClient: lender-b-portal
+        request: {operation: get, recordRef: tenure-right}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+      - id: holder-gives-consent-to-the-consortium
+        action: give-tenure-right-consent
+        accessProfile: tenure-right-consent-self
+        claims: *holder_claims
+        request:
+          operation: invoke
+          idempotencyKey: imani-give-consortium
+          input:
+            link: {recordRef: holder-link}
+            subject: {recordRef: tenure-right}
+            clause: {recordRef: consortium-clause}
+            recipient: lending-consortium
+            purpose: credit-assessment
+            scope: lender-assessment
+            decision: given
+            channel: self-service
+            effectiveAt: "2026-09-01T01:00:00Z"
+        expect: {outcome: success, status: 200}
+      - id: lender-b-reads-through-the-consortium
+        entity: tenure-right
+        accessProfile: lender-assessment
+        claims: *lender_b_claims
+        request: {operation: get, recordRef: tenure-right}
+        expect: {outcome: success, status: 200, fields: {holderName: Imani Mwangi}}
+      - id: holder-withdraws-lender-a-consent
+        action: withdraw-tenure-right-consent
+        accessProfile: tenure-right-consent-self
+        claims: *holder_claims
+        request:
+          operation: invoke
+          idempotencyKey: imani-withdraw-lender-a
+          input:
+            link: {recordRef: holder-link}
+            subject: {recordRef: tenure-right}
+            clause: {recordRef: lender-a-clause}
+            recipient: lender-a
+            purpose: credit-assessment
+            scope: lender-assessment
+            decision: withdrawn
+            channel: self-service
+            effectiveAt: "2026-09-01T02:00:00Z"
+        expect: {outcome: success, status: 200}
+      - id: lender-a-still-reads-through-the-consortium
+        entity: tenure-right
+        accessProfile: lender-assessment
+        claims: *lender_a_claims
+        request: {operation: get, recordRef: tenure-right}
+        expect: {outcome: success, status: 200, fields: {holderName: Imani Mwangi}}
+      - id: holder-withdraws-consortium-consent
+        action: withdraw-tenure-right-consent
+        accessProfile: tenure-right-consent-self
+        claims: *holder_claims
+        request:
+          operation: invoke
+          idempotencyKey: imani-withdraw-consortium
+          input:
+            link: {recordRef: holder-link}
+            subject: {recordRef: tenure-right}
+            clause: {recordRef: consortium-clause}
+            recipient: lending-consortium
+            purpose: credit-assessment
+            scope: lender-assessment
+            decision: withdrawn
+            channel: self-service
+            effectiveAt: "2026-09-01T03:00:00Z"
+        expect: {outcome: success, status: 200}
+      - id: lender-a-cannot-read-after-both-withdrawals
+        entity: tenure-right
+        accessProfile: lender-assessment
+        claims: *lender_a_claims
+        request: {operation: get, recordRef: tenure-right}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+      - id: lender-b-cannot-read-after-both-withdrawals
+        entity: tenure-right
+        accessProfile: lender-assessment
+        claims: *lender_b_claims
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 0}
+      - id: lender-a-feed-shows-its-own-and-consortium-decisions
+        entity: tenure-right-consent-decision
+        accessProfile: tenure-right-consent-recipient
+        claims:
+          principal: synthetic-lender-a-feed
+          scopes: ["consent:tenure-right:read"]
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 4}
+      - id: lender-b-feed-shows-only-consortium-decisions
+        entity: tenure-right-consent-decision
+        accessProfile: tenure-right-consent-recipient
+        claims:
+          principal: synthetic-lender-b-feed
+          scopes: ["consent:tenure-right:read"]
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 2}

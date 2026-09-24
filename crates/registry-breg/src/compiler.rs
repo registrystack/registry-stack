@@ -262,10 +262,12 @@ pub fn compile_project_with_assets(
     );
     validate_project_entity_access_profiles(project, &mut diagnostics);
     expand_project_access(project, &mut sources, &mut diagnostics);
-    resolve_vocabularies(project, &mut sources, &mut action_sources, &mut diagnostics);
+    let vocabularies =
+        resolve_vocabularies(project, &mut sources, &mut action_sources, &mut diagnostics);
     validate_entities(&project.registry.id, &sources, profile, &mut diagnostics);
     crate::access::validate_access_requirements(&sources, &mut diagnostics);
     crate::membership::validate(&sources, &mut diagnostics);
+    crate::consent::validate(project, &sources, &mut diagnostics);
     findings.extend(crate::access::access_findings(&sources));
     validate_derived_assets(&sources, &origins.derived, assets, &mut diagnostics);
     validate_hook_assets(&sources, &origins.hooks, assets, &mut diagnostics);
@@ -275,6 +277,7 @@ pub fn compile_project_with_assets(
 
     let (mut entities, physical_names) = compile_entities(&sources, &origins, assets)?;
     crate::membership::compile(&mut entities);
+    let recipients = crate::consent::compile(project, &sources, &mut entities);
     let owned_scripts = action_sources
         .values()
         .filter_map(|action| {
@@ -296,9 +299,14 @@ pub fn compile_project_with_assets(
         &mut entities,
     )
     .map_err(CompileFailure::from_errors)?;
-    let mut action_inventory =
-        compile_immediate_actions(&action_sources, &entities, &project.access_profiles, assets)
-            .map_err(CompileFailure::from_errors)?;
+    let mut action_inventory = compile_immediate_actions(
+        &action_sources,
+        &entities,
+        &project.access_profiles,
+        assets,
+        &vocabularies,
+    )
+    .map_err(CompileFailure::from_errors)?;
     crate::action_evidence_contracts::compile_evidence(project, assets, &mut action_inventory)
         .map_err(CompileFailure::from_errors)?;
     findings.extend(crate::access::compiled_access_findings(
@@ -340,6 +348,7 @@ pub fn compile_project_with_assets(
         &metadata_inventory,
         &query_inventory,
         &event_delivery_inventory,
+        &recipients,
         &ddl,
     )
     .map_err(CompileFailure::from_one)?;
@@ -369,6 +378,7 @@ pub fn compile_project_with_assets(
         metadata_inventory,
         query_inventory,
         event_delivery_inventory,
+        recipients,
         ddl,
         artifacts,
         findings,
@@ -1791,7 +1801,7 @@ fn validate_project_entity_access_profiles(
     }
 }
 
-fn expand_project_access(
+pub(crate) fn expand_project_access(
     project: &RegistryProject,
     entities: &mut BTreeMap<String, EntitySource>,
     errors: &mut Vec<Diagnostic>,
@@ -1994,6 +2004,7 @@ fn expand_project_access(
                 spatial_queries: grant.spatial_queries.clone(),
                 row_boundaries: grant.row_boundaries.clone(),
                 membership_boundaries: grant.membership_boundaries.clone(),
+                require_consent: grant.require_consent.clone(),
                 request_visibility: grant.request_visibility,
                 lookups: grant.lookups.clone(),
                 read_paths: grant.read_paths.clone(),
@@ -2014,10 +2025,18 @@ fn resolve_vocabularies(
     entities: &mut BTreeMap<String, EntitySource>,
     actions: &mut BTreeMap<String, CollectedActionSource>,
     errors: &mut Vec<Diagnostic>,
-) {
+) -> BTreeMap<String, Vec<String>> {
     let mut vocabularies = BTreeMap::new();
     for vocabulary in &project.vocabularies {
         validate_id(&vocabulary.id, "project.vocabularies[].id", errors);
+        if crate::consent::is_reserved_vocabulary(&vocabulary.id) {
+            errors.push(Diagnostic::error(
+                "consent.vocabulary.reserved",
+                "project.vocabularies[].id",
+                "registry-recipients and registry-consent-scopes are synthesized from recipients and gated profiles and cannot be declared",
+            ));
+            continue;
+        }
         if vocabulary.values.is_empty()
             || has_duplicates(&vocabulary.values)
             || vocabulary.values.iter().any(|value| !valid_code(value))
@@ -2039,12 +2058,31 @@ fn resolve_vocabularies(
             ));
         }
     }
+    for (id, values) in crate::consent::synthesized_vocabularies(project, entities) {
+        vocabularies.insert(id.to_owned(), values);
+    }
+    // The scope vocabulary lists the profiles that require consent, so until
+    // one does, a consent record's scope has nothing to resolve to.
+    let unused_consent = crate::consent::unused_record_message(entities);
     for entity in entities.values_mut() {
         for field in &mut entity.fields {
             if let FieldTypeSource::VocabularyCode { vocabulary, values } = &mut field.field_type {
+                if !values.is_empty() && crate::consent::is_reserved_vocabulary(vocabulary) {
+                    errors.push(Diagnostic::error(
+                        "consent.vocabulary.reserved",
+                        "entities[].fields[].values",
+                        "a field bound to a synthesized consent vocabulary takes its values from the compiler",
+                    ));
+                }
                 if values.is_empty() {
                     if let Some(resolved) = vocabularies.get(vocabulary) {
                         *values = resolved.clone();
+                    } else if vocabulary == crate::consent::SCOPES_VOCABULARY {
+                        errors.push(Diagnostic::error(
+                            "consent.require.unused",
+                            "entities[].fields[].vocabulary",
+                            &unused_consent,
+                        ));
                     } else {
                         errors.push(Diagnostic::error(
                             "field.vocabulary.unknown",
@@ -2062,6 +2100,12 @@ fn resolve_vocabularies(
                 if values.is_empty() {
                     if let Some(resolved) = vocabularies.get(vocabulary) {
                         *values = resolved.clone();
+                    } else if vocabulary == crate::consent::SCOPES_VOCABULARY {
+                        errors.push(Diagnostic::error(
+                            "consent.require.unused",
+                            "actions[].inputs[].vocabulary",
+                            &unused_consent,
+                        ));
                     } else {
                         errors.push(Diagnostic::error(
                             "action.input.vocabulary.unknown",
@@ -2073,6 +2117,7 @@ fn resolve_vocabularies(
             }
         }
     }
+    vocabularies
 }
 
 fn validate_entities(
@@ -5456,6 +5501,8 @@ fn compile_entities(
                 indexes,
                 access_profiles: profiles,
                 membership_boundaries: BTreeMap::new(),
+                consent_record: None,
+                consent_requirements: BTreeMap::new(),
                 hooks,
                 module_origins,
             },

@@ -496,6 +496,17 @@
     "ActionSource": {
       "additionalProperties": false,
       "properties": {
+        "consentIssuer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConsentIssuerSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Required when the action creates consent-record rows."
+        },
         "effects": {
           "default": [],
           "items": {
@@ -1250,6 +1261,120 @@
         "greater_than_or_equal"
       ],
       "type": "string"
+    },
+    "ConsentDecisionSource": {
+      "additionalProperties": false,
+      "description": "Maps the adopter's decision codes onto the engine's decision sets.",
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "gives": {
+          "description": "Codes that give consent.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "refusals": {
+          "description": "Revoke codes never shown to recipients.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "revokes": {
+          "description": "Codes that supersede every give on the same key ordered no later.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "field",
+        "gives",
+        "revokes"
+      ],
+      "type": "object"
+    },
+    "ConsentIssuerSource": {
+      "description": "Who an action creates consent rows for.",
+      "oneOf": [
+        {
+          "const": "self",
+          "description": "The subject, bound through a principal link entity.",
+          "type": "string"
+        },
+        {
+          "const": "steward",
+          "description": "A reviewed steward act on the subject's behalf.",
+          "type": "string"
+        }
+      ]
+    },
+    "ConsentRecordSource": {
+      "additionalProperties": false,
+      "description": "The fields of a consent-record entity the engine reads. Other fields are\nignored by consent enforcement.",
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/ConsentDecisionSource"
+        },
+        "purpose": {
+          "description": "A vocabulary-code field compared with the verified request purpose.",
+          "type": "string"
+        },
+        "recipient": {
+          "description": "A vocabulary-code field bound to `registry-recipients`.",
+          "type": "string"
+        },
+        "scope": {
+          "description": "A vocabulary-code field bound to `registry-consent-scopes`.",
+          "type": "string"
+        },
+        "subject": {
+          "description": "A reference field naming the protected subject row.",
+          "type": "string"
+        },
+        "validity": {
+          "$ref": "#/$defs/ConsentValiditySource"
+        }
+      },
+      "required": [
+        "subject",
+        "recipient",
+        "purpose",
+        "scope",
+        "decision",
+        "validity"
+      ],
+      "type": "object"
+    },
+    "ConsentValiditySource": {
+      "additionalProperties": false,
+      "description": "Validity of a consent decision. Every give expires within `maxDuration`.",
+      "properties": {
+        "from": {
+          "description": "A required timestamp field; a give is active only from this time.",
+          "type": "string"
+        },
+        "maxDuration": {
+          "description": "An ISO 8601 duration such as `P365D`, at most ten years.",
+          "type": "string"
+        },
+        "until": {
+          "description": "An optional timestamp field ending the give earlier than `maxDuration`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "from",
+        "maxDuration"
+      ],
+      "type": "object"
     },
     "ConstraintSource": {
       "oneOf": [
@@ -2126,6 +2251,17 @@
         "classification": {
           "$ref": "#/$defs/Classification",
           "default": "internal"
+        },
+        "consentRecord": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConsentRecordSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Declares this entity's rows as subject-issued consent decisions that\n`requireConsent` permissions check before returning a subject's row."
         },
         "constraints": {
           "default": [],

@@ -1,0 +1,230 @@
+# SPDX-License-Identifier: Apache-2.0
+# Consent enforcement test fixture: a person gated on its own identity, an
+# enrolment gated through its person reference, a recipient feed over the
+# consent rows, and a steward action that records decisions.
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: consent-access
+  version: '1'
+  defaultLanguage: en
+  canonicalBaseIri: https://consent.example.test
+recipients:
+  organizations:
+  - id: wfp
+    name: World Food Programme
+    contact: dpo@wfp.example.test
+    clients: [wfp-scope]
+  - id: ngo-alpha
+    name: NGO Alpha
+    contact: privacy@ngo-alpha.example.test
+    clients: [ngo-alpha-portal]
+  - id: ngo-beta
+    name: NGO Beta
+    contact: privacy@ngo-beta.example.test
+    clients: []
+  groups:
+  - id: referral-network
+    name: Referral network
+    members: [wfp, ngo-alpha]
+retiredConsentScopes: [food-targeting-2025]
+vocabularies:
+- id: data-use-purpose
+  values: [food-assistance, health-referral]
+- id: consent-decision
+  values: [given, refused, withdrawn, invalidated]
+entities:
+- id: person
+  primaryDataset: consent-dataset
+  route: persons
+  mutationMode: mutable
+  classification: restricted
+  fields:
+  - {id: given-name, type: string, maxLength: 80, required: true, classification: restricted}
+  - {id: district, type: string, maxLength: 80, required: true, classification: internal}
+  selectorProfiles:
+  - id: given-name
+    fields: [given-name]
+  readPaths:
+  - {id: households, through: household-member, to: household, route: households}
+- id: household
+  primaryDataset: consent-dataset
+  route: households
+  mutationMode: mutable
+  classification: internal
+  fields:
+  - {id: label, type: string, maxLength: 80, required: true, classification: internal}
+- id: household-member
+  primaryDataset: consent-dataset
+  route: household-members
+  mutationMode: mutable
+  classification: internal
+  fields:
+  - {id: person, type: reference, target: person, required: true, classification: restricted}
+  - {id: household, type: reference, target: household, required: true, classification: internal}
+- id: enrolment
+  primaryDataset: consent-dataset
+  route: enrolments
+  mutationMode: mutable
+  classification: restricted
+  fields:
+  - {id: person, type: reference, target: person, required: true, classification: restricted}
+  - {id: programme, type: string, maxLength: 80, required: true, classification: internal}
+  selectorProfiles:
+  - id: programme
+    fields: [programme]
+  readPaths:
+  - {id: households, through: enrolment-household, to: household, route: households}
+- id: consent-decision
+  primaryDataset: consent-dataset
+  route: consent-decisions
+  mutationMode: create_only
+  classification: restricted
+  fields:
+  - {id: subject, type: reference, target: person, required: true, classification: restricted}
+  - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
+  - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
+  - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
+  - {id: decision, type: vocabulary-code, vocabulary: consent-decision, required: true, classification: internal}
+  - {id: effective-at, type: timestamp, required: true, classification: internal}
+  - {id: expires-at, type: timestamp, classification: internal}
+  consentRecord:
+    subject: subject
+    recipient: recipient
+    purpose: purpose
+    scope: scope
+    decision:
+      field: decision
+      gives: [given]
+      revokes: [refused, withdrawn, invalidated]
+      refusals: [refused]
+    validity:
+      from: effective-at
+      until: expires-at
+      maxDuration: P365D
+- id: enrolment-household
+  primaryDataset: consent-dataset
+  route: enrolment-households
+  mutationMode: mutable
+  classification: internal
+  fields:
+  - {id: enrolment, type: reference, target: enrolment, required: true, classification: restricted}
+  - {id: household, type: reference, target: household, required: true, classification: internal}
+actions:
+- id: record-consent
+  consentIssuer: steward
+  inputs:
+  - {id: subject, type: reference, target: person, required: true, classification: restricted}
+  - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: internal}
+  - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: internal}
+  - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: internal}
+  - {id: decision, type: vocabulary-code, vocabulary: consent-decision, required: true, classification: internal}
+  - {id: effective-at, type: timestamp, required: true, classification: internal}
+  - {id: expires-at, type: timestamp, classification: internal}
+  effects:
+  - id: decision
+    target: {entity: consent-decision}
+    operation: create
+    set:
+      subject: {fromField: subject}
+      recipient: {fromField: recipient}
+      purpose: {fromField: purpose}
+      scope: {fromField: scope}
+      decision: {fromField: decision}
+      effective-at: {fromField: effective-at}
+      expires-at: {fromField: expires-at}
+accessProfiles:
+- id: food-targeting
+  default: true
+  principalClaim: principal
+  actorKind: service
+  requesterClients: [wfp-scope, ngo-alpha-portal]
+  requiredScopes: [records:read]
+  requiredPurposes: [food-assistance]
+  permissions:
+  - entity: person
+    rowBoundaries: []
+    operations: [get, list, lookup, snapshot, revisions]
+    readableFields: [given-name, district]
+    filterableFields: [district]
+    sortableFields: [given-name]
+    allowCount: true
+    revisionAccess: true
+    lookups:
+    - selector: given-name
+      valueOrigin: request
+    readPaths:
+    - path: households
+      readableFields: [label]
+    requireConsent:
+    - {record: consent-decision, on: id}
+  - entity: enrolment
+    rowBoundaries: []
+    operations: [get, list, lookup, snapshot, revisions]
+    readableFields: [person, programme]
+    allowCount: true
+    revisionAccess: true
+    lookups:
+    - selector: programme
+      valueOrigin: request
+    readPaths:
+    - path: households
+      readableFields: [label]
+    requireConsent:
+    - {record: consent-decision, on: person}
+  # The read path's target needs its own permission in the profile; without
+  # one the runtime answers the path with 503.
+  - entity: household
+    rowBoundaries: []
+    operations: [get]
+    readableFields: [label]
+- id: recipient-feed
+  principalClaim: principal
+  actorKind: service
+  requesterClients: [wfp-scope, ngo-alpha-portal]
+  requiredScopes: [consent:read]
+  permissions:
+  - entity: consent-decision
+    operations: [get, list]
+    readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]
+    rowBoundaries:
+    - {field: recipient, claim: 'registry:recipients', operator: in}
+- id: steward
+  principalClaim: principal
+  requiredScopes: [records:manage]
+  permissions:
+  - entity: person
+    rowBoundaries: []
+    operations: [create, get, patch]
+    readableFields: [given-name, district]
+    writableFields: [given-name, district]
+  - entity: household
+    rowBoundaries: []
+    operations: [create, get]
+    readableFields: [label]
+    writableFields: [label]
+  - entity: household-member
+    rowBoundaries: []
+    operations: [create, get]
+    readableFields: [person, household]
+    writableFields: [person, household]
+  - entity: enrolment
+    rowBoundaries: []
+    operations: [create, get]
+    readableFields: [person, programme]
+    writableFields: [person, programme]
+  - entity: consent-decision
+    rowBoundaries: []
+    operations: [get, list]
+    readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]
+  - action: record-consent
+    operations: [invoke]
+    targets:
+    - {entity: person, rowBoundaries: []}
+    - {entity: consent-decision, rowBoundaries: []}
+    results: [decision]
+  - entity: enrolment-household
+    rowBoundaries: []
+    operations: [create, get]
+    readableFields: [enrolment, household]
+    writableFields: [enrolment, household]
