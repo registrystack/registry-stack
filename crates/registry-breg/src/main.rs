@@ -34,6 +34,9 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    for advisory in prepared.postgres_advisories() {
+        OperationalEvent::PostgresBaselineAdvisory(advisory.clone()).emit();
+    }
     if let Err(error) = serve(prepared).await {
         OperationalEvent::StoppedWithError(error).emit();
         std::process::exit(1);

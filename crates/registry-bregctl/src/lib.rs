@@ -1295,10 +1295,36 @@ enum SuggestedAction {
 }
 
 #[derive(Serialize)]
-struct DoctorSuccessReport {
+struct DoctorSuccessReport<'a> {
     ok: bool,
     command: &'static str,
     checked: &'static [&'static str],
+    advisories: Vec<DoctorAdvisory<'a>>,
+}
+
+/// One PostgreSQL baseline advisory as doctor reports it. Advisories never
+/// change the outcome: doctor passed before they were decided.
+#[derive(Serialize)]
+struct DoctorAdvisory<'a> {
+    code: &'static str,
+    severity: &'static str,
+    message: &'static str,
+    observed: ObservedNumbers<'a>,
+}
+
+/// The observed numbers of one advisory, as a JSON object in the order the
+/// advisory decided them.
+struct ObservedNumbers<'a>(&'a [(&'static str, i64)]);
+
+impl Serialize for ObservedNumbers<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap as _;
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (name, value) in self.0 {
+            map.serialize_entry(name, value)?;
+        }
+        map.end()
+    }
 }
 
 #[derive(Serialize)]
@@ -1930,7 +1956,7 @@ where
         }
         Command::Doctor(args) => {
             return match doctor::run(&args.runtime_config) {
-                Ok(()) => write_doctor_success(format, stdout, stderr),
+                Ok(advisories) => write_doctor_success(&advisories, format, stdout, stderr),
                 Err(diagnostic) => {
                     let (artifact, action) =
                         if diagnostic.code.starts_with("startup.runtime_config") {
@@ -10389,6 +10415,7 @@ fn write_dev_success(
 }
 
 fn write_doctor_success(
+    advisories: &[registry_breg::postgres::BaselineAdvisory],
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -10397,6 +10424,15 @@ fn write_doctor_success(
         ok: true,
         command: "doctor",
         checked: &doctor::CHECKED_DEPENDENCIES,
+        advisories: advisories
+            .iter()
+            .map(|advisory| DoctorAdvisory {
+                code: advisory.code(),
+                severity: advisory.severity().as_str(),
+                message: advisory.message(),
+                observed: ObservedNumbers(advisory.observed()),
+            })
+            .collect(),
     };
     let result = if format == OutputFormat::Json {
         serde_json::to_writer_pretty(&mut *stdout, &report)
@@ -10415,6 +10451,20 @@ fn write_doctor_success(
                 .map(|dependency| (*dependency, "pass".to_owned()))
                 .collect();
             lines.pairs(&pairs);
+            if !report.advisories.is_empty() {
+                lines.heading("PostgreSQL advisories:");
+                for advisory in &report.advisories {
+                    lines.item(&format!("{}  {}", advisory.severity, advisory.code));
+                    lines.prose(2, advisory.message);
+                    let observed: Vec<(&str, String)> = advisory
+                        .observed
+                        .0
+                        .iter()
+                        .map(|(name, value)| (*name, value.to_string()))
+                        .collect();
+                    lines.pairs_at(2, &observed);
+                }
+            }
             stdout.write_all(lines.finish().as_bytes())
         }
     };
@@ -13167,19 +13217,108 @@ mod tests {
             ),
             (
                 OutputFormat::Json,
-                "{\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"eventDestinations\",\n    \"reviewBindings\",\n    \"authentication\",\n    \"fieldEncryption\"\n  ]\n}\n",
+                "{\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"eventDestinations\",\n    \"reviewBindings\",\n    \"authentication\",\n    \"fieldEncryption\"\n  ],\n  \"advisories\": []\n}\n",
             ),
         ] {
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
 
             assert_eq!(
-                write_doctor_success(format, &mut stdout, &mut stderr),
+                write_doctor_success(&[], format, &mut stdout, &mut stderr),
                 ExitCode::SUCCESS
             );
             assert_eq!(plain(&stdout), expected);
             assert!(stderr.is_empty());
         }
+    }
+
+    #[test]
+    fn doctor_reports_postgres_advisories_after_the_passing_checks_without_failing() {
+        let settings = registry_breg::postgres::BaselineSettings {
+            max_connections: Some("20".to_owned()),
+            superuser_reserved_connections: Some("3".to_owned()),
+            reserved_connections: Some("1".to_owned()),
+            autovacuum: Some("on".to_owned()),
+            track_counts: Some("off".to_owned()),
+            pg_stat_statements_installed: Some(false),
+        };
+        let advisories = registry_breg::postgres::advise(&settings, 9);
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            write_doctor_success(&advisories, OutputFormat::Human, &mut stdout, &mut stderr),
+            ExitCode::SUCCESS
+        );
+        assert!(stderr.is_empty());
+        let human = plain(&stdout);
+        let (checks, advisory_section) = human
+            .split_once("\n\nPostgreSQL advisories:\n")
+            .expect("advisories follow the passing checks in their own section");
+        assert!(checks.starts_with("10 dependency checks passed.\n"));
+        assert!(checks.ends_with("fieldEncryption      pass"));
+        assert_eq!(
+            advisory_section,
+            "  warning  postgres.connections.pool_over_half\n\
+             \u{20}   one replica's runtime pool may take more than half of the connections PostgreSQL\n\
+             \u{20}   leaves for ordinary roles, leaving too few for other replicas, operator tooling, and\n\
+             \u{20}   maintenance\n\
+             \u{20}   poolMaxSize                   9\n\
+             \u{20}   maxConnections                20\n\
+             \u{20}   superuserReservedConnections  3\n\
+             \u{20}   reservedConnections           1\n\
+             \u{20}   usableConnections             16\n\
+             \u{20} warning  postgres.track_counts.off\n\
+             \u{20}   track_counts is off, so autovacuum cannot tell which tables need vacuuming or\n\
+             \u{20}   analyzing\n\
+             \u{20} information  postgres.pg_stat_statements.unavailable\n\
+             \u{20}   pg_stat_statements is not installed in this database, so per-statement timings are\n\
+             \u{20}   unavailable when diagnosing load\n"
+        );
+
+        let mut stdout = Vec::new();
+        assert_eq!(
+            write_doctor_success(&advisories, OutputFormat::Json, &mut stdout, &mut stderr),
+            ExitCode::SUCCESS
+        );
+        assert!(stderr.is_empty());
+        let report: Value = serde_json::from_slice(&stdout).expect("doctor JSON parses");
+        assert_eq!(report["ok"], true);
+        assert_eq!(report["checked"].as_array().map(Vec::len), Some(10));
+        assert_eq!(
+            report["advisories"],
+            json!([
+                {
+                    "code": "postgres.connections.pool_over_half",
+                    "severity": "warning",
+                    "message": advisories[0].message(),
+                    "observed": {
+                        "poolMaxSize": 9,
+                        "maxConnections": 20,
+                        "superuserReservedConnections": 3,
+                        "reservedConnections": 1,
+                        "usableConnections": 16
+                    }
+                },
+                {
+                    "code": "postgres.track_counts.off",
+                    "severity": "warning",
+                    "message": advisories[1].message(),
+                    "observed": {}
+                },
+                {
+                    "code": "postgres.pg_stat_statements.unavailable",
+                    "severity": "information",
+                    "message": advisories[2].message(),
+                    "observed": {}
+                }
+            ])
+        );
+        let keys = std::str::from_utf8(&stdout).expect("doctor JSON is UTF-8");
+        assert!(
+            keys.find("\"poolMaxSize\"") < keys.find("\"usableConnections\""),
+            "observed numbers keep the order the advisory decided them in"
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 //! PostgreSQL-only runtime and migration safety kernel.
 
+mod baseline;
 mod catalog;
 mod config;
 mod context;
@@ -14,6 +15,9 @@ mod revision_read;
 mod roles;
 mod schema;
 
+pub use baseline::{
+    advise, inspect_baseline, AdvisorySeverity, BaselineAdvisory, BaselineSettings,
+};
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
 pub use catalog::{

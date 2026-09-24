@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use registry_breg::postgres::BaselineAdvisory;
 use registry_breg::runtime_config::RuntimeConfigError;
 use registry_breg::startup::{prepare, StartupError};
 use registry_breg::{Diagnostic, DiagnosticSeverity};
@@ -24,9 +25,10 @@ pub(crate) const CHECKED_DEPENDENCIES: [&str; 10] = [
 ];
 
 /// Run startup preparation without binding a listener and discard its unbound
-/// prepared state. This verifies only the dependencies preparation currently
-/// opens and intentionally owns no parallel readiness logic.
-pub(crate) fn run(runtime_config: &Path) -> Result<(), Diagnostic> {
+/// prepared state, keeping only the PostgreSQL baseline advisories it decided.
+/// This verifies only the dependencies preparation currently opens and
+/// intentionally owns no parallel readiness logic.
+pub(crate) fn run(runtime_config: &Path) -> Result<Vec<BaselineAdvisory>, Diagnostic> {
     if !runtime_config.is_absolute() {
         return Err(diagnostic(
             "startup.runtime_config.path_invalid",
@@ -47,7 +49,7 @@ pub(crate) fn run(runtime_config: &Path) -> Result<(), Diagnostic> {
         })?;
     runtime
         .block_on(prepare(runtime_config))
-        .map(drop)
+        .map(|prepared| prepared.postgres_advisories().to_vec())
         .map_err(startup_diagnostic)
 }
 

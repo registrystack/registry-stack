@@ -458,6 +458,118 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn prepared_server_sessions_are_named_bounded_and_advised_with_pg_stat_statements() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
+    let database = TestDatabase::create(4).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let fixture = StartupFixture::new();
+    let signing =
+        generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("fixture signing key generates");
+    let provisional = PackageFixture::build(&fixture.root, fingerprint(1), &signing);
+    let provisional_context = provisional.context(PackageIntent::InitialActivation);
+    let verified_provisional = load_package(&provisional.root, &provisional_context)
+        .expect("provisional package loads enough to install schema");
+    install_compiled_schema(
+        &migration,
+        verified_provisional.registry(),
+        &database.runtime_role,
+    )
+    .await
+    .expect("compiled schema installs");
+    let expected_catalog = ExpectedManagedCatalog::compiled(verified_provisional.registry());
+    let schema_fingerprint =
+        managed_schema_fingerprint(&migration, &database.runtime_role, &expected_catalog)
+            .await
+            .expect("compiled schema fingerprints");
+    drop(provisional);
+    let package = PackageFixture::build(&fixture.root, schema_fingerprint, &signing);
+    let context = package.context(PackageIntent::InitialActivation);
+    let verified = load_package(&package.root, &context).expect("final package verifies");
+    initialize_registry_state_for_catalog_test(
+        &migration,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(verified.registry()),
+        RegistryStateTestIdentity {
+            package_id: &verified.manifest().package_id,
+            environment: &verified.manifest().environment,
+            instance_id: &verified.manifest().instance_id,
+            database_id: &verified.manifest().database_id,
+            package_revision: &verified.manifest().package_revision,
+            package_sequence: i64::try_from(verified.manifest().sequence)
+                .expect("fixture sequence fits"),
+        },
+    )
+    .await
+    .expect("Registry state initializes");
+    migration_task.abort();
+    let idp = MockIdp::start().await;
+    let config_path = fixture.write_static_jwks_config(
+        &package,
+        &database.migration_role,
+        &database.runtime_role,
+        &idp,
+        Some("0123456789abcdef0123456789abcdef"),
+    );
+
+    let prepared =
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .expect("prepared server verifies package, database, audit, and OIDC");
+    let pool = prepared
+        .runtime_pool_for_test()
+        .expect("the verified startup path exposes its runtime pool");
+    let client = pool.get_for_test().await.expect("runtime session opens");
+    let row = client
+        .query_one(
+            "SELECT current_setting('application_name'),
+                    setting,
+                    source
+             FROM pg_catalog.pg_settings
+             WHERE name = 'idle_in_transaction_session_timeout'",
+            &[],
+        )
+        .await
+        .expect("runtime session reads its own settings");
+    assert_eq!(row.get::<_, String>(0), "breg");
+    assert_eq!(row.get::<_, String>(1), "120000");
+    assert_eq!(row.get::<_, String>(2), "client");
+    drop(client);
+    let codes = prepared
+        .postgres_advisories()
+        .iter()
+        .map(|advisory| advisory.code())
+        .collect::<Vec<_>>();
+    assert!(codes.contains(&"postgres.pg_stat_statements.unavailable"));
+    let connections = prepared
+        .postgres_advisories()
+        .iter()
+        .find(|advisory| advisory.code().starts_with("postgres.connections."))
+        .expect("the connection numbers are always reported");
+    assert_eq!(connections.observed()[0], ("poolMaxSize", 4));
+    assert_eq!(connections.observed()[1].0, "maxConnections");
+    assert!(connections.observed()[1].1 > 0);
+    drop(prepared);
+
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION pg_stat_statements")
+        .await
+        .expect("the test database installs pg_stat_statements");
+    let prepared =
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .expect("catalog verification and startup accept pg_stat_statements");
+    assert_ready(&prepared, StatusCode::OK).await;
+    assert!(prepared
+        .postgres_advisories()
+        .iter()
+        .all(|advisory| !advisory.code().starts_with("postgres.pg_stat_statements.")));
+    drop(prepared);
+    idp.stop().await;
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready() {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
