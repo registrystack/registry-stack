@@ -2448,6 +2448,99 @@ mod tests {
         assert!(error.contains("additionalProperties"), "{error}");
     }
 
+    // registrystack/registry-stack#1341 (Codex follow-up): a displaySchema
+    // can constrain a projected property through a root `allOf` branch
+    // instead of the root `properties` map. `allOf` requires every branch to
+    // validate the whole display object, so each branch's own `properties`,
+    // `patternProperties`, and `additionalProperties: false` provably apply
+    // too, even when the root alone would admit the source field.
+    #[test]
+    fn check_refuses_an_allof_branch_property_whose_type_the_source_never_produces() {
+        // Every branch's own object schema must stay closed the same way the
+        // root displaySchema does (registry-casework-core's
+        // `object_schemas_are_closed`), so the branch below declares all
+        // four projected fields, three compatibly and one, `authorizationConditions`, not.
+        let yaml = CASEWORK_YAML.replace(
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n",
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n      allOf:\n        - additionalProperties: false\n          properties:\n            record: {type: string}\n            licensedActivities: {type: array}\n            authorizationConditions: {type: number}\n            supportingReference: {type: string}\n",
+        );
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(error.contains("allOf branch 1"), "{error}");
+        assert!(error.contains("authorizationConditions"), "{error}");
+        assert!(error.contains("number"), "{error}");
+        assert!(error.contains("string"), "{error}");
+    }
+
+    #[test]
+    fn check_refuses_a_projected_field_an_allof_branch_closes_off() {
+        let yaml = CASEWORK_YAML.replace(
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n",
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n      allOf:\n        - additionalProperties: false\n          properties:\n            record: {type: string}\n            licensedActivities: {type: array}\n            supportingReference: {type: string}\n",
+        );
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(error.contains("allOf branch 1"), "{error}");
+        assert!(error.contains("authorizationConditions"), "{error}");
+        assert!(error.contains("additionalProperties"), "{error}");
+        // The branch's other declared properties are compatible, so they
+        // must not also be reported.
+        assert!(!error.contains("licensedActivities"), "{error}");
+    }
+
+    #[test]
+    fn check_refuses_an_allof_branch_that_admits_no_value() {
+        let yaml = CASEWORK_YAML.replace(
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n",
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n      allOf:\n        - false\n",
+        );
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(error.contains("allOf branch 1"), "{error}");
+        assert!(error.contains("admits no value"), "{error}");
+    }
+
+    #[test]
+    fn check_accepts_a_compatible_allof_branch() {
+        let yaml = CASEWORK_YAML.replace(
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n",
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n      allOf:\n        - additionalProperties: false\n          properties:\n            record: {type: string}\n            licensedActivities: {type: array}\n            authorizationConditions: {type: string}\n            supportingReference: {type: string}\n",
+        );
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+
+        check_source_descriptions(&project).unwrap();
+    }
+
+    // anyOf does not require every branch to validate the whole display
+    // object, only that some branch does, so a mismatch inside one branch is
+    // not provable this way; it is left to the runtime check, as documented
+    // in `display_schema`.
+    #[test]
+    fn check_accepts_disagreeing_anyof_branches_as_unprovable() {
+        // Each branch is closed, the same way `check_refuses_an_allof_branch_property_whose_type_the_source_never_produces`'s
+        // branch is, and each one alone would refuse `authorizationConditions`
+        // (source: string), but `anyOf` only needs one branch to validate, so
+        // neither branch's own constraints provably apply.
+        let yaml = CASEWORK_YAML.replace(
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n",
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n      anyOf:\n        - additionalProperties: false\n          properties:\n            authorizationConditions: {type: number}\n        - additionalProperties: false\n          properties:\n            authorizationConditions: {type: boolean}\n",
+        );
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+
+        check_source_descriptions(&project).unwrap();
+    }
+
     #[test]
     fn check_refuses_an_undeclared_field_a_pattern_does_not_match() {
         // A patternProperties entry that cannot match the disclosed name
