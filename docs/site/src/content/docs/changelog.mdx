@@ -158,6 +158,38 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-evidencectl/src/source_cli.rs, diff_and_apply_refuse_a_next_fact_schema_that_drops_a_fact_a_derivation_reads;
     products/breg/evidence/tests/verify-composition.py, verify(). */}
 
+- BREAKING: `bregctl test --baseline-runtime-config` rehearses the successor
+  migration before it writes a receipt. It rebuilds the active package's
+  schema from its signed sources on the disposable test database, runs the
+  migration in apply order, requires the candidate schema, and rolls back.
+  A plan that used to fail only at `apply` now fails `test`, so `package`
+  cannot sign it, and a predecessor this `bregctl` cannot rebuild is refused
+  as `migration.rehearsal.baseline_unavailable` or
+  `migration.rehearsal.baseline_not_reproducible`. The rehearsal runs over
+  empty tables, so it does not prove data-dependent steps. A failure reports
+  the SQLSTATE and the object names, never the PostgreSQL message. See
+  [what `test` rehearses](../operate/breg-changes/#what-test-rehearses).
+
+{/* Evidence: crates/registry-breg/src/postgres/rehearsal.rs;
+    crates/registry-bregctl/src/test_lifecycle.rs;
+    crates/registry-breg/tests/postgres_migration.rs, real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse. */}
+
+- BREAKING: `bregctl history rebaseline` no longer refuses a registry holding
+  more than 1,000 live rows. It verifies every live row against its journal
+  head in pages of 1,000 inside one transaction, so a registry of any size
+  can regain snapshot coverage after an erasure. The codes
+  `history.rebaseline.live_rows.budget_exceeded` and
+  `field_encryption.erase_history.rebaseline.live_rows_budget_exceeded` are
+  gone, and so are `HistoryRebaselineError::LiveRowBudgetExceeded` and
+  `MAX_REBASELINE_LIVE_ROWS` in `registry-breg`. The run holds every entity
+  table exclusively, reads included, until it commits, so a larger registry
+  means a longer read and write outage: size a maintenance window from a
+  rehearsal. See
+  [restore snapshot coverage after an erasure](../operate/breg-retention/#restore-snapshot-coverage-after-an-erasure).
+
+{/* Evidence: crates/registry-breg/src/history_migration.rs, verify_every_live_row_matches_its_journal_head();
+    crates/registry-breg/tests/postgres_history_rebaseline.rs, rebaseline_refuses_a_mismatch_on_a_later_page. */}
+
 - Raising a `text` field's `maxLength` is a compatible additive change,
   `field_length_widened`, applied live: the successor replaces the column's
   length check and validates the stored rows, with no reviewed migration.
