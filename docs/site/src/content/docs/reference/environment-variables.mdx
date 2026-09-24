@@ -166,7 +166,7 @@ preserves the previous set. It does not verify release authenticity.
 | `BREG_MCP_LOG` | Level for the JSON operational records `breg-mcp` writes on standard output. | Defaults to `info`. |
 | `BREG_REVIEW_LOG` | Level for the JSON operational records `breg-review` writes on standard output. | Defaults to `info`. |
 
-Both are closed enumerations, not tracing filter directives. Each accepts exactly `error`, `warn`, and `info`; any other value is refused, and the process reports the error on standard error and exits with status 2 instead of falling back to `info`. `BREG_REVIEW_LOG` applies to the `breg_review` and `registry_breg_review` targets. Startup refusals, such as an invalid runtime configuration, go to standard error, apart from the JSON records on standard output.
+Both are closed enumerations, not tracing filter directives. Each accepts exactly `error`, `warn`, and `info`; any other value is refused, and the process reports the error on standard error and exits with status 2 instead of falling back to `info`. `BREG_REVIEW_LOG` applies to the `breg_review` and `registry_breg_review` targets. A runtime configuration that cannot be loaded stops either process with status 1: `breg-mcp` reports it as an `ERROR` JSON record on standard output, and `breg-review` reports it on standard error. [Operate the citizen chat assistant](../../operate/breg-mcp/) lists the records worth watching.
 
 ## Source
 

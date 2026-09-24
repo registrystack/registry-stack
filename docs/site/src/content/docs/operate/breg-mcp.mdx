@@ -1,0 +1,253 @@
+---
+title: Operate the citizen chat assistant
+description: Run breg-mcp and breg-review behind your proxy, probe them, read their logs and audit journals, rotate their keys, and upgrade them.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-25"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+You have two runtime configurations that pass `check`, one for the `breg-mcp` gateway and one for
+the `breg-review` page, and you want both serving behind your own TLS proxy. This page covers what
+the proxy owns, how to probe and watch both processes, where their audit journals live, how to
+rotate their keys, and how to upgrade them.
+
+Writing the configurations, preparing the registry, and preparing the authorization server are in
+[Configure the citizen chat assistant](../../configure/breg-mcp/). To see both services work
+end to end first, [run the local journey](../../tutorials/first-citizen-mcp/).
+
+## Put a proxy in front of both services
+
+Neither service terminates TLS. With `tlsTermination: operator-controlled-upstream`, your proxy
+owns the public listener and forwards plain HTTP to a loopback or private address. The proxy has
+these responsibilities:
+
+- **Terminate TLS** for both public origins.
+- **Keep the gateway's `Host`.** On `/mcp`, the gateway refuses with 403 any request whose `Host`
+  does not match the authority of `resourceServer.resource`. Forward the original `Host`, or
+  rewrite it to that authority.
+- **Never add an `Origin` header.** The gateway refuses any `/mcp` request that carries one, since
+  a chat host is not a browser page. The refusal happens before the token is verified.
+- **Pass `Authorization` through unchanged** to the gateway.
+- **Rate limit at the edge.** The gateway charges its per-citizen and per-client limits only after
+  a token verifies, so requests with missing or invalid tokens cost nothing in process. The review
+  page reads no peer address and no forwarded header, so `limits.globalSignIn` is one ceiling
+  shared by everyone on `/signin` and `/signin/callback`. Limit both services by client address at
+  the proxy, and give the sign-in routes their own tighter limit.
+- **Serve the review page at `publicOrigin`.** The page builds its sign-in redirect URI from
+  `publicOrigin`, so the origin browsers see must be exactly that value.
+
+The gateway checks `Host` and `Origin` on `/mcp` only. `/health`, `/ready`, and the
+protected-resource metadata routes answer any host.
+
+{/* Evidence: crates/registry-breg-mcp/src/server.rs, require_resource_host(), forbidden();
+    crates/registry-breg-mcp/src/inbound.rs, authenticate();
+    crates/registry-breg-review/src/journal.rs, network address;
+    crates/registry-breg-review/src/config.rs, default_global_sign_in(), CALLBACK_PATH. */}
+
+## Probe health and readiness
+
+Both services answer `GET /health` and `GET /ready` with a JSON body and `Cache-Control:
+no-store`. Probe them over HTTP from your platform.
+
+| Route | `breg-mcp` | `breg-review` |
+|---|---|---|
+| `GET /health` | 200 `{"status":"alive"}` | 200 `{"status":"alive"}` |
+| `GET /ready`, journal writable | 200 `{"status":"ready"}` | 200 `{"status":"ready"}` |
+| `GET /ready`, journal not writable | 503 `{"status":"unavailable"}` | 503 `{"status":"not-ready"}` |
+
+Readiness reflects the audit journal alone. Neither route calls the registry or the authorization
+server, so a ready service can still answer a tool call with `registry-unavailable` or a sign-in
+with an error page. Watch the warnings in the next section for those.
+
+{/* Evidence: crates/registry-breg-mcp/src/server.rs, health(), ready();
+    crates/registry-breg-mcp/src/gateway.rs, ready();
+    crates/registry-breg-review/src/lib.rs, health(), ready();
+    crates/registry-breg-review/src/journal.rs, ready(). */}
+
+## Read the logs
+
+Each service writes one JSON object per line on standard output. The level is set by
+`BREG_MCP_LOG` or `BREG_REVIEW_LOG`, which accept exactly `error`, `warn`, or `info` and default to
+`info`. Any other value stops the process before it starts, with a message on standard error and
+exit status 2. See [environment variables](../../reference/environment-variables/).
+
+Startup failures take different channels. `breg-mcp` writes an `ERROR` JSON line on standard output
+and exits with status 1. `breg-review` writes a plain line starting `breg-review:` on standard error
+and exits with status 1. Collect both streams.
+
+These records are the ones to watch:
+
+| Service | Level | Message |
+|---|---|---|
+| `breg-mcp` | info | `tool call`, with `request_id`, `tool`, and `outcome` |
+| `breg-mcp` | warn | `the access-token key set is unavailable` |
+| `breg-mcp` | error | `tool audit append failed` |
+| `breg-review` | warn | `a rate limit refused a request` |
+| `breg-review` | warn | `the registry could not answer a review` |
+| `breg-review` | error | `an action could not be audited` |
+
+Neither service logs a token, a secret, a cookie, or a field value. The `request_id` of a gateway
+log record matches the `requestId` of its two audit records.
+
+{/* Evidence: crates/registry-breg-mcp/src/main.rs, BREG_MCP_LOG;
+    crates/registry-breg-mcp/src/inbound.rs, authenticate();
+    crates/registry-breg-mcp/src/gateway.rs, tool audit append failed;
+    crates/registry-breg-review/src/main.rs, BREG_REVIEW_LOG;
+    crates/registry-breg-review/src/lib.rs, a rate limit refused a request. */}
+
+## Keep the audit journals
+
+Each service keeps its own hash-chained journal at `audit.path`, separate from the registry's
+audit. The registry still audits every read and write it performs for the gateway's delegated
+token.
+
+| Service | Records | Pseudonym classes |
+|---|---|---|
+| `breg-mcp` | Two per tool call: an `attempt` before any registry call, then an `outcome` of `ok` or a tool error code | `breg-mcp-principal-v1`, `breg-mcp-client-v1` |
+| `breg-review` | One per step of `sign-in`, `read`, `submit`, and `sign-out`, with an outcome of `attempted`, `succeeded`, `conflicted`, `refused`, or `failed` | `breg-review-principal-v1`, `breg-review-client-v1` |
+
+A record names the citizen and the client only by keyed HMAC-SHA-256 pseudonym, derived from the
+issuer and the subject or client identifier. The gateway records the tool and a request
+identifier; the review page records the change request identifier. Neither journal holds a field
+value, a prompt, a tool argument, a token, a cookie, or a network address. Each line is an
+envelope carrying the record, the previous line's hash, and its own hash.
+
+The pseudonym classes and the audit key both enter the derivation, so the same citizen has a
+different pseudonym in each journal, and a different one again after the audit key changes.
+Correlate one person across the two journals through the registry's audit, or by recomputing
+pseudonyms with each service's key; the journals alone do not join.
+
+{/* Evidence: crates/registry-breg-mcp/src/audit.rs, ToolAudit;
+    crates/registry-breg-mcp/src/inbound.rs, PRINCIPAL_CLASS, CLIENT_CLASS;
+    crates/registry-breg-review/src/journal.rs, PRINCIPAL_CLASS, CLIENT_CLASS, Outcome. */}
+
+The journal fails closed. A tool call whose attempt cannot be recorded never reaches the registry,
+and a review step that cannot be recorded is refused. Give each journal a directory that meets
+these rules:
+
+- The runtime user owns the directory, and neither group nor others may write to it. The service
+  creates the directory when it is missing.
+- One process writes one journal. The service holds a lock file, `<path>.lock`, beside it; run
+  every replica with its own `audit.path`.
+- The active file grows to its segment size, 64 MiB by default, and is then sealed beside it with
+  an eight-digit sequence suffix. The service never deletes a sealed segment, so size the volume
+  for the journal's growth.
+
+On start, each service verifies the existing chain with its audit key and refuses to serve if it
+does not verify. Neither binary has a verify, archive, or prune command.
+
+{/* Evidence: crates/registry-platform-audit/src/segmented_jsonl.rs, DurableSegmentedAuditLog;
+    crates/registry-breg-mcp/src/gateway.rs, call();
+    crates/registry-breg-review/src/journal.rs, MAXIMUM_SEGMENT_BYTES. */}
+
+## Rotate keys and secrets
+
+Both services read every secret once, at startup. Replacing a secret file takes effect only on
+the next restart.
+
+**Client keys.** The gateway's exchange client and the review page's sign-in client each
+authenticate with a private JWK. To rotate one, register the new public key with the authorization
+server beside the old one, replace the secret file, restart the service, and then remove the old
+public key.
+
+**Issuer signing keys.** With `jwks.kind: uri`, the gateway refetches the key set when a token names
+a key it does not hold, so the authorization server can publish a new key and sign with it without
+a gateway restart. With `jwks.kind: static`, add the new public key to the key set secret and
+restart before the authorization server signs with it. The review page always fetches the key set
+named by the issuer's discovery document.
+
+**Audit keys.** A running journal cannot change key: a service started with a new audit key over an
+existing journal fails its chain check and exits with status 1. To rotate the key, point
+`audit.path` at a new file and restart. Keep the old journal and the old key together for as long
+as your retention policy requires, since the key is what verifies that journal and recomputes its
+pseudonyms.
+
+{/* Evidence: crates/registry-breg-mcp/src/config.rs, InlineCredential;
+    crates/registry-breg-mcp/src/inbound.rs, uri_fetcher();
+    crates/registry-platform-oidc/src/lib.rs, JwksFetcher;
+    crates/registry-breg-review/src/lib.rs, JwksFetcher;
+    crates/registry-platform-audit/src/segmented_jsonl.rs, DurableSegmentedAuditLog. */}
+
+## Upgrade
+
+Run `check` from the new binary against the configuration you already serve, then replace the
+binary and restart:
+
+```sh
+breg-mcp --runtime-config /etc/breg-mcp/runtime.yaml check
+breg-review --runtime-config /etc/breg-review/runtime.yaml check
+```
+
+Both services stop accepting connections on `SIGTERM` or `SIGINT` and finish the requests already
+in flight. A restart loses different state in each:
+
+- **`breg-mcp`** keeps no session between requests. Drafts live in the registry, so a chat host
+  carries on after a restart.
+- **`breg-review`** keeps sessions and pending sign-ins in memory. A restart signs every citizen
+  out and abandons sign-ins in progress; the citizen opens the review link again and signs in.
+
+For the same reason, run one review page instance, or route each browser to the same instance with
+sticky sessions. The in-process limits count per instance, so each replica you add raises the
+effective limit.
+
+{/* Evidence: crates/registry-breg-mcp/src/main.rs, shutdown_signal();
+    crates/registry-breg-mcp/src/server.rs, NeverSessionManager;
+    crates/registry-breg-review/src/lib.rs, SIGTERM;
+    crates/registry-breg-review/README.md. */}
+
+## Run the release images
+
+The Base Registry Engine release set includes a `breg-mcp` image and a `breg-review` image beside
+the `breg` image. Each carries its binary alone, on a distroless base with no shell. The release manifest
+records the promoted digest of each image; pin that digest instead of the movable tag.
+
+{/* Reconcile: image names with release wiring */}
+
+Mount the runtime configuration and the secrets read-only, and give the journal a writable
+directory the image user owns. Inside a container, bind the listener on `0.0.0.0`, which requires
+`networkExposure: container-private`:
+
+```yaml
+listener:
+  bind: 0.0.0.0:8110
+  tlsTermination: operator-controlled-upstream
+  networkExposure: container-private
+```
+
+{/* Evidence: crates/registry-breg-mcp/src/config.rs, valid_listener(). */}
+
+A gateway container then looks like this, with the review page following the same pattern on port
+8115:
+
+{/* Reconcile: image names with release wiring; default command, configuration path,
+    journal directory, and image user from release/docker/Dockerfile.breg-mcp and
+    Dockerfile.breg-review. */}
+
+```sh
+BREG_MCP_IMAGE='ghcr.io/registrystack/breg-mcp@sha256:<digest-from-the-release-manifest>'
+docker run --rm \
+  --mount type=bind,source=/etc/breg-mcp/runtime.yaml,target=/etc/breg-mcp/runtime.yaml,readonly \
+  --mount type=bind,source=/run/secrets/breg-mcp,target=/run/secrets/breg-mcp,readonly \
+  --mount type=volume,source=breg-mcp-audit,target=/var/lib/breg-mcp \
+  --publish 127.0.0.1:8110:8110 \
+  "$BREG_MCP_IMAGE"
+```
+
+Set `audit.path` to a file under the mounted journal directory, such as
+`/var/lib/breg-mcp/audit/audit.jsonl`. Run `check` in the same image before you serve:
+
+```sh
+docker run --rm \
+  --mount type=bind,source=/etc/breg-mcp/runtime.yaml,target=/etc/breg-mcp/runtime.yaml,readonly \
+  --mount type=bind,source=/run/secrets/breg-mcp,target=/run/secrets/breg-mcp,readonly \
+  "$BREG_MCP_IMAGE" \
+  --runtime-config /etc/breg-mcp/runtime.yaml check
+```
+
+The secret files must be readable by the image user. The image carries no shell and no HTTP
+client, so probe `/health` and `/ready` from the platform.

@@ -103,6 +103,7 @@ EXCLUDED_BREG_TUTORIALS=(
 	tutorials/review-registry-changes             # needs psql against the quickstart database and an editor step on change-control configuration; replayable, not yet specified as a journey here
 	tutorials/review-breg-changes-in-casework     # joins the BReg and Casework runtimes with direct HTTP calls into both; the Casework product contract gate replays the same journey, not yet specified as a journey here
 	tutorials/send-registry-events-to-a-webhook   # needs the business demo launcher and its webhook receiver, not the generic quickstart this gate starts
+	tutorials/first-citizen-mcp                   # one maintained script, products/breg/acceptance/citizen-address-correction/run-local.sh, needs Docker and a workspace build; verified in reader mode
 )
 
 in_list() {

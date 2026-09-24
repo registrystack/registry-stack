@@ -137,7 +137,8 @@ standing agent: it may read and author change-request drafts, and `check` refuse
 operation with `access_profile.standing_agent.operation_forbidden`, any direct write with
 `access_profile.standing_agent.direct_mutation_forbidden`, and any immediate action with
 `access_profile.standing_agent.action_forbidden`. The person submits each draft through a profile
-they use directly.
+they use directly. The [citizen chat assistant](../../configure/breg-mcp/) is built on such a
+profile.
 
 {/* Evidence: crates/registry-breg/src/auth.rs, RegistryAuthenticator::authenticate();
     crates/registry-breg/src/api/mod.rs, authorize_profile_claims();

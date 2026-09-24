@@ -47,6 +47,10 @@ its own deployment contract and adopter tooling, and each one is optional.
   PostgreSQL schema, a REST API, per-profile permissions, revision history, and
   an audit journal.
   Docs: [Base Registry Engine overview](https://docs.registrystack.org/dev/start/breg-quickstart/).
+  Two supporting services run beside it: `breg-mcp`, an MCP gateway a chat
+  host uses to read one verified citizen's own data and draft a change request,
+  and `breg-review`, the page where that citizen reviews and submits the draft.
+  Docs: [Run a citizen chat assistant locally](https://docs.registrystack.org/dev/tutorials/first-citizen-mcp/).
 - **Registry Relay:** scoped, read-only HTTP APIs over an existing read-only
   SQLite source. One authored contract compiles and seals into the package the
   `relay` service verifies before it opens a listener.
@@ -142,7 +146,9 @@ flowchart LR
   `breg` binary, Evidence Gateway in `crates/registry-evidence` with one
   `evidence` binary, Registry Casework in `crates/registry-casework` with one
   `casework` binary, and Registry Scheduling in `crates/registry-scheduling`
-  with one `scheduling` binary.
+  with one `scheduling` binary. The Base Registry Engine citizen services live
+  in `crates/registry-breg-mcp` (`breg-mcp`) and `crates/registry-breg-review`
+  (`breg-review`).
 - `products/`: product-owned docs, examples, Docker inputs, specs, security
   material, scripts, performance harnesses, and fixtures that are not normal
   workspace crates.
