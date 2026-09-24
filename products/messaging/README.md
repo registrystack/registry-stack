@@ -20,7 +20,8 @@ Pre-1.0 and under construction. This version is the product skeleton:
 - the package ledger: the runtime serves only the package digest
   `messagingctl apply` recorded, and a change applies on restart;
 - the unauthenticated `/health` and `/ready` routes, the authenticated
-  message submission, status, cancel, and template preview routes, and
+  message submission, status, cancel, and template preview routes, the
+  provider callback routes each provider's verifier authenticates, and
   `/metrics` on a separate private listener;
 - message submission under a caller-scoped `Idempotency-Key`, rendered from
   the active package at acceptance and recorded with its dispatch job and
@@ -30,16 +31,20 @@ Pre-1.0 and under construction. This version is the product skeleton:
   sender profile's dispatch policy, quarantine of a message whose send may
   have happened, and audit records written through an outbox the runtime
   publishes to the journal;
+- SMTP and HTTP provider delivery through the connections the runtime
+  configuration gives the package's providers, and verified provider
+  delivery callbacks whose receipts move a message's delivery report only
+  forward;
 - `messagingctl init`, `check`, `preview`, `apply`, and `messages list`,
   `show`, `retry`, `settle`, and `cancel`;
 - the Rust client for health and readiness;
 - the security invariant matrix, the problem catalog, and the generated
   OpenAPI and runtime schema.
 
-Provider delivery, provider egress, callbacks, quotas, and the retention
-sweep arrive in later slices. The `messaging` binary registers no provider
-transport yet, so the worker fails every message it claims with the attempt
-failure code `provider-unconfigured`, without a send, and logs a warning.
+Quotas and the retention sweep arrive in later slices. A provider the
+runtime configuration gives no connection is not activated, so the worker
+fails its messages with the attempt failure code `provider-unconfigured`,
+without a send, and startup logs a warning.
 
 ## Product boundary
 

@@ -23,9 +23,10 @@ use std::collections::BTreeMap;
 use serde_json::{json, Map, Value};
 
 use registry_messaging_core::{
-    type_uri, MessageStatus, ProblemCode, IDEMPOTENCY_KEY_HEADER, MAXIMUM_CORRELATION_ID_BYTES,
-    MAXIMUM_IDEMPOTENCY_KEY_BYTES, MAXIMUM_SENDER_BYTES, MESSAGING_RUNTIME_API_VERSION,
-    MESSAGING_RUNTIME_KIND, MESSAGING_RUNTIME_SCHEMA_ID, RUNTIME_SCHEMA_FILE,
+    type_uri, MessageStatus, ProblemCode, IDEMPOTENCY_KEY_HEADER, MAXIMUM_CALLBACK_HEADER_BYTES,
+    MAXIMUM_CALLBACK_URL_BYTES, MAXIMUM_CORRELATION_ID_BYTES, MAXIMUM_IDEMPOTENCY_KEY_BYTES,
+    MAXIMUM_SENDER_BYTES, MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND,
+    MESSAGING_RUNTIME_SCHEMA_ID, RUNTIME_SCHEMA_FILE,
 };
 
 use crate::config::{
@@ -33,7 +34,7 @@ use crate::config::{
     MAXIMUM_ASSERTION_ISSUER_CLIENTS, MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES, MAXIMUM_PAYLOAD_DAYS,
     MAXIMUM_RECORD_DAYS,
 };
-use crate::http::OPERATIONS;
+use crate::http::{RequestBody, OPERATIONS};
 use crate::messages::MASKED_CONTACT;
 
 /// File name of the generated OpenAPI document.
@@ -139,13 +140,28 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
         if !parameters.is_empty() {
             entry["parameters"] = Value::Array(parameters);
         }
-        if let Some(schema) = operation.request_body {
-            entry["requestBody"] = json!({
-                "required": true,
-                "content": {"application/json": {"schema": {
-                    "$ref": format!("#/components/schemas/{schema}")
-                }}}
-            });
+        match operation.request_body {
+            RequestBody::None => {}
+            RequestBody::Json(schema) => {
+                entry["requestBody"] = json!({
+                    "required": true,
+                    "content": {"application/json": {"schema": {
+                        "$ref": format!("#/components/schemas/{schema}")
+                    }}}
+                });
+            }
+            RequestBody::ProviderCallback => {
+                entry["requestBody"] = json!({
+                    "required": false,
+                    "description": "The body the provider sends, JSON or form-encoded, read \
+                                    only by the provider package's receipt script after the \
+                                    callback verified.",
+                    "content": {
+                        "application/json": {"schema": {}},
+                        "application/x-www-form-urlencoded": {"schema": {"type": "object"}}
+                    }
+                });
+            }
         }
         entry["security"] = if operation.authenticated {
             json!([{"bearer": []}])
@@ -581,6 +597,7 @@ fn install_runtime_constraints(schema: &mut Value) {
             }),
         );
     }
+    install_callback_verifier(schema);
     if let Some(providers) = schema
         .pointer_mut("/$defs/SecretProvidersConfig")
         .and_then(Value::as_object_mut)
@@ -592,6 +609,83 @@ fn install_runtime_constraints(schema: &mut Value) {
                 {"required": ["environment"], "properties": {"environment": {"$ref": "#/$defs/EnvironmentSecretProviderConfig"}}}
             ]),
         );
+    }
+}
+
+/// The callback verifier is decoded by the core's closed type, which the
+/// schema feature does not derive; publish its three kinds precisely in
+/// place of the open object the settings type declares.
+fn install_callback_verifier(schema: &mut Value) {
+    let header = json!({
+        "type": "string",
+        "minLength": 1,
+        "maxLength": MAXIMUM_CALLBACK_HEADER_BYTES,
+        "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+    });
+    let reference = json!({"type": "string", "pattern": SECRET_REFERENCE_SCHEMA_PATTERN});
+    let verifier = json!({
+        "description": "How the provider's delivery callbacks are authenticated, from a closed \
+                        set of algorithms. Required exactly when the package declares \
+                        `receipts: callback`; there is no unauthenticated kind.",
+        "oneOf": [
+            {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "HMAC-SHA1 over `url` and the request's query, followed by the \
+                                form parameters sorted by name, base64 in `header`.",
+                "required": ["kind", "url", "header", "secretRef"],
+                "properties": {
+                    "kind": {"type": "string", "const": "hmac-sha1-url-form"},
+                    "url": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": MAXIMUM_CALLBACK_URL_BYTES,
+                        "pattern": "^https?://[^?#]+$",
+                        "description": "The external callback URL the provider was given and \
+                                        signs, exactly as given, without a query or fragment."
+                    },
+                    "header": header,
+                    "secretRef": reference
+                }
+            },
+            {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "HMAC-SHA256 over the raw request body, in `header` as `encoding`.",
+                "required": ["kind", "header", "encoding", "secretRef"],
+                "properties": {
+                    "kind": {"type": "string", "const": "hmac-sha256-body"},
+                    "header": header,
+                    "encoding": {"type": "string", "enum": ["hex", "base64"]},
+                    "secretRef": reference
+                }
+            },
+            {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "A secret random token as the last segment of the callback path.",
+                "required": ["kind", "tokenRef"],
+                "properties": {
+                    "kind": {"type": "string", "const": "path-token"},
+                    "tokenRef": reference
+                }
+            }
+        ]
+    });
+    if let Some(definitions) = schema.pointer_mut("/$defs").and_then(Value::as_object_mut) {
+        definitions.insert("CallbackVerifierConfig".to_owned(), verifier);
+    }
+    if let Some(variants) = schema
+        .pointer_mut("/$defs/ProviderConnection/oneOf")
+        .and_then(Value::as_array_mut)
+    {
+        for variant in variants {
+            if let Some(member) = variant.pointer_mut("/properties/callbackVerifier") {
+                *member = json!({
+                    "anyOf": [{"$ref": "#/$defs/CallbackVerifierConfig"}, {"type": "null"}]
+                });
+            }
+        }
     }
 }
 
@@ -701,6 +795,60 @@ mod tests {
         assert_eq!(message["security"], json!([{"bearer": []}]));
         assert!(message["responses"]["404"].is_object());
         assert!(message["responses"]["401"].is_object());
+    }
+
+    #[test]
+    fn the_runtime_schema_publishes_the_closed_callback_verifier_kinds() {
+        let documents = runtime_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[RUNTIME_SCHEMA_FILE]).unwrap();
+        let kinds: Vec<&str> = document["$defs"]["CallbackVerifierConfig"]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|variant| variant["properties"]["kind"]["const"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            kinds,
+            ["hmac-sha1-url-form", "hmac-sha256-body", "path-token"]
+        );
+        let referenced = document["$defs"]["ProviderConnection"]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|variant| {
+                variant["properties"]["callbackVerifier"]["anyOf"][0]["$ref"]
+                    == "#/$defs/CallbackVerifierConfig"
+            })
+            .count();
+        assert_eq!(referenced, 1, "only the http connection names a verifier");
+    }
+
+    #[test]
+    fn the_callback_operations_take_no_bearer_and_any_provider_body() {
+        let documents = openapi_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[OPENAPI_FILE]).unwrap();
+        for path in [
+            registry_messaging_core::PROVIDER_CALLBACK_PATH,
+            registry_messaging_core::PROVIDER_CALLBACK_TOKEN_PATH,
+        ] {
+            let callback = &document["paths"][path]["post"];
+            assert_eq!(callback["security"], json!([]));
+            assert!(callback["responses"]["204"].is_object());
+            assert!(callback["responses"]["401"].is_null());
+            assert_eq!(
+                callback["responses"]["403"]["content"]["application/problem+json"]["schema"]
+                    ["allOf"][1]["properties"]["code"]["enum"],
+                json!(["callback.unverified"])
+            );
+            assert_eq!(
+                callback["responses"]["422"]["content"]["application/problem+json"]["schema"]
+                    ["allOf"][1]["properties"]["code"]["enum"],
+                json!(["callback.unreadable"])
+            );
+            let content = &callback["requestBody"]["content"];
+            assert!(content["application/json"].is_object());
+            assert!(content["application/x-www-form-urlencoded"].is_object());
+        }
     }
 
     #[test]

@@ -101,13 +101,13 @@ async fn concurrent_migrators_apply_each_version_once_and_both_succeed() {
     a.expect("the first concurrent migration");
     b.expect("the second concurrent migration");
     c.expect("the third concurrent migration");
-    assert_eq!(applied_versions(&isolated).await, [1, 2]);
+    assert_eq!(applied_versions(&isolated).await, [1, 2, 3]);
 
     first
         .migrate()
         .await
         .expect("a repeated migration applies nothing");
-    assert_eq!(applied_versions(&isolated).await, [1, 2]);
+    assert_eq!(applied_versions(&isolated).await, [1, 2, 3]);
 
     let runtime = PostgresStore::connect_runtime(&config, &secrets).expect("a runtime store");
     runtime.ready().await.expect("a migrated store is ready");

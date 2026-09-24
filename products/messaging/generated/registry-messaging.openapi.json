@@ -207,6 +207,8 @@
           "code": {
             "enum": [
               "authentication.refused",
+              "callback.unreadable",
+              "callback.unverified",
               "content.invalid",
               "content.too-large",
               "content.too-many-segments",
@@ -246,6 +248,8 @@
           "type": {
             "enum": [
               "https://id.registrystack.org/problems/registry-messaging/authentication/refused",
+              "https://id.registrystack.org/problems/registry-messaging/callback/unreadable",
+              "https://id.registrystack.org/problems/registry-messaging/callback/unverified",
               "https://id.registrystack.org/problems/registry-messaging/content/invalid",
               "https://id.registrystack.org/problems/registry-messaging/content/too-large",
               "https://id.registrystack.org/problems/registry-messaging/content/too-many-segments",
@@ -1234,6 +1238,365 @@
           }
         ],
         "summary": "Cancel a queued message, including one waiting for a retry, the caller submitted, or any queued message for an operator. A message whose dispatch started or that reached a final state is refused."
+      }
+    },
+    "/v1/provider-callbacks/{provider_id}": {
+      "post": {
+        "operationId": "receiveProviderCallback",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "description": "The body the provider sends, JSON or form-encoded, read only by the provider package's receipt script after the callback verified.",
+          "required": false
+        },
+        "responses": {
+          "204": {
+            "description": "The operation succeeded. The body is empty."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.invalid"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.invalid."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "callback.unverified"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: callback.unverified."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.body-too-large"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.body-too-large."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "callback.unreadable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: callback.unreadable."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "service.unavailable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: service.unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Take one delivery callback from a provider whose runtime configuration names an `hmac-sha1-url-form` or `hmac-sha256-body` callback verifier. The verifier, not a bearer token, authenticates the request; the provider package's receipt script reads it. A verified callback answers 204 whether or not its reference names a message, and a receipt never moves a message's report backwards."
+      }
+    },
+    "/v1/provider-callbacks/{provider_id}/{token}": {
+      "post": {
+        "operationId": "receiveProviderCallbackWithToken",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "description": "The body the provider sends, JSON or form-encoded, read only by the provider package's receipt script after the callback verified.",
+          "required": false
+        },
+        "responses": {
+          "204": {
+            "description": "The operation succeeded. The body is empty."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.invalid"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.invalid."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "callback.unverified"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: callback.unverified."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.body-too-large"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.body-too-large."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "callback.unreadable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: callback.unreadable."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "service.unavailable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: service.unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Take one delivery callback from a provider whose runtime configuration names a `path-token` callback verifier, with the secret token as the last path segment. Otherwise as `receiveProviderCallback`."
       }
     },
     "/v1/templates/{template_id}/versions/{version}/preview": {

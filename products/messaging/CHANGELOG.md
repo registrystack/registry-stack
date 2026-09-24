@@ -61,6 +61,25 @@
 - Declare idempotent submission once, as `idempotentSubmit` on the manifest's
   provider entry. An `smtp` provider may not declare it, and
   `capabilities.idempotentSubmit` in `provider.yaml` is refused.
+- Activate every provider the runtime configuration connects at startup:
+  `providers.<id>` gives an `smtp` or `http` provider its connection and
+  credentials, `tlsTrustProfiles` names PEM trust bundles an `http` provider
+  may select, and every credential, bundle, and callback secret is a
+  `secret:` reference resolved before either listener binds. A declared
+  provider with no connection logs a warning and fails its messages with
+  `provider-unconfigured`.
+- Add provider delivery callbacks: `POST /v1/provider-callbacks/{provider_id}`
+  and, for a `path-token` verifier, `POST
+  /v1/provider-callbacks/{provider_id}/{token}`, authenticated by the
+  provider's `callbackVerifier` (`hmac-sha1-url-form` with its external `url`,
+  `hmac-sha256-body`, or `path-token`) rather than a bearer token. The
+  package's receipt script reads a verified callback, and its receipt moves
+  the message's delivery report only forward, joins a bounded history of
+  distinct receipts, and is audited as `messaging.receipt.recorded` in the
+  same transaction. A receipt naming no message answers 204 and is counted
+  in `messaging_provider_callbacks_total`.
+- Add the problems `callback.unverified` (403) and `callback.unreadable`
+  (422).
 - Add `registry-messaging-client` with health and readiness.
 - Publish the security invariant matrix, the recorded decisions, and the
   problem catalog under `https://id.registrystack.org/problems/registry-messaging/`.

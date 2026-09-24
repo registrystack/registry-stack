@@ -18,6 +18,11 @@
 //! Authentication refusals are counted here rather than written to the audit
 //! journal: a refused credential names no principal to hold accountable, and
 //! journaling it would let an unauthenticated caller grow the journal.
+//!
+//! Provider callbacks are counted by [`CallbackOutcome`] alone. The provider
+//! id in a callback path is caller text until it names an activated
+//! provider, so it never becomes a label; a callback that verifies but
+//! matches no message is counted as `unmatched` and journals nothing.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -39,6 +44,59 @@ const METRICS_MEDIA_TYPE: &str = "text/plain; version=0.0.4";
 pub struct Metrics {
     requests: Mutex<BTreeMap<RequestKey, u64>>,
     refusals: Mutex<BTreeMap<&'static str, u64>>,
+    callbacks: Mutex<BTreeMap<&'static str, u64>>,
+}
+
+/// What became of one provider callback, the closed label of
+/// `messaging_provider_callbacks_total`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CallbackOutcome {
+    /// The path named no receiving provider, or the request did not verify.
+    Unverified,
+    /// The receipt script could not read the verified callback.
+    Unreadable,
+    /// The receipt script reported nothing this runtime records.
+    Ignored,
+    /// The receipt advanced the message's report.
+    Applied,
+    /// The receipt matched a message and did not advance its report.
+    Unchanged,
+    /// The receipt's reference names no message of this provider.
+    Unmatched,
+    /// The receipt's reference names more than one message of this provider.
+    Ambiguous,
+    /// The callback could not be read or recorded for want of the store or
+    /// the receipt script.
+    Unavailable,
+}
+
+impl CallbackOutcome {
+    /// Every outcome, in the order the exposition lists them.
+    pub const ALL: [Self; 8] = [
+        Self::Unverified,
+        Self::Unreadable,
+        Self::Ignored,
+        Self::Applied,
+        Self::Unchanged,
+        Self::Unmatched,
+        Self::Ambiguous,
+        Self::Unavailable,
+    ];
+
+    /// The outcome's label value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unverified => "unverified",
+            Self::Unreadable => "unreadable",
+            Self::Ignored => "ignored",
+            Self::Applied => "applied",
+            Self::Unchanged => "unchanged",
+            Self::Unmatched => "unmatched",
+            Self::Ambiguous => "ambiguous",
+            Self::Unavailable => "unavailable",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -80,6 +138,16 @@ impl Metrics {
             .or_default() += 1;
     }
 
+    /// Count one provider callback by its outcome.
+    pub fn record_callback(&self, outcome: CallbackOutcome) {
+        *self
+            .callbacks
+            .lock()
+            .expect("the metrics registry is never held across a panic")
+            .entry(outcome.as_str())
+            .or_default() += 1;
+    }
+
     /// Render the Prometheus text exposition.
     #[must_use]
     pub fn render(&self) -> String {
@@ -110,6 +178,22 @@ impl Metrics {
         {
             text.push_str(&format!(
                 "messaging_authentication_refusals_total{{reason=\"{reason}\"}} {count}\n"
+            ));
+        }
+        text.push_str(
+            "# HELP messaging_provider_callbacks_total Provider delivery callbacks, by what \
+             became of them.\n",
+        );
+        text.push_str("# TYPE messaging_provider_callbacks_total counter\n");
+        let callbacks = self
+            .callbacks
+            .lock()
+            .expect("the metrics registry is never held across a panic");
+        for outcome in CallbackOutcome::ALL {
+            let count = callbacks.get(outcome.as_str()).copied().unwrap_or_default();
+            text.push_str(&format!(
+                "messaging_provider_callbacks_total{{outcome=\"{}\"}} {count}\n",
+                outcome.as_str()
             ));
         }
         text
@@ -186,5 +270,21 @@ mod tests {
         ));
         assert!(text.contains("method=\"other\""));
         assert!(text.contains("messaging_authentication_refusals_total{reason=\"unavailable\"} 1"));
+    }
+
+    #[test]
+    fn every_callback_outcome_is_exposed_from_zero() {
+        let metrics = Metrics::default();
+        metrics.record_callback(CallbackOutcome::Unmatched);
+        metrics.record_callback(CallbackOutcome::Unmatched);
+        let text = metrics.render();
+        assert!(text.contains("messaging_provider_callbacks_total{outcome=\"unmatched\"} 2"));
+        for outcome in CallbackOutcome::ALL {
+            assert!(text.contains(&format!(
+                "messaging_provider_callbacks_total{{outcome=\"{}\"}}",
+                outcome.as_str()
+            )));
+        }
+        assert!(text.contains("messaging_provider_callbacks_total{outcome=\"applied\"} 0"));
     }
 }

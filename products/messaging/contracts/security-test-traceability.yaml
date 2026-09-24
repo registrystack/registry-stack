@@ -66,6 +66,28 @@ entries:
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_killed_worker_leaves_its_message_unknown_and_unsent_again}
       - {path: crates/registry-messaging/src/dispatch.rs, name: a_transport_timeout_outside_one_to_sixty_seconds_is_refused}
       - {path: crates/registry-messaging-core/src/package.rs, name: retrying_an_uncertain_send_needs_provider_deduplication_or_an_explicit_choice}
+  - id: MESSAGING-SEC-07
+    tests:
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: an_hmac_sha256_body_callback_is_applied_and_a_forged_one_is_unverified}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: an_hmac_sha1_url_form_callback_is_applied_and_a_forged_one_is_unverified}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: a_path_token_callback_is_applied_and_a_wrong_token_is_unverified}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: duplicate_and_out_of_order_receipts_never_regress_the_report}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: a_final_undelivered_report_is_not_replaced_by_a_late_delivered_one}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: a_message_keeps_a_bounded_history_of_distinct_receipts}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: a_verified_receipt_naming_no_message_is_received_and_counted}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: a_reference_scoped_to_another_provider_names_nothing}
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: a_reference_two_messages_carry_is_received_and_applied_to_neither}
+      - {path: crates/registry-messaging/src/http.rs, name: a_callback_for_a_provider_that_receives_none_is_unverified}
+      - {path: crates/registry-messaging/src/http.rs, name: a_path_token_callback_verifies_only_on_the_token_route_with_its_token}
+      - {path: crates/registry-messaging/src/http.rs, name: a_body_signed_callback_refuses_a_token_route_and_a_forged_signature}
+      - {path: crates/registry-messaging/src/http.rs, name: a_callback_body_over_the_edge_limit_is_refused}
+      - {path: crates/registry-messaging-core/src/callback.rs, name: hmac_sha1_url_form_refuses_every_forgery}
+      - {path: crates/registry-messaging-core/src/callback.rs, name: hmac_sha256_body_refuses_every_forgery}
+      - {path: crates/registry-messaging-core/src/callback.rs, name: path_token_accepts_only_the_exact_token}
+      - {path: crates/registry-messaging-core/src/callback.rs, name: a_verifier_configuration_document_refuses_none_and_unknown_keys}
+      - {path: crates/registry-messaging-core/src/receipt.rs, name: a_report_never_regresses}
+      - {path: crates/registry-messaging-core/src/receipt.rs, name: a_duplicate_report_is_a_no_op}
+      - {path: crates/registry-messaging-core/src/receipt.rs, name: a_terminal_state_is_never_displaced_by_the_other_terminal_state}
   - id: MESSAGING-SEC-09
     tests:
       - {path: crates/registry-messaging-core/src/render.rs, name: a_runaway_template_runs_out_of_fuel}

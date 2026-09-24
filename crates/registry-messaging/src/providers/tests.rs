@@ -91,6 +91,21 @@ fn http_connection_to(base_url: &str, authentication: Value) -> Value {
     })
 }
 
+/// The callback receivers of a starter project whose `sms-gateway` names
+/// `verifier`, reading `secrets`.
+pub(crate) fn callback_receivers(verifier: Value, secrets: &[(&str, &[u8])]) -> CallbackReceivers {
+    let mut connection = http_connection_to("http://127.0.0.1:9/v1/", json!({"kind": "none"}));
+    connection["callbackVerifier"] = verifier;
+    let project = project(json!({"sms-gateway": connection}), |_| {}, secrets);
+    activate_providers(
+        &project.config,
+        &project.loaded,
+        &project.secrets,
+        &mut Transports::new(),
+    )
+    .expect("providers activate")
+}
+
 fn outbound(
     channel: Channel,
     provider: &str,

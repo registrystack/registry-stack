@@ -12,5 +12,8 @@ authentication:
   passwordRef: secret:file/sms-auth-token
 callbackVerifier:
   kind: hmac-sha1-url-form
+  # The status callback URL the provider is given and signs, exactly as it
+  # is given: this deployment's public address for the callback route.
+  url: https://messaging.example.org/v1/provider-callbacks/sms-gateway
   header: X-Twilio-Signature
   secretRef: secret:file/sms-auth-token

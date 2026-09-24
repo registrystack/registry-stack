@@ -30,6 +30,98 @@
       ],
       "type": "object"
     },
+    "CallbackVerifierConfig": {
+      "description": "How the provider's delivery callbacks are authenticated, from a closed set of algorithms. Required exactly when the package declares `receipts: callback`; there is no unauthenticated kind.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "HMAC-SHA1 over `url` and the request's query, followed by the form parameters sorted by name, base64 in `header`.",
+          "properties": {
+            "header": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "hmac-sha1-url-form",
+              "type": "string"
+            },
+            "secretRef": {
+              "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+              "type": "string"
+            },
+            "url": {
+              "description": "The external callback URL the provider was given and signs, exactly as given, without a query or fragment.",
+              "maxLength": 2048,
+              "minLength": 1,
+              "pattern": "^https?://[^?#]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "url",
+            "header",
+            "secretRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "HMAC-SHA256 over the raw request body, in `header` as `encoding`.",
+          "properties": {
+            "encoding": {
+              "enum": [
+                "hex",
+                "base64"
+              ],
+              "type": "string"
+            },
+            "header": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "hmac-sha256-body",
+              "type": "string"
+            },
+            "secretRef": {
+              "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "header",
+            "encoding",
+            "secretRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A secret random token as the last segment of the callback path.",
+          "properties": {
+            "kind": {
+              "const": "path-token",
+              "type": "string"
+            },
+            "tokenRef": {
+              "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tokenRef"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "CredentialPlacement": {
       "description": "Where an OAuth client secret travels in the token request.",
       "enum": [
@@ -468,7 +560,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Runtime settings for one HTTP provider.",
+          "description": "Boxed: an `http` connection is several times the size of an `smtp`\none.",
           "properties": {
             "acknowledgeQueryStringContent": {
               "description": "Required, and only allowed, when the package sends with `get`: the\nmessage content travels in the query string, where provider access\nlogs keep it.",
@@ -489,11 +581,13 @@
               "type": "string"
             },
             "callbackVerifier": {
-              "additionalProperties": true,
-              "description": "How the provider's delivery callbacks are authenticated. Required\nexactly when the package declares `receipts: callback`.",
-              "type": [
-                "object",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CallbackVerifierConfig"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "concurrencyLimit": {

@@ -102,6 +102,92 @@ submission whose `expiresAt` is already past or falls later is refused with
 payloads and records when their periods end arrives in a later slice; until
 then nothing is erased.
 
+### Providers
+
+`providers` gives each provider `messaging.yaml` declares its connection,
+keyed by the provider id and tagged with the same `kind`. A connection for a
+provider the package does not declare, or with another kind, is refused. A
+declared provider with no connection is not activated: startup logs a
+warning, and its messages fail with the attempt failure code
+`provider-unconfigured` without a send. Every credential, trust bundle, and
+callback secret is a `secret:` reference, resolved once at startup before
+either listener binds; a provider that cannot be activated stops the runtime
+with an error naming the provider and the member, never a value.
+
+An `smtp` connection:
+
+| Key | Required | Meaning |
+|---|---|---|
+| `host` | yes | The relay's DNS name or IP literal, at most 253 bytes; the name TLS verifies |
+| `tls` | yes | `starttls`, `implicit`, or `development-loopback` (plaintext to a loopback relay, accepted only by a test build) |
+| `port` | no | Defaults to 587 for `starttls` and 465 for `implicit`; required for `development-loopback` |
+| `authentication` | no | `usernameRef` and `passwordRef` |
+| `attemptTimeoutSeconds` | no | One attempt's whole budget, 1 to 60, default 30 |
+| `trustedRootCertificateRef` | no | A PEM root trusted besides the public web roots |
+| `allowedPrivateCidrs` | no | Exact private networks the relay may resolve into |
+
+An `http` connection:
+
+| Key | Required | Meaning |
+|---|---|---|
+| `baseUrl` | yes | Origin and path prefix ending in `/`; `https`, or `http` only to a loopback host |
+| `timeoutMilliseconds` | yes | One send's whole budget, at most 10000 |
+| `maximumResponseBytes` | yes | The largest response body read, at most 1 MiB |
+| `concurrencyLimit` | yes | Sends in flight, at most the package's `capabilities.concurrencyLimit` |
+| `redirects` | yes | `deny`, the only policy |
+| `authentication` | yes | One of the kinds below |
+| `callbackVerifier` | when the package declares `receipts: callback`, and only then | See Provider callbacks |
+| `tlsTrustProfile` | no | A `tlsTrustProfiles` name whose bundle replaces the public web roots |
+| `allowedPrivateCidrs` | no | Exact private networks an `https` provider may resolve into |
+| `acknowledgeQueryStringContent` | when, and only when, the package sends with `get` | Acknowledges that content travels in the query string |
+
+`authentication.kind` is `none` (only for a loopback `http` `baseUrl`),
+`basic` (`usernameRef`, `passwordRef`), `static-authorization` (`tokenRef`,
+and `scheme`, which may only be `Bearer`), `static-api-key` (`headerName`,
+`valueRef`), `static-api-key-query` (`parameterName`, `valueRef`), or
+`oauth2-client-credentials` (`tokenEndpoint` on the `baseUrl`'s scheme,
+`clientIdRef`, `clientSecretRef`, `maximumCacheSeconds` from 10 to 86400, and
+optionally `scope`, `audience`, `resource`, `assumedLifetimeSeconds`, and
+`credentialPlacement: form-body`). A resolved credential value is at most
+4096 bytes.
+
+`tlsTrustProfiles` names at most 64 PEM trust bundles, each
+`{bundleRef: secret:...}`, that an `http` connection's `tlsTrustProfile`
+selects.
+
+### Provider callbacks
+
+An `http` provider whose package declares `receipts: callback` reports
+delivery to `POST /v1/provider-callbacks/{provider_id}` on the public
+listener, or, for `path-token`, to
+`POST /v1/provider-callbacks/{provider_id}/{token}`. These routes take no
+bearer token: the connection's `callbackVerifier` authenticates each
+callback, and is one of
+
+| `kind` | Keys | Verifies |
+|---|---|---|
+| `hmac-sha1-url-form` | `url`, `header`, `secretRef` | HMAC-SHA1 over `url` and the request's query, then the form parameters sorted by name, base64 in `header` |
+| `hmac-sha256-body` | `header`, `encoding` (`hex` or `base64`), `secretRef` | HMAC-SHA256 over the raw body, encoded in `header` |
+| `path-token` | `tokenRef` | The secret token as the last path segment |
+
+`url` is the external callback URL the provider was given and signs, exactly
+as given, `http` or `https`, without a query or fragment, at most 2048 bytes;
+it is what a reverse proxy in front of the runtime must not change for the
+provider. `header` is an HTTP header name of at most 128 bytes. There is no
+unauthenticated kind.
+
+A verified callback answers 204 whether its receipt moved the report,
+changed nothing, reported a state the runtime does not record, or named no
+message. A callback that does not verify, names a provider without a
+verifier, or arrives on the route its verifier does not use answers `403
+callback.unverified`; one the receipt script cannot read answers `422
+callback.unreadable`; a body over the request edge's limit answers `413
+request.body-too-large`; and a store failure answers `503
+service.unavailable`, so the provider retries. The metrics listener counts
+callbacks in `messaging_provider_callbacks_total{outcome}`, with `outcome`
+one of `unverified`, `unreadable`, `ignored`, `applied`, `unchanged`,
+`unmatched`, `ambiguous`, or `unavailable`.
+
 ## The package
 
 `package.root/messaging.yaml` carries:

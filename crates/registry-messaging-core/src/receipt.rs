@@ -7,9 +7,9 @@
 //! deciding whether that belief may overwrite what is stored: a report only
 //! ever moves forward through the ordered states below, a duplicate report
 //! is a no-op, and a terminal state is never replaced, even by another
-//! terminal state. This module makes that decision in the abstract; applying
-//! it to a stored message is a runtime concern that lands with the callback
-//! route in a later change.
+//! terminal state. This module makes that decision in the abstract; the
+//! runtime's callback route applies it to the stored message, inside the
+//! transaction that records the receipt.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -39,6 +39,27 @@ impl DeliveryReport {
             Self::Sent => 1,
             Self::Delivered | Self::Undelivered => 2,
         }
+    }
+
+    /// Every report, in rank order.
+    pub const ALL: [Self; 3] = [Self::Sent, Self::Delivered, Self::Undelivered];
+
+    /// The report's wire and storage name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sent => "sent",
+            Self::Delivered => "delivered",
+            Self::Undelivered => "undelivered",
+        }
+    }
+
+    /// The report named `value`, or `None` for any other text.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|report| report.as_str() == value)
     }
 
     /// Whether this report is a final word: once stored, it is never
@@ -113,6 +134,18 @@ impl Receipt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_report_names_itself_as_it_serializes() {
+        for report in DeliveryReport::ALL {
+            assert_eq!(
+                serde_json::to_value(report).unwrap(),
+                serde_json::Value::String(report.as_str().to_owned())
+            );
+            assert_eq!(DeliveryReport::parse(report.as_str()), Some(report));
+        }
+        assert_eq!(DeliveryReport::parse("failed"), None);
+    }
 
     #[test]
     fn the_first_report_for_a_message_always_advances() {

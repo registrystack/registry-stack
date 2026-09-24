@@ -180,7 +180,7 @@ impl CallbackReceiver {
     #[must_use]
     pub fn verifier(&self) -> ResolvedCallbackVerifier<'_> {
         match &self.verifier {
-            CallbackVerifierSecret::HmacSha1UrlForm { header, secret } => {
+            CallbackVerifierSecret::HmacSha1UrlForm { header, secret, .. } => {
                 ResolvedCallbackVerifier::HmacSha1UrlForm {
                     header,
                     secret: secret.expose_secret(),
@@ -201,15 +201,40 @@ impl CallbackReceiver {
         }
     }
 
+    /// Whether the verifier is `path-token`, whose callbacks arrive on the
+    /// route that carries the token segment and only there.
+    #[must_use]
+    pub const fn uses_path_token(&self) -> bool {
+        matches!(self.verifier, CallbackVerifierSecret::PathToken { .. })
+    }
+
     /// The provider whose receipt script reads a verified callback.
     #[must_use]
     pub fn provider(&self) -> &HttpProvider {
         &self.provider
     }
+
+    /// The URL a callback that reached `path` with `query` is verified and
+    /// read over: the configured external URL for `hmac-sha1-url-form`,
+    /// which is what the provider signs, and the received path otherwise,
+    /// with the request's own query string appended in either case.
+    #[must_use]
+    pub fn request_url(&self, path: &str, query: Option<&str>) -> String {
+        let base = match &self.verifier {
+            CallbackVerifierSecret::HmacSha1UrlForm { url, .. } => url.as_str(),
+            CallbackVerifierSecret::HmacSha256Body { .. }
+            | CallbackVerifierSecret::PathToken { .. } => path,
+        };
+        match query {
+            Some(query) => format!("{base}?{query}"),
+            None => base.to_owned(),
+        }
+    }
 }
 
 enum CallbackVerifierSecret {
     HmacSha1UrlForm {
+        url: String,
         header: String,
         secret: ProtectedSecret,
     },
@@ -227,13 +252,16 @@ impl CallbackVerifierSecret {
     fn resolve(config: &CallbackVerifierConfig, secrets: &SecretResolver) -> Result<Self, String> {
         let field = |reason: String| format!("callbackVerifier: {reason}");
         Ok(match config {
-            CallbackVerifierConfig::HmacSha1UrlForm { header, secret_ref } => {
-                Self::HmacSha1UrlForm {
-                    header: header.clone(),
-                    secret: resolve(secrets, "callbackVerifier.secretRef", secret_ref)
-                        .map_err(field)?,
-                }
-            }
+            CallbackVerifierConfig::HmacSha1UrlForm {
+                url,
+                header,
+                secret_ref,
+            } => Self::HmacSha1UrlForm {
+                url: url.clone(),
+                header: header.clone(),
+                secret: resolve(secrets, "callbackVerifier.secretRef", secret_ref)
+                    .map_err(field)?,
+            },
             CallbackVerifierConfig::HmacSha256Body {
                 header,
                 encoding,
@@ -340,4 +368,4 @@ impl MessageTransport for HttpTransport {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

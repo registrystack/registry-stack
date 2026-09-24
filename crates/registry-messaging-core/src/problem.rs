@@ -15,6 +15,12 @@
 //! see, whether or not the message exists, so the status route is never an
 //! existence oracle.
 //!
+//! `callback.unverified` answers every provider callback that does not
+//! verify, including one naming a provider this deployment takes no
+//! callbacks from, so the callback route never tells a caller which
+//! providers are configured. It answers 403 rather than 401 because no HTTP
+//! authentication scheme describes a provider signature to challenge with.
+//!
 //! The `request.*` family carries the request-edge rejections (a route that
 //! does not exist, a method the route refuses, a body too large or not JSON)
 //! under this product's own prefix, exactly as Casework and Scheduling do: no
@@ -23,6 +29,8 @@
 use crate::naming::MESSAGING_PROBLEM_TYPE_BASE;
 
 pub const AUTHENTICATION_REFUSED_PROBLEM: &str = "authentication.refused";
+pub const CALLBACK_UNREADABLE_PROBLEM: &str = "callback.unreadable";
+pub const CALLBACK_UNVERIFIED_PROBLEM: &str = "callback.unverified";
 pub const CONTENT_INVALID_PROBLEM: &str = "content.invalid";
 pub const CONTENT_TOO_LARGE_PROBLEM: &str = "content.too-large";
 pub const CONTENT_TOO_MANY_SEGMENTS_PROBLEM: &str = "content.too-many-segments";
@@ -49,6 +57,8 @@ pub const TEMPLATE_RENDER_REFUSED_PROBLEM: &str = "template.render-refused";
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ProblemCode {
     AuthenticationRefused,
+    CallbackUnreadable,
+    CallbackUnverified,
     ContentInvalid,
     ContentTooLarge,
     ContentTooManySegments,
@@ -76,6 +86,8 @@ impl ProblemCode {
     /// The complete closed vocabulary, in code-string order.
     pub const ALL: &'static [Self] = &[
         Self::AuthenticationRefused,
+        Self::CallbackUnreadable,
+        Self::CallbackUnverified,
         Self::ContentInvalid,
         Self::ContentTooLarge,
         Self::ContentTooManySegments,
@@ -103,6 +115,8 @@ impl ProblemCode {
     pub const fn code(self) -> &'static str {
         match self {
             Self::AuthenticationRefused => AUTHENTICATION_REFUSED_PROBLEM,
+            Self::CallbackUnreadable => CALLBACK_UNREADABLE_PROBLEM,
+            Self::CallbackUnverified => CALLBACK_UNVERIFIED_PROBLEM,
             Self::ContentInvalid => CONTENT_INVALID_PROBLEM,
             Self::ContentTooLarge => CONTENT_TOO_LARGE_PROBLEM,
             Self::ContentTooManySegments => CONTENT_TOO_MANY_SEGMENTS_PROBLEM,
@@ -145,7 +159,9 @@ impl ProblemCode {
         match self {
             Self::RequestInvalid => 400,
             Self::AuthenticationRefused => 401,
-            Self::OperationNotAuthorized | Self::ProfileNotAuthorized => 403,
+            Self::CallbackUnverified
+            | Self::OperationNotAuthorized
+            | Self::ProfileNotAuthorized => 403,
             Self::MessageNotVisible | Self::RequestNotFound | Self::TemplateNotFound => 404,
             Self::RequestMethodNotAllowed => 405,
             Self::IdempotencyKeyReused | Self::MessageDispatchStarted | Self::MessageTerminal => {
@@ -154,7 +170,8 @@ impl ProblemCode {
             Self::IdempotencyExpired => 410,
             Self::RequestBodyTooLarge => 413,
             Self::RequestUnsupportedMediaType => 415,
-            Self::ContentInvalid
+            Self::CallbackUnreadable
+            | Self::ContentInvalid
             | Self::ContentTooLarge
             | Self::ContentTooManySegments
             | Self::RequestUnprocessable
@@ -171,6 +188,8 @@ impl ProblemCode {
     pub const fn title(self) -> &'static str {
         match self {
             Self::AuthenticationRefused => "Authentication refused",
+            Self::CallbackUnreadable => "Callback unreadable",
+            Self::CallbackUnverified => "Callback not verified",
             Self::ContentInvalid => "Content invalid for the channel",
             Self::ContentTooLarge => "Content too large",
             Self::ContentTooManySegments => "Too many SMS segments",
@@ -201,6 +220,12 @@ impl ProblemCode {
         match self {
             Self::AuthenticationRefused => {
                 "The bearer credential is missing, invalid, or expired. Sign in again."
+            }
+            Self::CallbackUnreadable => {
+                "The callback was verified, but the provider's receipt script could not read a delivery report from it."
+            }
+            Self::CallbackUnverified => {
+                "The callback did not verify for a provider this deployment accepts callbacks from."
             }
             Self::ContentInvalid => {
                 "The content does not have the parts the channel requires, or the template's channel differs from the sender profile's."
@@ -269,7 +294,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 22);
+        assert_eq!(ProblemCode::ALL.len(), 24);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }
@@ -384,6 +409,23 @@ mod tests {
         assert_eq!(
             ProblemCode::from_code("message.terminal"),
             Some(ProblemCode::MessageTerminal)
+        );
+    }
+
+    /// A callback that does not verify is forbidden, not challenged: there
+    /// is no bearer scheme to retry with. One that verifies but that the
+    /// receipt script cannot read is unprocessable.
+    #[test]
+    fn callback_refusals_pin_their_statuses() {
+        assert_eq!(ProblemCode::CallbackUnverified.http_status(), 403);
+        assert_eq!(ProblemCode::CallbackUnreadable.http_status(), 422);
+        assert_eq!(
+            ProblemCode::from_code("callback.unverified"),
+            Some(ProblemCode::CallbackUnverified)
+        );
+        assert_eq!(
+            ProblemCode::from_code("callback.unreadable"),
+            Some(ProblemCode::CallbackUnreadable)
         );
     }
 }

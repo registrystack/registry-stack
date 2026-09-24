@@ -22,11 +22,13 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use registry_messaging::audit::AuditJournal;
 use registry_messaging::auth::MessagingAuthenticator;
 use registry_messaging::config::RuntimeConfig;
+use registry_messaging::dispatch::Transports;
 use registry_messaging::http::{router, HttpState, Readiness};
 use registry_messaging::messages::{MessageService, MessageStore};
 use registry_messaging::metrics::Metrics;
 use registry_messaging::outbox::Publisher;
 use registry_messaging::package::load_package;
+use registry_messaging::providers::activate_providers;
 use registry_messaging::runtime::{apply_package, message_store, migrate_from_path};
 use registry_messaging::store::PostgresStore;
 use registry_messaging_core::{Package, IDEMPOTENCY_KEY_HEADER};
@@ -177,11 +179,21 @@ pub struct Harness {
     pub store: PostgresStore,
     pub service: Arc<MessageService>,
     pub audit: Arc<AuditJournal>,
+    pub metrics: Arc<Metrics>,
+    /// The transports of the providers the runtime configuration connects.
+    pub transports: Arc<Transports>,
     pub app: Router,
 }
 
 impl Harness {
     pub async fn start() -> Self {
+        Self::start_with(Value::Null, |_| {}).await
+    }
+
+    /// Start with `providers` as the runtime configuration's providers
+    /// block, activated as the runtime activates them, after
+    /// `adjust_package` has changed the package copy.
+    pub async fn start_with(providers: Value, adjust_package: impl FnOnce(&Path)) -> Self {
         capture_logs();
         let isolated = isolated_schema().await;
         let root = tempfile::tempdir().expect("a runtime directory");
@@ -196,7 +208,9 @@ impl Harness {
         .unwrap();
         copy_tree(&starter.join("templates"), &package_root.join("templates"));
         copy_tree(&starter.join("providers"), &package_root.join("providers"));
-        let runtime_path = write_runtime(root.path(), &package_root, &isolated.reference);
+        adjust_package(&package_root);
+        let runtime_path =
+            write_runtime(root.path(), &package_root, &isolated.reference, providers);
         migrate_from_path(&runtime_path).await.expect("migrate");
         let config = RuntimeConfig::load(&runtime_path).expect("the runtime configuration");
         apply_package(&config, true)
@@ -221,6 +235,16 @@ impl Harness {
             Arc::clone(&audit),
             config.retention,
         ));
+        let mut transports = Transports::new();
+        let callbacks = activate_providers(
+            &config,
+            &config.load_package().expect("the package"),
+            &secrets,
+            &mut transports,
+        )
+        .expect("activate the configured providers");
+        let transports = Arc::new(transports);
+        let metrics = Arc::new(Metrics::default());
         let authenticator = Arc::new(MessagingAuthenticator::new(
             verifier(),
             keys(),
@@ -230,11 +254,11 @@ impl Harness {
         let app = router(HttpState {
             authenticator,
             readiness: Readiness::Store(store.clone()),
-            metrics: Arc::new(Metrics::default()),
+            metrics: Arc::clone(&metrics),
             package: Arc::clone(&package),
             audit: Arc::clone(&audit),
             messages: Some(Arc::clone(&service)),
-            callbacks: Arc::default(),
+            callbacks: Arc::new(callbacks),
         });
         Self {
             root,
@@ -244,6 +268,8 @@ impl Harness {
             store,
             service,
             audit,
+            metrics,
+            transports,
             app,
         }
     }
@@ -352,6 +378,11 @@ impl Harness {
         Uuid::parse_str(receipt["id"].as_str().unwrap()).unwrap()
     }
 
+    /// Send one request through the public router.
+    pub async fn send(&self, request: Request<Body>) -> (StatusCode, Value) {
+        send(self.app.clone(), request).await
+    }
+
     pub async fn call(&self, method: &str, uri: &str, bearer: Option<&str>) -> (StatusCode, Value) {
         let mut request = Request::builder().method(method).uri(uri);
         if let Some(bearer) = bearer {
@@ -373,7 +404,7 @@ async fn send(app: Router, request: Request<Body>) -> (StatusCode, Value) {
     (status, body)
 }
 
-fn write_runtime(root: &Path, package: &Path, database: &str) -> PathBuf {
+fn write_runtime(root: &Path, package: &Path, database: &str, providers: Value) -> PathBuf {
     let jwks_name = format!("MESSAGING_JWKS_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
     let audit_name = format!("MESSAGING_AUDIT_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
     std::env::set_var(&jwks_name, static_jwks());
@@ -400,6 +431,10 @@ fn write_runtime(root: &Path, package: &Path, database: &str) -> PathBuf {
             "hashKeyRef": format!("secret:env/{audit_name}")
         }
     });
+    let mut runtime = runtime;
+    if !providers.is_null() {
+        runtime["providers"] = providers;
+    }
     let path = root.join("runtime.yaml");
     std::fs::write(&path, serde_norway::to_string(&runtime).unwrap()).unwrap();
     path

@@ -6,6 +6,7 @@
 
 pub mod audit;
 pub mod auth;
+pub mod callbacks;
 pub mod config;
 pub mod dispatch;
 pub mod environment;
@@ -16,6 +17,7 @@ pub mod metrics;
 pub mod outbox;
 pub mod package;
 pub mod providers;
+pub mod receipts;
 pub mod runtime;
 #[cfg(feature = "schema")]
 pub mod schema;

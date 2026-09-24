@@ -27,6 +27,10 @@
 //! only. The status and cancel routes answer the submitter and operator
 //! profiles alone, and a message anyone else asks for answers exactly like
 //! one that does not exist.
+//!
+//! The provider callback routes take no bearer token: the provider's
+//! configured verifier authenticates each request, and [`crate::callbacks`]
+//! reads and records it.
 
 use std::sync::Arc;
 
@@ -42,7 +46,8 @@ use axum::{Json, Router};
 use registry_messaging_core::{
     type_uri, AccessRole, Caller, ContentRefusal, MessageView, Package, ProblemCode,
     TemplatePreview, TemplatePreviewRequest, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER, MESSAGES_PATH,
-    MESSAGE_CANCEL_PATH, MESSAGE_PATH, METRICS_PATH, READY_PATH, TEMPLATE_PREVIEW_PATH,
+    MESSAGE_CANCEL_PATH, MESSAGE_PATH, METRICS_PATH, PROVIDER_CALLBACK_PATH,
+    PROVIDER_CALLBACK_TOKEN_PATH, READY_PATH, TEMPLATE_PREVIEW_PATH,
 };
 use registry_platform_authcommon::parse_bearer_token;
 use registry_platform_httpsec::{
@@ -52,6 +57,7 @@ use serde::Serialize;
 
 use crate::audit::AuditJournal;
 use crate::auth::{AuthenticationError, MessagingAuthenticator};
+use crate::callbacks;
 use crate::messages::{
     prepare_submission, valid_idempotency_key, MessageService, SubmissionAnswer,
     MESSAGE_REFUSED_EVENT, MESSAGE_REPLAYED_EVENT,
@@ -124,14 +130,24 @@ pub struct Operation {
     pub success_status: u16,
     /// Whether the operation requires the `Idempotency-Key` header.
     pub idempotency_key: bool,
-    /// The component schema of the JSON request body, if the operation
-    /// takes one.
-    pub request_body: Option<&'static str>,
+    /// The request body the operation takes.
+    pub request_body: RequestBody,
     /// The component schema of the JSON success body, or `None` for an
     /// empty body.
     pub response_body: Option<&'static str>,
     /// Every problem the operation can answer with.
     pub problems: &'static [ProblemCode],
+}
+
+/// The request body of one operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RequestBody {
+    None,
+    /// A JSON body described by this component schema.
+    Json(&'static str),
+    /// A provider's delivery callback: whatever JSON or form body the
+    /// provider sends, read only by that provider's receipt script.
+    ProviderCallback,
 }
 
 /// The problems every operation can answer at the request edge.
@@ -149,7 +165,7 @@ pub const OPERATIONS: &[Operation] = &[
         authenticated: false,
         success_status: 200,
         idempotency_key: false,
-        request_body: None,
+        request_body: RequestBody::None,
         response_body: None,
         problems: &[ProblemCode::RequestMethodNotAllowed],
     },
@@ -161,7 +177,7 @@ pub const OPERATIONS: &[Operation] = &[
         authenticated: false,
         success_status: 200,
         idempotency_key: false,
-        request_body: None,
+        request_body: RequestBody::None,
         response_body: None,
         problems: &EDGE_PROBLEMS,
     },
@@ -176,7 +192,7 @@ pub const OPERATIONS: &[Operation] = &[
         authenticated: true,
         success_status: 202,
         idempotency_key: true,
-        request_body: Some("SubmitMessageRequest"),
+        request_body: RequestBody::Json("SubmitMessageRequest"),
         response_body: Some("MessageReceipt"),
         problems: &[
             ProblemCode::RequestInvalid,
@@ -209,7 +225,7 @@ pub const OPERATIONS: &[Operation] = &[
         authenticated: true,
         success_status: 200,
         idempotency_key: false,
-        request_body: None,
+        request_body: RequestBody::None,
         response_body: Some("MessageView"),
         problems: &[
             ProblemCode::AuthenticationRefused,
@@ -229,7 +245,7 @@ pub const OPERATIONS: &[Operation] = &[
         authenticated: true,
         success_status: 200,
         idempotency_key: false,
-        request_body: None,
+        request_body: RequestBody::None,
         response_body: Some("MessageView"),
         problems: &[
             ProblemCode::AuthenticationRefused,
@@ -251,7 +267,7 @@ pub const OPERATIONS: &[Operation] = &[
         authenticated: true,
         success_status: 200,
         idempotency_key: false,
-        request_body: Some("TemplatePreviewRequest"),
+        request_body: RequestBody::Json("TemplatePreviewRequest"),
         response_body: Some("TemplatePreview"),
         problems: &[
             ProblemCode::RequestInvalid,
@@ -269,6 +285,49 @@ pub const OPERATIONS: &[Operation] = &[
             ProblemCode::ServiceUnavailable,
         ],
     },
+    Operation {
+        method: "post",
+        path: PROVIDER_CALLBACK_PATH,
+        operation_id: "receiveProviderCallback",
+        summary: "Take one delivery callback from a provider whose runtime configuration names \
+                  an `hmac-sha1-url-form` or `hmac-sha256-body` callback verifier. The verifier, \
+                  not a bearer token, authenticates the request; the provider package's receipt \
+                  script reads it. A verified callback answers 204 whether or not its reference \
+                  names a message, and a receipt never moves a message's report backwards.",
+        authenticated: false,
+        success_status: 204,
+        idempotency_key: false,
+        request_body: RequestBody::ProviderCallback,
+        response_body: None,
+        problems: &CALLBACK_PROBLEMS,
+    },
+    Operation {
+        method: "post",
+        path: PROVIDER_CALLBACK_TOKEN_PATH,
+        operation_id: "receiveProviderCallbackWithToken",
+        summary: "Take one delivery callback from a provider whose runtime configuration names \
+                  a `path-token` callback verifier, with the secret token as the last path \
+                  segment. Otherwise as `receiveProviderCallback`.",
+        authenticated: false,
+        success_status: 204,
+        idempotency_key: false,
+        request_body: RequestBody::ProviderCallback,
+        response_body: None,
+        problems: &CALLBACK_PROBLEMS,
+    },
+];
+
+/// Every problem a provider callback can answer with. An unknown provider,
+/// a verifier refusal, and a token on the wrong route all answer
+/// `callback.unverified`, so the route does not reveal which providers
+/// receive callbacks.
+const CALLBACK_PROBLEMS: [ProblemCode; 6] = [
+    ProblemCode::RequestInvalid,
+    ProblemCode::CallbackUnverified,
+    ProblemCode::RequestMethodNotAllowed,
+    ProblemCode::RequestBodyTooLarge,
+    ProblemCode::CallbackUnreadable,
+    ProblemCode::ServiceUnavailable,
 ];
 
 pub fn router(state: HttpState) -> Router {
@@ -281,6 +340,11 @@ pub fn router(state: HttpState) -> Router {
             .route(MESSAGE_PATH, get(get_message))
             .route(MESSAGE_CANCEL_PATH, post(cancel_message))
             .route(TEMPLATE_PREVIEW_PATH, post(preview_template))
+            .route(PROVIDER_CALLBACK_PATH, post(callbacks::receive))
+            .route(
+                PROVIDER_CALLBACK_TOKEN_PATH,
+                post(callbacks::receive_with_token),
+            )
             .with_state(state)
             .layer(middleware::from_fn_with_state(metrics, count_requests)),
     )
@@ -1592,6 +1656,163 @@ mod tests {
         expect_problem(
             call(app, "POST", "/v1/messages/m-1/cancel", None).await,
             ProblemCode::AuthenticationRefused,
+        )
+        .await;
+    }
+
+    const CALLBACK_TOKEN: &[u8] = b"callback-token-4f1b90";
+    const CALLBACK_SECRET: &[u8] = b"callback-secret-8a3c55";
+
+    /// A router whose `sms-gateway` receives callbacks through `verifier`,
+    /// with no message store.
+    fn callback_app(verifier: serde_json::Value) -> (Router, Arc<Metrics>) {
+        let mut state = state_with(authenticator(), true);
+        state.callbacks = Arc::new(crate::providers::tests::callback_receivers(
+            verifier,
+            &[
+                ("callback-token", CALLBACK_TOKEN),
+                ("callback-secret", CALLBACK_SECRET),
+            ],
+        ));
+        let metrics = Arc::clone(&state.metrics);
+        (router(state), metrics)
+    }
+
+    fn path_token_verifier() -> serde_json::Value {
+        json!({"kind": "path-token", "tokenRef": "secret:file/callback-token"})
+    }
+
+    fn body_verifier() -> serde_json::Value {
+        json!({
+            "kind": "hmac-sha256-body",
+            "header": "x-gateway-signature",
+            "encoding": "hex",
+            "secretRef": "secret:file/callback-secret"
+        })
+    }
+
+    fn callbacks_counted(metrics: &Metrics, outcome: &str, count: u64) {
+        let text = metrics.render();
+        assert!(
+            text.contains(&format!(
+                "messaging_provider_callbacks_total{{outcome=\"{outcome}\"}} {count}\n"
+            )),
+            "{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_callback_for_a_provider_that_receives_none_is_unverified() {
+        let (app, metrics) = callback_app(path_token_verifier());
+        for uri in [
+            "/v1/provider-callbacks/mail-relay",
+            "/v1/provider-callbacks/no-such-provider",
+            "/v1/provider-callbacks/no-such-provider/callback-token-4f1b90",
+        ] {
+            let headers = expect_problem(
+                post(
+                    app.clone(),
+                    uri,
+                    None,
+                    Some("application/json"),
+                    b"{}".to_vec(),
+                )
+                .await,
+                ProblemCode::CallbackUnverified,
+            )
+            .await;
+            assert!(headers.get(WWW_AUTHENTICATE).is_none());
+        }
+        callbacks_counted(&metrics, "unverified", 3);
+    }
+
+    #[tokio::test]
+    async fn a_path_token_callback_verifies_only_on_the_token_route_with_its_token() {
+        let (app, metrics) = callback_app(path_token_verifier());
+        for uri in [
+            "/v1/provider-callbacks/sms-gateway",
+            "/v1/provider-callbacks/sms-gateway/callback-token-000000",
+            "/v1/provider-callbacks/sms-gateway/callback-token-4f1b9",
+        ] {
+            expect_problem(
+                post(
+                    app.clone(),
+                    uri,
+                    None,
+                    Some("application/json"),
+                    b"{}".to_vec(),
+                )
+                .await,
+                ProblemCode::CallbackUnverified,
+            )
+            .await;
+        }
+        callbacks_counted(&metrics, "unverified", 3);
+        // The token verifies; with no store the callback cannot be recorded,
+        // so the provider is told to retry.
+        expect_problem(
+            post(
+                app,
+                "/v1/provider-callbacks/sms-gateway/callback-token-4f1b90",
+                None,
+                Some("application/json"),
+                b"{}".to_vec(),
+            )
+            .await,
+            ProblemCode::ServiceUnavailable,
+        )
+        .await;
+        callbacks_counted(&metrics, "unavailable", 1);
+        let text = metrics.render();
+        assert!(!text.contains("callback-token-4f1b90"), "{text}");
+        assert!(text.contains("route=\"/v1/provider-callbacks/{provider_id}/{token}\""));
+    }
+
+    #[tokio::test]
+    async fn a_body_signed_callback_refuses_a_token_route_and_a_forged_signature() {
+        let (app, metrics) = callback_app(body_verifier());
+        expect_problem(
+            post(
+                app.clone(),
+                "/v1/provider-callbacks/sms-gateway/anything",
+                None,
+                Some("application/json"),
+                b"{}".to_vec(),
+            )
+            .await,
+            ProblemCode::CallbackUnverified,
+        )
+        .await;
+        let body = br#"{"id":"gw-1","status":"delivered"}"#.to_vec();
+        let forged = Request::builder()
+            .method("POST")
+            .uri("/v1/provider-callbacks/sms-gateway")
+            .header(CONTENT_TYPE, "application/json")
+            .header("x-gateway-signature", "00".repeat(32))
+            .body(Body::from(body))
+            .unwrap();
+        expect_problem(
+            app.oneshot(forged).await.unwrap(),
+            ProblemCode::CallbackUnverified,
+        )
+        .await;
+        callbacks_counted(&metrics, "unverified", 2);
+    }
+
+    #[tokio::test]
+    async fn a_callback_body_over_the_edge_limit_is_refused() {
+        let (app, _) = callback_app(path_token_verifier());
+        let body = vec![b'a'; registry_platform_httpsec::DEFAULT_REQUEST_BODY_LIMIT_BYTES + 1];
+        expect_problem(
+            post(
+                app,
+                "/v1/provider-callbacks/sms-gateway/callback-token-4f1b90",
+                None,
+                Some("application/json"),
+                body,
+            )
+            .await,
+            ProblemCode::RequestBodyTooLarge,
         )
         .await;
     }

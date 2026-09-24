@@ -13,8 +13,10 @@ Threat: a caller without a valid credential for this deployment reaches a
 `/v1` route, or a credential minted for another service, another client, or
 another purpose is accepted here.
 
-There is no unauthenticated mode. Every `/v1` route resolves its caller
-before any other decision. A credential is accepted only when it is a compact
+There is no unauthenticated mode. Every `/v1` route except the provider
+callback routes resolves its caller before any other decision; a callback
+carries no bearer token and is authenticated by its provider's configured
+verifier instead (see Callbacks). A credential is accepted only when it is a compact
 RFC 9068 access token (`at+jwt`) from the configured issuer, for the
 configured audience, from a client `authentication.oidc.allowedClients`
 admits, signed by a key the issuer published or the static JWKS document
@@ -127,7 +129,11 @@ only on `metricsListener`, which must be a concrete loopback or private
 address and may not share the public socket. Metric labels are closed by
 construction: route templates, a fixed method vocabulary, status classes, and
 refusal reasons. No identifier, principal, client, contact, or problem
-detail becomes a label.
+detail becomes a label. `messaging_provider_callbacks_total` counts callbacks
+by a closed outcome label only (`unverified`, `unreadable`, `ignored`,
+`applied`, `unchanged`, `unmatched`, `ambiguous`, `unavailable`); neither the
+provider id nor a path token becomes a label, and the request counters label
+the callback routes by their templates.
 
 Tests: `http.rs::the_metrics_listener_serves_counters_and_nothing_else`,
 `metrics.rs::labels_are_closed`, the `config.rs` listener tests, and the
@@ -157,7 +163,8 @@ operator actions the same way (MESSAGING-DEC-13). The events are
 `messaging.message.accepted`, `messaging.dispatch.transition` with its actor
 (`caller`, `worker`, or `operator-tool`), `messaging.attempt.started`,
 `messaging.attempt.finished`, `messaging.message.quarantined`, and
-`messaging.message.settled`. A refused or replayed submission is journaled
+`messaging.message.settled`, and `messaging.receipt.recorded` for a
+delivery receipt that moved a report or joined a message's history. A refused or replayed submission is journaled
 directly, as `messaging.message.refused` with its problem code or
 `messaging.message.replayed` with the message identifier. The records carry
 identifiers, classes, the principal pseudonym, and a keyed recipient
@@ -409,10 +416,89 @@ Tests: `providers/tests.rs`, including
   the message still waits in a retry; MESSAGING-SEC-10 and the sweep must
   decide how the two interact.
 
-## Callbacks (pending, slice S5)
+## Callbacks
 
-MESSAGING-SEC-07: configured verifier kinds, a replay window, and delivery
-reports that only move forward.
+Threat: a forged, replayed, or reordered provider callback changes a
+delivery report or regresses it; a callback route becomes an oracle for
+which providers receive callbacks or which messages exist; a callback's
+body, a path token, or a provider reference reaches a log, a label, or the
+journal; a provider repeating itself grows the store without bound
+(MESSAGING-SEC-07, enforced).
+
+`POST /v1/provider-callbacks/{provider_id}` and
+`POST /v1/provider-callbacks/{provider_id}/{token}` are served on the public
+listener, carry no bearer token, and take the request edge's default body
+limit (`413 request.body-too-large` above it). The path names the provider;
+the verifier its runtime configuration names decides whether the request is
+that provider's. `callbackVerifier` is required exactly when the package
+declares `receipts: callback`, and is one of a closed set named by
+algorithm: `hmac-sha1-url-form` (HMAC-SHA1 over the configured external
+`url`, the request's query, and the form parameters sorted by name, base64 in
+a configured header), `hmac-sha256-body` (HMAC-SHA256 over the raw body, hex
+or base64 in a configured header), or `path-token` (a secret token as the
+last path segment). `none` is not a kind. Tags are compared in constant time
+by `aws-lc-rs`. The secret or token is a `secret:` reference resolved once at
+startup.
+
+An unknown provider, a provider without a verifier, a missing or wrong
+signature or token, a token segment on a provider whose verifier is not
+`path-token`, and a missing segment on one whose verifier is all answer
+`403 callback.unverified` alike, so the route reveals neither which
+providers receive callbacks nor why a request was refused. It is 403 rather
+than 401 because there is no challenge scheme a provider could answer. The
+refusal is logged with the provider id only when the provider is configured,
+and with a value-free reason; nothing about the request is read before it
+verifies.
+
+A verified callback is read by the package's `receiptScript` on the blocking
+pool, under the same bounded Rhai engine and budget as `interpret`. A script
+that throws or returns the wrong shape answers `422 callback.unreadable`; one
+that returns nothing (an intermediate state the runtime does not record)
+answers 204. The receipt names its message by the reference the provider
+answered when it accepted an attempt, scoped to that provider, so another
+provider's reference names nothing. Everything the receipt changes is decided
+in one transaction under the message row's lock: the report moves only
+forward (none, `sent`, then `delivered` or `undelivered`, final once
+terminal); the receipt joins the message's history of at most sixteen
+distinct receipts unless the same report and code are already there; and a
+receipt that moved the report or joined the history writes
+`messaging.receipt.recorded` to the outbox in the same transaction, carrying
+the message id, provider, report, the provider's code, whether it applied,
+and the report before and after. The record, the history row, and the logs
+never carry the reference, the recipient, a part, or the callback's body,
+form, or headers.
+
+There is no replay window: none of the three verifier kinds signs a
+timestamp, so a window could not be enforced for them. A replayed genuine
+callback repeats a report the message already holds or has passed, so it
+changes nothing and, as an exact duplicate, is not stored or audited again.
+
+A verified receipt whose reference names no message of the provider, or
+names more than one, answers 204 so the provider does not retry it, changes
+nothing, journals nothing, and is counted as `unmatched` or `ambiguous`. A
+store or journal failure, or a provider without a receipt script, answers
+`503 service.unavailable`, so the provider retries it.
+
+Residual risks. A callback that arrives before the accepting attempt commits
+finds no reference, is counted `unmatched`, and is lost unless the provider
+repeats it. A receipt cannot settle a message held as `unknown` after a
+maybe-sent attempt, since such an attempt stores no reference; spec 6.4's
+"a receipt can also settle unknown" is not implemented. A reference two
+messages share is not applied to either. A reference longer than 128 bytes
+is never stored, so never matches. `hmac-sha1-url-form` verifies over the
+operator-configured external `url`, not the URL the request arrived on, so a
+reverse proxy that rewrites the path does not break it, but a wrong `url`
+refuses every callback. HMAC-SHA1 is kept only because a widely deployed
+provider signs with it; it is used as a MAC, where SHA-1's collision
+weakness does not apply.
+
+Tests: MESSAGING-SEC-07 in `contracts/security-test-traceability.yaml`: the
+PostgreSQL suite `tests/postgres_callbacks.rs` (each verifier kind valid and
+forged, duplicate and out-of-order receipts, a final report kept, the
+history bound, unknown, foreign, and ambiguous references, unreadable and
+ignored callbacks, and the absence of the reference, secrets, and token from
+logs and the journal), the route tests in `http.rs`, and the verifier and
+report-order tests in `registry-messaging-core`.
 
 ## Templates
 

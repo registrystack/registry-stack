@@ -55,6 +55,14 @@ pub const MESSAGE_CANCEL_PATH: &str = "/v1/messages/{message_id}/cancel";
 /// Route template rendering one template version without sending it.
 pub const TEMPLATE_PREVIEW_PATH: &str = "/v1/templates/{template_id}/versions/{version}/preview";
 
+/// Route template taking one provider's delivery callbacks, authenticated
+/// by the provider's configured verifier rather than a bearer token.
+pub const PROVIDER_CALLBACK_PATH: &str = "/v1/provider-callbacks/{provider_id}";
+
+/// Route template taking one provider's delivery callbacks with the secret
+/// token of a `path-token` verifier as the last path segment.
+pub const PROVIDER_CALLBACK_TOKEN_PATH: &str = "/v1/provider-callbacks/{provider_id}/{token}";
+
 /// Header carrying the scoped idempotency key of a mutating command.
 pub const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 
@@ -102,6 +110,14 @@ mod tests {
         assert_eq!(MESSAGES_PATH, "/v1/messages");
         assert_eq!(MESSAGE_PATH, "/v1/messages/{message_id}");
         assert_eq!(MESSAGE_CANCEL_PATH, "/v1/messages/{message_id}/cancel");
+        assert_eq!(
+            PROVIDER_CALLBACK_PATH,
+            "/v1/provider-callbacks/{provider_id}"
+        );
+        assert_eq!(
+            PROVIDER_CALLBACK_TOKEN_PATH,
+            "/v1/provider-callbacks/{provider_id}/{token}"
+        );
         assert_eq!(
             TEMPLATE_PREVIEW_PATH,
             "/v1/templates/{template_id}/versions/{version}/preview"

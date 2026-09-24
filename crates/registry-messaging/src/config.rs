@@ -143,7 +143,9 @@ pub struct RuntimeConfig {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ProviderConnection {
     Smtp(SmtpProviderSettings),
-    Http(HttpProviderSettings),
+    /// Boxed: an `http` connection is several times the size of an `smtp`
+    /// one.
+    Http(Box<HttpProviderSettings>),
 }
 
 impl ProviderConnection {

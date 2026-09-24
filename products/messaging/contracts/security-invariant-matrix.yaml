@@ -118,19 +118,30 @@ invariants:
       path: crates/registry-messaging/src/providers/tests.rs
       name: an_activated_provider_cut_off_after_the_message_left_is_maybe_sent
   - id: MESSAGING-SEC-07
-    state: pending
-    plannedSlice: S5
+    state: enforced
     threat: >-
       A forged, replayed, or reordered provider callback changes a delivery
       report or regresses it to an earlier state.
     enforcementPoint: >-
-      The configured callback verifier kind, a replay window, and a report
-      state that only moves forward.
+      POST /v1/provider-callbacks/{provider_id} verifies each callback with
+      the verifier kind the runtime configuration gives that provider
+      (hmac-sha1-url-form, hmac-sha256-body, or path-token; none is not a
+      kind) before its body is read, then applies the receipt its receipt
+      script reads in one transaction under the message row's lock: the
+      report moves only forward (none, sent, then delivered or undelivered,
+      final once terminal), and a receipt already in the message's bounded
+      history is not stored or audited again. There is no replay window: the
+      verifier kinds carry no timestamp, and a replayed genuine callback
+      repeats a report the message already holds or has passed, so it
+      changes nothing.
     refusal: >-
-      Refuse a bad signature, ignore a duplicate, and never regress a report.
-    pendingNote: >-
-      Callbacks and receipts land in slice S5. The negative tests cover a bad
-      signature, a duplicate, and an out-of-order receipt.
+      Refuse an unknown provider, a missing or wrong signature or token, and
+      a token on the wrong route alike with 403 callback.unverified and
+      record nothing; answer a duplicate or regressing receipt 204 without
+      moving the report.
+    negativeTest:
+      path: crates/registry-messaging/tests/postgres_callbacks.rs
+      name: duplicate_and_out_of_order_receipts_never_regress_the_report
   - id: MESSAGING-SEC-08
     state: pending
     plannedSlice: S6

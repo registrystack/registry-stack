@@ -5696,11 +5696,13 @@ name = "registry-messaging"
 version = "0.34.0"
 dependencies = [
  "async-trait",
+ "aws-lc-rs",
  "axum",
  "base64 0.22.1",
  "chrono",
  "clap",
  "deadpool-postgres",
+ "hex",
  "ipnet",
  "jsonwebtoken",
  "lettre",

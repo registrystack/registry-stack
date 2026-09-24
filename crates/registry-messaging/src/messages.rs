@@ -517,6 +517,20 @@ impl MessageStore {
         Ok(Some(report))
     }
 
+    /// Apply a verified callback's `receipt` from `provider` to the message
+    /// it names.
+    ///
+    /// # Errors
+    ///
+    /// As [`crate::receipts::record_receipt`].
+    pub async fn record_receipt(
+        &self,
+        provider: &str,
+        receipt: &registry_messaging_core::Receipt,
+    ) -> Result<crate::receipts::ReceiptOutcome, MessageStoreError> {
+        crate::receipts::record_receipt(&self.store, provider, receipt).await
+    }
+
     /// Move an unknown outcome to delivered, fenced by its generation, with
     /// its audit in the same transaction.
     async fn settle_sent(

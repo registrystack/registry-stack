@@ -37,6 +37,11 @@ name = "postgres_dispatch"
 path = "tests/postgres_dispatch.rs"
 required-features = ["postgres-test"]
 
+[[test]]
+name = "postgres_callbacks"
+path = "tests/postgres_callbacks.rs"
+required-features = ["postgres-test"]
+
 [features]
 default = []
 postgres-test = []
@@ -90,6 +95,8 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+aws-lc-rs.workspace = true
+hex.workspace = true
 rcgen.workspace = true
 registry-messaging-client.workspace = true
 registry-platform-testing.workspace = true
